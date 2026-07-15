@@ -43,7 +43,6 @@ const wss = new WebSocketServer({
   },
 });
 
-const CLAUDE_MODELS = new Set(["fable", "opus", "sonnet", "haiku"]);
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
 const store = new LocalStore(config.dbPath);
@@ -249,9 +248,11 @@ function createRunner(
       );
 }
 
-function validModel(provider: ProviderId, model: string): boolean {
+function validModel(_provider: ProviderId, model: string): boolean {
+  // Both CLIs accept a short alias (e.g. "sonnet") or a full model id
+  // (e.g. "claude-sonnet-5"); the CLI itself rejects anything bogus at
+  // spawn time, so this only guards against obviously malformed input.
   if (!model) return true;
-  if (provider === "claude") return CLAUDE_MODELS.has(model);
   return /^[A-Za-z0-9._-]+$/.test(model);
 }
 

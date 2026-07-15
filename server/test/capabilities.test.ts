@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CapabilityRegistry } from "../src/capabilities.js";
+import { CapabilityRegistry, parseMcpList } from "../src/capabilities.js";
 import { LocalStore } from "../src/store.js";
 import { saveProjectCommand } from "../src/commandLibrary.js";
 
@@ -83,4 +83,60 @@ test("serves cached Claude models immediately and merges later runtime discovery
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("collapses the CLI's full model id back to its alias instead of adding a duplicate option", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  try {
+    const store = new LocalStore(join(dir, "test.sqlite"));
+    const registry = new CapabilityRegistry(store, () => undefined, "/repo");
+
+    registry.mergeWorkerMeta({ model: "claude-sonnet-5", slashCommands: [], mcpServers: [], toolCount: 1 });
+    const models = registry.getState().models;
+    assert.equal(models.filter((model) => model.id === "sonnet").length, 1);
+    assert.equal(models.some((model) => model.id === "claude-sonnet-5"), false);
+
+    registry.mergeWorkerMeta({ model: "claude-fable-5", slashCommands: [], mcpServers: [], toolCount: 1 });
+    assert.equal(registry.getState().models.some((model) => model.id === "fable"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("collapses full model ids already persisted in the cache when loading", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  try {
+    const store = new LocalStore(join(dir, "test.sqlite"));
+    // Simulates a cache written before model-id normalization existed.
+    store.saveCapabilities("/repo", {
+      slashCommands: [],
+      mcpServers: [],
+      models: [{ id: "claude-fable-5", label: "claude-fable-5" }, { id: "claude-sonnet-5", label: "claude-sonnet-5" }],
+      toolCount: null,
+      loading: false,
+      source: "live",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+      error: null,
+    });
+    const models = new CapabilityRegistry(store, () => undefined, "/repo").getState().models;
+    assert.equal(models.some((model) => model.id.startsWith("claude-")), false);
+    assert.equal(models.filter((model) => model.id === "fable").length, 1);
+    assert.equal(models.filter((model) => model.id === "sonnet").length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parses claude mcp list statuses, including remote servers needing authentication", () => {
+  const servers = parseMcpList([
+    "fontrip: https://mcp.sre.fontrip.com/mcp - ✔ Connected",
+    "Notion: https://mcp.notion.com/mcp - ! Needs authentication",
+    "broken: /usr/local/bin/broken-server - ✘ Failed to connect",
+  ].join("\n"));
+
+  assert.deepEqual(servers, [
+    { name: "fontrip", status: "connected" },
+    { name: "Notion", status: "needs_auth" },
+    { name: "broken", status: "failed" },
+  ]);
 });

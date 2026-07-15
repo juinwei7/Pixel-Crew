@@ -23,9 +23,9 @@ function resetCopy(value: string | null): string {
   if (!value) return "重置時間未提供";
   if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return `${date.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })} 重置`;
+    if (!Number.isNaN(date.getTime())) return `重置：${date.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}`;
   }
-  return value.replace(/^resets\s+/i, "") + " 重置";
+  return `重置：${value.replace(/^resets\s+/i, "")}`;
 }
 
 function ProviderMeter({ provider, state }: { provider: ProviderId; state: ProviderUsageState }) {

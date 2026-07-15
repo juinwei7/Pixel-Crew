@@ -37,12 +37,30 @@ export const DEFAULT_CLAUDE_MODELS: ModelOption[] = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku" },
+  { id: "fable", label: "Fable" },
 ];
+
+// The CLI's init event (and any cache written before this normalization
+// existed) reports the resolved full model id (e.g. "claude-sonnet-5"),
+// not the alias the user picked. Collapse it back to the alias so it
+// de-dupes against the alias entry instead of showing up as a second,
+// oddly-labeled option in the model picker. Non-Claude ids (custom or
+// Codex) are left untouched so their labels survive.
+function normalizeModelOption(model: ModelOption): ModelOption {
+  const match = model.id.match(/^claude-([a-z]+)(?:-|$)/i);
+  if (!match) return model;
+  const alias = match[1].toLowerCase();
+  return { ...model, id: alias, label: alias.charAt(0).toUpperCase() + alias.slice(1) };
+}
 
 function mergeModels(...groups: ModelOption[][]): ModelOption[] {
   const models = new Map<string, ModelOption>();
   for (const group of groups) {
-    for (const model of group) if (model.id) models.set(model.id, model);
+    for (const model of group) {
+      if (!model.id) continue;
+      const normalized = normalizeModelOption(model);
+      models.set(normalized.id, normalized);
+    }
   }
   return [...models.values()];
 }
@@ -74,11 +92,12 @@ async function commandFiles(root: string): Promise<string[]> {
 
 function normalizeMcpStatus(raw: string): string {
   if (/connected|✓/i.test(raw)) return "connected";
+  if (/needs authentication/i.test(raw)) return "needs_auth";
   if (/failed|✘/i.test(raw)) return "failed";
   return raw.trim().toLowerCase() || "unknown";
 }
 
-function parseMcpList(stdout: string): McpServerState[] {
+export function parseMcpList(stdout: string): McpServerState[] {
   const servers: McpServerState[] = [];
   for (const line of stdout.split("\n")) {
     const match = line.match(/^(.+?):\s+.+\s+-\s+(.+)$/);

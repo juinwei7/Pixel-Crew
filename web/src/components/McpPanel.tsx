@@ -6,6 +6,22 @@ function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
 }
 
+function statusLabel(status: string): string {
+  switch (status) {
+    case "connected":
+    case "enabled":
+      return "已連線";
+    case "needs_auth":
+      return "需授權";
+    case "failed":
+      return "連線失敗";
+    case "pending":
+      return "連線中…";
+    default:
+      return status || "未知";
+  }
+}
+
 export function McpPanel({
   capabilities,
   provider,
@@ -124,7 +140,7 @@ export function McpPanel({
             }`}
           />
           <span className="mcp-popover__name">{s.name}</span>
-          <span className="mcp-popover__status">{s.status}</span>
+          <span className="mcp-popover__status">{statusLabel(s.status)}</span>
           {isEditable(s.name) && (
             <button
               className="mcp-popover__remove"

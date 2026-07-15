@@ -22,6 +22,7 @@ const CLAUDE_MODEL_OPTIONS = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku（最快）" },
+  { id: "fable", label: "Fable" },
 ];
 
 function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: typeof CLAUDE_MODEL_OPTIONS, activeModel?: string | null) {
