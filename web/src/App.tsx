@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useWorkers } from "./hooks/useWorkers";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
@@ -6,9 +6,12 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { McpPanel } from "./components/McpPanel";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { CommandCenter } from "./components/CommandCenter";
 import type { ProviderId } from "./types";
 import { roomName } from "./workspace";
+
+const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
+  default: module.CommandCenter,
+})));
 
 const CLAUDE_MODEL_OPTIONS = [
   { id: "", label: "預設模型" },
@@ -17,6 +20,17 @@ const CLAUDE_MODEL_OPTIONS = [
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku（最快）" },
 ];
+
+const EMPTY_CAPABILITIES = {
+  slashCommands: [],
+  mcpServers: [],
+  models: [],
+  toolCount: null,
+  loading: true,
+  source: "empty" as const,
+  updatedAt: null,
+  error: null,
+};
 
 export function App() {
   const {
@@ -27,7 +41,8 @@ export function App() {
     targetRepoPath,
     workspacePaths,
     wsReady,
-    capabilities,
+    capabilitiesByWorkspace,
+    workflowRevisions,
     auth,
     createWorker,
     pickWorkspace,
@@ -54,7 +69,7 @@ export function App() {
   const activeProvider: ProviderId = active?.provider ?? "claude";
   const activeWorkspace = active?.workspacePath || targetRepoPath;
   const activeAuth = auth[activeProvider];
-  const activeCapabilities = capabilities[activeProvider];
+  const activeCapabilities = capabilitiesByWorkspace[activeWorkspace]?.[activeProvider] ?? EMPTY_CAPABILITIES;
   const modelOptions = activeProvider === "codex"
     ? [{ id: "", label: "預設模型" }, ...activeCapabilities.models]
     : CLAUDE_MODEL_OPTIONS;
@@ -136,7 +151,7 @@ export function App() {
           >
             MCP {activeCapabilities.loading ? "…" : `${mcpConnected}/${mcpServers.length}`}
           </button>
-          {mcpOpen && <McpPanel capabilities={activeCapabilities} provider={activeProvider} />}
+          {mcpOpen && <McpPanel capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} />}
         </div>
 
         <select
@@ -303,11 +318,24 @@ export function App() {
       </form>
 
       {commandCenterOpen && activeWorkspace && (
-        <CommandCenter
-          workspacePath={activeWorkspace}
-          provider={activeProvider}
-          onClose={() => setCommandCenterOpen(false)}
-        />
+        <Suspense fallback={<div className="command-center command-center--loading">正在載入工作流中心…</div>}>
+          <CommandCenter
+            workspacePath={activeWorkspace}
+            provider={activeProvider}
+            workers={workerList}
+            activeWorkerId={activeId}
+            revisions={{
+              claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0,
+              codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0,
+            }}
+            onRun={async (workerId, message) => {
+              const runError = await send(workerId, message);
+              if (!runError) setActiveId(workerId);
+              return runError;
+            }}
+            onClose={() => setCommandCenterOpen(false)}
+          />
+        </Suspense>
       )}
 
       <AuthGate

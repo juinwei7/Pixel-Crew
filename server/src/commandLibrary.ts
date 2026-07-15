@@ -1,6 +1,7 @@
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
+import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
 
 export type CommandDocument = {
   name: string;
@@ -30,35 +31,14 @@ function commandPath(workspacePath: string, name: string): string {
   return path;
 }
 
-function scalar(value: string): string {
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'")))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
 export function commandMetadata(content: string): Pick<CommandDocument, "description" | "argumentHint" | "allowedTools" | "model"> {
-  const metadata = { description: "", argumentHint: "", allowedTools: "", model: "" };
-  const normalized = content.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return metadata;
-  const end = normalized.indexOf("\n---", 4);
-  if (end < 0) return metadata;
-  for (const line of normalized.slice(4, end).split("\n")) {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!match) continue;
-    const key = match[1].toLowerCase();
-    const value = scalar(match[2]);
-    if (key === "description") metadata.description = value;
-    else if (key === "argument-hint" || key === "argument_hint") metadata.argumentHint = value;
-    else if (key === "allowed-tools" || key === "allowed_tools") metadata.allowedTools = value;
-    else if (key === "model") metadata.model = value;
-  }
-  return metadata;
+  const metadata = workflowFrontmatter(content);
+  return {
+    description: frontmatterText(metadata.description),
+    argumentHint: frontmatterText(metadata["argument-hint"] ?? metadata.argument_hint),
+    allowedTools: frontmatterText(metadata["allowed-tools"] ?? metadata.allowed_tools),
+    model: frontmatterText(metadata.model),
+  };
 }
 
 async function markdownFiles(root: string): Promise<string[]> {
@@ -104,6 +84,7 @@ export async function saveProjectCommand(
 ): Promise<CommandDocument> {
   if (!content.trim()) throw new Error("指令內容不能是空白");
   if (Buffer.byteLength(content, "utf8") > MAX_COMMAND_BYTES) throw new Error("指令內容不能超過 200 KB");
+  commandMetadata(content);
   const path = commandPath(workspacePath, name);
   const oldPath = originalName ? commandPath(workspacePath, originalName) : null;
   await assertSafeLocalPath(workspacePath, path);

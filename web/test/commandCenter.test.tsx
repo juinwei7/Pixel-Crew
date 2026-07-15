@@ -5,14 +5,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CommandCenter } from "../src/components/CommandCenter";
 
 test("renders distinct Claude and Codex command experiences", () => {
+  const shared = {
+    workspacePath: "/repo",
+    workers: [],
+    activeWorkerId: null,
+    revisions: { claude: 0, codex: 0 },
+    onRun: async () => null,
+    onClose: () => undefined,
+  } as const;
   const claude = renderToStaticMarkup(
-    <CommandCenter workspacePath="/repo" provider="claude" onClose={() => undefined} />,
+    <CommandCenter {...shared} provider="claude" />,
   );
   assert.match(claude, /Claude 指令中心/);
   assert.match(claude, /.claude\/commands/);
 
   const codex = renderToStaticMarkup(
-    <CommandCenter workspacePath="/repo" provider="codex" onClose={() => undefined} />,
+    <CommandCenter {...shared} provider="codex" />,
   );
   assert.match(codex, /Codex Skills/);
   assert.match(codex, /.agents\/skills/);

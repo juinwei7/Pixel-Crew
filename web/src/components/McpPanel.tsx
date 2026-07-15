@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { CapabilityState, ProviderId } from "../types";
-
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:8787";
+import { apiRequest } from "../api";
 
 function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
@@ -10,9 +9,11 @@ function isEditable(name: string): boolean {
 export function McpPanel({
   capabilities,
   provider,
+  workspacePath,
 }: {
   capabilities: CapabilityState;
   provider: ProviderId;
+  workspacePath: string;
 }) {
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
@@ -29,54 +30,57 @@ export function McpPanel({
   async function refresh() {
     setPending(true);
     setNotice(null);
-    const res = await fetch(`${SERVER_URL}/api/mcp/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider }),
-    });
-    setPending(false);
-    setNotice(res.ok ? { ok: true, text: "MCP 狀態已更新" } : { ok: false, text: "更新失敗" });
+    try {
+      await apiRequest("/api/mcp/refresh", { method: "POST", body: { provider, workspacePath }, timeoutMs: 65000 });
+      setNotice({ ok: true, text: "MCP 狀態已更新" });
+    } catch (error) {
+      setNotice({ ok: false, text: (error as Error).message });
+    } finally {
+      setPending(false);
+    }
   }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     setPending(true);
     setNotice(null);
-    const res = await fetch(`${SERVER_URL}/api/mcp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      await apiRequest("/api/mcp", {
+        method: "POST",
+        timeoutMs: 65000,
+        body: {
         provider,
+        workspacePath,
         name: name.trim(),
         target: target.trim(),
         header: provider === "claude" ? header.trim() : "",
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setPending(false);
-    if (res.ok) {
+        },
+      });
       setNotice({ ok: true, text: `已加入 ${name.trim()}，工人下一句話生效` });
       setName("");
       setTarget("");
       setHeader("");
-    } else {
-      setNotice({ ok: false, text: data.error ?? "加入失敗" });
+    } catch (error) {
+      setNotice({ ok: false, text: (error as Error).message });
+    } finally {
+      setPending(false);
     }
   }
 
   async function remove(serverName: string) {
     setPending(true);
     setNotice(null);
-    const res = await fetch(`${SERVER_URL}/api/mcp/${encodeURIComponent(serverName)}?provider=${provider}`, {
-      method: "DELETE",
-    });
-    const data = await res.json().catch(() => ({}));
-    setPending(false);
-    setNotice(
-      res.ok
-        ? { ok: true, text: `已移除 ${serverName}，工人下一句話生效` }
-        : { ok: false, text: data.error ?? "移除失敗" },
-    );
+    try {
+      await apiRequest(`/api/mcp/${encodeURIComponent(serverName)}?provider=${provider}&workspacePath=${encodeURIComponent(workspacePath)}`, {
+        method: "DELETE",
+        timeoutMs: 65000,
+      });
+      setNotice({ ok: true, text: `已移除 ${serverName}，工人下一句話生效` });
+    } catch (error) {
+      setNotice({ ok: false, text: (error as Error).message });
+    } finally {
+      setPending(false);
+    }
   }
 
   return (

@@ -1,6 +1,7 @@
 import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
+import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
 
 export type SkillDocument = {
   name: string;
@@ -27,20 +28,11 @@ function skillDirectory(workspacePath: string, name: string): string {
   return path;
 }
 
-function frontmatterValue(content: string, key: string): string {
-  const normalized = content.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return "";
-  const end = normalized.indexOf("\n---", 4);
-  if (end < 0) return "";
-  const match = normalized.slice(4, end).match(new RegExp(`^${key}:\\s*(.*)$`, "im"));
-  const value = match?.[1]?.trim() ?? "";
-  return value.replace(/^(['"])(.*)\1$/, "$2");
-}
-
 export function skillMetadata(content: string): { name: string; description: string } {
+  const metadata = workflowFrontmatter(content);
   return {
-    name: frontmatterValue(content, "name"),
-    description: frontmatterValue(content, "description"),
+    name: frontmatterText(metadata.name),
+    description: frontmatterText(metadata.description),
   };
 }
 

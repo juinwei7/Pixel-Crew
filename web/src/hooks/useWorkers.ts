@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CapabilityState, ProviderAuthState, ProviderId, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
+import { apiRequest } from "../api";
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:8787";
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8787";
 
 type ServerMessage =
@@ -11,7 +11,7 @@ type ServerMessage =
       targetRepoPath: string;
       workspacePaths: string[];
       auth: ProviderAuthState[];
-      capabilities: Record<ProviderId, CapabilityState>;
+      capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
       workers: Array<{
         id: string;
         name: string;
@@ -28,7 +28,8 @@ type ServerMessage =
   | { type: "worker_removed"; workerId: string }
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
   | { type: "worker_status"; workerId: string; busy: boolean }
-  | { type: "capabilities_updated"; provider: ProviderId; capabilities: CapabilityState }
+  | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
+  | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState };
 
 type WorkerSummary = {
@@ -73,10 +74,10 @@ export function useWorkers() {
     updatedAt: null,
     error: null,
   });
-  const [capabilities, setCapabilities] = useState<Record<ProviderId, CapabilityState>>({
-    claude: emptyCapabilities(),
-    codex: emptyCapabilities(),
-  });
+  const [capabilitiesByWorkspace, setCapabilitiesByWorkspace] = useState<
+    Record<string, Record<ProviderId, CapabilityState>>
+  >({});
+  const [workflowRevisions, setWorkflowRevisions] = useState<Record<string, number>>({});
   const [auth, setAuth] = useState<Record<ProviderId, ProviderAuthState>>({
     claude: defaultAuth("claude", "Claude Code", "claude auth login"),
     codex: defaultAuth("codex", "Codex", "codex login"),
@@ -108,7 +109,7 @@ export function useWorkers() {
           setTargetRepoPath(data.targetRepoPath);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
-          setCapabilities(data.capabilities);
+          setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
           const record: Record<string, WorkerState> = {};
           const ids: string[] = [];
           for (const w of data.workers) {
@@ -208,7 +209,21 @@ export function useWorkers() {
           break;
         }
         case "capabilities_updated": {
-          setCapabilities((current) => ({ ...current, [data.provider]: data.capabilities }));
+          setCapabilitiesByWorkspace((current) => ({
+            ...current,
+            [data.workspacePath]: {
+              claude: current[data.workspacePath]?.claude ?? emptyCapabilities(),
+              codex: current[data.workspacePath]?.codex ?? emptyCapabilities(),
+              [data.provider]: data.capabilities,
+            },
+          }));
+          break;
+        }
+        case "workflow_library_updated": {
+          setWorkflowRevisions((current) => ({
+            ...current,
+            [`${data.provider}\0${data.workspacePath}`]: data.revision,
+          }));
           break;
         }
         case "auth_updated": {
@@ -231,14 +246,16 @@ export function useWorkers() {
     provider: ProviderId = "claude",
     workspacePath?: string,
   ): Promise<{ id?: string; error?: string }> => {
-    const res = await fetch(`${SERVER_URL}/api/workers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, provider, workspacePath }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (data.id) setActiveId(data.id);
-    return res.ok ? { id: data.id } : { error: data.error ?? "無法建立 Worker" };
+    try {
+      const data = await apiRequest<{ id: string }>("/api/workers", {
+        method: "POST",
+        body: { name, provider, workspacePath },
+      });
+      if (data.id) setActiveId(data.id);
+      return { id: data.id };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
   }, []);
 
   const pickWorkspace = useCallback(async (): Promise<{
@@ -246,93 +263,85 @@ export function useWorkers() {
     canceled?: boolean;
     error?: string;
   }> => {
-    const res = await fetch(`${SERVER_URL}/api/workspaces/pick`, { method: "POST" });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error ?? "無法開啟資料夾選擇器" };
-    return { path: data.path, canceled: Boolean(data.canceled) };
+    try {
+      const data = await apiRequest<{ path?: string; canceled?: boolean }>("/api/workspaces/pick", {
+        method: "POST",
+        timeoutMs: 125000,
+      });
+      return { path: data.path, canceled: Boolean(data.canceled) };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
   }, []);
 
   const switchProvider = useCallback(async (
     id: string,
     provider: ProviderId,
   ): Promise<string | null> => {
-    const res = await fetch(`${SERVER_URL}/api/workers/${id}/provider`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider }),
-    });
-    if (res.ok) return null;
-    const data = await res.json().catch(() => ({}));
-    return data.error ?? "無法切換 NPC 類型";
+    try {
+      await apiRequest(`/api/workers/${id}/provider`, { method: "PATCH", body: { provider } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
   const switchWorkspace = useCallback(async (
     id: string,
     workspacePath: string,
   ): Promise<string | null> => {
-    const res = await fetch(`${SERVER_URL}/api/workers/${id}/workspace`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspacePath }),
-    });
-    if (res.ok) return null;
-    const data = await res.json().catch(() => ({}));
-    return data.error ?? "無法切換工作位置";
+    try {
+      await apiRequest(`/api/workers/${id}/workspace`, { method: "PATCH", body: { workspacePath } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
   useEffect(() => {
     if (!activeId) return;
-    void fetch(`${SERVER_URL}/api/workers/${activeId}/activate`, { method: "POST" });
+    void apiRequest(`/api/workers/${activeId}/activate`, { method: "POST" }).catch(() => undefined);
   }, [activeId]);
 
   const closeWorker = useCallback(async (id: string) => {
-    await fetch(`${SERVER_URL}/api/workers/${id}`, { method: "DELETE" });
+    await apiRequest(`/api/workers/${id}`, { method: "DELETE" }).catch(() => undefined);
   }, []);
 
   const renameWorker = useCallback(async (id: string, name: string): Promise<string | null> => {
-    const res = await fetch(`${SERVER_URL}/api/workers/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (res.ok) return null;
-    const data = await res.json().catch(() => ({}));
-    return data.error ?? "改名失敗";
+    try {
+      await apiRequest(`/api/workers/${id}`, { method: "PATCH", body: { name } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
   const send = useCallback(async (id: string, message: string): Promise<string | null> => {
-    const res = await fetch(`${SERVER_URL}/api/workers/${id}/message`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return data.error ?? "送出失敗";
+    try {
+      await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
+        method: "POST",
+        body: { message },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
     }
-    return null;
   }, []);
 
   const setModel = useCallback(async (id: string, model: string) => {
-    await fetch(`${SERVER_URL}/api/workers/${id}/model`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model }),
-    });
+    await apiRequest(`/api/workers/${id}/model`, { method: "POST", body: { model } }).catch(() => undefined);
   }, []);
 
   const interrupt = useCallback(async (id: string) => {
-    await fetch(`${SERVER_URL}/api/workers/${id}/interrupt`, { method: "POST" });
+    await apiRequest(`/api/workers/${id}/interrupt`, { method: "POST" }).catch(() => undefined);
   }, []);
 
   const refreshAuth = useCallback(async (provider?: ProviderId) => {
     try {
-      const res = await fetch(`${SERVER_URL}/api/auth/refresh`, {
+      const data = await apiRequest<{ auth: ProviderAuthState[] }>("/api/auth/refresh", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
+        body: { provider },
       });
-      const data = await res.json().catch(() => ({}));
       if (Array.isArray(data.auth)) {
         setAuth((current) => ({
           ...current,
@@ -361,7 +370,8 @@ export function useWorkers() {
     targetRepoPath,
     workspacePaths,
     wsReady,
-    capabilities,
+    capabilitiesByWorkspace,
+    workflowRevisions,
     auth,
     createWorker,
     pickWorkspace,

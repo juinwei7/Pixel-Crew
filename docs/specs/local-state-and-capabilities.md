@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted for implementation — 2026-07-15
+Implemented — 2026-07-15. The global-capability portion is superseded by
+`provider-workflows-v2.md` now that one server can host multiple rooms.
 
 ## Problem
 

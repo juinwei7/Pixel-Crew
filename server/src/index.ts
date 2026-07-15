@@ -1,13 +1,13 @@
 import express from "express";
 import cors, { type CorsOptions } from "cors";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer, WebSocket } from "ws";
-import { v4 as uuidv4 } from "uuid";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import { CapabilityRegistry } from "./capabilities.js";
@@ -21,6 +21,7 @@ import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./provide
 import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
 import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
 import { isAllowedLoopbackOrigin } from "./localAccess.js";
+import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -97,12 +98,40 @@ function providerReady(provider: ProviderId): boolean {
   return authStates[provider].status === "authenticated";
 }
 
-const capabilities = new CapabilityRegistry(store, (state) => {
-  broadcast({ type: "capabilities_updated", provider: "claude", capabilities: state });
-});
-const codexCapabilities = new CodexCapabilityRegistry((state) => {
-  broadcast({ type: "capabilities_updated", provider: "codex", capabilities: state });
-});
+const claudeCapabilityRegistries = new Map<string, CapabilityRegistry>();
+const codexCapabilityRegistries = new Map<string, CodexCapabilityRegistry>();
+
+function registryKey(workspacePath: string): string {
+  try {
+    return realpathSync(workspacePath);
+  } catch {
+    return resolve(workspacePath);
+  }
+}
+
+function claudeCapabilitiesFor(workspacePath = config.targetRepoPath): CapabilityRegistry {
+  const key = registryKey(workspacePath);
+  let registry = claudeCapabilityRegistries.get(key);
+  if (!registry) {
+    registry = new CapabilityRegistry(store, (state) => {
+      broadcast({ type: "capabilities_updated", workspacePath: key, provider: "claude", capabilities: state });
+    }, key);
+    claudeCapabilityRegistries.set(key, registry);
+  }
+  return registry;
+}
+
+function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapabilityRegistry {
+  const key = registryKey(workspacePath);
+  let registry = codexCapabilityRegistries.get(key);
+  if (!registry) {
+    registry = new CodexCapabilityRegistry((state) => {
+      broadcast({ type: "capabilities_updated", workspacePath: key, provider: "codex", capabilities: state });
+    }, key);
+    codexCapabilityRegistries.set(key, registry);
+  }
+  return registry;
+}
 
 function persistWorker(worker: Worker): void {
   const session = worker.runner.getPersistenceState();
@@ -123,11 +152,8 @@ function record(worker: Worker, event: RunnerEvent): void {
     worker.history.splice(0, worker.history.length - MAX_HISTORY);
   }
   store.appendEvent(worker.id, event, MAX_HISTORY);
-  if (
-    event.type === "meta" &&
-    worker.runner.workspacePath === capabilities.getWorkspacePath()
-  ) {
-    capabilities.mergeWorkerMeta(event);
+  if (event.type === "meta" && worker.runner.provider === "claude") {
+    claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
   if (event.type === "turn_end" || event.type === "error") persistWorker(worker);
   broadcast({ type: "event", workerId: worker.id, event });
@@ -141,8 +167,8 @@ function createWorker(
   persisted?: PersistedWorker,
 ): Worker {
   const workerProvider = persisted?.provider ?? provider;
-  const workerWorkspace = persisted?.workspacePath || workspacePath || config.targetRepoPath;
-  const id = persisted?.id ?? uuidv4();
+  const workerWorkspace = registryKey(persisted?.workspacePath || workspacePath || config.targetRepoPath);
+  const id = persisted?.id ?? randomUUID();
   const worker: Worker = {
     id,
     runner: null as unknown as AgentSession,
@@ -181,7 +207,7 @@ function createRunner(
     : new ClaudeSession(
         (event) => record(worker, event),
         workspacePath,
-        () => capabilities.getAllowedTools(),
+        () => claudeCapabilitiesFor(workspacePath).getAllowedTools(),
         initialState,
       );
 }
@@ -233,9 +259,19 @@ function sameWorkspacePath(left: string, right: string): boolean {
 
 function recentWorkspacePaths(): string[] {
   return [...new Set([
-    config.targetRepoPath,
+    registryKey(config.targetRepoPath),
     ...[...workers.values()].map((worker) => worker.runner.workspacePath),
   ].filter(Boolean))];
+}
+
+function capabilitiesSnapshot(): Record<string, Record<ProviderId, ReturnType<CapabilityRegistry["getState"]>>> {
+  return Object.fromEntries(recentWorkspacePaths().map((workspacePath) => [
+    workspacePath,
+    {
+      claude: claudeCapabilitiesFor(workspacePath).getState(),
+      codex: codexCapabilitiesFor(workspacePath).getState(),
+    },
+  ]));
 }
 
 function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
@@ -254,10 +290,7 @@ wss.on("connection", (socket) => {
       targetRepoPath: config.targetRepoPath,
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
-      capabilities: {
-        claude: capabilities.getState(),
-        codex: codexCapabilities.getState(),
-      },
+      capabilitiesByWorkspace: capabilitiesSnapshot(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
         events: w.history,
@@ -302,13 +335,19 @@ app.post("/api/workspaces/pick", async (_req, res) => {
   }
 });
 
-app.get("/api/capabilities", (_req, res) => {
-  res.json({
-    capabilities: {
-      claude: capabilities.getState(),
-      codex: codexCapabilities.getState(),
-    },
-  });
+app.get("/api/capabilities", (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+    res.json({
+      workspacePath,
+      capabilities: {
+        claude: claudeCapabilitiesFor(workspacePath).getState(),
+        codex: codexCapabilitiesFor(workspacePath).getState(),
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法讀取房間能力" });
+  }
 });
 
 app.get("/api/commands", async (req, res) => {
@@ -330,7 +369,7 @@ app.put("/api/commands", async (req, res) => {
       req.body?.originalName ? String(req.body.originalName) : undefined,
     );
     restartIdleWorkers("claude", workspacePath);
-    void capabilities.refresh(workspacePath, true).catch((error) => {
+    void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
       console.error("failed to refresh Claude capabilities after saving a command", error);
     });
     res.json({ command });
@@ -344,7 +383,7 @@ app.delete("/api/commands", async (req, res) => {
     const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
     await deleteProjectCommand(workspacePath, String(req.body?.name ?? ""));
     restartIdleWorkers("claude", workspacePath);
-    void capabilities.refresh(workspacePath, true).catch((error) => {
+    void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
       console.error("failed to refresh Claude capabilities after deleting a command", error);
     });
     res.json({ ok: true });
@@ -414,7 +453,8 @@ app.post("/api/workers", (req, res) => {
       provider,
       workspacePath,
     );
-    if (provider === "claude") void capabilities.refresh(workspacePath);
+    if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+    else void codexCapabilitiesFor(workspacePath).refresh();
     res.json(workerSummary(worker));
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
@@ -476,7 +516,8 @@ app.patch("/api/workers/:id/provider", (req, res) => {
   worker.runner.name = name;
   if (providerReady(provider)) worker.runner.warmup();
   persistWorker(worker);
-  if (provider === "claude") void capabilities.refresh(workspacePath);
+  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+  else void codexCapabilitiesFor(workspacePath).refresh();
   const summary = workerSummary(worker);
   broadcast({ type: "worker_updated", worker: summary });
   res.json(summary);
@@ -512,7 +553,8 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     if (model && validModel(provider, model)) worker.runner.setModel(model);
     if (providerReady(provider)) worker.runner.warmup();
     persistWorker(worker);
-    if (provider === "claude") void capabilities.refresh(workspacePath);
+    if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+    else void codexCapabilitiesFor(workspacePath).refresh();
     const summary = workerSummary(worker);
     broadcast({ type: "worker_updated", worker: summary, reset: true });
     res.json({ ...summary, conversationReset });
@@ -528,7 +570,9 @@ app.post("/api/workers/:id/activate", (req, res) => {
     return;
   }
   if (worker.runner.provider === "claude") {
-    void capabilities.refresh(worker.runner.workspacePath);
+    void claudeCapabilitiesFor(worker.runner.workspacePath).refresh();
+  } else {
+    void codexCapabilitiesFor(worker.runner.workspacePath).refresh();
   }
   res.json({ ok: true, workspacePath: worker.runner.workspacePath });
 });
@@ -644,8 +688,10 @@ async function refreshOneAuth(provider: ProviderId): Promise<ProviderAuthState> 
   }
   if (becameReady) {
     restartIdleWorkers(provider);
-    if (provider === "claude") void capabilities.refresh();
-    else void codexCapabilities.refresh();
+    for (const workspacePath of recentWorkspacePaths()) {
+      if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+      else void codexCapabilitiesFor(workspacePath).refresh();
+    }
   }
   return next;
 }
@@ -655,8 +701,23 @@ async function refreshAuth(provider?: ProviderId): Promise<ProviderAuthState[]> 
   return Promise.all((Object.keys(authProviders) as ProviderId[]).map(refreshOneAuth));
 }
 
+async function refreshProviderWorkspaces(provider: ProviderId): Promise<void> {
+  await Promise.all(recentWorkspacePaths().map((workspacePath) => (
+    provider === "codex"
+      ? codexCapabilitiesFor(workspacePath).refresh()
+      : claudeCapabilitiesFor(workspacePath).refresh()
+  )));
+}
+
 app.post("/api/mcp", async (req, res) => {
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
   const name = String(req.body?.name ?? "").trim();
   const target = String(req.body?.target ?? "").trim();
   const header = String(req.body?.header ?? "").trim();
@@ -690,11 +751,10 @@ app.post("/api/mcp", async (req, res) => {
 
   try {
     const { stdout } = await execFileAsync(provider === "codex" ? config.codexBin : config.claudeBin, args, {
-      cwd: config.targetRepoPath,
+      cwd: workspacePath,
       timeout: 30000,
     });
-    if (provider === "codex") await codexCapabilities.refresh();
-    else await capabilities.refresh();
+    await refreshProviderWorkspaces(provider);
     restartIdleWorkers(provider);
     res.json({ ok: true, message: stdout.trim() });
   } catch (err: any) {
@@ -704,17 +764,33 @@ app.post("/api/mcp", async (req, res) => {
 
 app.post("/api/mcp/refresh", async (req, res) => {
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
-  if (provider === "codex") await codexCapabilities.refresh();
-  else await capabilities.refresh();
-  restartIdleWorkers(provider);
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  if (provider === "codex") await codexCapabilitiesFor(workspacePath).refresh();
+  else await claudeCapabilitiesFor(workspacePath).refresh();
+  restartIdleWorkers(provider, workspacePath);
   res.json({
     ok: true,
-    capabilities: provider === "codex" ? codexCapabilities.getState() : capabilities.getState(),
+    capabilities: provider === "codex"
+      ? codexCapabilitiesFor(workspacePath).getState()
+      : claudeCapabilitiesFor(workspacePath).getState(),
   });
 });
 
 app.delete("/api/mcp/:name", async (req, res) => {
   const provider: ProviderId = req.query.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
   const name = req.params.name;
   if (!/^[\w.-]+$/.test(name)) {
     res.status(400).json({ error: "這個 server 不能從這裡移除（可能是 claude.ai 帳號層級的連接器）" });
@@ -722,11 +798,10 @@ app.delete("/api/mcp/:name", async (req, res) => {
   }
   try {
     const { stdout } = await execFileAsync(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "remove", name], {
-      cwd: config.targetRepoPath,
+      cwd: workspacePath,
       timeout: 30000,
     });
-    if (provider === "codex") await codexCapabilities.refresh();
-    else await capabilities.refresh();
+    await refreshProviderWorkspaces(provider);
     restartIdleWorkers(provider);
     res.json({ ok: true, message: stdout.trim() });
   } catch (err: any) {
@@ -750,7 +825,19 @@ for (const savedWorker of store.loadWorkers(MAX_HISTORY).slice(0, MAX_WORKERS)) 
 }
 if (workers.size === 0) createWorker(undefined, undefined, "claude", config.targetRepoPath);
 
-void Promise.all([capabilities.refresh(), codexCapabilities.refresh()]).then(() => {
+const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ workspacePath, provider, revision }) => {
+  broadcast({ type: "workflow_library_updated", workspacePath, provider, revision });
+  if (provider === "claude") {
+    void claudeCapabilitiesFor(workspacePath).refreshCommands(true);
+    restartIdleWorkers("claude", workspacePath);
+  }
+});
+workflowWatcher.start();
+
+void Promise.all(recentWorkspacePaths().flatMap((workspacePath) => [
+  claudeCapabilitiesFor(workspacePath).refresh(),
+  codexCapabilitiesFor(workspacePath).refresh(),
+])).then(() => {
   restartIdleWorkers();
 });
 void refreshAuth();

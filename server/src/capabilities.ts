@@ -80,7 +80,6 @@ function sanitizeServerName(name: string): string {
 
 export class CapabilityRegistry {
   private state: CapabilityState;
-  private workspacePath = config.targetRepoPath;
   private refreshGeneration = 0;
   private allowRules: string[] = [];
   private diskCommands: string[] = [];
@@ -89,8 +88,9 @@ export class CapabilityRegistry {
   constructor(
     private readonly store: LocalStore,
     private readonly onUpdate: (state: CapabilityState) => void,
+    private readonly workspacePath = config.targetRepoPath,
   ) {
-    const cached = store.loadCapabilities(config.targetRepoPath);
+    const cached = store.loadCapabilities(workspacePath);
     this.state = cached
       ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
       : { ...EMPTY_STATE };
@@ -109,21 +109,12 @@ export class CapabilityRegistry {
     return this.workspacePath;
   }
 
-  async refresh(workspacePath = this.workspacePath, resetRuntimeCommands = false): Promise<void> {
+  async refresh(resetRuntimeCommands = false): Promise<void> {
     const generation = ++this.refreshGeneration;
-    const requestedWorkspace = workspacePath;
-    if (requestedWorkspace !== this.workspacePath) {
-      this.workspacePath = requestedWorkspace;
-      this.runtimeCommands = [];
-      const cached = this.store.loadCapabilities(requestedWorkspace);
-      this.state = cached
-        ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
-        : { ...EMPTY_STATE };
-    }
     if (resetRuntimeCommands) this.runtimeCommands = [];
     this.publish({ ...this.state, loading: true, error: null }, false);
     const [repoCommands, userCommands] = await Promise.all([
-      commandFiles(join(requestedWorkspace, ".claude", "commands")),
+      commandFiles(join(this.workspacePath, ".claude", "commands")),
       commandFiles(join(homedir(), ".claude", "commands")),
     ]);
     if (generation !== this.refreshGeneration) return;
@@ -141,7 +132,7 @@ export class CapabilityRegistry {
     let error: string | null = null;
     try {
       const mcpResult = await execFileAsync(config.claudeBin, ["mcp", "list"], {
-        cwd: requestedWorkspace,
+        cwd: this.workspacePath,
         timeout: 60000,
       });
       mcpServers = parseMcpList(mcpResult.stdout);
@@ -158,6 +149,22 @@ export class CapabilityRegistry {
       source: "live",
       updatedAt: new Date().toISOString(),
       error,
+    });
+  }
+
+  async refreshCommands(resetRuntimeCommands = false): Promise<void> {
+    if (resetRuntimeCommands) this.runtimeCommands = [];
+    const [repoCommands, userCommands] = await Promise.all([
+      commandFiles(join(this.workspacePath, ".claude", "commands")),
+      commandFiles(join(homedir(), ".claude", "commands")),
+    ]);
+    this.diskCommands = uniqueSorted([...repoCommands, ...userCommands]);
+    this.publish({
+      ...this.state,
+      slashCommands: uniqueSorted([...this.diskCommands, ...this.runtimeCommands]),
+      source: "live",
+      updatedAt: new Date().toISOString(),
+      error: null,
     });
   }
 

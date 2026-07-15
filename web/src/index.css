@@ -1613,6 +1613,15 @@ body {
   backdrop-filter: blur(14px) saturate(0.78);
 }
 
+.command-center--loading {
+  display: grid;
+  place-items: center;
+  color: #7d91ad;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
 .command-center__shell {
   width: min(1180px, 100%);
   height: min(780px, 100%);
@@ -2029,6 +2038,105 @@ body {
   font-size: 9px;
 }
 
+.workflow-mode {
+  display: flex;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid rgba(104, 139, 174, 0.14);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.workflow-mode button {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #60738f;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.workflow-mode button.workflow-mode--active {
+  background: rgba(77, 227, 255, 0.1);
+  color: var(--cyan);
+}
+
+.workflow-structured {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px 15px 15px;
+  overflow-y: auto;
+}
+
+.workflow-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 11px;
+}
+
+.workflow-fields label,
+.workflow-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.workflow-fields span,
+.workflow-body > span {
+  color: #7085a0;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.workflow-fields input {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid rgba(104, 139, 174, 0.16);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.2);
+  color: #d9e6f5;
+  font-size: 11px;
+}
+
+.workflow-fields input:focus {
+  border-color: rgba(77, 227, 255, 0.34);
+}
+
+.workflow-body {
+  min-height: 180px;
+  flex: 1;
+}
+
+.workflow-body textarea {
+  min-height: 150px;
+  flex: 1;
+  padding: 12px 13px;
+  border: 1px solid rgba(104, 139, 174, 0.13);
+  border-radius: 9px;
+  resize: none;
+  outline: none;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.workflow-structured__error {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 91, 122, 0.3);
+  border-radius: 9px;
+  background: rgba(255, 91, 122, 0.07);
+  color: #ff9bad;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
 .command-editor__document textarea {
   width: 100%;
   min-height: 0;
@@ -2050,6 +2158,62 @@ body {
   align-items: center;
   gap: 9px;
   padding-top: 13px;
+}
+
+.workflow-test {
+  display: grid;
+  grid-template-columns: auto minmax(105px, 0.45fr) minmax(150px, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding-top: 10px;
+}
+
+.workflow-test > span {
+  color: rgba(77, 227, 255, 0.68);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+
+.workflow-test select,
+.workflow-test input {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(104, 139, 174, 0.17);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.22);
+  color: #cbd9ea;
+  font-size: 10px;
+}
+
+.workflow-test button,
+.command-editor__reload {
+  padding: 7px 11px;
+  border: 1px solid rgba(77, 227, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(77, 227, 255, 0.07);
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.workflow-test--codex button {
+  border-color: rgba(55, 214, 163, 0.24);
+  background: rgba(55, 214, 163, 0.07);
+  color: #8ee2bc;
+}
+
+.workflow-test button:disabled,
+.command-editor__reload:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.command-editor__reload {
+  border-color: rgba(255, 196, 84, 0.25);
+  background: rgba(255, 196, 84, 0.07);
+  color: #ffd27b;
 }
 
 .command-editor__notice {

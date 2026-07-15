@@ -48,7 +48,10 @@ export class CodexCapabilityRegistry {
     error: null,
   };
 
-  constructor(private readonly onUpdate: (state: CapabilityState) => void) {}
+  constructor(
+    private readonly onUpdate: (state: CapabilityState) => void,
+    private readonly workspacePath = config.targetRepoPath,
+  ) {}
 
   getState(): CapabilityState {
     return this.state;
@@ -58,12 +61,12 @@ export class CodexCapabilityRegistry {
     this.publish({ ...this.state, loading: true, error: null });
     const [mcpResult, modelResult] = await Promise.allSettled([
       execFileAsync(config.codexBin, ["mcp", "list", "--json"], {
-        cwd: config.targetRepoPath,
+        cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 2 * 1024 * 1024,
       }),
       execFileAsync(config.codexBin, ["debug", "models"], {
-        cwd: config.targetRepoPath,
+        cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 8 * 1024 * 1024,
       }),
