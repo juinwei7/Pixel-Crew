@@ -36,6 +36,28 @@ function turnFailureReason(event: Extract<RunnerEvent, { type: "turn_end" }>): s
   return [...new Set(details)].join("\n") || "Agent 回合失敗，但 CLI 沒有提供詳細原因；請重試或查看啟動 Pixel Crew 的終端輸出。";
 }
 
+function isAgentTool(name: string): boolean {
+  return shortToolName(name).toLowerCase() === "agent";
+}
+
+function subagentInfo(input: unknown): { name: string; task: string } {
+  const detail = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  const description = String(detail.description ?? "").trim();
+  const type = String(detail.subagent_type ?? detail.subagentType ?? "").trim();
+  const prompt = String(detail.prompt ?? "").trim();
+  const rawName = description || type || "子代理";
+  const characters = Array.from(rawName);
+  return {
+    name: characters.length > 20 ? `${characters.slice(0, 19).join("")}…` : rawName,
+    task: description || (prompt.length > 80 ? `${prompt.slice(0, 79)}…` : prompt) || type || "協助處理任務",
+  };
+}
+
+function isAsyncAgentResult(output: unknown): boolean {
+  const text = readableFailureDetail(output);
+  return /async agent launched successfully|agentId:\s*[a-z0-9]+/i.test(text);
+}
+
 export const INITIAL_CHARACTER: CharacterState = {
   activity: "idle",
   mood: "neutral",
@@ -63,6 +85,7 @@ export function emptyWorker(
     workspacePath,
     turns: [],
     character: INITIAL_CHARACTER,
+    subagents: [],
     meta: null,
     keyCounter: 0,
     openTextKey: null,
@@ -76,6 +99,9 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
     ...w,
     turns: [...w.turns],
     character: { ...w.character },
+    // Keep Fast Refresh and any older in-memory snapshots compatible with the
+    // field introduced for temporary Agent NPCs.
+    subagents: [...(w.subagents ?? [])],
   };
 
   const nextKey = () => `k${next.keyCounter++}`;
@@ -84,11 +110,21 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
     const last = next.turns[next.turns.length - 1];
     return last && last.status === "running" ? { ...last, items: [...last.items] } : null;
   };
+  const currentOrResumedTurn = (): Turn | null => {
+    const running = currentTurn();
+    if (running) return running;
+    const last = next.turns[next.turns.length - 1];
+    if (!last || last.status !== "done") return null;
+    const resumed: Turn = { ...last, status: "running", items: [...last.items] };
+    next.turns[next.turns.length - 1] = resumed;
+    next.busy = true;
+    return resumed;
+  };
   const putTurn = (turn: Turn) => {
     next.turns[next.turns.length - 1] = turn;
   };
-  const appendItem = (item: TurnItem) => {
-    const turn = currentTurn();
+  const appendItem = (item: TurnItem, resume = false) => {
+    const turn = resume ? currentOrResumedTurn() : currentTurn();
     if (!turn) return;
     turn.items.push(item);
     putTurn(turn);
@@ -115,7 +151,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       break;
     }
     case "text_delta": {
-      const turn = currentTurn();
+      const turn = currentOrResumedTurn();
       if (turn) {
         const idx = next.openTextKey
           ? turn.items.findIndex((i) => i.key === next.openTextKey)
@@ -138,7 +174,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       break;
     }
     case "thinking_delta": {
-      const turn = currentTurn();
+      const turn = currentOrResumedTurn();
       if (turn) {
         const idx = next.openThinkingKey
           ? turn.items.findIndex((i) => i.key === next.openThinkingKey)
@@ -169,7 +205,14 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         input: event.input,
         isError: false,
         status: "running",
-      });
+      }, true);
+      if (isAgentTool(event.name)) {
+        const info = subagentInfo(event.input);
+        next.subagents = [
+          ...next.subagents.filter((agent) => agent.id !== event.id),
+          { id: event.id, name: info.name, task: info.task, background: false },
+        ];
+      }
       next.character = {
         activity: "working",
         mood: "neutral",
@@ -181,11 +224,13 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
     }
     case "tool_call_result": {
       const turn = currentTurn();
+      let completedAgent = false;
       if (turn) {
         const idx = turn.items.findIndex(
           (i) => i.kind === "tool_call" && (i as { id?: string }).id === event.id,
         );
         if (idx >= 0) {
+          completedAgent = isAgentTool(turn.items[idx].kind === "tool_call" ? turn.items[idx].name : "");
           turn.items[idx] = {
             ...turn.items[idx],
             output: event.output,
@@ -193,6 +238,15 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
             status: "done",
           } as TurnItem;
           putTurn(turn);
+        }
+      }
+      if (completedAgent) {
+        if (!event.isError && isAsyncAgentResult(event.output)) {
+          next.subagents = next.subagents.map((agent) =>
+            agent.id === event.id ? { ...agent, background: true } : agent,
+          );
+        } else {
+          next.subagents = next.subagents.filter((agent) => agent.id !== event.id);
         }
       }
       next.character.activity = "idle";
@@ -212,12 +266,40 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
             key: nextKey(),
             text: turnFailureReason(event),
           });
+        } else {
+          // The CLI result is authoritative. In practice the final turn event
+          // can reach the UI before its buffered text deltas; those late deltas
+          // cannot be attached after the turn is closed. Preserve the complete
+          // answer here, while avoiding duplication in the normal ordered path.
+          const result = event.resultText.trim();
+          if (result) {
+            let lastTextIndex = -1;
+            for (let index = turn.items.length - 1; index >= 0; index--) {
+              if (turn.items[index].kind === "assistant_text") {
+                lastTextIndex = index;
+                break;
+              }
+            }
+            const lastItem = lastTextIndex >= 0 ? turn.items[lastTextIndex] : null;
+            const lastText = lastItem?.kind === "assistant_text" ? lastItem.text.trim() : "";
+            if (lastText !== result) {
+              if (lastText && result.startsWith(lastText)) {
+                turn.items[lastTextIndex] = {
+                  ...turn.items[lastTextIndex],
+                  text: result,
+                } as TurnItem;
+              } else {
+                turn.items.push({ kind: "assistant_text", key: nextKey(), text: result });
+              }
+            }
+          }
         }
         putTurn(turn);
       }
       next.busy = false;
       next.openTextKey = null;
       next.openThinkingKey = null;
+      next.subagents = [];
       next.character = {
         ...next.character,
         activity: "idle",
@@ -256,6 +338,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         next.turns[turnIndex] = turn;
       }
       next.busy = false;
+      next.subagents = [];
       next.character = {
         ...next.character,
         activity: "idle",

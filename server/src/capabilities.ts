@@ -157,7 +157,11 @@ export class CapabilityRegistry {
     mcpServers: McpServerState[];
     toolCount: number;
   }): void {
-    this.runtimeCommands = uniqueSorted(meta.slashCommands);
+    const discoveredCommands = uniqueSorted(meta.slashCommands);
+    // Resumed/background Claude sessions sometimes emit an init/meta frame
+    // without slash_commands. That frame is not evidence that commands were
+    // removed, so do not let it erase a previously discovered palette.
+    if (discoveredCommands.length > 0) this.runtimeCommands = discoveredCommands;
     const byName = new Map(this.state.mcpServers.map((server) => [server.name, server]));
     for (const server of meta.mcpServers) byName.set(server.name, server);
     this.publish({

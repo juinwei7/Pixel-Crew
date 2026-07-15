@@ -6,7 +6,8 @@ export type StationKey =
   | "terminal"
   | "web"
   | "check"
-  | "desk";
+  | "desk"
+  | "meeting";
 
 export function stationForTool(name: string, input: unknown): StationKey {
   const n = name.toLowerCase();

@@ -131,6 +131,8 @@ export const FURNITURE_DEFS: FurnitureDef[] = [
   { key: "terminal", label: "終端機", map: RACK, x: 205, bottom: 60, standX: 205, standY: 75, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
   { key: "check", label: "驗證", map: KIOSK, x: 246, bottom: 60, standX: 246, standY: 75, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
   { key: "desk", label: "其他工具", map: CRATE, x: 286, bottom: 58, standX: 286, standY: 73, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
+  // Invisible rendezvous point around the meeting table drawn by OfficeDecor.
+  { key: "meeting", label: "", map: ["."], x: 45, bottom: 128, standX: 45, standY: 145, leds: [] },
   // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.
   { key: "home", label: "", map: ["."], x: 160, bottom: 160, standX: 160, standY: 174, leds: [] },
 ];

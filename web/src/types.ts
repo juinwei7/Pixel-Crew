@@ -71,6 +71,13 @@ export type WorkerMeta = {
   toolCount: number;
 };
 
+export type SubagentState = {
+  id: string;
+  name: string;
+  task: string;
+  background: boolean;
+};
+
 export type CapabilityState = {
   slashCommands: string[];
   mcpServers: Array<{ name: string; status: string }>;
@@ -101,6 +108,7 @@ export type WorkerState = {
   workspacePath: string;
   turns: Turn[];
   character: CharacterState;
+  subagents: SubagentState[];
   meta: WorkerMeta | null;
   /** Reducer bookkeeping (kept in state so snapshot replay works). */
   keyCounter: number;

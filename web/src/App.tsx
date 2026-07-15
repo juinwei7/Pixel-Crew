@@ -209,8 +209,16 @@ export function App() {
 
       <aside className={`holo-panel ${panelOpen ? "" : "holo-panel--closed"}`}>
         <div className="holo-panel__title">
-          任務日誌
-          {active && <span className="holo-panel__worker">{active.name}</span>}
+          <div className="holo-panel__heading">
+            <span className="holo-panel__eyebrow">WORKSTREAM</span>
+            <strong>任務日誌</strong>
+          </div>
+          {active && (
+            <span className="holo-panel__worker">
+              <i />
+              {active.name}
+            </span>
+          )}
         </div>
         <QuestLog turns={active?.turns ?? []} />
       </aside>

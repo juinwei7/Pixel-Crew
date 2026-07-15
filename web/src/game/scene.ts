@@ -17,9 +17,13 @@ const SPOT_OFFSETS: Array<[number, number]> = [
   [0, 0],
   [-14, 5],
   [14, 5],
-  [-7, 10],
-  [7, 10],
-  [0, 14],
+  [-25, 10],
+  [25, 10],
+  [-14, 18],
+  [14, 18],
+  [0, 22],
+  [-28, 22],
+  [28, 22],
 ];
 
 export type WorkerSceneState = {
@@ -28,6 +32,8 @@ export type WorkerSceneState = {
   character: CharacterState;
   active: boolean;
   colorIndex: number;
+  selectId: string;
+  temporary: boolean;
 };
 
 export type PersonScreenPos = { id: string; x: number; y: number; scale: number };
@@ -187,11 +193,14 @@ export async function createScene(
 
   return {
     setWorkers(list: WorkerSceneState[]) {
-      personalDesks.setWorkers(list);
-      officeDecor.setWorkerCount(list.length);
+      const permanentWorkers = list.filter((worker) => !worker.temporary);
+      personalDesks.setWorkers(permanentWorkers);
+      officeDecor.setWorkerCount(permanentWorkers.length);
       const seen = new Set<string>();
-      for (let workerIndex = 0; workerIndex < list.length; workerIndex++) {
-        const w = list[workerIndex];
+      let permanentIndex = 0;
+      let temporaryIndex = 0;
+      for (const w of list) {
+        const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
         seen.add(w.id);
         let entry = entries.get(w.id);
         if (!entry) {
@@ -201,9 +210,9 @@ export async function createScene(
           person.container.hitArea = {
             contains: (x: number, y: number) => x >= -8 && x <= 8 && y >= -18 && y <= 2,
           };
-          person.container.on("pointerdown", () => callbacks.onSelect(w.id));
+          person.container.on("pointerdown", () => callbacks.onSelect(w.selectId));
           world.addChild(person.container);
-          entry = { person, last: null, index: entries.size };
+          entry = { person, last: null, index: workerIndex };
           entries.set(w.id, entry);
           const spot = standSpot(w.character.station, entry.index);
           person.x = spot.x;
@@ -212,9 +221,10 @@ export async function createScene(
         }
         entry.index = workerIndex;
         entry.person.active = w.active;
+        entry.person.container.alpha = w.temporary ? 0.88 : 1;
         if (entry.last !== w.character) applyCharacter(entry, w.character);
         if (w.character.station === "home") {
-          const spot = personalDeskSpot(workerIndex, list.length);
+          const spot = personalDeskSpot(workerIndex, permanentWorkers.length);
           entry.person.setTarget(spot.x, spot.y);
         }
       }
@@ -227,7 +237,7 @@ export async function createScene(
 
       const activeStations = new Set<StationKey>();
       for (const w of list) {
-        if (w.character.activity === "working") activeStations.add(w.character.station);
+        if (!w.temporary && w.character.activity === "working") activeStations.add(w.character.station);
       }
       furniture.setActive(activeStations);
     },

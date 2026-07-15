@@ -55,6 +55,35 @@ function ToolRow({ item }: { item: ToolCallItem }) {
   );
 }
 
+function ToolGroup({ items }: { items: ToolCallItem[] }) {
+  const urgent = items.some((item) => item.status === "running" || item.isError);
+  const [open, setOpen] = useState(urgent);
+  const failed = items.filter((item) => item.isError).length;
+  const running = items.filter((item) => item.status === "running").length;
+
+  useEffect(() => {
+    if (urgent) setOpen(true);
+  }, [urgent]);
+
+  return (
+    <div className={`tool-group ${failed ? "tool-group--error" : ""}`}>
+      <button className="tool-group__head" onClick={() => setOpen((value) => !value)}>
+        <span className="tool-group__mark">{running ? <span className="spinner" /> : "⌘"}</span>
+        <span className="tool-group__title">工具活動</span>
+        <span className="tool-group__summary">
+          {items.length} 項{failed ? ` · ${failed} 失敗` : ""}
+        </span>
+        <span className="tool-group__chevron">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="tool-group__items">
+          {items.map((item) => <ToolRow key={item.key} item={item} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ThinkingRow({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -71,10 +100,35 @@ function ThinkingRow({ text }: { text: string }) {
   );
 }
 
-function TurnItems({ items }: { items: TurnItem[] }) {
+function TurnItems({ items, status }: { items: TurnItem[]; status: Turn["status"] }) {
+  let finalTextIndex = -1;
+  if (status === "done") {
+    for (let index = items.length - 1; index >= 0; index--) {
+      if (items[index].kind === "assistant_text") {
+        finalTextIndex = index;
+        break;
+      }
+    }
+  }
+  const grouped: Array<TurnItem | { kind: "tool_group"; key: string; items: ToolCallItem[] }> = [];
+  for (const item of items) {
+    if (item.kind === "tool_call") {
+      const previous = grouped[grouped.length - 1];
+      if (previous?.kind === "tool_group") previous.items.push(item);
+      else grouped.push({ kind: "tool_group", key: `tools-${item.key}`, items: [item] });
+    } else {
+      grouped.push(item);
+    }
+  }
+
   return (
     <div className="turn-card__items">
-      {items.map((item) => {
+      {grouped.map((item) => {
+        if (item.kind === "tool_group") {
+          return item.items.length === 1
+            ? <ToolRow key={item.key} item={item.items[0]} />
+            : <ToolGroup key={item.key} items={item.items} />;
+        }
         if (item.kind === "tool_call") return <ToolRow key={item.key} item={item} />;
         if (item.kind === "thinking") return <ThinkingRow key={item.key} text={item.text} />;
         if (item.kind === "system_error") {
@@ -84,8 +138,11 @@ function TurnItems({ items }: { items: TurnItem[] }) {
             </div>
           );
         }
+        const sourceIndex = items.findIndex((source) => source.key === item.key);
+        const isFinal = sourceIndex === finalTextIndex;
         return (
-          <div key={item.key} className="turn-text">
+          <div key={item.key} className={`turn-text ${isFinal ? "turn-text--final" : ""}`}>
+            {isFinal && <div className="turn-text__label">FINAL RESPONSE</div>}
             <RichText text={item.text} />
           </div>
         );
@@ -112,7 +169,7 @@ function TurnCard({ turn, isLatest }: { turn: Turn; isLatest: boolean }) {
       </button>
       {open && (
         <>
-          <TurnItems items={turn.items} />
+          <TurnItems items={turn.items} status={turn.status} />
           {turn.status !== "running" && turn.durationMs !== undefined && (
             <div className="turn-card__foot">
               {(turn.durationMs / 1000).toFixed(1)}s · ${turn.costUsd?.toFixed(4) ?? "0"}
