@@ -28,7 +28,10 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // True while an IME (e.g. 注音/拼音) is mid-composition, so Enter confirms a
+  // candidate instead of submitting a half-typed message.
+  const composingRef = useRef(false);
   const provider = active?.provider ?? "claude";
   const history = useMemo(() => deriveCommandHistory(workers, provider, workspacePath), [workers, provider, workspacePath]);
   const query = draft.startsWith("/") || draft.startsWith("$") ? draft.slice(1).toLowerCase() : draft.toLowerCase();
@@ -83,6 +86,15 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     return () => window.removeEventListener("pointerdown", closeOutside);
   }, [paletteOpen, onPaletteOpen]);
 
+  // Grow the field to fit its content (Shift+Enter newlines) up to a cap,
+  // then let it scroll. Runs for typed and programmatic (history/choose) edits.
+  useEffect(() => {
+    const field = inputRef.current;
+    if (!field) return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(field.scrollHeight, 160)}px`;
+  }, [draft]);
+
   function choose(item: PaletteItem) {
     setDraft(item.value);
     setHistoryIndex(-1);
@@ -128,12 +140,16 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         ⌘ <span>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
       </button>
       <span className="command-composer__prompt">›</span>
-      <input
+      <textarea
         ref={inputRef}
         value={draft}
+        rows={1}
+        spellCheck={false}
         disabled={!active || active.busy || !authReady}
-        placeholder={active?.busy ? `${active.name} 執勤中…` : `對 ${active?.name ?? "…"} 下指令`}
+        placeholder={active?.busy ? `${active.name} 執勤中…` : `對 ${active?.name ?? "…"} 下指令（Shift+Enter 換行）`}
         aria-label="輸入 Agent 指令"
+        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionEnd={() => { composingRef.current = false; }}
         onChange={(event) => {
           const value = event.target.value;
           setDraft(value);
@@ -142,6 +158,9 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
           if (value === "/" || (value.startsWith("/") && !value.includes(" "))) onPaletteOpen(true);
         }}
         onKeyDown={(event) => {
+          // While composing (IME), defer Enter / arrows / Tab to the input
+          // method so it can confirm or navigate candidates.
+          if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
           if (event.key === "Escape") {
             onPaletteOpen(false);
             return;
@@ -158,7 +177,9 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
               return;
             }
           }
-          if (!paletteOpen && (event.key === "ArrowUp" || event.key === "ArrowDown") && history.length > 0) {
+          // Only steer history while the draft is a single line, so once the
+          // user has added a newline the arrows move the caret as usual.
+          if (!paletteOpen && (event.key === "ArrowUp" || event.key === "ArrowDown") && history.length > 0 && !draft.includes("\n")) {
             event.preventDefault();
             const next = event.key === "ArrowUp" ? Math.min(history.length - 1, historyIndex + 1) : Math.max(-1, historyIndex - 1);
             setHistoryIndex(next);
@@ -166,8 +187,11 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
           }
           if (event.key === "Enter") {
             const action = composerEnterAction(paletteOpen, libraryLoading, items.length, event.shiftKey);
-            if (action !== "submit") event.preventDefault();
+            if (action === "ignore" && event.shiftKey) return; // Shift+Enter inserts a newline
+            // A textarea never submits the form on Enter, so drive it here.
+            event.preventDefault();
             if (action === "choose") choose(items[selected] ?? items[0]);
+            else if (action === "submit") void submit();
           }
         }}
       />

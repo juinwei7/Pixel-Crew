@@ -3537,8 +3537,8 @@ body {
 .command-composer__library { min-height: 32px; padding: 0 9px; border: 1px solid rgba(77,227,255,.13); border-radius: 7px; background: rgba(77,227,255,.045); color: var(--cyan); cursor: pointer; font: 10px var(--mono); }
 .command-composer__library span { color: #7289a6; font-size: 8px; }
 .command-composer__prompt { color: var(--cyan); font: 700 18px var(--mono); }
-.command-composer > input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
-.command-composer > input:disabled { opacity: .5; }
+.command-composer > textarea { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.45 inherit; resize: none; max-height: 160px; overflow-y: auto; padding: 3px 0; }
+.command-composer > textarea:disabled { opacity: .5; }
 .command-composer__submit { min-width: 70px; min-height: 34px; border: 1px solid rgba(55,214,163,.26); border-radius: 9px; background: rgba(55,214,163,.12); color: #80e6bf; cursor: pointer; }
 .command-composer__submit:disabled { opacity: .35; cursor: default; }
 .command-composer__submit--stop { border-color: rgba(255,92,122,.35); background: rgba(255,92,122,.12); color: #ff8fa5; }
