@@ -1,5 +1,5 @@
 import express from "express";
-import cors from "cors";
+import cors, { type CorsOptions } from "cors";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -18,13 +18,27 @@ import { CodexAuthProvider } from "./providers/codexAuth.js";
 import { CodexSession } from "./codexRunner.js";
 import type { AgentSession } from "./providers/session.js";
 import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./providers/types.js";
+import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
+import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
+import { isAllowedLoopbackOrigin } from "./localAccess.js";
 
 const app = express();
-app.use(cors());
+const loopbackCors: CorsOptions = {
+  origin(origin, callback) {
+    callback(null, isAllowedLoopbackOrigin(origin));
+  },
+};
+app.use(cors(loopbackCors));
 app.use(express.json());
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({
+  server,
+  path: "/ws",
+  verifyClient(info, done) {
+    done(isAllowedLoopbackOrigin(info.origin));
+  },
+});
 
 const CLAUDE_MODELS = new Set(["fable", "opus", "sonnet", "haiku"]);
 const MAX_HISTORY = 2000;
@@ -195,6 +209,28 @@ function normalizeWorkspacePath(input: unknown): string {
   }
 }
 
+function normalizeManagedWorkspacePath(input: unknown): string {
+  const canonical = normalizeWorkspacePath(input);
+  const managedPaths = [config.targetRepoPath, ...[...workers.values()].map((worker) => worker.runner.workspacePath)];
+  const managed = managedPaths.some((path) => {
+    try {
+      return realpathSync(path) === canonical;
+    } catch {
+      return false;
+    }
+  });
+  if (!managed) throw new Error("只能管理目前已加入 Pixel Crew 的工作資料夾");
+  return canonical;
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return resolve(left) === resolve(right);
+  }
+}
+
 function recentWorkspacePaths(): string[] {
   return [...new Set([
     config.targetRepoPath,
@@ -273,6 +309,84 @@ app.get("/api/capabilities", (_req, res) => {
       codex: codexCapabilities.getState(),
     },
   });
+});
+
+app.get("/api/commands", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+    res.json({ commands: await listProjectCommands(workspacePath), workspacePath });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法讀取專案指令" });
+  }
+});
+
+app.put("/api/commands", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+    const command = await saveProjectCommand(
+      workspacePath,
+      String(req.body?.name ?? ""),
+      String(req.body?.content ?? ""),
+      req.body?.originalName ? String(req.body.originalName) : undefined,
+    );
+    restartIdleWorkers("claude", workspacePath);
+    void capabilities.refresh(workspacePath, true).catch((error) => {
+      console.error("failed to refresh Claude capabilities after saving a command", error);
+    });
+    res.json({ command });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法儲存專案指令" });
+  }
+});
+
+app.delete("/api/commands", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+    await deleteProjectCommand(workspacePath, String(req.body?.name ?? ""));
+    restartIdleWorkers("claude", workspacePath);
+    void capabilities.refresh(workspacePath, true).catch((error) => {
+      console.error("failed to refresh Claude capabilities after deleting a command", error);
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法刪除專案指令" });
+  }
+});
+
+app.get("/api/skills", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+    res.json({ skills: await listProjectSkills(workspacePath), workspacePath });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法讀取 Codex Skills" });
+  }
+});
+
+app.put("/api/skills", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+    const skill = await saveProjectSkill(
+      workspacePath,
+      String(req.body?.name ?? ""),
+      String(req.body?.content ?? ""),
+      req.body?.originalName ? String(req.body.originalName) : undefined,
+    );
+    restartIdleWorkers("codex", workspacePath);
+    res.json({ skill });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法儲存 Codex Skill" });
+  }
+});
+
+app.delete("/api/skills", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+    await deleteProjectSkill(workspacePath, String(req.body?.name ?? ""));
+    restartIdleWorkers("codex", workspacePath);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法刪除 Codex Skill" });
+  }
 });
 
 app.get("/api/auth", (_req, res) => {
@@ -488,10 +602,11 @@ app.post("/api/workers/:id/model", (req, res) => {
 const execFileAsync = promisify(execFile);
 
 /** Restart idle workers so their next message picks up provider configuration. */
-function restartIdleWorkers(provider?: ProviderId): void {
+function restartIdleWorkers(provider?: ProviderId, workspacePath?: string): void {
   for (const worker of workers.values()) {
     if (
       (!provider || worker.runner.provider === provider) &&
+      (!workspacePath || sameWorkspacePath(worker.runner.workspacePath, workspacePath)) &&
       providerReady(worker.runner.provider) &&
       !worker.runner.busy
     ) {

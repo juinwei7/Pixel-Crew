@@ -109,7 +109,7 @@ export class CapabilityRegistry {
     return this.workspacePath;
   }
 
-  async refresh(workspacePath = this.workspacePath): Promise<void> {
+  async refresh(workspacePath = this.workspacePath, resetRuntimeCommands = false): Promise<void> {
     const generation = ++this.refreshGeneration;
     const requestedWorkspace = workspacePath;
     if (requestedWorkspace !== this.workspacePath) {
@@ -120,6 +120,7 @@ export class CapabilityRegistry {
         ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
         : { ...EMPTY_STATE };
     }
+    if (resetRuntimeCommands) this.runtimeCommands = [];
     this.publish({ ...this.state, loading: true, error: null }, false);
     const [repoCommands, userCommands] = await Promise.all([
       commandFiles(join(requestedWorkspace, ".claude", "commands")),
@@ -127,6 +128,14 @@ export class CapabilityRegistry {
     ]);
     if (generation !== this.refreshGeneration) return;
     this.diskCommands = uniqueSorted([...repoCommands, ...userCommands]);
+    this.publish({
+      ...this.state,
+      slashCommands: uniqueSorted([...this.diskCommands, ...this.runtimeCommands]),
+      loading: true,
+      source: "live",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    }, false);
 
     let mcpServers = this.state.mcpServers;
     let error: string | null = null;

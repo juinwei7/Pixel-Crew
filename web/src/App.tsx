@@ -6,6 +6,7 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { McpPanel } from "./components/McpPanel";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
+import { CommandCenter } from "./components/CommandCenter";
 import type { ProviderId } from "./types";
 import { roomName } from "./workspace";
 
@@ -46,6 +47,7 @@ export function App() {
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [commandCenterOpen, setCommandCenterOpen] = useState(false);
 
   const workerList = order.map((id) => workers[id]).filter(Boolean);
   const active = activeId ? workers[activeId] : undefined;
@@ -246,17 +248,33 @@ export function App() {
                 /{cmd}
               </button>
             ))}
+            <button type="button" className="cmd-palette__manage" onClick={() => setCommandCenterOpen(true)}>
+              管理專案指令…
+            </button>
           </div>
         )}
-        {activeProvider === "claude" && draft === "/" && slashMatches.length === 0 && (
+        {draft === "/" && slashMatches.length === 0 && (
           <div className="cmd-palette">
             <div className="cmd-palette__empty">
-              {activeCapabilities.loading
-                ? "正在載入可用指令…"
-                : "尚未發現專案或使用者指令；CLI 內建指令會在初始化後補上。"}
+              {activeProvider === "claude"
+                ? activeCapabilities.loading
+                  ? "正在載入 Claude Code 指令…"
+                  : "尚未發現 Claude 專案或使用者指令。"
+                : "Codex 不會載入 .claude/commands；工作流會獨立管理。"}
             </div>
+            <button type="button" className="cmd-palette__manage" onClick={() => setCommandCenterOpen(true)}>
+              {activeProvider === "claude" ? "建立或管理 Claude 指令…" : "查看 Codex 工作流…"}
+            </button>
           </div>
         )}
+        <button
+          type="button"
+          className="command-bar__library"
+          onClick={() => setCommandCenterOpen(true)}
+          title="開啟指令中心"
+        >
+          {activeProvider === "claude" ? "CLAUDE 指令" : "CODEX 工作流"}
+        </button>
         <span className="command-bar__prompt">&gt;</span>
         <input
           className="command-bar__input"
@@ -283,6 +301,14 @@ export function App() {
           {active?.busy ? "中止" : "執行"}
         </button>
       </form>
+
+      {commandCenterOpen && activeWorkspace && (
+        <CommandCenter
+          workspacePath={activeWorkspace}
+          provider={activeProvider}
+          onClose={() => setCommandCenterOpen(false)}
+        />
+      )}
 
       <AuthGate
         auth={activeAuth}
