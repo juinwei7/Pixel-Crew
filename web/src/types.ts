@@ -1,0 +1,95 @@
+import type { StationKey } from "./stations";
+
+export type RunnerEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
+  | { type: "tool_call_start"; id: string; name: string; input: unknown }
+  | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
+  | {
+      type: "turn_end";
+      resultText: string;
+      costUsd: number;
+      durationMs: number;
+      isError: boolean;
+      permissionDenials: unknown[];
+    }
+  | {
+      type: "meta";
+      model: string;
+      slashCommands: string[];
+      mcpServers: Array<{ name: string; status: string }>;
+      toolCount: number;
+    }
+  | { type: "user_message"; text: string }
+  | { type: "error"; message: string };
+
+export type ToolCallItem = {
+  kind: "tool_call";
+  key: string;
+  id: string;
+  name: string;
+  input: unknown;
+  output?: unknown;
+  isError: boolean;
+  status: "running" | "done";
+};
+
+export type TextItem = {
+  kind: "assistant_text" | "thinking" | "system_error";
+  key: string;
+  text: string;
+};
+
+export type TurnItem = ToolCallItem | TextItem;
+
+export type Turn = {
+  key: string;
+  command: string;
+  status: "running" | "done" | "error";
+  items: TurnItem[];
+  costUsd?: number;
+  durationMs?: number;
+};
+
+export type CharacterActivity = "idle" | "walking" | "working" | "thinking";
+export type CharacterMood = "neutral" | "success" | "error";
+
+export type CharacterState = {
+  activity: CharacterActivity;
+  mood: CharacterMood;
+  station: StationKey;
+  speech: string;
+  bump: number;
+};
+
+export type WorkerMeta = {
+  model: string;
+  slashCommands: string[];
+  mcpServers: Array<{ name: string; status: string }>;
+  toolCount: number;
+};
+
+export type CapabilityState = {
+  slashCommands: string[];
+  mcpServers: Array<{ name: string; status: string }>;
+  toolCount: number | null;
+  loading: boolean;
+  source: "empty" | "cache" | "live";
+  updatedAt: string | null;
+  error: string | null;
+};
+
+export type WorkerState = {
+  id: string;
+  name: string;
+  model: string | null;
+  busy: boolean;
+  colorIndex: number;
+  turns: Turn[];
+  character: CharacterState;
+  meta: WorkerMeta | null;
+  /** Reducer bookkeeping (kept in state so snapshot replay works). */
+  keyCounter: number;
+  openTextKey: string | null;
+  openThinkingKey: string | null;
+};

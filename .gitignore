@@ -1,0 +1,10 @@
+node_modules/
+server/dist/
+web/dist/
+*.tsbuildinfo
+.DS_Store
+.idea/
+server/data/
+.env
+.env.*
+!.env.example
