@@ -4,13 +4,17 @@ import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { McpPanel } from "./components/McpPanel";
+import { AuthGate } from "./components/AuthGate";
+import { WorkspacePicker } from "./components/WorkspacePicker";
+import type { ProviderId } from "./types";
+import { roomName } from "./workspace";
 
-const MODEL_OPTIONS = [
-  { value: "", label: "預設模型" },
-  { value: "fable", label: "Fable（最強）" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku（最快）" },
+const CLAUDE_MODEL_OPTIONS = [
+  { id: "", label: "預設模型" },
+  { id: "fable", label: "Fable（最強）" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku（最快）" },
 ];
 
 export function App() {
@@ -20,13 +24,20 @@ export function App() {
     activeId,
     setActiveId,
     targetRepoPath,
+    workspacePaths,
     wsReady,
     capabilities,
+    auth,
     createWorker,
+    pickWorkspace,
+    switchProvider,
+    switchWorkspace,
     closeWorker,
+    renameWorker,
     send,
     setModel,
     interrupt,
+    refreshAuth,
   } = useWorkers();
 
   const [draft, setDraft] = useState("");
@@ -34,17 +45,25 @@ export function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   const workerList = order.map((id) => workers[id]).filter(Boolean);
   const active = activeId ? workers[activeId] : undefined;
+  const activeProvider: ProviderId = active?.provider ?? "claude";
+  const activeWorkspace = active?.workspacePath || targetRepoPath;
+  const activeAuth = auth[activeProvider];
+  const activeCapabilities = capabilities[activeProvider];
+  const modelOptions = activeProvider === "codex"
+    ? [{ id: "", label: "預設模型" }, ...activeCapabilities.models]
+    : CLAUDE_MODEL_OPTIONS;
 
   const slashMatches = useMemo(() => {
-    if (!draft.startsWith("/") || draft.includes(" ")) return [];
+    if (activeProvider !== "claude" || !draft.startsWith("/") || draft.includes(" ")) return [];
     const prefix = draft.slice(1).toLowerCase();
-    return capabilities.slashCommands
+    return activeCapabilities.slashCommands
       .filter((c) => c.toLowerCase().startsWith(prefix))
       .slice(0, 8);
-  }, [draft, capabilities.slashCommands]);
+  }, [draft, activeCapabilities.slashCommands, activeProvider]);
 
   async function submit(text: string) {
     if (!activeId) return;
@@ -83,8 +102,19 @@ export function App() {
     }
   }
 
-  const mcpServers = capabilities.mcpServers;
-  const mcpConnected = mcpServers.filter((s) => s.status === "connected").length;
+  const mcpServers = activeCapabilities.mcpServers;
+  const mcpConnected = mcpServers.filter(
+    (s) => s.status === "connected" || s.status === "enabled",
+  ).length;
+  const authReady = activeAuth.status === "authenticated";
+  const authLabel =
+    activeAuth.status === "authenticated"
+      ? `${activeAuth.displayName.toUpperCase()} READY`
+      : activeAuth.status === "checking"
+        ? `${activeAuth.displayName.toUpperCase()} CHECKING`
+        : activeAuth.status === "cli_missing"
+          ? `${activeAuth.displayName.toUpperCase()} MISSING`
+          : `${activeAuth.displayName.toUpperCase()} LOGIN`;
 
   return (
     <div className="game-root">
@@ -95,7 +125,6 @@ export function App() {
           <span className="hud-header__dot" />
           PIXEL CREW
         </div>
-        <div className="hud-header__repo">{targetRepoPath || "…"}</div>
 
         <div className="mcp-chip-wrap">
           <button
@@ -103,28 +132,72 @@ export function App() {
             onClick={() => setMcpOpen((v) => !v)}
             title="MCP server 狀態"
           >
-            MCP {capabilities.loading ? "…" : `${mcpConnected}/${mcpServers.length}`}
+            MCP {activeCapabilities.loading ? "…" : `${mcpConnected}/${mcpServers.length}`}
           </button>
-          {mcpOpen && <McpPanel capabilities={capabilities} />}
+          {mcpOpen && <McpPanel capabilities={activeCapabilities} provider={activeProvider} />}
         </div>
+
+        <select
+          className="hud-header__model hud-header__provider"
+          value={activeProvider}
+          disabled={Boolean(active?.busy) || (workerList.length >= 20 && Boolean(active?.turns.length))}
+          onChange={(e) => {
+            const provider = e.target.value as ProviderId;
+            if (provider !== activeProvider) {
+              void (async () => {
+                if (active && active.turns.length === 0) {
+                  setError(await switchProvider(active.id, provider));
+                  return;
+                }
+                const result = await createWorker(undefined, provider, activeWorkspace);
+                setError(result.error ?? null);
+              })();
+            }
+          }}
+          title={
+            active?.turns.length === 0
+              ? "尚未開始對話，直接切換目前 NPC 類型"
+              : workerList.length >= 20
+                ? "NPC 已達 20 位上限"
+                : "已有對話，切換時會建立新的 NPC"
+          }
+        >
+          <option value="claude">Claude Code</option>
+          <option value="codex">Codex</option>
+        </select>
 
         <select
           className="hud-header__model"
           value={active?.model ?? ""}
-          disabled={!active || active.busy}
+          disabled={!active || active.busy || !authReady}
           onChange={(e) => activeId && setModel(activeId, e.target.value)}
           title="切換模型（對話脈絡會保留）"
         >
-          {MODEL_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
+          {modelOptions.map((opt) => (
+            <option key={opt.id} value={opt.id}>
               {opt.label}
             </option>
           ))}
         </select>
+        <div className={`hud-header__conn ${authReady ? "hud-header__conn--on" : "hud-header__conn--warn"}`}>
+          {authReady ? "●" : "○"} {authLabel}
+        </div>
         <div className={`hud-header__conn ${wsReady ? "hud-header__conn--on" : ""}`}>
-          {wsReady ? "● ONLINE" : "○ CONNECTING"}
+          {wsReady ? "● SERVER ONLINE" : "○ SERVER CONNECTING"}
         </div>
       </header>
+
+      <button
+        type="button"
+        className="room-banner"
+        onClick={() => setWorkspaceOpen(true)}
+        title="選擇新的工作位置"
+      >
+        <span className="room-banner__label">CURRENT ROOM</span>
+        <strong>{roomName(activeWorkspace)}</strong>
+        <span className="room-banner__path">{activeWorkspace}</span>
+        <span className="room-banner__change">切換 ↗</span>
+      </button>
 
       <button
         className={`panel-toggle ${panelOpen ? "panel-toggle--open" : ""}`}
@@ -146,8 +219,9 @@ export function App() {
         workers={workerList}
         activeId={activeId}
         onSelect={setActiveId}
-        onCreate={() => createWorker()}
+        onCreate={() => createWorker(undefined, activeProvider, activeWorkspace)}
         onClose={closeWorker}
+        onRename={renameWorker}
       />
 
       <form className="command-bar" onSubmit={handleSubmit}>
@@ -166,10 +240,10 @@ export function App() {
             ))}
           </div>
         )}
-        {draft === "/" && slashMatches.length === 0 && (
+        {activeProvider === "claude" && draft === "/" && slashMatches.length === 0 && (
           <div className="cmd-palette">
             <div className="cmd-palette__empty">
-              {capabilities.loading
+              {activeCapabilities.loading
                 ? "正在載入可用指令…"
                 : "尚未發現專案或使用者指令；CLI 內建指令會在初始化後補上。"}
             </div>
@@ -190,17 +264,41 @@ export function App() {
               ? `${active.name} 執勤中…（可繼續切換其他工人）`
               : `對 ${active?.name ?? "…"} 下指令，/ 看指令`
           }
-          disabled={!active || active.busy}
+          disabled={!active || active.busy || !authReady}
         />
         {error && <span className="command-bar__error">{error}</span>}
         <button
           className={`command-bar__submit ${active?.busy ? "command-bar__submit--stop" : ""}`}
           type="submit"
-          disabled={!active || (!active.busy && !draft.trim())}
+          disabled={!active || !authReady || (!active.busy && !draft.trim())}
         >
           {active?.busy ? "中止" : "執行"}
         </button>
       </form>
+
+      <AuthGate
+        auth={activeAuth}
+        providers={auth}
+        onRefresh={refreshAuth}
+        onUseProvider={(provider) => void createWorker(undefined, provider, activeWorkspace)}
+      />
+
+      {workspaceOpen && (
+        <WorkspacePicker
+          currentPath={activeWorkspace}
+          recentPaths={workspacePaths}
+          resetsConversation={Boolean(active?.turns.length)}
+          onBrowse={pickWorkspace}
+          onClose={() => setWorkspaceOpen(false)}
+          onSelect={async (path) => {
+            if (!activeId) {
+              const result = await createWorker(undefined, activeProvider, path);
+              return result.error ?? null;
+            }
+            return switchWorkspace(activeId, path);
+          }}
+        />
+      )}
     </div>
   );
 }

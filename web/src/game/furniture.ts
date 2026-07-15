@@ -108,15 +108,6 @@ const CRATE = [
   "DDDDDDDDDDDDDDDD",
 ];
 
-const RUG = [
-  "....UUUUUUUUUUUU....",
-  "..UU............UU..",
-  ".U................U.",
-  ".U................U.",
-  "..UU............UU..",
-  "....UUUUUUUUUUUU....",
-];
-
 export type FurnitureDef = {
   key: StationKey;
   label: string;
@@ -133,14 +124,15 @@ export type FurnitureDef = {
 };
 
 export const FURNITURE_DEFS: FurnitureDef[] = [
-  { key: "board", label: "任務板", map: BOARD, x: 34, bottom: 42, standX: 34, standY: 62, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
-  { key: "books", label: "讀檔案", map: SHELF, x: 82, bottom: 52, standX: 82, standY: 66, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
-  { key: "code", label: "寫程式", map: CODE_DESK, x: 136, bottom: 56, standX: 136, standY: 70, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
-  { key: "web", label: "上網查", map: GLOBE, x: 188, bottom: 52, standX: 188, standY: 66, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
-  { key: "terminal", label: "終端機", map: RACK, x: 62, bottom: 118, standX: 62, standY: 133, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
-  { key: "check", label: "驗證", map: KIOSK, x: 126, bottom: 124, standX: 126, standY: 139, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
-  { key: "desk", label: "其他工具", map: CRATE, x: 188, bottom: 116, standX: 188, standY: 131, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
-  { key: "home", label: "待命區", map: RUG, x: 232, bottom: 158, standX: 232, standY: 154, leds: [] },
+  { key: "board", label: "任務板", map: BOARD, x: 32, bottom: 42, standX: 32, standY: 65, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
+  { key: "books", label: "讀檔案", map: SHELF, x: 73, bottom: 60, standX: 73, standY: 74, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
+  { key: "code", label: "寫程式", map: CODE_DESK, x: 116, bottom: 60, standX: 116, standY: 74, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
+  { key: "web", label: "上網查", map: GLOBE, x: 160, bottom: 60, standX: 160, standY: 74, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
+  { key: "terminal", label: "終端機", map: RACK, x: 205, bottom: 60, standX: 205, standY: 75, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
+  { key: "check", label: "驗證", map: KIOSK, x: 246, bottom: 60, standX: 246, standY: 75, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
+  { key: "desk", label: "其他工具", map: CRATE, x: 286, bottom: 58, standX: 286, standY: 73, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
+  // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.
+  { key: "home", label: "", map: ["."], x: 160, bottom: 160, standX: 160, standY: 174, leds: [] },
 ];
 
 class FurnitureSprite {

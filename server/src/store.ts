@@ -1,15 +1,18 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { RunnerEvent } from "./claudeRunner.js";
 import type { CapabilityState } from "./capabilities.js";
+import type { ProviderId } from "./providers/types.js";
 
 export type PersistedWorker = {
   id: string;
   name: string;
   model: string | null;
   colorIndex: number;
-  claudeSessionId: string;
+  provider: ProviderId;
+  workspacePath: string;
+  sessionId: string;
   completedTurns: number;
   events: RunnerEvent[];
 };
@@ -26,8 +29,10 @@ export class LocalStore {
 
   constructor(path: string) {
     this.path = path;
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    chmodSync(dirname(path), 0o700);
+    const directory = dirname(path);
+    const createdDirectory = !existsSync(directory);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (createdDirectory) chmodSync(directory, 0o700);
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -38,6 +43,8 @@ export class LocalStore {
         name TEXT NOT NULL,
         model TEXT,
         color_index INTEGER NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
         claude_session_id TEXT NOT NULL,
         completed_turns INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -60,12 +67,22 @@ export class LocalStore {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
+    } catch {
+      // Existing databases already migrated to the provider-aware schema.
+    }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN workspace_path TEXT");
+    } catch {
+      // Existing databases already migrated to workspace-aware workers.
+    }
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, claude_session_id, completed_turns
+      SELECT id, name, model, color_index, provider, workspace_path, claude_session_id, completed_turns
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -86,7 +103,9 @@ export class LocalStore {
         name: String(row.name),
         model: row.model == null ? null : String(row.model),
         colorIndex: Number(row.color_index),
-        claudeSessionId: String(row.claude_session_id),
+        provider: row.provider === "codex" ? "codex" : "claude",
+        workspacePath: row.workspace_path == null ? "" : String(row.workspace_path),
+        sessionId: String(row.claude_session_id),
         completedTurns: Number(row.completed_turns),
         events,
       };
@@ -97,12 +116,14 @@ export class LocalStore {
     this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, claude_session_id, completed_turns
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, provider, workspace_path, claude_session_id, completed_turns
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
           color_index = excluded.color_index,
+          provider = excluded.provider,
+          workspace_path = excluded.workspace_path,
           claude_session_id = excluded.claude_session_id,
           completed_turns = excluded.completed_turns,
           updated_at = CURRENT_TIMESTAMP
@@ -111,7 +132,9 @@ export class LocalStore {
         worker.name,
         worker.model,
         worker.colorIndex,
-        worker.claudeSessionId,
+        worker.provider,
+        worker.workspacePath,
+        worker.sessionId,
         worker.completedTurns,
       );
     });
@@ -121,6 +144,13 @@ export class LocalStore {
     this.flushEvents();
     this.safeWrite("delete worker", () => {
       this.db.prepare("DELETE FROM workers WHERE id = ?").run(id);
+    });
+  }
+
+  clearWorkerEvents(id: string): void {
+    this.flushEvents();
+    this.safeWrite("clear worker events", () => {
+      this.db.prepare("DELETE FROM runner_events WHERE worker_id = ?").run(id);
     });
   }
 

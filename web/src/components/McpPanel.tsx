@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CapabilityState } from "../types";
+import type { CapabilityState, ProviderId } from "../types";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:8787";
 
@@ -7,7 +7,13 @@ function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
 }
 
-export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
+export function McpPanel({
+  capabilities,
+  provider,
+}: {
+  capabilities: CapabilityState;
+  provider: ProviderId;
+}) {
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [header, setHeader] = useState("");
@@ -15,7 +21,22 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   const servers = capabilities.mcpServers;
+  const activeServerCount = servers.filter(
+    (server) => server.status === "connected" || server.status === "enabled",
+  ).length;
   const isUrl = /^https?:\/\//.test(target.trim());
+
+  async function refresh() {
+    setPending(true);
+    setNotice(null);
+    const res = await fetch(`${SERVER_URL}/api/mcp/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    });
+    setPending(false);
+    setNotice(res.ok ? { ok: true, text: "MCP 狀態已更新" } : { ok: false, text: "更新失敗" });
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -24,7 +45,12 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
     const res = await fetch(`${SERVER_URL}/api/mcp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), target: target.trim(), header: header.trim() }),
+      body: JSON.stringify({
+        provider,
+        name: name.trim(),
+        target: target.trim(),
+        header: provider === "claude" ? header.trim() : "",
+      }),
     });
     const data = await res.json().catch(() => ({}));
     setPending(false);
@@ -41,7 +67,7 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
   async function remove(serverName: string) {
     setPending(true);
     setNotice(null);
-    const res = await fetch(`${SERVER_URL}/api/mcp/${encodeURIComponent(serverName)}`, {
+    const res = await fetch(`${SERVER_URL}/api/mcp/${encodeURIComponent(serverName)}?provider=${provider}`, {
       method: "DELETE",
     });
     const data = await res.json().catch(() => ({}));
@@ -60,7 +86,18 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
         <span className="mcp-popover__tools">
           {capabilities.loading
             ? "讀取中…"
-            : `${capabilities.toolCount ?? "?"} tools · ${capabilities.source === "cache" ? "快取" : "已更新"}`}
+            : capabilities.toolCount == null
+              ? `${activeServerCount}/${servers.length} active`
+              : `${capabilities.toolCount} tools · ${capabilities.source === "cache" ? "快取" : "已更新"}`}
+          <button
+            type="button"
+            className="mcp-popover__refresh"
+            title="重新讀取 MCP"
+            disabled={pending || capabilities.loading}
+            onClick={() => void refresh()}
+          >
+            ↻
+          </button>
         </span>
       </div>
 
@@ -76,7 +113,7 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
         <div key={s.name} className="mcp-popover__row">
           <span
             className={`mcp-popover__dot ${
-              s.status === "connected" ? "mcp-popover__dot--on" : ""
+              s.status === "connected" || s.status === "enabled" ? "mcp-popover__dot--on" : ""
             }`}
           />
           <span className="mcp-popover__name">{s.name}</span>
@@ -108,13 +145,16 @@ export function McpPanel({ capabilities }: { capabilities: CapabilityState }) {
           value={target}
           onChange={(e) => setTarget(e.target.value)}
         />
-        {isUrl && (
+        {isUrl && provider === "claude" && (
           <input
             className="mcp-add__input"
             placeholder="Header（選填，如 Authorization: Bearer <token>）"
             value={header}
             onChange={(e) => setHeader(e.target.value)}
           />
+        )}
+        {isUrl && provider === "codex" && (
+          <div className="mcp-add__hint">OAuth 或 bearer token 請先用 codex mcp login／終端設定。</div>
         )}
         <button
           className="mcp-add__submit"

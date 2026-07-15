@@ -16,7 +16,9 @@ test("persists workers, bounded events, and capability cache", () => {
       name: "一號機",
       model: "sonnet",
       colorIndex: 2,
-      claudeSessionId: "session-1",
+      provider: "claude",
+      workspacePath: "/repo",
+      sessionId: "session-1",
       completedTurns: 3,
     });
     store.appendEvent("worker-1", { type: "user_message", text: "first" }, 2);
@@ -33,6 +35,7 @@ test("persists workers, bounded events, and capability cache", () => {
     const capabilities: CapabilityState = {
       slashCommands: ["complete-task"],
       mcpServers: [{ name: "issue-tracker", status: "connected" }],
+      models: [],
       toolCount: 4,
       loading: false,
       source: "live",
@@ -45,8 +48,13 @@ test("persists workers, bounded events, and capability cache", () => {
     const [worker] = reopened.loadWorkers(20);
     assert.equal(worker.name, "一號機");
     assert.equal(worker.completedTurns, 3);
+    assert.equal(worker.provider, "claude");
+    assert.equal(worker.workspacePath, "/repo");
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
+
+    reopened.clearWorkerEvents("worker-1");
+    assert.deepEqual(reopened.loadWorkers(20)[0].events, []);
 
     reopened.deleteWorker("worker-1");
     assert.equal(reopened.loadWorkers(20).length, 0);

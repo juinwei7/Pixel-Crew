@@ -1,5 +1,7 @@
 import type { StationKey } from "./stations";
 
+export type ProviderId = "claude" | "codex";
+
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
   | { type: "thinking_delta"; text: string }
@@ -72,10 +74,20 @@ export type WorkerMeta = {
 export type CapabilityState = {
   slashCommands: string[];
   mcpServers: Array<{ name: string; status: string }>;
+  models: Array<{ id: string; label: string; description?: string }>;
   toolCount: number | null;
   loading: boolean;
   source: "empty" | "cache" | "live";
   updatedAt: string | null;
+  error: string | null;
+};
+
+export type ProviderAuthState = {
+  provider: ProviderId;
+  displayName: string;
+  status: "checking" | "authenticated" | "unauthenticated" | "cli_missing" | "error";
+  loginCommand: string;
+  checkedAt: string | null;
   error: string | null;
 };
 
@@ -85,6 +97,8 @@ export type WorkerState = {
   model: string | null;
   busy: boolean;
   colorIndex: number;
+  provider: ProviderId;
+  workspacePath: string;
   turns: Turn[];
   character: CharacterState;
   meta: WorkerMeta | null;

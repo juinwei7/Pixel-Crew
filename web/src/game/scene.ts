@@ -5,6 +5,8 @@ import { Room, ART_W, ART_H } from "./room";
 import { FurnitureLayer, FURNITURE_DEFS } from "./furniture";
 import { Person } from "./person";
 import { ParticleSystem } from "./particles";
+import { PersonalDeskLayer, personalDeskSpot } from "./personalDesks";
+import { OfficeDecor } from "./officeDecor";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -22,6 +24,7 @@ const SPOT_OFFSETS: Array<[number, number]> = [
 
 export type WorkerSceneState = {
   id: string;
+  name: string;
   character: CharacterState;
   active: boolean;
   colorIndex: number;
@@ -65,10 +68,12 @@ export async function createScene(
   const room = new Room();
   const furniture = new FurnitureLayer();
   const particles = new ParticleSystem();
+  const personalDesks = new PersonalDeskLayer(callbacks.onSelect);
+  const officeDecor = new OfficeDecor();
 
   room.container.zIndex = -1000;
   particles.g.zIndex = 10000;
-  world.addChild(room.container, particles.g);
+  world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g);
   for (const child of [...furniture.container.children]) {
     world.addChild(child);
   }
@@ -116,6 +121,7 @@ export async function createScene(
   let elapsed = 0;
 
   function standSpot(station: StationKey, index: number): { x: number; y: number } {
+    if (station === "home") return personalDeskSpot(index, entries.size || 1);
     const def = furniture.def(station);
     const [ox, oy] = SPOT_OFFSETS[index % SPOT_OFFSETS.length];
     return {
@@ -181,8 +187,11 @@ export async function createScene(
 
   return {
     setWorkers(list: WorkerSceneState[]) {
+      personalDesks.setWorkers(list);
+      officeDecor.setWorkerCount(list.length);
       const seen = new Set<string>();
-      for (const w of list) {
+      for (let workerIndex = 0; workerIndex < list.length; workerIndex++) {
+        const w = list[workerIndex];
         seen.add(w.id);
         let entry = entries.get(w.id);
         if (!entry) {
@@ -201,8 +210,13 @@ export async function createScene(
           person.y = spot.y;
           person.setTarget(spot.x, spot.y);
         }
+        entry.index = workerIndex;
         entry.person.active = w.active;
         if (entry.last !== w.character) applyCharacter(entry, w.character);
+        if (w.character.station === "home") {
+          const spot = personalDeskSpot(workerIndex, list.length);
+          entry.person.setTarget(spot.x, spot.y);
+        }
       }
       for (const [id, entry] of entries) {
         if (!seen.has(id)) {

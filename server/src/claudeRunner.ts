@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import type { AgentSession } from "./providers/session.js";
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
@@ -31,7 +32,8 @@ export type RunnerEvent =
  * over stdin (stream-json input), so the CLI cold start (settings, hooks,
  * MCP connections) is paid once per session instead of once per message.
  */
-export class ClaudeSession {
+export class ClaudeSession implements AgentSession {
+  readonly provider = "claude" as const;
   private child: ChildProcessWithoutNullStreams | null = null;
   private claudeSessionId: string;
   private completedTurns: number;
@@ -42,10 +44,11 @@ export class ClaudeSession {
 
   constructor(
     private readonly onEvent: (event: RunnerEvent) => void,
+    readonly workspacePath: string,
     private readonly getAllowedTools: () => string[] = () => [],
-    initialState?: { claudeSessionId: string; completedTurns: number },
+    initialState?: { sessionId: string; completedTurns: number },
   ) {
-    this.claudeSessionId = initialState?.claudeSessionId || randomUUID();
+    this.claudeSessionId = initialState?.sessionId || randomUUID();
     this.completedTurns = initialState?.completedTurns ?? 0;
   }
 
@@ -72,9 +75,9 @@ export class ClaudeSession {
     return this.model;
   }
 
-  getPersistenceState(): { claudeSessionId: string; completedTurns: number } {
+  getPersistenceState(): { sessionId: string; completedTurns: number } {
     return {
-      claudeSessionId: this.claudeSessionId,
+      sessionId: this.claudeSessionId,
       completedTurns: this.completedTurns,
     };
   }
@@ -126,7 +129,7 @@ export class ClaudeSession {
     if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
 
     const child = spawn(config.claudeBin, args, {
-      cwd: config.targetRepoPath,
+      cwd: this.workspacePath,
       env: process.env,
     });
     this.child = child;
@@ -234,12 +237,14 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {
       break;
     }
     case "result": {
+      const subtype = String(parsed.subtype ?? "");
+      const isError = Boolean(parsed.is_error) || subtype.startsWith("error");
       onEvent({
         type: "turn_end",
-        resultText: parsed.result ?? "",
+        resultText: parsed.result ?? parsed.error?.message ?? parsed.message ?? (isError ? subtype : ""),
         costUsd: parsed.total_cost_usd ?? 0,
         durationMs: parsed.duration_ms ?? 0,
-        isError: Boolean(parsed.is_error),
+        isError,
         permissionDenials: parsed.permission_denials ?? [],
       });
       break;

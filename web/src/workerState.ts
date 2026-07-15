@@ -7,6 +7,35 @@ import type {
 } from "./types";
 import { shortToolName, stationForTool } from "./stations";
 
+function readableFailureDetail(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object") return String(value ?? "").trim();
+  const detail = value as Record<string, unknown>;
+  const tool = detail.tool_name ?? detail.toolName ?? detail.name;
+  const reason = detail.reason ?? detail.message ?? detail.error;
+  if (tool || reason) {
+    return [tool ? `工具 ${String(tool)}` : "權限遭拒", reason ? String(reason) : "未獲授權"]
+      .filter(Boolean)
+      .join("：");
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function turnFailureReason(event: Extract<RunnerEvent, { type: "turn_end" }>): string {
+  const details: string[] = [];
+  const result = event.resultText.trim();
+  if (result) details.push(result);
+  for (const denial of event.permissionDenials) {
+    const readable = readableFailureDetail(denial);
+    if (readable) details.push(`權限問題：${readable}`);
+  }
+  return [...new Set(details)].join("\n") || "Agent 回合失敗，但 CLI 沒有提供詳細原因；請重試或查看啟動 Pixel Crew 的終端輸出。";
+}
+
 export const INITIAL_CHARACTER: CharacterState = {
   activity: "idle",
   mood: "neutral",
@@ -21,6 +50,8 @@ export function emptyWorker(
   model: string | null,
   busy: boolean,
   colorIndex: number,
+  provider: WorkerState["provider"],
+  workspacePath: string,
 ): WorkerState {
   return {
     id,
@@ -28,6 +59,8 @@ export function emptyWorker(
     model,
     busy,
     colorIndex,
+    provider,
+    workspacePath,
     turns: [],
     character: INITIAL_CHARACTER,
     meta: null,
@@ -173,6 +206,13 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         turn.status = event.isError ? "error" : "done";
         turn.costUsd = event.costUsd;
         turn.durationMs = event.durationMs;
+        if (event.isError) {
+          turn.items.push({
+            kind: "system_error",
+            key: nextKey(),
+            text: turnFailureReason(event),
+          });
+        }
         putTurn(turn);
       }
       next.busy = false;
@@ -197,11 +237,23 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       break;
     }
     case "error": {
-      const turn = currentTurn();
+      let turn = currentTurn();
+      let turnIndex = next.turns.length - 1;
+      if (!turn) {
+        turnIndex = -1;
+        for (let index = next.turns.length - 1; index >= 0; index--) {
+          if (next.turns[index].status === "error") {
+            turnIndex = index;
+            break;
+          }
+        }
+        const failed = next.turns[turnIndex];
+        if (failed) turn = { ...failed, items: [...failed.items] };
+      }
       if (turn) {
         turn.status = "error";
         turn.items.push({ kind: "system_error", key: nextKey(), text: event.message });
-        putTurn(turn);
+        next.turns[turnIndex] = turn;
       }
       next.busy = false;
       next.character = {

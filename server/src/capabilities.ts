@@ -9,10 +9,12 @@ import type { LocalStore } from "./store.js";
 const execFileAsync = promisify(execFile);
 
 export type McpServerState = { name: string; status: string };
+export type ModelOption = { id: string; label: string; description?: string };
 
 export type CapabilityState = {
   slashCommands: string[];
   mcpServers: McpServerState[];
+  models: ModelOption[];
   toolCount: number | null;
   loading: boolean;
   source: "empty" | "cache" | "live";
@@ -23,6 +25,7 @@ export type CapabilityState = {
 const EMPTY_STATE: CapabilityState = {
   slashCommands: [],
   mcpServers: [],
+  models: [],
   toolCount: null,
   loading: true,
   source: "empty",
@@ -77,6 +80,8 @@ function sanitizeServerName(name: string): string {
 
 export class CapabilityRegistry {
   private state: CapabilityState;
+  private workspacePath = config.targetRepoPath;
+  private refreshGeneration = 0;
   private allowRules: string[] = [];
   private diskCommands: string[] = [];
   private runtimeCommands: string[] = [];
@@ -87,7 +92,7 @@ export class CapabilityRegistry {
   ) {
     const cached = store.loadCapabilities(config.targetRepoPath);
     this.state = cached
-      ? { ...cached, loading: true, source: "cache", error: null }
+      ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
       : { ...EMPTY_STATE };
     this.rebuildAllowRules();
   }
@@ -100,25 +105,41 @@ export class CapabilityRegistry {
     return this.allowRules;
   }
 
-  async refresh(): Promise<void> {
+  getWorkspacePath(): string {
+    return this.workspacePath;
+  }
+
+  async refresh(workspacePath = this.workspacePath): Promise<void> {
+    const generation = ++this.refreshGeneration;
+    const requestedWorkspace = workspacePath;
+    if (requestedWorkspace !== this.workspacePath) {
+      this.workspacePath = requestedWorkspace;
+      this.runtimeCommands = [];
+      const cached = this.store.loadCapabilities(requestedWorkspace);
+      this.state = cached
+        ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
+        : { ...EMPTY_STATE };
+    }
     this.publish({ ...this.state, loading: true, error: null }, false);
     const [repoCommands, userCommands] = await Promise.all([
-      commandFiles(join(config.targetRepoPath, ".claude", "commands")),
+      commandFiles(join(requestedWorkspace, ".claude", "commands")),
       commandFiles(join(homedir(), ".claude", "commands")),
     ]);
+    if (generation !== this.refreshGeneration) return;
     this.diskCommands = uniqueSorted([...repoCommands, ...userCommands]);
 
     let mcpServers = this.state.mcpServers;
     let error: string | null = null;
     try {
       const mcpResult = await execFileAsync(config.claudeBin, ["mcp", "list"], {
-        cwd: config.targetRepoPath,
+        cwd: requestedWorkspace,
         timeout: 60000,
       });
       mcpServers = parseMcpList(mcpResult.stdout);
     } catch (err) {
       error = (err as Error).message;
     }
+    if (generation !== this.refreshGeneration) return;
 
     this.publish({
       ...this.state,
@@ -160,7 +181,7 @@ export class CapabilityRegistry {
   private publish(state: CapabilityState, persist = true): void {
     this.state = state;
     this.rebuildAllowRules();
-    if (persist) this.store.saveCapabilities(config.targetRepoPath, state);
+    if (persist) this.store.saveCapabilities(this.workspacePath, state);
     this.onUpdate(state);
   }
 }

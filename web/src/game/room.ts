@@ -57,6 +57,17 @@ export class Room {
     for (let y = WALL_H; y < ART_H; y += 16) g.rect(0, y, ART_W, 1).fill(TILE_LINE);
     for (let x = 0; x < ART_W; x += 16) g.rect(x, WALL_H, 1, ART_H - WALL_H).fill(TILE_LINE);
 
+    // Office zoning: shared equipment strip, central desk carpet and clear aisle.
+    g.rect(8, 82, 304, 1).fill({ color: 0x263552, alpha: 0.8 });
+    g.rect(82, 91, 156, 79).fill({ color: 0x111d32, alpha: 0.5 });
+    g.rect(84, 93, 152, 75).stroke({ width: 1, color: 0x243654, alpha: 0.24 });
+    g.rect(154, 84, 12, 92).fill({ color: 0x182641, alpha: 0.38 });
+    for (let y = 89; y < 174; y += 12) {
+      g.rect(159, y, 2, 1).fill({ color: 0x344766, alpha: 0.32 });
+    }
+    g.rect(17, 96, 57, 50).fill({ color: 0x141f36, alpha: 0.65 });
+    g.rect(246, 96, 66, 50).fill({ color: 0x141f36, alpha: 0.65 });
+
     this.starSeeds = Array.from({ length: 14 }, () => ({
       x: 181 + Math.random() * 56,
       y: 8 + Math.random() * 23,

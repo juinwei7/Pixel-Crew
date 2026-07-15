@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ToolCallItem, Turn, TurnItem } from "../types";
+import { RichText } from "./RichText";
 
 function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -61,7 +62,11 @@ function ThinkingRow({ text }: { text: string }) {
       <button className="thinking-row__head" onClick={() => setOpen((v) => !v)}>
         💭 思考{open ? "" : "…"}
       </button>
-      {open && <div className="thinking-row__body">{text}</div>}
+      {open && (
+        <div className="thinking-row__body">
+          <RichText text={text} compact />
+        </div>
+      )}
     </div>
   );
 }
@@ -81,7 +86,7 @@ function TurnItems({ items }: { items: TurnItem[] }) {
         }
         return (
           <div key={item.key} className="turn-text">
-            {item.text}
+            <RichText text={item.text} />
           </div>
         );
       })}
@@ -97,7 +102,7 @@ function statusChip(status: Turn["status"]) {
 
 function TurnCard({ turn, isLatest }: { turn: Turn; isLatest: boolean }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
-  const open = expanded ?? (isLatest || turn.status === "running");
+  const open = expanded ?? (isLatest || turn.status === "running" || turn.status === "error");
 
   return (
     <div className={`turn-card turn-card--${turn.status}`}>
