@@ -224,6 +224,46 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       };
       break;
     }
+    case "tool_call_output_delta": {
+      const turn = currentOrResumedTurn();
+      if (turn) {
+        const idx = turn.items.findIndex((item) => item.kind === "tool_call" && item.id === event.id);
+        const item = idx >= 0 ? turn.items[idx] : null;
+        if (item?.kind === "tool_call") {
+          const current = typeof item.output === "string" ? item.output : "";
+          turn.items[idx] = { ...item, output: `${current}${event.delta}`.slice(-200_000) };
+          putTurn(turn);
+        }
+      }
+      break;
+    }
+    case "approval_requested": {
+      appendItem({
+        kind: "approval",
+        key: nextKey(),
+        request: event.request,
+        status: "pending",
+      }, true);
+      next.character.activity = "thinking";
+      next.character.mood = "neutral";
+      next.character.speech = "等待核准…";
+      break;
+    }
+    case "approval_resolved": {
+      const turn = currentOrResumedTurn();
+      if (turn) {
+        const idx = turn.items.findIndex(
+          (item) => item.kind === "approval" && item.request.id === event.id,
+        );
+        if (idx >= 0 && turn.items[idx].kind === "approval") {
+          turn.items[idx] = { ...turn.items[idx], status: "resolved", decision: event.decision };
+          putTurn(turn);
+        }
+      }
+      next.character.activity = "working";
+      next.character.speech = event.decision === "deny" ? "已拒絕操作" : "繼續執行…";
+      break;
+    }
     case "tool_call_result": {
       const turn = currentTurn();
       let completedAgent = false;
@@ -259,6 +299,11 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
     case "turn_end": {
       const turn = currentTurn();
       if (turn) {
+        turn.items = turn.items.map((item) =>
+          item.kind === "approval" && item.status === "pending"
+            ? { ...item, status: "resolved", decision: "deny" as const }
+            : item,
+        );
         turn.status = event.isError ? "error" : "done";
         turn.costUsd = event.costUsd;
         turn.durationMs = event.durationMs;
@@ -336,6 +381,11 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       }
       if (turn) {
         turn.status = "error";
+        turn.items = turn.items.map((item) =>
+          item.kind === "approval" && item.status === "pending"
+            ? { ...item, status: "resolved", decision: "deny" as const }
+            : item,
+        );
         turn.items.push({ kind: "system_error", key: nextKey(), text: event.message });
         next.turns[turnIndex] = turn;
       }

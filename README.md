@@ -13,7 +13,8 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - 自訂像素角色：從本機 PNG、JPEG 或 WebP 裁切、去背並降色成 24×32 NPC，也可上傳 GIF 保留動態效果；所有檔案只保存在本機。
 - 資料夾即房間：每位 Worker 綁定一個本機工作資料夾，並可從 Finder、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
 - Provider 切換：尚未對話時直接更換目前 NPC 類型；已有對話時才建立新 Worker，避免混用不相容的 session 歷史。
-- 即時串流：透過 WebSocket 顯示回覆、thinking、工具呼叫及結果。
+- 即時串流：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
+- 互動式核准：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次、允許本次工作階段（依 provider 支援）或拒絕。
 - 富文字對話：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
 - 像素辦公室：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
 - Slash commands：啟動時掃描專案與使用者指令，不必先送出測試訊息。
@@ -30,7 +31,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 flowchart LR
     UI[React + PixiJS] <-->|REST + WebSocket| Server[Express server]
     Server <-->|stream-json| Claude[Claude Code CLI]
-    Server <-->|JSONL exec/resume| Codex[Codex CLI]
+    Server <-->|app-server JSON-RPC| Codex[Codex CLI]
     Server <--> DB[(SQLite)]
     Claude --> Rooms[Worker room / local folder]
     Codex --> Rooms
@@ -38,7 +39,7 @@ flowchart LR
     Codex --> MCP
 ```
 
-後端將兩種 CLI 的原生事件正規化為相同的 Worker event protocol，再傳給前端並批次寫入本機 SQLite。Claude 使用持久的 `stream-json` 子程序；Codex 每回合使用 `codex exec --json`，後續回合以 thread ID resume。
+後端將兩種 CLI 的原生事件正規化為相同的 Worker event protocol，再傳給前端並寫入本機 SQLite。Claude 使用持久的 `stream-json` 子程序與本機 permission MCP bridge；Codex 使用長駐的 `codex app-server` JSON-RPC，讓工具輸出、子 Agent 活動與核准請求能在同一回合即時呈現。
 
 ## 系統需求
 

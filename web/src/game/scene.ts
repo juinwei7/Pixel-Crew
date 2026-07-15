@@ -38,7 +38,7 @@ export type WorkerSceneState = {
   temporary: boolean;
 };
 
-export type PersonScreenPos = { id: string; x: number; y: number; scale: number };
+export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
 
 export type SceneHandle = {
   setWorkers(list: WorkerSceneState[]): void;
@@ -48,6 +48,8 @@ export type SceneHandle = {
 type SceneCallbacks = {
   onPositions(list: PersonScreenPos[]): void;
   onSelect(id: string): void;
+  onOpen(id: string): void;
+  onHover(id: string | null): void;
   onAvatarError(id: string, message: string): void;
 };
 
@@ -56,7 +58,16 @@ type PersonEntry = {
   last: CharacterState | null;
   index: number;
   avatarId: string | null;
+  temporary: boolean;
+  transition: "entering" | "ready" | "removing";
+  transitionMs: number;
+  baseAlpha: number;
+  targetX: number;
+  targetY: number;
 };
+
+const PERSON_ENTER_MS = 1_350;
+const PERSON_EXIT_MS = 780;
 
 export async function createScene(
   host: HTMLDivElement,
@@ -145,7 +156,7 @@ export async function createScene(
     entry.last = next;
     const { person, index } = entry;
 
-    if (!prev || prev.station !== next.station) {
+    if ((!prev || prev.station !== next.station) && entry.transition === "ready") {
       const spot = standSpot(next.station, index);
       person.setTarget(spot.x, spot.y);
     }
@@ -164,10 +175,33 @@ export async function createScene(
 
     room.update(elapsed);
     furniture.update(elapsed);
+    personalDesks.update(dt);
     particles.update(dt);
 
     const positions: PersonScreenPos[] = [];
     for (const [id, entry] of entries) {
+      entry.transitionMs += dt;
+      if (entry.transition === "entering") {
+        const progress = Math.min(1, entry.transitionMs / PERSON_ENTER_MS);
+        // Let the desk finish assembling before its owner walks in. The late
+        // fade only softens the doorway edge; movement remains the main cue.
+        if (entry.transitionMs >= 720) entry.person.setTarget(entry.targetX, entry.targetY);
+        entry.person.container.alpha = entry.baseAlpha * Math.min(1, Math.max(0, (progress - 0.48) / 0.22));
+        if (progress >= 1) {
+          entry.transition = "ready";
+          entry.person.container.alpha = entry.baseAlpha;
+        }
+      } else if (entry.transition === "removing") {
+        const progress = Math.min(1, entry.transitionMs / PERSON_EXIT_MS);
+        entry.person.container.alpha = entry.baseAlpha * (progress < 0.42
+          ? 1
+          : Math.max(0, 1 - (progress - 0.42) / 0.58));
+        if (progress >= 1) {
+          entry.person.destroy();
+          entries.delete(id);
+          continue;
+        }
+      }
       entry.person.update(elapsed, dt);
 
       const state = entry.last;
@@ -190,6 +224,7 @@ export async function createScene(
         x: world.position.x + entry.person.x * scale,
         y: world.position.y + (entry.person.y - 17) * scale,
         scale,
+        opacity: entry.person.container.alpha,
       });
     }
     callbacks.onPositions(positions);
@@ -207,6 +242,9 @@ export async function createScene(
         const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
         seen.add(w.id);
         let entry = entries.get(w.id);
+        const desiredSpot = w.character.station === "home"
+          ? personalDeskSpot(workerIndex, permanentWorkers.length)
+          : standSpot(w.character.station, workerIndex);
         if (!entry) {
           const person = new Person(w.colorIndex);
           person.container.eventMode = "static";
@@ -215,15 +253,38 @@ export async function createScene(
             contains: (x: number, y: number) => x >= -8 && x <= 8 && y >= -18 && y <= 2,
           };
           person.container.on("pointerdown", () => callbacks.onSelect(w.selectId));
+          person.container.on("pointertap", (event) => {
+            if (event.detail >= 2) callbacks.onOpen(w.selectId);
+          });
+          person.container.on("pointerover", () => callbacks.onHover(w.temporary ? null : w.id));
+          person.container.on("pointerout", () => callbacks.onHover(null));
           world.addChild(person.container);
-          entry = { person, last: null, index: workerIndex, avatarId: null };
+          const entering = !w.temporary;
+          entry = {
+            person,
+            last: null,
+            index: workerIndex,
+            avatarId: null,
+            temporary: w.temporary,
+            transition: entering ? "entering" : "ready",
+            transitionMs: 0,
+            baseAlpha: w.temporary ? 0.88 : 1,
+            targetX: desiredSpot.x,
+            targetY: desiredSpot.y,
+          };
           entries.set(w.id, entry);
-          const spot = standSpot(w.character.station, entry.index);
-          person.x = spot.x;
-          person.y = spot.y;
-          person.setTarget(spot.x, spot.y);
+          person.x = desiredSpot.x;
+          person.y = entering ? ART_H + 8 : desiredSpot.y;
+          person.setTarget(person.x, person.y);
+          person.container.alpha = entering ? 0 : entry.baseAlpha;
+        } else if (entry.transition === "removing") {
+          entry.transition = w.temporary ? "ready" : "entering";
+          entry.transitionMs = 0;
+          entry.person.container.eventMode = "static";
         }
         entry.index = workerIndex;
+        entry.targetX = desiredSpot.x;
+        entry.targetY = desiredSpot.y;
         if (entry.avatarId !== w.avatarId) {
           entry.avatarId = w.avatarId;
           void entry.person
@@ -233,17 +294,21 @@ export async function createScene(
             });
         }
         entry.person.active = w.active;
-        entry.person.container.alpha = w.temporary ? 0.88 : 1;
         if (entry.last !== w.character) applyCharacter(entry, w.character);
-        if (w.character.station === "home") {
-          const spot = personalDeskSpot(workerIndex, permanentWorkers.length);
-          entry.person.setTarget(spot.x, spot.y);
+        if (entry.transition === "ready" && w.character.station === "home") {
+          entry.person.setTarget(desiredSpot.x, desiredSpot.y);
         }
       }
       for (const [id, entry] of entries) {
         if (!seen.has(id)) {
-          entry.person.destroy();
-          entries.delete(id);
+          if (entry.transition !== "removing") {
+            entry.transition = "removing";
+            entry.transitionMs = 0;
+            entry.person.active = false;
+            entry.person.container.eventMode = "none";
+            callbacks.onHover(null);
+            entry.person.setTarget(entry.person.x, ART_H + 8);
+          }
         }
       }
 

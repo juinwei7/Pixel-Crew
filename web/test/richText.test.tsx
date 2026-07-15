@@ -27,3 +27,9 @@ test("adds safe attributes to external links", () => {
   assert.match(html, /target="_blank"/);
   assert.match(html, /rel="noopener noreferrer"/);
 });
+
+test("adds a dedicated copy action to fenced code blocks", () => {
+  const html = renderToStaticMarkup(<RichText text={'```ts\nconst answer = 42;\n```'} />);
+  assert.match(html, /aria-label="複製程式碼"/);
+  assert.match(html, /const answer = 42/);
+});

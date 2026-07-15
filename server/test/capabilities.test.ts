@@ -54,3 +54,33 @@ test("keeps slash commands isolated by workspace registry", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("serves cached Claude models immediately and merges later runtime discovery", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  try {
+    const store = new LocalStore(join(dir, "test.sqlite"));
+    store.saveCapabilities("/repo", {
+      slashCommands: [],
+      mcpServers: [],
+      models: [{ id: "cached-model", label: "Cached Model" }],
+      toolCount: null,
+      loading: false,
+      source: "live",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+      error: null,
+    });
+    const registry = new CapabilityRegistry(store, () => undefined, "/repo");
+    assert.equal(registry.getState().source, "cache");
+    assert.equal(registry.getState().loading, true);
+    assert.equal(registry.getState().models.some((model) => model.id === "cached-model"), true);
+    assert.equal(registry.getState().models.some((model) => model.id === "sonnet"), true);
+
+    registry.mergeWorkerMeta({ model: "runtime-model", slashCommands: [], mcpServers: [], toolCount: 1 });
+    assert.equal(registry.getState().models.some((model) => model.id === "runtime-model"), true);
+
+    const reopened = new CapabilityRegistry(store, () => undefined, "/repo");
+    assert.equal(reopened.getState().models.some((model) => model.id === "runtime-model"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

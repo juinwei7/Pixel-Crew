@@ -33,6 +33,20 @@ const EMPTY_STATE: CapabilityState = {
   error: null,
 };
 
+export const DEFAULT_CLAUDE_MODELS: ModelOption[] = [
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "haiku", label: "Haiku" },
+];
+
+function mergeModels(...groups: ModelOption[][]): ModelOption[] {
+  const models = new Map<string, ModelOption>();
+  for (const group of groups) {
+    for (const model of group) if (model.id) models.set(model.id, model);
+  }
+  return [...models.values()];
+}
+
 function uniqueSorted(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
@@ -92,8 +106,8 @@ export class CapabilityRegistry {
   ) {
     const cached = store.loadCapabilities(workspacePath);
     this.state = cached
-      ? { ...cached, models: cached.models ?? [], loading: true, source: "cache", error: null }
-      : { ...EMPTY_STATE };
+      ? { ...cached, models: mergeModels(DEFAULT_CLAUDE_MODELS, cached.models ?? []), loading: true, source: "cache", error: null }
+      : { ...EMPTY_STATE, models: [...DEFAULT_CLAUDE_MODELS] };
     this.rebuildAllowRules();
   }
 
@@ -169,6 +183,7 @@ export class CapabilityRegistry {
   }
 
   mergeWorkerMeta(meta: {
+    model?: string;
     slashCommands: string[];
     mcpServers: McpServerState[];
     toolCount: number;
@@ -182,6 +197,11 @@ export class CapabilityRegistry {
     for (const server of meta.mcpServers) byName.set(server.name, server);
     this.publish({
       ...this.state,
+      models: mergeModels(
+        DEFAULT_CLAUDE_MODELS,
+        this.state.models,
+        meta.model ? [{ id: meta.model, label: meta.model }] : [],
+      ),
       slashCommands: uniqueSorted([...this.diskCommands, ...this.runtimeCommands]),
       mcpServers: [...byName.values()],
       toolCount: meta.toolCount,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CapabilityState, ProviderAuthState, ProviderId, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, ProviderAuthState, ProviderId, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -126,6 +126,16 @@ export function useWorkers() {
               w.avatarId,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
+            // A persisted running turn cannot still have a live provider
+            // callback after the server restarted. Close it honestly instead
+            // of leaving a dead approval card clickable forever. A normal
+            // browser reconnect preserves it because the worker is still busy.
+            if (!w.busy && state.turns[state.turns.length - 1]?.status === "running") {
+              state = applyRunnerEvent(state, {
+                type: "error",
+                message: "工作階段已中止；請重新下指令",
+              });
+            }
             state.busy = w.busy;
             record[w.id] = state;
             ids.push(w.id);
@@ -308,8 +318,13 @@ export function useWorkers() {
     void apiRequest(`/api/workers/${activeId}/activate`, { method: "POST" }).catch(() => undefined);
   }, [activeId]);
 
-  const closeWorker = useCallback(async (id: string) => {
-    await apiRequest(`/api/workers/${id}`, { method: "DELETE" }).catch(() => undefined);
+  const closeWorker = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}`, { method: "DELETE" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
   const renameWorker = useCallback(async (id: string, name: string): Promise<string | null> => {
@@ -351,12 +366,38 @@ export function useWorkers() {
     }
   }, []);
 
-  const setModel = useCallback(async (id: string, model: string) => {
-    await apiRequest(`/api/workers/${id}/model`, { method: "POST", body: { model } }).catch(() => undefined);
+  const setModel = useCallback(async (id: string, model: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/model`, { method: "POST", body: { model } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
-  const interrupt = useCallback(async (id: string) => {
-    await apiRequest(`/api/workers/${id}/interrupt`, { method: "POST" }).catch(() => undefined);
+  const interrupt = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/interrupt`, { method: "POST" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const resolveApproval = useCallback(async (
+    workerId: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+  ): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${workerId}/approvals/${approvalId}`, {
+        method: "POST",
+        body: { decision },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
   }, []);
 
   const refreshAuth = useCallback(async (provider?: ProviderId) => {
@@ -407,6 +448,7 @@ export function useWorkers() {
     send,
     setModel,
     interrupt,
+    resolveApproval,
     refreshAuth,
   };
 }

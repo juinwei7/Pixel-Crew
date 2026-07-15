@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCodexArgs, codexChildEnv, codexTool } from "../src/codexRunner.js";
+import { buildCodexArgs, codexAppTool, codexChildEnv, codexTool } from "../src/codexRunner.js";
 
 test("builds first-turn and resume Codex commands with stable option ordering", () => {
   assert.deepEqual(
@@ -77,4 +77,37 @@ test("removes host Codex runtime flags while preserving user configuration", () 
       CODEX_HOME: "/home/user/.codex",
     },
   );
+});
+
+test("normalizes app-server command, MCP, and collab-agent items", () => {
+  assert.deepEqual(codexAppTool({
+    type: "commandExecution",
+    command: "npm test",
+    cwd: "/repo",
+    commandActions: [{ type: "read" }],
+    aggregatedOutput: "ok",
+    exitCode: 0,
+    status: "completed",
+  }), {
+    name: "Bash",
+    input: { command: "npm test", cwd: "/repo", actions: [{ type: "read" }] },
+    output: "ok",
+    isError: false,
+  });
+  assert.deepEqual(codexAppTool({
+    type: "mcpToolCall",
+    server: "docs",
+    tool: "search",
+    arguments: { query: "approval" },
+    result: { content: [{ type: "text", text: "found" }] },
+    status: "completed",
+  })?.name, "mcp__docs__search");
+  assert.deepEqual(codexAppTool({
+    type: "collabAgentToolCall",
+    tool: "spawnAgent",
+    prompt: "review this",
+    receiverThreadIds: ["thread-2"],
+    agentsStates: { "thread-2": "running" },
+    status: "inProgress",
+  })?.name, "Agent");
 });

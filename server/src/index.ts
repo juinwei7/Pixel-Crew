@@ -161,11 +161,28 @@ async function deleteAvatarIfUnused(avatarId: string): Promise<void> {
 }
 
 function record(worker: Worker, event: RunnerEvent): void {
-  worker.history.push(event);
+  // Output deltas can arrive many times per second. Keep a compact live copy
+  // for reconnect snapshots without turning every chunk into a SQLite row.
+  // The provider's final tool result is still persisted normally.
+  const previous = worker.history[worker.history.length - 1];
+  if (
+    event.type === "tool_call_output_delta" &&
+    previous?.type === "tool_call_output_delta" &&
+    previous.id === event.id
+  ) {
+    worker.history[worker.history.length - 1] = {
+      ...event,
+      delta: `${previous.delta}${event.delta}`.slice(-200_000),
+    };
+  } else {
+    worker.history.push(event);
+  }
   if (worker.history.length > MAX_HISTORY) {
     worker.history.splice(0, worker.history.length - MAX_HISTORY);
   }
-  store.appendEvent(worker.id, event, MAX_HISTORY);
+  if (event.type !== "tool_call_output_delta") {
+    store.appendEvent(worker.id, event, MAX_HISTORY);
+  }
   if (event.type === "meta" && worker.runner.provider === "claude") {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
@@ -699,6 +716,47 @@ app.post("/api/workers/:id/message", (req, res) => {
   worker.runner.send(message);
   broadcast({ type: "worker_status", workerId: worker.id, busy: true });
   res.json({ ok: true });
+});
+
+app.post("/api/workers/:id/approvals/:approvalId", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const requested = String(req.body?.decision ?? "");
+  const decision = requested === "allow_once" || requested === "allow_session" || requested === "deny"
+    ? requested
+    : null;
+  if (!decision) {
+    res.status(400).json({ error: "unknown approval decision" });
+    return;
+  }
+  if (!worker.runner.resolveApproval(req.params.approvalId, decision)) {
+    res.status(409).json({ error: "核准要求已失效或已處理" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.post("/internal/claude-approval", async (req, res) => {
+  const header = String(req.headers.authorization ?? "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token || token.length > 100) {
+    res.status(401).json({ message: "Invalid approval bridge token" });
+    return;
+  }
+  for (const worker of workers.values()) {
+    const pending = worker.runner.handleApprovalBridge(token, req.body);
+    if (!pending) continue;
+    try {
+      res.json(await pending);
+    } catch (error) {
+      res.status(500).json({ message: (error as Error).message || "Approval bridge failed" });
+    }
+    return;
+  }
+  res.status(404).json({ message: "Approval bridge is no longer active" });
 });
 
 app.post("/api/workers/:id/model", (req, res) => {

@@ -164,3 +164,48 @@ test("removes a foreground or failed Agent when its tool call returns", () => {
   });
   assert.deepEqual(failed.subagents, []);
 });
+
+test("streams command output before the tool completes", () => {
+  const running = applyRunnerEvent(startedWorker(), {
+    type: "tool_call_start",
+    id: "command-1",
+    name: "Bash",
+    input: { command: "npm test" },
+  });
+  const streamed = applyRunnerEvent(running, {
+    type: "tool_call_output_delta",
+    id: "command-1",
+    delta: "running tests\n",
+  });
+  const tool = streamed.turns[0].items.find((item) => item.kind === "tool_call");
+  assert.equal(tool?.kind === "tool_call" ? tool.output : null, "running tests\n");
+  assert.equal(tool?.kind === "tool_call" ? tool.status : null, "running");
+});
+
+test("keeps an approval in the active turn until it is resolved", () => {
+  const waiting = applyRunnerEvent(startedWorker(), {
+    type: "approval_requested",
+    request: {
+      id: "approval-1",
+      activityId: "command-1",
+      category: "command",
+      title: "允許執行？",
+      input: { command: "npm install" },
+      command: "npm install",
+      cwd: "/repo",
+      decisions: ["allow_once", "deny"],
+    },
+  });
+  const pending = waiting.turns[0].items.find((item) => item.kind === "approval");
+  assert.equal(pending?.kind === "approval" ? pending.status : null, "pending");
+  assert.equal(waiting.busy, true);
+
+  const resolved = applyRunnerEvent(waiting, {
+    type: "approval_resolved",
+    id: "approval-1",
+    decision: "allow_once",
+  });
+  const approval = resolved.turns[0].items.find((item) => item.kind === "approval");
+  assert.equal(approval?.kind === "approval" ? approval.status : null, "resolved");
+  assert.equal(approval?.kind === "approval" ? approval.decision : null, "allow_once");
+});

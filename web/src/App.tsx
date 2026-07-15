@@ -1,72 +1,57 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useWorkers } from "./hooks/useWorkers";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useUiPreferences, clampTaskLogWidth } from "./uiPreferences";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
 import { WorkerTabs } from "./components/WorkerTabs";
-import { McpPanel } from "./components/McpPanel";
+import { TopBar } from "./components/TopBar";
+import { CommandComposer } from "./components/CommandComposer";
+import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import type { ProviderId } from "./types";
-import { roomName } from "./workspace";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
 })));
 
 const CLAUDE_MODEL_OPTIONS = [
-  { id: "", label: "預設模型" },
-  { id: "fable", label: "Fable（最強）" },
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
   { id: "haiku", label: "Haiku（最快）" },
 ];
 
+function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: typeof CLAUDE_MODEL_OPTIONS, activeModel?: string | null) {
+  const models = new Map<string, { id: string; label: string; description?: string }>();
+  for (const model of fallback) models.set(model.id, model);
+  for (const model of discovered) models.set(model.id, model);
+  if (activeModel && !models.has(activeModel)) models.set(activeModel, { id: activeModel, label: activeModel });
+  return [{ id: "", label: "預設模型" }, ...models.values()];
+}
+
 const EMPTY_CAPABILITIES = {
-  slashCommands: [],
-  mcpServers: [],
-  models: [],
-  toolCount: null,
-  loading: true,
-  source: "empty" as const,
-  updatedAt: null,
-  error: null,
+  slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: true,
+  source: "empty" as const, updatedAt: null, error: null,
 };
 
 export function App() {
   const {
-    workers,
-    order,
-    activeId,
-    setActiveId,
-    targetRepoPath,
-    workspacePaths,
-    wsReady,
-    capabilitiesByWorkspace,
-    workflowRevisions,
-    auth,
-    createWorker,
-    pickWorkspace,
-    switchProvider,
-    switchWorkspace,
-    closeWorker,
-    renameWorker,
-    saveAvatar,
-    resetAvatar,
-    send,
-    setModel,
-    interrupt,
-    refreshAuth,
+    workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
+    capabilitiesByWorkspace, workflowRevisions, auth, createWorker, pickWorkspace,
+    switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar,
+    send, setModel, interrupt, resolveApproval, refreshAuth,
   } = useWorkers();
-
-  const [draft, setDraft] = useState("");
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [mcpOpen, setMcpOpen] = useState(false);
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
+  const [taskSearchOpen, setTaskSearchOpen] = useState(false);
+  const [taskSearch, setTaskSearch] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   const workerList = order.map((id) => workers[id]).filter(Boolean);
   const active = activeId ? workers[activeId] : undefined;
@@ -74,315 +59,185 @@ export function App() {
   const activeWorkspace = active?.workspacePath || targetRepoPath;
   const activeAuth = auth[activeProvider];
   const activeCapabilities = capabilitiesByWorkspace[activeWorkspace]?.[activeProvider] ?? EMPTY_CAPABILITIES;
-  const modelOptions = activeProvider === "codex"
-    ? [{ id: "", label: "預設模型" }, ...activeCapabilities.models]
-    : CLAUDE_MODEL_OPTIONS;
+  const modelOptions = mergeModelOptions(
+    activeProvider === "claude" ? CLAUDE_MODEL_OPTIONS : [],
+    activeCapabilities.models,
+    active?.model,
+  );
 
-  const slashMatches = useMemo(() => {
-    if (activeProvider !== "claude" || !draft.startsWith("/") || draft.includes(" ")) return [];
-    const prefix = draft.slice(1).toLowerCase();
-    return activeCapabilities.slashCommands
-      .filter((c) => c.toLowerCase().startsWith(prefix))
-      .slice(0, 8);
-  }, [draft, activeCapabilities.slashCommands, activeProvider]);
+  const dismissToast = useCallback((id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
+  const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
+    setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
+  }, []);
 
-  async function submit(text: string) {
-    if (!activeId) return;
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setDraft("");
-    setPaletteIndex(0);
-    const err = await send(activeId, trimmed);
-    setError(err);
+  const approvalWorker = useMemo(() => workerList.find((worker) => worker.turns.some((turn) =>
+    turn.items.some((item) => item.kind === "approval" && item.status === "pending")
+  )), [workerList]);
+
+  const shortcuts = useMemo(() => ({
+    onCommandPalette: () => setCommandPaletteOpen(true),
+    onToggleTaskLog: () => updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
+    onApproval: () => {
+      if (!approvalWorker) return;
+      setActiveId(approvalWorker.id);
+      updatePreferences({ taskLogOpen: true });
+    },
+    onEscape: () => {
+      setCommandPaletteOpen(false);
+      setTaskSearchOpen(false);
+    },
+  }), [approvalWorker, preferences.taskLogOpen, setActiveId, updatePreferences]);
+  useKeyboardShortcuts(shortcuts);
+
+  useEffect(() => {
+    setTaskSearch("");
+    setTaskSearchOpen(false);
+    setCommandPaletteOpen(false);
+  }, [activeId, activeProvider, activeWorkspace]);
+
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+
+  function beginPanelResize(event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = preferences.taskLogWidth;
+    const move = (moveEvent: PointerEvent) => updatePreferences({
+      taskLogWidth: clampTaskLogWidth(startWidth + startX - moveEvent.clientX, window.innerWidth),
+    });
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (active?.busy) {
-      if (activeId) interrupt(activeId);
+  async function changeProvider(provider: ProviderId) {
+    if (provider === activeProvider) return;
+    if (active && active.turns.length === 0) {
+      const error = await switchProvider(active.id, provider);
+      if (error) notify(error, "error");
+      else notify(`已切換為 ${provider === "claude" ? "Claude Code" : "Codex"}`);
       return;
     }
-    if (slashMatches.length > 0 && draft.startsWith("/") && !draft.includes(" ")) {
-      submit(`/${slashMatches[paletteIndex] ?? slashMatches[0]}`);
-      return;
-    }
-    submit(draft);
+    const result = await createWorker(undefined, provider, activeWorkspace);
+    if (result.error) notify(result.error, "error");
+    else notify("已建立新的 Agent 人員");
   }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (slashMatches.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setPaletteIndex((i) => (i + 1) % slashMatches.length);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setPaletteIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
-    } else if (e.key === "Tab") {
-      e.preventDefault();
-      setDraft(`/${slashMatches[paletteIndex] ?? slashMatches[0]} `);
-    }
-  }
-
-  const mcpServers = activeCapabilities.mcpServers;
-  const mcpConnected = mcpServers.filter(
-    (s) => s.status === "connected" || s.status === "enabled",
-  ).length;
-  const authReady = activeAuth.status === "authenticated";
-  const authLabel =
-    activeAuth.status === "authenticated"
-      ? `${activeAuth.displayName.toUpperCase()} READY`
-      : activeAuth.status === "checking"
-        ? `${activeAuth.displayName.toUpperCase()} CHECKING`
-        : activeAuth.status === "cli_missing"
-          ? `${activeAuth.displayName.toUpperCase()} MISSING`
-          : `${activeAuth.displayName.toUpperCase()} LOGIN`;
 
   return (
-    <div className="game-root">
-      <GameCanvas
-        workers={workerList}
-        activeId={activeId}
-        onSelect={setActiveId}
-        onAvatarError={(id, message) => {
-          setActiveId(id);
-          setError(message);
+    <div className="game-root" style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
+      <GameCanvas workers={workerList} activeId={activeId} onSelect={setActiveId} onOpenLog={() => updatePreferences({ taskLogOpen: true })} onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }} />
+
+      <TopBar
+        active={active}
+        activeWorkspace={activeWorkspace}
+        capabilities={activeCapabilities}
+        auth={activeAuth}
+        wsReady={wsReady}
+        modelOptions={modelOptions}
+        workerCount={workerList.length}
+        onRoom={() => setWorkspaceOpen(true)}
+        onProvider={(provider) => void changeProvider(provider)}
+        onModel={(model) => {
+          if (!activeId) return;
+          void setModel(activeId, model).then((error) => {
+            if (error) notify(error, "error");
+            else notify("模型設定已更新");
+          });
         }}
+        onRefreshAuth={() => void refreshAuth(activeProvider)}
+        onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
       />
 
-      <header className="hud-header">
-        <div className="hud-header__title">
-          <span className="hud-header__dot" />
-          PIXEL CREW
-        </div>
+      {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
 
-        <div className="mcp-chip-wrap">
-          <button
-            className="mcp-chip"
-            onClick={() => setMcpOpen((v) => !v)}
-            title="MCP server 狀態"
-          >
-            MCP {activeCapabilities.loading ? "…" : `${mcpConnected}/${mcpServers.length}`}
-          </button>
-          {mcpOpen && <McpPanel capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} />}
-        </div>
-
-        <select
-          className="hud-header__model hud-header__provider"
-          value={activeProvider}
-          disabled={Boolean(active?.busy) || (workerList.length >= 20 && Boolean(active?.turns.length))}
-          onChange={(e) => {
-            const provider = e.target.value as ProviderId;
-            if (provider !== activeProvider) {
-              void (async () => {
-                if (active && active.turns.length === 0) {
-                  setError(await switchProvider(active.id, provider));
-                  return;
-                }
-                const result = await createWorker(undefined, provider, activeWorkspace);
-                setError(result.error ?? null);
-              })();
-            }
-          }}
-          title={
-            active?.turns.length === 0
-              ? "尚未開始對話，直接切換目前 NPC 類型"
-              : workerList.length >= 20
-                ? "NPC 已達 20 位上限"
-                : "已有對話，切換時會建立新的 NPC"
-          }
-        >
-          <option value="claude">Claude Code</option>
-          <option value="codex">Codex</option>
-        </select>
-
-        <select
-          className="hud-header__model"
-          value={active?.model ?? ""}
-          disabled={!active || active.busy || !authReady}
-          onChange={(e) => activeId && setModel(activeId, e.target.value)}
-          title="切換模型（對話脈絡會保留）"
-        >
-          {modelOptions.map((opt) => (
-            <option key={opt.id} value={opt.id}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        <div className={`hud-header__conn ${authReady ? "hud-header__conn--on" : "hud-header__conn--warn"}`}>
-          {authReady ? "●" : "○"} {authLabel}
-        </div>
-        <div className={`hud-header__conn ${wsReady ? "hud-header__conn--on" : ""}`}>
-          {wsReady ? "● SERVER ONLINE" : "○ SERVER CONNECTING"}
-        </div>
-      </header>
-
-      <button
-        type="button"
-        className="room-banner"
-        onClick={() => setWorkspaceOpen(true)}
-        title="選擇新的工作位置"
-      >
-        <span className="room-banner__label">CURRENT ROOM</span>
-        <strong>{roomName(activeWorkspace)}</strong>
-        <span className="room-banner__path">{activeWorkspace}</span>
-        <span className="room-banner__change">切換 ↗</span>
+      <button className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`} onClick={() => updatePreferences({ taskLogOpen: !preferences.taskLogOpen })} title={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌（⌘/Ctrl J）`} aria-label={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌`}>
+        {preferences.taskLogOpen ? "▶" : "◀"}
       </button>
 
-      <button
-        className={`panel-toggle ${panelOpen ? "panel-toggle--open" : ""}`}
-        onClick={() => setPanelOpen((v) => !v)}
-        title={panelOpen ? "收合日誌" : "展開日誌"}
-      >
-        {panelOpen ? "▶" : "◀"}
-      </button>
-
-      <aside className={`holo-panel ${panelOpen ? "" : "holo-panel--closed"}`}>
+      <aside className={`holo-panel ${preferences.taskLogOpen ? "" : "holo-panel--closed"}`} aria-label="任務日誌">
+        <button type="button" className="holo-panel__resize" aria-label="調整任務日誌寬度" title="拖曳調整；雙擊恢復閱讀版" onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences({ taskLogWidth: 600 })} onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          updatePreferences({ taskLogWidth: preferences.taskLogWidth + (event.key === "ArrowLeft" ? 24 : -24) });
+        }} />
         <div className="holo-panel__title">
-          <div className="holo-panel__heading">
-            <span className="holo-panel__eyebrow">WORKSTREAM</span>
-            <strong>任務日誌</strong>
+          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">WORKSTREAM</span><strong>任務日誌</strong></div>
+          {active && <span className="holo-panel__worker"><i />{active.name}</span>}
+          <div className="task-log-toolbar">
+            <div className="task-log-toolbar__view" aria-label="日誌模式">
+              <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
+              <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>活動</button>
+            </div>
+            <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label="搜尋任務日誌" title="搜尋">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
+            </button>
+            <select aria-label="日誌寬度" value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
+              <option value="420">緊湊</option><option value="600">閱讀</option><option value="820">寬版</option>
+            </select>
           </div>
-          {active && (
-            <span className="holo-panel__worker">
-              <i />
-              {active.name}
-            </span>
-          )}
         </div>
-        <QuestLog turns={active?.turns ?? []} />
+        {taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder="搜尋目前 NPC 的任務" onChange={(event) => setTaskSearch(event.target.value)} /><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
+        <QuestLog key={`${activeId ?? "none"}:${activeProvider}:${activeWorkspace}`} turns={active?.turns ?? []} view={preferences.taskLogView} searchQuery={taskSearch} onApprove={activeId ? (approvalId, decision) => resolveApproval(activeId, approvalId, decision) : undefined} />
       </aside>
 
       <WorkerTabs
         workers={workerList}
         activeId={activeId}
+        currentRoom={activeWorkspace}
+        filter={preferences.crewFilter}
+        collapsed={preferences.crewRailCollapsed}
+        onFilter={(crewFilter) => updatePreferences({ crewFilter })}
+        onCollapsed={(crewRailCollapsed) => updatePreferences({ crewRailCollapsed })}
         onSelect={setActiveId}
-        onCreate={() => createWorker(undefined, activeProvider, activeWorkspace)}
-        onClose={closeWorker}
-        onRename={renameWorker}
+        onCreate={() => void createWorker(undefined, activeProvider, activeWorkspace).then((result) => result.error ? notify(result.error, "error") : notify("新工位建造中"))}
+        onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
+        onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
         onAvatar={setAvatarWorkerId}
+        onRoom={(id) => { setActiveId(id); setWorkspaceOpen(true); }}
       />
 
-      <form className="command-bar" onSubmit={handleSubmit}>
-        {slashMatches.length > 0 && (
-          <div className="cmd-palette">
-            {slashMatches.map((cmd, i) => (
-              <button
-                key={cmd}
-                type="button"
-                className={`cmd-palette__item ${i === paletteIndex ? "cmd-palette__item--sel" : ""}`}
-                onMouseEnter={() => setPaletteIndex(i)}
-                onClick={() => submit(`/${cmd}`)}
-              >
-                /{cmd}
-              </button>
-            ))}
-            <button type="button" className="cmd-palette__manage" onClick={() => setCommandCenterOpen(true)}>
-              管理專案指令…
-            </button>
-          </div>
-        )}
-        {draft === "/" && slashMatches.length === 0 && (
-          <div className="cmd-palette">
-            <div className="cmd-palette__empty">
-              {activeProvider === "claude"
-                ? activeCapabilities.loading
-                  ? "正在載入 Claude Code 指令…"
-                  : "尚未發現 Claude 專案或使用者指令。"
-                : "Codex 不會載入 .claude/commands；工作流會獨立管理。"}
-            </div>
-            <button type="button" className="cmd-palette__manage" onClick={() => setCommandCenterOpen(true)}>
-              {activeProvider === "claude" ? "建立或管理 Claude 指令…" : "查看 Codex 工作流…"}
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className="command-bar__library"
-          onClick={() => setCommandCenterOpen(true)}
-          title="開啟指令中心"
-        >
-          {activeProvider === "claude" ? "CLAUDE 指令" : "CODEX 工作流"}
-        </button>
-        <span className="command-bar__prompt">&gt;</span>
-        <input
-          className="command-bar__input"
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setPaletteIndex(0);
-            setError(null);
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            active?.busy
-              ? `${active.name} 執勤中…（可繼續切換其他工人）`
-              : `對 ${active?.name ?? "…"} 下指令，/ 看指令`
-          }
-          disabled={!active || active.busy || !authReady}
-        />
-        {error && <span className="command-bar__error">{error}</span>}
-        <button
-          className={`command-bar__submit ${active?.busy ? "command-bar__submit--stop" : ""}`}
-          type="submit"
-          disabled={!active || !authReady || (!active.busy && !draft.trim())}
-        >
-          {active?.busy ? "中止" : "執行"}
-        </button>
-      </form>
-
-      {commandCenterOpen && activeWorkspace && (
-        <Suspense fallback={<div className="command-center command-center--loading">正在載入工作流中心…</div>}>
-          <CommandCenter
-            workspacePath={activeWorkspace}
-            provider={activeProvider}
-            workers={workerList}
-            activeWorkerId={activeId}
-            revisions={{
-              claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0,
-              codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0,
-            }}
-            onRun={async (workerId, message) => {
-              const runError = await send(workerId, message);
-              if (!runError) setActiveId(workerId);
-              return runError;
-            }}
-            onClose={() => setCommandCenterOpen(false)}
-          />
-        </Suspense>
-      )}
-
-      <AuthGate
-        auth={activeAuth}
-        providers={auth}
-        onRefresh={refreshAuth}
-        onUseProvider={(provider) => void createWorker(undefined, provider, activeWorkspace)}
+      <CommandComposer
+        key={`${activeId ?? "none"}:${activeProvider}:${activeWorkspace}`}
+        active={active}
+        workers={workerList}
+        workspacePath={activeWorkspace}
+        capabilities={activeCapabilities}
+        authReady={activeAuth.status === "authenticated"}
+        paletteOpen={commandPaletteOpen}
+        onPaletteOpen={setCommandPaletteOpen}
+        onSubmit={(text) => activeId ? send(activeId, text) : Promise.resolve("沒有可用的人員")}
+        onInterrupt={() => {
+          if (!activeId) return;
+          void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
+        }}
+        onManage={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
       />
 
-      {workspaceOpen && (
-        <WorkspacePicker
-          currentPath={activeWorkspace}
-          recentPaths={workspacePaths}
-          resetsConversation={Boolean(active?.turns.length)}
-          onBrowse={pickWorkspace}
-          onClose={() => setWorkspaceOpen(false)}
-          onSelect={async (path) => {
-            if (!activeId) {
-              const result = await createWorker(undefined, activeProvider, path);
-              return result.error ?? null;
-            }
-            return switchWorkspace(activeId, path);
-          }}
-        />
-      )}
+      {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, message); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
 
-      {avatarWorkerId && workers[avatarWorkerId] && (
-        <AvatarWorkshop
-          worker={workers[avatarWorkerId]}
-          onSave={saveAvatar}
-          onReset={resetAvatar}
-          onClose={() => setAvatarWorkerId(null)}
-        />
-      )}
+      <AuthGate auth={activeAuth} providers={auth} onRefresh={refreshAuth} onUseProvider={(provider) => void createWorker(undefined, provider, activeWorkspace)} />
+
+      {workspaceOpen && <WorkspacePicker currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
+        if (!activeId) {
+          const result = await createWorker(undefined, activeProvider, path);
+          if (!result.error) notify("已進入新房間");
+          return result.error ?? null;
+        }
+        const error = await switchWorkspace(activeId, path);
+        if (!error) notify("人員已搬到新房間");
+        return error;
+      }} />}
+
+      {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("像素角色已更新"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已恢復預設角色"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
+
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

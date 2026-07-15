@@ -105,9 +105,12 @@ export function McpPanel({
         </span>
       </div>
 
-      {servers.length === 0 && (
+      {capabilities.loading && servers.length === 0 && (
+        <div className="mcp-popover__skeleton" aria-label="正在讀取 MCP servers"><i /><i /><i /></div>
+      )}
+      {!capabilities.loading && servers.length === 0 && (
         <div className="mcp-popover__empty">
-          {capabilities.loading ? "正在讀取 MCP servers…" : "沒有設定 MCP server"}
+          沒有設定 MCP server
         </div>
       )}
       {capabilities.error && (

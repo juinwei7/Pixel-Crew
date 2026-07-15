@@ -1,12 +1,28 @@
 import type { StationKey } from "./stations";
 
 export type ProviderId = "claude" | "codex";
+export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
+
+export type ApprovalRequest = {
+  id: string;
+  activityId: string | null;
+  category: "command" | "file_change" | "tool" | "permissions";
+  title: string;
+  input: unknown;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+  decisions: ApprovalDecision[];
+};
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
   | { type: "thinking_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; input: unknown }
+  | { type: "tool_call_output_delta"; id: string; delta: string }
   | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
+  | { type: "approval_requested"; request: ApprovalRequest }
+  | { type: "approval_resolved"; id: string; decision: ApprovalDecision }
   | {
       type: "turn_end";
       resultText: string;
@@ -42,7 +58,15 @@ export type TextItem = {
   text: string;
 };
 
-export type TurnItem = ToolCallItem | TextItem;
+export type ApprovalItem = {
+  kind: "approval";
+  key: string;
+  request: ApprovalRequest;
+  status: "pending" | "resolved";
+  decision?: ApprovalDecision;
+};
+
+export type TurnItem = ToolCallItem | TextItem | ApprovalItem;
 
 export type Turn = {
   key: string;
