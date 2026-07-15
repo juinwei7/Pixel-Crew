@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, ProviderAuthState, ProviderId, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -11,6 +11,7 @@ type ServerMessage =
       targetRepoPath: string;
       workspacePaths: string[];
       auth: ProviderAuthState[];
+      providerUsage: Record<ProviderId, ProviderUsageState>;
       capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
       workers: Array<{
         id: string;
@@ -31,7 +32,8 @@ type ServerMessage =
   | { type: "worker_status"; workerId: string; busy: boolean }
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
-  | { type: "auth_updated"; auth: ProviderAuthState };
+  | { type: "auth_updated"; auth: ProviderAuthState }
+  | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState };
 
 type WorkerSummary = {
   id: string;
@@ -84,6 +86,13 @@ export function useWorkers() {
     claude: defaultAuth("claude", "Claude Code", "claude auth login"),
     codex: defaultAuth("codex", "Codex", "codex login"),
   });
+  const emptyUsage = (provider: ProviderId): ProviderUsageState => ({
+    provider, windows: [], loading: true, source: "empty", updatedAt: null, error: null,
+  });
+  const [providerUsage, setProviderUsage] = useState<Record<ProviderId, ProviderUsageState>>({
+    claude: emptyUsage("claude"),
+    codex: emptyUsage("codex"),
+  });
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
 
@@ -111,6 +120,7 @@ export function useWorkers() {
           setTargetRepoPath(data.targetRepoPath);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
+          setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
           setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
           const record: Record<string, WorkerState> = {};
           const ids: string[] = [];
@@ -243,6 +253,10 @@ export function useWorkers() {
         }
         case "auth_updated": {
           setAuth((current) => ({ ...current, [data.auth.provider]: data.auth }));
+          break;
+        }
+        case "usage_updated": {
+          setProviderUsage((current) => ({ ...current, [data.provider]: data.usage }));
           break;
         }
       }
@@ -417,6 +431,16 @@ export function useWorkers() {
     }
   }, []);
 
+  const refreshUsage = useCallback(async (): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ usage: Record<ProviderId, ProviderUsageState> }>("/api/usage/refresh", { method: "POST", timeoutMs: 35_000 });
+      setProviderUsage(data.usage);
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   useEffect(() => {
     const pending = (Object.keys(auth) as ProviderId[]).filter(
       (provider) => auth[provider].status !== "authenticated" && auth[provider].status !== "checking",
@@ -437,6 +461,7 @@ export function useWorkers() {
     capabilitiesByWorkspace,
     workflowRevisions,
     auth,
+    providerUsage,
     createWorker,
     pickWorkspace,
     switchProvider,
@@ -450,5 +475,6 @@ export function useWorkers() {
     interrupt,
     resolveApproval,
     refreshAuth,
+    refreshUsage,
   };
 }

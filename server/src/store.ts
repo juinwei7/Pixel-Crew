@@ -68,6 +68,12 @@ export class LocalStore {
         payload TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS provider_usage_cache (
+        provider TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     try {
       this.db.exec("ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
@@ -197,6 +203,30 @@ export class LocalStore {
           payload = excluded.payload,
           updated_at = CURRENT_TIMESTAMP
       `).run(repoPath, JSON.stringify(state));
+    });
+  }
+
+  loadProviderUsage(provider: ProviderId): unknown | null {
+    const row = this.db.prepare(
+      "SELECT payload FROM provider_usage_cache WHERE provider = ?",
+    ).get(provider) as { payload?: string } | undefined;
+    if (!row?.payload) return null;
+    try {
+      return JSON.parse(row.payload);
+    } catch {
+      return null;
+    }
+  }
+
+  saveProviderUsage(provider: ProviderId, payload: unknown): void {
+    this.safeWrite("save provider usage", () => {
+      this.db.prepare(`
+        INSERT INTO provider_usage_cache (provider, payload, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(provider) DO UPDATE SET
+          payload = excluded.payload,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(provider, JSON.stringify(payload));
     });
   }
 

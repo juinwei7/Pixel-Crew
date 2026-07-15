@@ -122,6 +122,24 @@ export type ProviderAuthState = {
   error: string | null;
 };
 
+export type UsageWindow = {
+  id: string;
+  label: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAt: string | null;
+  scope: "session" | "weekly" | "model" | "rate";
+};
+
+export type ProviderUsageState = {
+  provider: ProviderId;
+  windows: UsageWindow[];
+  loading: boolean;
+  source: "empty" | "cache" | "live";
+  updatedAt: string | null;
+  error: string | null;
+};
+
 export type WorkerState = {
   id: string;
   name: string;

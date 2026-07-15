@@ -8,6 +8,7 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
 import { CommandComposer } from "./components/CommandComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
+import { EnergyHud } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
@@ -39,9 +40,9 @@ const EMPTY_CAPABILITIES = {
 export function App() {
   const {
     workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
-    capabilitiesByWorkspace, workflowRevisions, auth, createWorker, pickWorkspace,
+    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
     switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar,
-    send, setModel, interrupt, resolveApproval, refreshAuth,
+    send, setModel, interrupt, resolveApproval, refreshAuth, refreshUsage,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -154,6 +155,8 @@ export function App() {
         onRefreshAuth={() => void refreshAuth(activeProvider)}
         onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
       />
+
+      <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
 

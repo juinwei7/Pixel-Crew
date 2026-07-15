@@ -44,6 +44,15 @@ test("persists workers, bounded events, and capability cache", () => {
       error: null,
     };
     store.saveCapabilities("/repo", capabilities);
+    const usage = {
+      provider: "claude",
+      windows: [{ id: "claude-week", label: "本週", usedPercent: 73, remainingPercent: 27, resetsAt: null, scope: "weekly" }],
+      loading: false,
+      source: "live",
+      updatedAt: "2026-07-16T00:00:00.000Z",
+      error: null,
+    };
+    store.saveProviderUsage("claude", usage);
 
     const reopened = new LocalStore(path);
     const [worker] = reopened.loadWorkers(20);
@@ -54,6 +63,7 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(worker.avatarId, "avatar-1");
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
+    assert.deepEqual(reopened.loadProviderUsage("claude"), usage);
 
     reopened.clearWorkerEvents("worker-1");
     assert.deepEqual(reopened.loadWorkers(20)[0].events, []);

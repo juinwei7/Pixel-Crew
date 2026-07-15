@@ -23,6 +23,7 @@ import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skill
 import { isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
+import { ProviderUsageRegistry } from "./providerUsage.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -47,6 +48,9 @@ const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
 const store = new LocalStore(config.dbPath);
 const avatarStore = new AvatarStore(config.avatarDir);
+const usageRegistry = new ProviderUsageRegistry(store, (usage) => {
+  broadcast({ type: "usage_updated", provider: usage.provider, usage });
+});
 const authProviders: Record<ProviderId, AgentAuthProvider> = {
   claude: new ClaudeAuthProvider(),
   codex: new CodexAuthProvider(),
@@ -187,6 +191,7 @@ function record(worker: Worker, event: RunnerEvent): void {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
   if (event.type === "turn_end" || event.type === "error") persistWorker(worker);
+  if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
   broadcast({ type: "event", workerId: worker.id, event });
 }
 
@@ -322,6 +327,7 @@ wss.on("connection", (socket) => {
       targetRepoPath: config.targetRepoPath,
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
+      providerUsage: usageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
@@ -462,6 +468,14 @@ app.delete("/api/skills", async (req, res) => {
 
 app.get("/api/auth", (_req, res) => {
   res.json({ auth: Object.values(authStates) });
+});
+
+app.get("/api/usage", (_req, res) => {
+  res.json({ usage: usageRegistry.getStates() });
+});
+
+app.post("/api/usage/refresh", async (_req, res) => {
+  res.json({ usage: await usageRegistry.refreshAll(true) });
 });
 
 app.post("/api/auth/refresh", async (req, res) => {
@@ -823,6 +837,7 @@ async function refreshOneAuth(provider: ProviderId): Promise<ProviderAuthState> 
   const becameReady = !wasReady && next.status === "authenticated";
   authStates[provider] = next;
   broadcast({ type: "auth_updated", auth: next });
+  if (next.status === "authenticated") void usageRegistry.refresh(provider);
   if (
     wasReady &&
     (next.status === "unauthenticated" || next.status === "cli_missing")
@@ -984,6 +999,10 @@ void Promise.all(recentWorkspacePaths().flatMap((workspacePath) => [
   restartIdleWorkers();
 });
 void refreshAuth();
+const usageRefreshTimer = setInterval(() => {
+  void usageRegistry.refreshAll(true);
+}, 5 * 60_000);
+usageRefreshTimer.unref();
 
 server.listen(config.port, config.host, () => {
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
