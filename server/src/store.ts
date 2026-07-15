@@ -10,6 +10,7 @@ export type PersistedWorker = {
   name: string;
   model: string | null;
   colorIndex: number;
+  avatarId: string | null;
   provider: ProviderId;
   workspacePath: string;
   sessionId: string;
@@ -43,6 +44,7 @@ export class LocalStore {
         name TEXT NOT NULL,
         model TEXT,
         color_index INTEGER NOT NULL,
+        avatar_id TEXT,
         provider TEXT NOT NULL DEFAULT 'claude',
         workspace_path TEXT,
         claude_session_id TEXT NOT NULL,
@@ -77,12 +79,17 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to workspace-aware workers.
     }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_id TEXT");
+    } catch {
+      // Existing databases already migrated to avatar-aware workers.
+    }
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, provider, workspace_path, claude_session_id, completed_turns
+      SELECT id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -103,6 +110,7 @@ export class LocalStore {
         name: String(row.name),
         model: row.model == null ? null : String(row.model),
         colorIndex: Number(row.color_index),
+        avatarId: row.avatar_id == null ? null : String(row.avatar_id),
         provider: row.provider === "codex" ? "codex" : "claude",
         workspacePath: row.workspace_path == null ? "" : String(row.workspace_path),
         sessionId: String(row.claude_session_id),
@@ -112,16 +120,17 @@ export class LocalStore {
     });
   }
 
-  saveWorker(worker: Omit<PersistedWorker, "events">): void {
-    this.safeWrite("save worker", () => {
+  saveWorker(worker: Omit<PersistedWorker, "events">): boolean {
+    return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, provider, workspace_path, claude_session_id, completed_turns
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
           color_index = excluded.color_index,
+          avatar_id = excluded.avatar_id,
           provider = excluded.provider,
           workspace_path = excluded.workspace_path,
           claude_session_id = excluded.claude_session_id,
@@ -132,6 +141,7 @@ export class LocalStore {
         worker.name,
         worker.model,
         worker.colorIndex,
+        worker.avatarId,
         worker.provider,
         worker.workspacePath,
         worker.sessionId,
@@ -226,12 +236,14 @@ export class LocalStore {
     });
   }
 
-  private safeWrite(operation: string, write: () => void): void {
+  private safeWrite(operation: string, write: () => void): boolean {
     try {
       write();
       this.restrictDatabasePermissions();
+      return true;
     } catch (err) {
       console.warn(`SQLite ${operation} failed:`, (err as Error).message);
+      return false;
     }
   }
 

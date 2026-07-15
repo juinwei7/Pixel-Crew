@@ -104,6 +104,7 @@ export type WorkerState = {
   model: string | null;
   busy: boolean;
   colorIndex: number;
+  avatarId: string | null;
   provider: ProviderId;
   workspacePath: string;
   turns: Turn[];

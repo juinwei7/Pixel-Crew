@@ -7,6 +7,7 @@ import { Person } from "./person";
 import { ParticleSystem } from "./particles";
 import { PersonalDeskLayer, personalDeskSpot } from "./personalDesks";
 import { OfficeDecor } from "./officeDecor";
+import { apiAssetUrl } from "../api";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -32,6 +33,7 @@ export type WorkerSceneState = {
   character: CharacterState;
   active: boolean;
   colorIndex: number;
+  avatarId: string | null;
   selectId: string;
   temporary: boolean;
 };
@@ -46,12 +48,14 @@ export type SceneHandle = {
 type SceneCallbacks = {
   onPositions(list: PersonScreenPos[]): void;
   onSelect(id: string): void;
+  onAvatarError(id: string, message: string): void;
 };
 
 type PersonEntry = {
   person: Person;
   last: CharacterState | null;
   index: number;
+  avatarId: string | null;
 };
 
 export async function createScene(
@@ -212,7 +216,7 @@ export async function createScene(
           };
           person.container.on("pointerdown", () => callbacks.onSelect(w.selectId));
           world.addChild(person.container);
-          entry = { person, last: null, index: workerIndex };
+          entry = { person, last: null, index: workerIndex, avatarId: null };
           entries.set(w.id, entry);
           const spot = standSpot(w.character.station, entry.index);
           person.x = spot.x;
@@ -220,6 +224,14 @@ export async function createScene(
           person.setTarget(spot.x, spot.y);
         }
         entry.index = workerIndex;
+        if (entry.avatarId !== w.avatarId) {
+          entry.avatarId = w.avatarId;
+          void entry.person
+            .setAvatar(w.avatarId ? apiAssetUrl(`/api/avatars/${w.avatarId}`) : null)
+            .then((message) => {
+              if (message) callbacks.onAvatarError(w.selectId, message);
+            });
+        }
         entry.person.active = w.active;
         entry.person.container.alpha = w.temporary ? 0.88 : 1;
         if (entry.last !== w.character) applyCharacter(entry, w.character);
@@ -230,7 +242,7 @@ export async function createScene(
       }
       for (const [id, entry] of entries) {
         if (!seen.has(id)) {
-          entry.person.container.destroy();
+          entry.person.destroy();
           entries.delete(id);
         }
       }
@@ -243,6 +255,8 @@ export async function createScene(
     },
     destroy() {
       app.renderer.off("resize", layout);
+      for (const entry of entries.values()) entry.person.destroy();
+      entries.clear();
       app.destroy(true, { children: true, texture: true });
     },
   };

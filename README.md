@@ -10,6 +10,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 
 - 多 Worker：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
 - NPC 管理：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
+- 自訂像素角色：從本機 PNG、JPEG 或 WebP 裁切、去背並降色成 24×32 NPC，也可上傳 GIF 保留動態效果；所有檔案只保存在本機。
 - 資料夾即房間：每位 Worker 綁定一個本機工作資料夾，並可從 Finder、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
 - Provider 切換：尚未對話時直接更換目前 NPC 類型；已有對話時才建立新 Worker，避免混用不相容的 session 歷史。
 - 即時串流：透過 WebSocket 顯示回覆、thinking、工具呼叫及結果。
@@ -93,8 +94,9 @@ npm run dev
 3. 在底部輸入框對目前的 Worker 下達任務。
 4. Claude Worker 可輸入 `/` 查看目前房間與使用者層級的 slash commands。
 5. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
-6. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
-7. Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
+6. 將滑鼠移到 Worker 分頁，點擊 `◈` 開啟角色工坊；可預覽裁切、位置、去背與色彩數量，再套用或恢復預設角色。
+7. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
+8. Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
 
 右上角會分別顯示 `SERVER ONLINE` 與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
 
@@ -116,6 +118,7 @@ npm run dev
 | `HOST` | `127.0.0.1` | 後端監聽位址 |
 | `PORT` | `8787` | 後端連接埠 |
 | `DB_PATH` | `server/data/cockpit.sqlite` | SQLite 資料庫位置 |
+| `AVATAR_DIR` | 與資料庫同層的 `avatars/` | 正規化 NPC PNG 與已驗證 GIF 的本機儲存目錄 |
 
 ### Web
 
@@ -130,6 +133,7 @@ npm run dev
 
 - 後端預設只監聽 `127.0.0.1`，定位為個人本機工具。
 - SQLite 會保存使用者訊息、thinking、工具輸入與工具結果，預設位置為 `server/data/cockpit.sqlite`。
+- 靜態角色來源圖只在瀏覽器處理，伺服器僅保存通過驗證的 24×32 PNG；GIF 為保留動畫會保存原檔，限制 2 MiB、320×320、120 幀與 800 萬解碼像素，並依 GIF 內建的每幀時間播放。兩者預設位於 `server/data/avatars/`。
 - Worker 的房間路徑會存入 SQLite；實際專案檔案仍留在原本的本機資料夾，不會複製進 Pixel Crew。
 - Agent 產生的原始 HTML 會經過 allowlist 清理後才顯示；腳本、事件處理器與危險 URL 不會直接注入頁面。
 - `server/data/`、實際 `.env`、build 產物與 IDE workspace 已由 `.gitignore` 排除。

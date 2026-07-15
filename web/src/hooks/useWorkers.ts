@@ -18,6 +18,7 @@ type ServerMessage =
         model: string | null;
         busy: boolean;
         colorIndex: number;
+        avatarId: string | null;
         provider: ProviderId;
         workspacePath: string;
         events: RunnerEvent[];
@@ -38,6 +39,7 @@ type WorkerSummary = {
   model: string | null;
   busy: boolean;
   colorIndex: number;
+  avatarId: string | null;
   provider: ProviderId;
   workspacePath: string;
 };
@@ -121,6 +123,7 @@ export function useWorkers() {
               w.colorIndex ?? 0,
               w.provider,
               w.workspacePath,
+              w.avatarId,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             state.busy = w.busy;
@@ -151,6 +154,7 @@ export function useWorkers() {
               data.worker.colorIndex ?? 0,
               data.worker.provider,
               data.worker.workspacePath,
+              data.worker.avatarId,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -190,6 +194,7 @@ export function useWorkers() {
                   data.worker.colorIndex,
                   data.worker.provider,
                   data.worker.workspacePath,
+                  data.worker.avatarId,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -316,6 +321,24 @@ export function useWorkers() {
     }
   }, []);
 
+  const saveAvatar = useCallback(async (id: string, dataBase64: string, mimeType: "image/png" | "image/gif"): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/avatar`, { method: "PUT", body: { dataBase64, mimeType }, timeoutMs: 30000 });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const resetAvatar = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/avatar`, { method: "DELETE" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const send = useCallback(async (id: string, message: string): Promise<string | null> => {
     try {
       await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
@@ -379,6 +402,8 @@ export function useWorkers() {
     switchWorkspace,
     closeWorker,
     renameWorker,
+    saveAvatar,
+    resetAvatar,
     send,
     setModel,
     interrupt,

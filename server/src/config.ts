@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 function required(name: string, fallback?: string): string {
@@ -9,6 +10,10 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+const dbPath =
+  process.env.DB_PATH?.trim() ||
+  fileURLToPath(new URL("../data/cockpit.sqlite", import.meta.url));
+
 export const config = {
   targetRepoPath: required("TARGET_REPO_PATH"),
   permissionMode: process.env.PERMISSION_MODE ?? "acceptEdits",
@@ -17,7 +22,6 @@ export const config = {
   codexSandbox: process.env.CODEX_SANDBOX ?? "workspace-write",
   port: Number(process.env.PORT ?? 8787),
   host: process.env.HOST?.trim() || "127.0.0.1",
-  dbPath:
-    process.env.DB_PATH?.trim() ||
-    fileURLToPath(new URL("../data/cockpit.sqlite", import.meta.url)),
+  dbPath,
+  avatarDir: process.env.AVATAR_DIR?.trim() || join(dirname(dbPath), "avatars"),
 };

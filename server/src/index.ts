@@ -22,6 +22,7 @@ import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from ".
 import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
 import { isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
+import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -30,7 +31,7 @@ const loopbackCors: CorsOptions = {
   },
 };
 app.use(cors(loopbackCors));
-app.use(express.json());
+app.use(express.json({ limit: "3mb" }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({
@@ -45,6 +46,7 @@ const CLAUDE_MODELS = new Set(["fable", "opus", "sonnet", "haiku"]);
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
 const store = new LocalStore(config.dbPath);
+const avatarStore = new AvatarStore(config.avatarDir);
 const authProviders: Record<ProviderId, AgentAuthProvider> = {
   claude: new ClaudeAuthProvider(),
   codex: new CodexAuthProvider(),
@@ -59,6 +61,7 @@ type Worker = {
   runner: AgentSession;
   history: RunnerEvent[];
   colorIndex: number;
+  avatarId: string | null;
 };
 
 const workers = new Map<string, Worker>();
@@ -71,6 +74,7 @@ function workerSummary(w: Worker) {
     model: w.runner.getModel() ?? null,
     busy: w.runner.busy,
     colorIndex: w.colorIndex,
+    avatarId: w.avatarId,
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
   };
@@ -133,17 +137,27 @@ function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapab
   return registry;
 }
 
-function persistWorker(worker: Worker): void {
+function persistWorker(worker: Worker): boolean {
   const session = worker.runner.getPersistenceState();
-  store.saveWorker({
+  return store.saveWorker({
     id: worker.id,
     name: worker.runner.name,
     model: worker.runner.getModel() ?? null,
     colorIndex: worker.colorIndex,
+    avatarId: worker.avatarId,
     provider: worker.runner.provider,
     workspacePath: worker.runner.workspacePath,
     ...session,
   });
+}
+
+async function deleteAvatarIfUnused(avatarId: string): Promise<void> {
+  if ([...workers.values()].some((worker) => worker.avatarId === avatarId)) return;
+  try {
+    await avatarStore.delete(avatarId);
+  } catch (error) {
+    console.warn("Delete unused avatar failed:", (error as Error).message);
+  }
 }
 
 function record(worker: Worker, event: RunnerEvent): void {
@@ -174,6 +188,7 @@ function createWorker(
     runner: null as unknown as AgentSession,
     history: persisted?.events ?? [],
     colorIndex: persisted?.colorIndex ?? workerCounter % 6,
+    avatarId: persisted?.avatarId ?? null,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -487,6 +502,74 @@ app.patch("/api/workers/:id", (req, res) => {
   res.json(summary);
 });
 
+app.get("/api/avatars/:id", async (req, res) => {
+  try {
+    const avatar = await avatarStore.read(req.params.id);
+    if (!avatar) {
+      res.status(404).json({ error: "找不到角色圖片" });
+      return;
+    }
+    res.set({
+      "Content-Type": avatar.mimeType,
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.send(avatar.data);
+  } catch (error) {
+    console.warn("Read avatar failed:", (error as Error).message);
+    res.status(500).json({ error: "無法讀取角色圖片" });
+  }
+});
+
+app.put("/api/workers/:id/avatar", async (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  try {
+    const previousId = worker.avatarId;
+    const avatarId = await avatarStore.save(req.body?.dataBase64 ?? req.body?.pngBase64, req.body?.mimeType ?? "image/png");
+    worker.avatarId = avatarId;
+    if (!persistWorker(worker)) {
+      worker.avatarId = previousId;
+      await avatarStore.delete(avatarId);
+      res.status(500).json({ error: "無法將角色圖片寫入本機資料庫" });
+      return;
+    }
+    const summary = workerSummary(worker);
+    broadcast({ type: "worker_updated", worker: summary });
+    res.json(summary);
+    if (previousId) await deleteAvatarIfUnused(previousId);
+  } catch (error) {
+    if (error instanceof AvatarValidationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    console.warn("Save avatar failed:", (error as Error).message);
+    res.status(500).json({ error: "無法儲存角色圖片" });
+  }
+});
+
+app.delete("/api/workers/:id/avatar", async (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const previousId = worker.avatarId;
+  worker.avatarId = null;
+  if (!persistWorker(worker)) {
+    worker.avatarId = previousId;
+    res.status(500).json({ error: "無法更新本機角色設定" });
+    return;
+  }
+  const summary = workerSummary(worker);
+  broadcast({ type: "worker_updated", worker: summary });
+  res.json(summary);
+  if (previousId) await deleteAvatarIfUnused(previousId);
+});
+
 app.patch("/api/workers/:id/provider", (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
@@ -577,17 +660,19 @@ app.post("/api/workers/:id/activate", (req, res) => {
   res.json({ ok: true, workspacePath: worker.runner.workspacePath });
 });
 
-app.delete("/api/workers/:id", (req, res) => {
+app.delete("/api/workers/:id", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
   worker.runner.stop();
+  const avatarId = worker.avatarId;
   workers.delete(worker.id);
   store.deleteWorker(worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
+  if (avatarId) await deleteAvatarIfUnused(avatarId);
 });
 
 app.post("/api/workers/:id/message", (req, res) => {

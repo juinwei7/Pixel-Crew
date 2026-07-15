@@ -1,6 +1,10 @@
 const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
 const SERVER_URL = viteEnv?.VITE_SERVER_URL ?? "http://localhost:8787";
 
+export function apiAssetUrl(path: string): string {
+  return `${SERVER_URL}${path}`;
+}
+
 type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   timeoutMs?: number;

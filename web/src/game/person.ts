@@ -1,4 +1,5 @@
-import { Container, Graphics, Sprite, Texture } from "pixi.js";
+import { Assets, Container, Graphics, Sprite, Texture } from "pixi.js";
+import { GifSprite, type GifSource } from "pixi.js/gif";
 import type { CharacterActivity } from "../types";
 import { PAL, texFromMap } from "./pixels";
 
@@ -262,6 +263,12 @@ export class Person {
   private readonly backWalk: Texture[];
   private readonly workFrames: Texture[];
   private readonly cheerFrame: Texture;
+  private customTexture: Texture | null = null;
+  private gifSprite: GifSprite | null = null;
+  private customScale = 1;
+  private avatarLoadVersion = 0;
+  private avatarUrl: string | null = null;
+  private destroyed = false;
 
   x = 232;
   y = 154;
@@ -314,6 +321,97 @@ export class Person {
     this.flashColor = color;
     this.flashT = 650;
     if (cheer) this.cheerT = 900;
+  }
+
+  async setAvatar(url: string | null): Promise<string | null> {
+    const version = ++this.avatarLoadVersion;
+    await this.releaseAvatar();
+    if (this.destroyed || version !== this.avatarLoadVersion) return null;
+    this.sprite.visible = true;
+    if (!url) {
+      this.customTexture = null;
+      this.customScale = 1;
+      return null;
+    }
+    this.customTexture = null;
+    try {
+      if (url.toLowerCase().endsWith(".gif")) {
+        const source = await Assets.load<GifSource>({
+          src: url,
+          data: { fps: 20, scaleMode: "nearest", autoGenerateMipmaps: false },
+        });
+        const gif = new GifSprite({ source, autoPlay: true, loop: true, autoUpdate: true });
+        if (!this.destroyed && version === this.avatarLoadVersion) {
+          gif.anchor.set(0.5, 1);
+          this.gifSprite = gif;
+          this.avatarUrl = url;
+          this.customScale = Math.min(12 / source.width, 16 / source.height);
+          this.sprite.visible = false;
+          this.container.addChildAt(gif, 1);
+        } else {
+          gif.destroy();
+          await unloadAvatar(url);
+        }
+      } else {
+        const texture = await Assets.load<Texture>(url);
+        if (!this.destroyed && version === this.avatarLoadVersion) {
+          this.customTexture = texture;
+          this.avatarUrl = url;
+          this.customScale = Math.min(12 / texture.width, 16 / texture.height);
+        } else {
+          await unloadAvatar(url);
+        }
+      }
+      return null;
+    } catch (error) {
+      await unloadAvatar(url);
+      if (!this.destroyed && version === this.avatarLoadVersion) {
+        this.customTexture = null;
+        this.sprite.visible = true;
+        return `無法載入自訂角色：${(error as Error).message || "圖片解碼失敗"}`;
+      }
+      return null;
+    }
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.avatarLoadVersion++;
+    const url = this.avatarUrl;
+    this.avatarUrl = null;
+    this.clearGifSprite();
+    this.customTexture = null;
+    if (url) void unloadAvatar(url);
+    this.container.destroy({ children: true });
+    for (const texture of new Set([
+      ...this.idleFrames,
+      ...this.sideWalk,
+      ...this.frontWalk,
+      ...this.backWalk,
+      ...this.workFrames,
+      this.cheerFrame,
+    ])) {
+      texture.destroy(true);
+    }
+  }
+
+  private async releaseAvatar(): Promise<void> {
+    const url = this.avatarUrl;
+    this.avatarUrl = null;
+    this.clearGifSprite();
+    this.sprite.texture = this.idleFrames[0];
+    this.sprite.visible = true;
+    this.customTexture = null;
+    this.customScale = 1;
+    if (url) await unloadAvatar(url);
+  }
+
+  private clearGifSprite(): void {
+    if (!this.gifSprite) return;
+    this.gifSprite.stop();
+    this.gifSprite.destroy();
+    this.gifSprite = null;
   }
 
   update(tMs: number, dtMs: number): void {
@@ -378,9 +476,24 @@ export class Person {
       this.sprite.texture = this.idleFrames[idx];
     }
 
-    this.sprite.scale.x = flip;
-    this.sprite.position.y = bobY;
-    this.sprite.tint = this.flashT > 0 ? this.flashColor : 0xffffff;
+    if (this.customTexture) {
+      this.sprite.texture = this.customTexture;
+      if (moving) {
+        const sideMovement = Math.abs(dx) >= Math.abs(dy);
+        flip = sideMovement ? this.facing : 1;
+        bobY = Math.floor(this.walkCycleT / 130) % 2 === 0 ? 0 : -1;
+      } else if (this.cheerT > 0) {
+        bobY = Math.floor(this.cheerT / 150) % 2 === 0 ? -1 : 0;
+      } else if (this.activity === "working") {
+        bobY = Math.floor(this.animT / 260) % 2 === 0 ? 0 : -1;
+      }
+    }
+
+    const visual = this.gifSprite ?? this.sprite;
+    const avatarScale = this.customTexture || this.gifSprite ? this.customScale : 1;
+    visual.scale.set(flip * avatarScale, avatarScale);
+    visual.position.y = bobY;
+    visual.tint = this.flashT > 0 ? this.flashColor : 0xffffff;
 
     this.container.position.set(Math.round(this.x), Math.round(this.y));
     this.container.zIndex = this.y;
@@ -417,5 +530,13 @@ export class Person {
         alpha: on ? 1 : 0.35,
       });
     }
+  }
+}
+
+async function unloadAvatar(url: string): Promise<void> {
+  try {
+    await Assets.unload(url);
+  } catch {
+    // The load may have failed before the URL entered Pixi's cache.
   }
 }

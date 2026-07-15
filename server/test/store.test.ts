@@ -16,6 +16,7 @@ test("persists workers, bounded events, and capability cache", () => {
       name: "一號機",
       model: "sonnet",
       colorIndex: 2,
+      avatarId: "avatar-1",
       provider: "claude",
       workspacePath: "/repo",
       sessionId: "session-1",
@@ -50,6 +51,7 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(worker.completedTurns, 3);
     assert.equal(worker.provider, "claude");
     assert.equal(worker.workspacePath, "/repo");
+    assert.equal(worker.avatarId, "avatar-1");
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
 

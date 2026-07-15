@@ -74,6 +74,7 @@ export function emptyWorker(
   colorIndex: number,
   provider: WorkerState["provider"],
   workspacePath: string,
+  avatarId: string | null = null,
 ): WorkerState {
   return {
     id,
@@ -81,6 +82,7 @@ export function emptyWorker(
     model,
     busy,
     colorIndex,
+    avatarId,
     provider,
     workspacePath,
     turns: [],

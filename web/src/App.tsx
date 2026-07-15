@@ -6,6 +6,7 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { McpPanel } from "./components/McpPanel";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
+import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import type { ProviderId } from "./types";
 import { roomName } from "./workspace";
 
@@ -50,6 +51,8 @@ export function App() {
     switchWorkspace,
     closeWorker,
     renameWorker,
+    saveAvatar,
+    resetAvatar,
     send,
     setModel,
     interrupt,
@@ -63,6 +66,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
+  const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
 
   const workerList = order.map((id) => workers[id]).filter(Boolean);
   const active = activeId ? workers[activeId] : undefined;
@@ -135,7 +139,15 @@ export function App() {
 
   return (
     <div className="game-root">
-      <GameCanvas workers={workerList} activeId={activeId} onSelect={setActiveId} />
+      <GameCanvas
+        workers={workerList}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onAvatarError={(id, message) => {
+          setActiveId(id);
+          setError(message);
+        }}
+      />
 
       <header className="hud-header">
         <div className="hud-header__title">
@@ -247,6 +259,7 @@ export function App() {
         onCreate={() => createWorker(undefined, activeProvider, activeWorkspace)}
         onClose={closeWorker}
         onRename={renameWorker}
+        onAvatar={setAvatarWorkerId}
       />
 
       <form className="command-bar" onSubmit={handleSubmit}>
@@ -359,6 +372,15 @@ export function App() {
             }
             return switchWorkspace(activeId, path);
           }}
+        />
+      )}
+
+      {avatarWorkerId && workers[avatarWorkerId] && (
+        <AvatarWorkshop
+          worker={workers[avatarWorkerId]}
+          onSave={saveAvatar}
+          onReset={resetAvatar}
+          onClose={() => setAvatarWorkerId(null)}
         />
       )}
     </div>

@@ -10,6 +10,7 @@ type Props = {
   onCreate(): void;
   onClose(id: string): void;
   onRename(id: string, name: string): Promise<string | null>;
+  onAvatar(id: string): void;
 };
 
 const MAX_WORKERS = 20;
@@ -19,7 +20,7 @@ function shirtColor(index: number): string {
   return `#${color.toString(16).padStart(6, "0")}`;
 }
 
-export function WorkerTabs({ workers, activeId, onSelect, onCreate, onClose, onRename }: Props) {
+export function WorkerTabs({ workers, activeId, onSelect, onCreate, onClose, onRename, onAvatar }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -76,6 +77,17 @@ export function WorkerTabs({ workers, activeId, onSelect, onCreate, onClose, onR
           </span>
           <span className="worker-tab__room">{roomName(w.workspacePath)}</span>
           {w.model && <span className="worker-tab__model">{w.model}</span>}
+          <button
+            className={`worker-tab__avatar-button ${w.avatarId ? "worker-tab__avatar-button--custom" : ""}`}
+            title="自訂像素角色"
+            aria-label={`自訂 ${w.name} 的像素角色`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAvatar(w.id);
+            }}
+          >
+            ◈
+          </button>
           <button
             className="worker-tab__rename-button"
             title={editingId === w.id ? "儲存名稱" : "重新命名"}

@@ -10,6 +10,7 @@ type VisualWorker = {
   character: WorkerState["character"];
   active: boolean;
   colorIndex: number;
+  avatarId: string | null;
   busy: boolean;
   temporary: boolean;
 };
@@ -23,6 +24,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       character: worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
+      avatarId: worker.avatarId,
       busy: worker.busy,
       temporary: false,
     };
@@ -39,6 +41,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       },
       active: false,
       colorIndex: (worker.colorIndex + index + 1) % SHIRT_COLORS.length,
+      avatarId: null,
       busy: true,
       temporary: true,
     }));
@@ -50,9 +53,10 @@ type Props = {
   workers: WorkerState[];
   activeId: string | null;
   onSelect(id: string): void;
+  onAvatarError?(id: string, message: string): void;
 };
 
-export function GameCanvas({ workers, activeId, onSelect }: Props) {
+export function GameCanvas({ workers, activeId, onSelect, onAvatarError }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
@@ -63,6 +67,8 @@ export function GameCanvas({ workers, activeId, onSelect }: Props) {
   });
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onAvatarErrorRef = useRef(onAvatarError);
+  onAvatarErrorRef.current = onAvatarError;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -86,6 +92,7 @@ export function GameCanvas({ workers, activeId, onSelect }: Props) {
         }
       },
       onSelect: (id) => onSelectRef.current(id),
+      onAvatarError: (id, message) => onAvatarErrorRef.current?.(id, message),
     }).then((h) => {
       if (cancelled) {
         h.destroy();
