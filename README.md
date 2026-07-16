@@ -1,6 +1,49 @@
 # Pixel Crew
 
-> A local multi-agent cockpit for Claude Code and Codex.
+> A local multi-agent cockpit for Claude Code and Codex — run several coding-agent sessions as pixel NPCs in one office.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/Node-22.5%2B-brightgreen.svg)](#系統需求)
+
+**English** · [繁體中文](#zh-tw)
+
+Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pixel-art office. Each session is an NPC you can task, watch stream its output/thinking/tool calls in real time, and approve or deny permission requests — all running against the **official CLIs already installed on your machine**. Pixel Crew never asks you to paste an API key; authentication and usage stay in the underlying CLIs.
+
+## Highlights
+
+- **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
+- **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
+- **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
+- **Folders as rooms** — bind each worker to a local folder; the agent runs there.
+- **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
+- **Image prompts** — paste PNG, JPEG or WebP screenshots directly into the composer and send them as native multimodal input.
+- **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their images run in order.
+- **Interactive approvals** — allow once, deny, or grant a supported scoped session rule directly in the task log.
+- **Work-energy HUD** — shows each provider's remaining usage at a glance.
+- **Local-first** — Pixel Crew binds to `127.0.0.1`, stores its own state in local SQLite, and adds no hosted backend or API-key form. Tasks still go through the selected provider's official CLI and service under that CLI's terms.
+
+## Quick start
+
+```bash
+git clone https://github.com/juinwei7/Pixel-Crew.git
+cd Pixel-Crew
+cp server/.env.example server/.env   # set TARGET_REPO_PATH to a local repo
+cp web/.env.example web/.env
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173> (backend runs on <http://127.0.0.1:8787>). You need Node.js 22.5+ and at least one of the Claude Code / Codex CLIs installed. Not logged in yet? Boot the app and follow the in-UI prompt to run `claude auth login` or `codex login` in your terminal.
+
+## Disclaimer
+
+Pixel Crew is an **independent, unofficial** tool. It is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI. "Claude", "Claude Code", "Codex" and related marks belong to their respective owners. Pixel Crew merely orchestrates and visualizes the official CLIs you install and log into yourself.
+
+---
+
+<a id="zh-tw"></a>
+
+# Pixel Crew（繁體中文）
 
 Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公室。你可以同時建立多位「工人」、分派不同任務，並即時查看文字輸出、思考狀態、工具呼叫與執行結果。
 
@@ -8,22 +51,27 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 
 ## 功能
 
-- 多 Worker：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
-- NPC 管理：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
-- 自訂像素角色：從本機 PNG、JPEG 或 WebP 裁切、去背並降色成 24×32 NPC，也可上傳 GIF 保留動態效果；所有檔案只保存在本機。
-- 資料夾即房間：每位 Worker 綁定一個本機工作資料夾，並可從 Finder、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
-- Provider 切換：尚未對話時直接更換目前 NPC 類型；已有對話時才建立新 Worker，避免混用不相容的 session 歷史。
-- 即時串流：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
-- 互動式核准：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次、允許本次工作階段（依 provider 支援）或拒絕。
-- 富文字對話：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
-- 像素辦公室：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
-- Slash commands：啟動時掃描專案與使用者指令，不必先送出測試訊息。
-- MCP 狀態：依目前 provider 載入 MCP servers，可在介面中新增、移除、重新整理及查看狀態。
-- 動態模型：Codex 模型選單直接讀取本機 CLI model catalog，不需隨版本手動更新清單。
-- Session 延續：重新啟動服務後，仍可透過 provider 的 session/thread ID 延續對話。
-- 本機持久化：使用 SQLite 保存 Worker、最近的事件歷史及能力快取。
-- 任務控制：可中止正在執行的 Worker，不影響其他工作階段。
-- 登入引導：啟動時分別檢查 Claude 與 Codex CLI；未登入時顯示安全的終端登入流程，不會接收帳密或 token。
+- **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
+- **NPC 管理**：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
+- **NPC 個性 / 職務**：為每位 NPC 設定「職務」與「詳細指示」，會在每次啟動時自動注入（Claude 透過 `--append-system-prompt`、Codex 透過 `model_instructions_file`），即使 `/clear`、換模型或重啟服務都保留，不必每次重講。也能把常用人設存成範本，一鍵套用到其他 NPC。
+- **像素角色**：內建多款官方角色預設（經典隊員、霓虹工程師、訊號分析師、火花設計師、夜班維運），也可從本機 PNG / JPEG / WebP 裁切、去背並降色成 24×32 NPC，或上傳 GIF 保留動態；所有檔案只保存在本機。
+- **資料夾即房間**：每位 Worker 綁定一個本機工作資料夾，並可從 Finder、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
+- **Provider 切換**：尚未對話時直接更換目前 NPC 類型；已有對話時透過摘要交接原地切換，但不混用兩邊不相容的原生 session 歷史。
+- **跨 LLM 交接**：空白 NPC 可直接原地更換 provider；已有對話時，會先整理目標、進度、決策與風險，再建立另一個 provider 的新 session 接手。交接摘要不是完整原生記憶，切換前會明確提醒並檢查目標 provider 的剩餘用量。
+- **即時串流**：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
+- **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
+- **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
+- **互動式核准**：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次或拒絕；Codex 另支援「本次工作階段皆允許」。
+- **全域工作能量**：頂部 HUD 顯示 Claude 與 Codex 目前的剩餘用量（讀取各自 CLI 的用量資訊），為帳號共用、不隨房間或 NPC 切換。
+- **富文字對話**：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
+- **像素辦公室**：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
+- **Slash commands**：啟動時掃描專案與使用者指令；內建原生指令會全域快取，讓新建的 NPC 或剛切換的房間也能立即看到，不必先送出測試訊息。
+- **MCP 狀態**：依目前 provider 載入 MCP servers，可在介面中新增、移除、重新整理及查看狀態（含「需授權」等狀態）。
+- **動態模型**：Claude 提供 Opus / Sonnet / Haiku / Fable 等別名，Codex 直接讀取本機 CLI 的 model catalog，不需隨版本手動更新清單。
+- **Session 延續**：重新啟動服務後，仍可透過 provider 的 session/thread ID 延續對話。
+- **本機持久化**：使用 SQLite 保存 Worker、最近的事件歷史、能力快取與人設。
+- **任務控制**：可中止正在執行的 Worker，不影響其他工作階段。
+- **登入引導**：啟動時分別檢查 Claude 與 Codex CLI；未登入時顯示安全的終端登入流程，不會接收帳密或 token。
 
 ## 架構
 
@@ -86,22 +134,23 @@ npm install
 npm run dev
 ```
 
-開啟 http://localhost:5173 。後端預設執行於 http://127.0.0.1:8787 。
+開啟 <http://localhost:5173> 。後端預設執行於 <http://127.0.0.1:8787> 。
 
 ## 使用方式
 
-1. 在右上角 provider 選單選擇 `Claude Code` 或 `Codex`；空白 NPC 會原地換類型，已有對話時才建立新 Worker。
+1. 在右上角 provider 選單選擇 `Claude Code` 或 `Codex`；空白 NPC 會直接原地換類型，已有對話時則顯示交接風險與目標用量，確認後整理摘要並由新 session 接手。
 2. 點擊畫面上方的房間名稱；macOS 可直接從 Finder 選擇資料夾，也可輸入本機絕對路徑或選擇最近房間。目前 NPC 會原地搬遷，不會增加 NPC 數量。
-3. 在底部輸入框對目前的 Worker 下達任務。
-4. Claude Worker 可輸入 `/` 查看目前房間與使用者層級的 slash commands。
-5. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
-6. 將滑鼠移到 Worker 分頁，點擊 `◈` 開啟角色工坊；可預覽裁切、位置、去背與色彩數量，再套用或恢復預設角色。
-7. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
-8. Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
+3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。
+4. Claude Worker 可輸入 `/` 查看目前房間與使用者層級的 slash commands 及內建原生指令。
+5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
+6. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
+7. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
+8. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
+9. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
 
-右上角會分別顯示 `SERVER ONLINE` 與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
+右上角會分別顯示伺服器與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
 
-專案特定工作流程可以放在目標 repo 的 `.claude/commands/` 與 `CLAUDE.md`。Pixel Crew 不會把任務流程寫死，因此不同 repository 可以使用自己的指令與規範。
+專案特定工作流程可以放在目標 repo 的 `.claude/commands/`、`CLAUDE.md`（Claude）或 `AGENTS.md`（Codex）。Pixel Crew 不會把任務流程寫死，因此不同 repository 可以使用自己的指令與規範。
 
 ## 設定
 
@@ -133,9 +182,11 @@ npm run dev
 ## 本機資料與安全性
 
 - 後端預設只監聽 `127.0.0.1`，定位為個人本機工具。
-- SQLite 會保存使用者訊息、thinking、工具輸入與工具結果，預設位置為 `server/data/cockpit.sqlite`。
+- SQLite 會保存使用者訊息、thinking、工具輸入、工具結果與各 NPC 人設，預設位置為 `server/data/cockpit.sqlite`。
 - 靜態角色來源圖只在瀏覽器處理，伺服器僅保存通過驗證的 24×32 PNG；GIF 為保留動畫會保存原檔，限制 2 MiB、320×320、120 幀與 800 萬解碼像素，並依 GIF 內建的每幀時間播放。兩者預設位於 `server/data/avatars/`。
 - Worker 的房間路徑會存入 SQLite；實際專案檔案仍留在原本的本機資料夾，不會複製進 Pixel Crew。
+- 訊息圖片只經由本機 loopback server 傳給目前 provider。Codex 所需的本機圖片暫存檔權限為 `0600`，會在該回合完成、中止或失敗時刪除；圖片本體不會寫入 Pixel Crew 的 SQLite 事件歷史。
+- NPC 人設會以每個 NPC 的暫存指示檔（Codex）或啟動參數（Claude）注入，檔案權限為 `0600`，session 結束時清除。
 - Agent 產生的原始 HTML 會經過 allowlist 清理後才顯示；腳本、事件處理器與危險 URL 不會直接注入頁面。
 - `server/data/`、實際 `.env`、build 產物與 IDE workspace 已由 `.gitignore` 排除。
 - SQLite 目錄權限設為 `0700`，資料庫及 sidecar 檔案設為 `0600`。
@@ -151,24 +202,27 @@ npm run dev
 # 同時啟動 server 與 web
 npm run dev
 
-# Production build
+# Production build（型別檢查 + 建置兩個套件）
 npm run build --workspaces
 
 # Server tests
 npm test -w server
 
-# Web rich-text tests
+# Web tests
 npm test -w web
 ```
+
+歡迎貢獻——請見 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 目前限制
 
 - 原生資料夾選擇器目前支援 macOS；其他作業系統仍需輸入本機絕對路徑或選擇最近房間。
 - 沒有跨裝置同步或多人帳號系統。
 - 最多為每位 Worker 保存最近 2,000 筆 runner events。
-- Slash commands 目前只提供給 Claude Worker；MCP 管理同時支援 Claude 與 Codex。
+- Slash commands 目前只提供給 Claude Worker；Codex 使用 `$` 觸發的 Repo Skills。MCP 管理同時支援 Claude 與 Codex。
+- 「本次工作階段皆允許」目前 Codex 為原生支援；Claude 端是否提供取決於所安裝 CLI 版本的權限提示能力。
 - 這是早期版本，資料庫 schema 尚未提供正式 migration 工具。
-- Claude 與 Codex 的對話歷史不能互換；空白 NPC 可原地換類型，已有對話時會建立新 Worker，尚未自動產生交接摘要。
+- Claude 與 Codex 的原生 session 歷史不能互換；跨 LLM 切換使用摘要交接，因此可能遺漏細節、工具狀態、待核准操作或未完成的背景工作。
 
 ## 技術棧
 
@@ -176,3 +230,7 @@ npm test -w web
 - Backend：Node.js、Express、WebSocket、TypeScript
 - Persistence：Node SQLite
 - Agent runtime：Claude Code CLI、Codex CLI
+
+## 授權
+
+本專案採用 [MIT License](./LICENSE)。
