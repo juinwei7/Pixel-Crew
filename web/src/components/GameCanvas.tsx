@@ -84,6 +84,7 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [sceneError, setSceneError] = useState<string | null>(null);
   const sceneRef = useRef<SceneHandle | null>(null);
   const latest = useRef<{ workers: WorkerState[]; activeId: string | null }>({
     workers,
@@ -156,7 +157,16 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
       }
       handle = h;
       sceneRef.current = h;
+      setSceneError(null);
       pushWorkers();
+    }).catch((error: unknown) => {
+      // Most commonly WebGL being unavailable (hardware acceleration off,
+      // remote desktop, blocklisted GPU driver). Without this the office
+      // just renders as a silent black area with the bubbles piled top-left.
+      if (cancelled) return;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("Pixel office scene failed to start:", error);
+      setSceneError(message);
     });
 
     function pushWorkers() {
@@ -174,6 +184,20 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
     latest.current = { workers, activeId };
     sceneRef.current?.setWorkers(visualWorkers(workers, activeId));
   }, [workers, activeId]);
+
+  if (sceneError) {
+    return (
+      <>
+        <div className="game-host" ref={hostRef} />
+        <div className="game-host__fallback" role="alert">
+          <strong>像素辦公室無法啟動</strong>
+          <p>這台裝置的瀏覽器拿不到 WebGL（常見原因：Chrome 硬體加速被關閉、遠端桌面連線、或顯示卡驅動被瀏覽器停用）。NPC 對話與任務日誌不受影響，仍可正常下指令。</p>
+          <p>可以檢查 <code>chrome://gpu</code> 的 WebGL 狀態，或到瀏覽器設定開啟「使用硬體加速」。</p>
+          <small>{sceneError}</small>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

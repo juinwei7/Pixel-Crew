@@ -176,6 +176,25 @@ body {
   display: block;
 }
 
+.game-host__fallback {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100% - 48px));
+  padding: 20px 22px;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 209, 102, 0.28);
+  border-radius: 13px;
+  background: rgba(10, 16, 30, 0.94);
+  color: #d5dfec;
+  text-align: left;
+}
+.game-host__fallback strong { display: block; margin-bottom: 8px; color: #ffd166; font-size: 13px; }
+.game-host__fallback p { margin: 0 0 8px; font-size: 11.5px; line-height: 1.6; color: #9db0c8; }
+.game-host__fallback code { padding: 1px 5px; border-radius: 4px; background: rgba(255,255,255,.07); font-family: var(--mono); }
+.game-host__fallback small { display: block; overflow-wrap: anywhere; color: #5f7089; font: 10px/1.5 var(--mono); }
+
 /* ---------- Robot speech bubble (HTML overlay) ---------- */
 
 .robot-bubble {
