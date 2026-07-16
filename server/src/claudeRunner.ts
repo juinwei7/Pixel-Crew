@@ -47,6 +47,33 @@ export type ApprovalRequest = {
   decisions: ApprovalDecision[];
 };
 
+type SessionPermissionUpdate = {
+  type: "addRules";
+  rules: Array<{ toolName: string; ruleContent: string }>;
+  behavior: "allow";
+  destination: "session";
+};
+
+function sessionPermissionUpdates(value: unknown, toolName: string): SessionPermissionUpdate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const candidate = entry as Record<string, unknown>;
+    if (candidate.type !== "addRules" || candidate.behavior !== "allow" || !Array.isArray(candidate.rules)) return [];
+    const rules = candidate.rules.flatMap((rule) => {
+      if (!rule || typeof rule !== "object") return [];
+      const detail = rule as Record<string, unknown>;
+      const suggestedTool = String(detail.toolName ?? "").slice(0, 120);
+      const ruleContent = typeof detail.ruleContent === "string" ? detail.ruleContent.trim().slice(0, 20_000) : "";
+      // A bare tool grant would turn one harmless approval into blanket access
+      // to every Bash command or file operation. Only accept scoped rules for
+      // the tool currently shown to the user.
+      return suggestedTool === toolName && ruleContent ? [{ toolName: suggestedTool, ruleContent }] : [];
+    }).slice(0, 20);
+    return rules.length ? [{ type: "addRules" as const, rules, behavior: "allow" as const, destination: "session" as const }] : [];
+  }).slice(0, 10);
+}
+
 export function approvalBridgeLaunch(moduleUrl = import.meta.url): { bridgePath: string; args: string[] } {
   const runningTypescript = moduleUrl.endsWith(".ts");
   const bridgePath = fileURLToPath(new URL(
@@ -78,6 +105,7 @@ export class ClaudeSession implements AgentSession {
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
   private pendingApprovals = new Map<string, {
     input: unknown;
+    permissionUpdates: SessionPermissionUpdate[];
     resolve(result: unknown): void;
   }>();
   busy = false;
@@ -152,10 +180,15 @@ export class ClaudeSession implements AgentSession {
   resolveApproval(id: string, decision: ApprovalDecision): boolean {
     const pending = this.pendingApprovals.get(id);
     if (!pending) return false;
+    if (decision === "allow_session" && pending.permissionUpdates.length === 0) return false;
     this.pendingApprovals.delete(id);
     pending.resolve(decision === "deny"
       ? { behavior: "deny", message: "使用者拒絕這項操作" }
-      : { behavior: "allow", updatedInput: pending.input });
+      : {
+          behavior: "allow",
+          updatedInput: pending.input,
+          ...(decision === "allow_session" ? { updatedPermissions: pending.permissionUpdates } : {}),
+        });
     this.onEvent({ type: "approval_resolved", id, decision });
     return true;
   }
@@ -164,7 +197,8 @@ export class ClaudeSession implements AgentSession {
     if (token !== this.approvalToken || !this.busy) return null;
     const detail = rawInput && typeof rawInput === "object" ? rawInput as Record<string, unknown> : {};
     const toolName = String(detail.tool_name ?? detail.toolName ?? "Tool").slice(0, 120);
-    const originalInput = detail.input ?? {};
+    const originalInput = detail.input ?? detail.tool_input ?? {};
+    const permissionUpdates = sessionPermissionUpdates(detail.permission_suggestions ?? detail.suggestions, toolName);
     const input = boundedValue(originalInput);
     const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
       ? String((originalInput as Record<string, unknown>).command ?? "").slice(0, 20_000)
@@ -178,10 +212,12 @@ export class ClaudeSession implements AgentSession {
       input,
       command,
       cwd: this.workspacePath,
-      reason: "Claude Code 需要額外權限才能繼續目前回合",
-      decisions: ["allow_once", "deny"],
+      reason: permissionUpdates.length
+        ? `Claude Code 需要額外權限；「本次皆允許」只套用目前工作階段的建議規則：${permissionUpdates.flatMap((update) => update.rules.map((rule) => `${rule.toolName}(${rule.ruleContent})`)).join("、").slice(0, 500)}`
+        : "Claude Code 需要額外權限才能繼續目前回合",
+      decisions: permissionUpdates.length ? ["allow_once", "allow_session", "deny"] : ["allow_once", "deny"],
     };
-    const pending = new Promise((resolve) => this.pendingApprovals.set(id, { input: originalInput, resolve }));
+    const pending = new Promise((resolve) => this.pendingApprovals.set(id, { input: originalInput, permissionUpdates, resolve }));
     this.onEvent({ type: "approval_requested", request });
     return pending;
   }

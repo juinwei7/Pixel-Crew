@@ -39,7 +39,11 @@ async function handle(line: string): Promise<void> {
         description: "Ask the local Pixel Crew user to approve or deny a Claude Code tool call.",
         inputSchema: {
           type: "object",
-          properties: { tool_name: { type: "string" }, input: { type: "object" } },
+          properties: {
+            tool_name: { type: "string" },
+            input: { type: "object" },
+            permission_suggestions: { type: "array", items: { type: "object" } },
+          },
           required: ["tool_name", "input"],
           additionalProperties: true,
         },
