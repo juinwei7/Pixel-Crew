@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { normalizeCodexUsage, parseClaudeUsage } from "../src/providerUsage.js";
+import { normalizeCodexUsage, parseClaudeUsage, ProviderUsageRegistry } from "../src/providerUsage.js";
+import { LocalStore } from "../src/store.js";
 
 test("parses Claude /usage JSON into account-wide remaining energy", () => {
   const raw = JSON.stringify({
@@ -39,4 +43,23 @@ test("ignores malformed reset timestamps without crashing", () => {
   assert.equal(window.remainingPercent, 58);
   assert.equal(window.resetsAt, null);
   assert.deepEqual(parseClaudeUsage("not usage output"), []);
+});
+
+test("does not spawn the provider CLI for a provider that has not started", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-usage-"));
+  try {
+    const store = new LocalStore(join(dir, "test.sqlite"));
+    const registry = new ProviderUsageRegistry(store, () => undefined, () => false);
+
+    // A forced refresh on a not-ready provider must resolve to a neutral,
+    // non-loading, error-free state without ever reading live usage.
+    const state = await registry.refresh("claude", true);
+    assert.equal(state.loading, false);
+    assert.equal(state.error, null);
+    assert.equal(state.source, "empty");
+    assert.equal(state.updatedAt, null);
+    assert.deepEqual(state.windows, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

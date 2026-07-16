@@ -47,9 +47,13 @@ const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
 const store = new LocalStore(config.dbPath);
 const avatarStore = new AvatarStore(config.avatarDir);
-const usageRegistry = new ProviderUsageRegistry(store, (usage) => {
-  broadcast({ type: "usage_updated", provider: usage.provider, usage });
-});
+const usageRegistry = new ProviderUsageRegistry(
+  store,
+  (usage) => {
+    broadcast({ type: "usage_updated", provider: usage.provider, usage });
+  },
+  providerReady,
+);
 const authProviders: Record<ProviderId, AgentAuthProvider> = {
   claude: new ClaudeAuthProvider(),
   codex: new CodexAuthProvider(),

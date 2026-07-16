@@ -28,7 +28,7 @@ export type ProviderUsageState = {
 };
 
 function emptyState(provider: ProviderId): ProviderUsageState {
-  return { provider, windows: [], loading: true, source: "empty", updatedAt: null, error: null };
+  return { provider, windows: [], loading: false, source: "empty", updatedAt: null, error: null };
 }
 
 function percent(value: unknown): number {
@@ -187,21 +187,28 @@ async function readCodexUsage(): Promise<UsageWindow[]> {
   });
 }
 
-function cachedState(provider: ProviderId, value: unknown): ProviderUsageState {
+function idleState(provider: ProviderId, value: unknown): ProviderUsageState {
   if (!value || typeof value !== "object") return emptyState(provider);
   const state = value as Partial<ProviderUsageState>;
   const windows = Array.isArray(state.windows) ? state.windows.filter((window) => window && typeof window === "object") as UsageWindow[] : [];
-  return { provider, windows, loading: true, source: windows.length ? "cache" : "empty", updatedAt: safeText(state.updatedAt) || null, error: null };
+  return { provider, windows, loading: false, source: windows.length ? "cache" : "empty", updatedAt: safeText(state.updatedAt) || null, error: null };
 }
 
 export class ProviderUsageRegistry {
   private states: Record<ProviderId, ProviderUsageState>;
   private active = new Map<ProviderId, Promise<ProviderUsageState>>();
 
-  constructor(private readonly store: LocalStore, private readonly onUpdate: (state: ProviderUsageState) => void) {
+  constructor(
+    private readonly store: LocalStore,
+    private readonly onUpdate: (state: ProviderUsageState) => void,
+    // Usage is read by spawning the provider CLI. We only do that once the
+    // provider is authenticated/started, so a signed-out Claude is never
+    // woken up just to draw the energy panel. Defaults to always-ready.
+    private readonly isReady: (provider: ProviderId) => boolean = () => true,
+  ) {
     this.states = {
-      claude: cachedState("claude", store.loadProviderUsage("claude")),
-      codex: cachedState("codex", store.loadProviderUsage("codex")),
+      claude: idleState("claude", store.loadProviderUsage("claude")),
+      codex: idleState("codex", store.loadProviderUsage("codex")),
     };
   }
 
@@ -213,6 +220,13 @@ export class ProviderUsageRegistry {
     const running = this.active.get(provider);
     if (running) return running;
     const previous = this.states[provider];
+    if (!this.isReady(provider)) {
+      // Provider not started yet — keep any cached windows, but never spawn
+      // the CLI and never surface a connection error for it.
+      const idle: ProviderUsageState = { ...previous, loading: false, error: null };
+      if (previous.loading || previous.error) this.publish(idle, false);
+      return Promise.resolve(idle);
+    }
     if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish({ ...previous, loading: true, error: null }, false);
     const operation = (provider === "claude" ? readClaudeUsage() : readCodexUsage())
