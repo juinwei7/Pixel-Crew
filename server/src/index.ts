@@ -2,11 +2,9 @@ import express from "express";
 import cors, { type CorsOptions } from "cors";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
-import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { release as osRelease } from "node:os";
+import { join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
@@ -37,14 +35,25 @@ import {
   type HandoffProgress,
   type HandoffSummary,
 } from "./handoff.js";
+import { canonicalWorkspacePath, sameWorkspace, workspaceIdentity } from "./platform/paths.js";
+import { execCli, resolveExecutable } from "./platform/processes.js";
+import { pickDirectory } from "./platform/directoryPicker.js";
+import { parseCommandLine } from "./platform/commandLine.js";
 
 const app = express();
+app.disable("x-powered-by");
 const loopbackCors: CorsOptions = {
   origin(origin, callback) {
     callback(null, isAllowedLoopbackOrigin(origin));
   },
 };
 app.use(cors(loopbackCors));
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:");
+  next();
+});
 app.use(express.json({ limit: "16mb" }));
 
 const server = createServer(app);
@@ -76,6 +85,20 @@ const authStates: Record<ProviderId, ProviderAuthState> = {
   claude: initialAuthState(authProviders.claude),
   codex: initialAuthState(authProviders.codex),
 };
+
+function systemStatus() {
+  const release = osRelease();
+  const windowsBuild = process.platform === "win32" ? Number(release.split(".")[2] ?? 0) : null;
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    release,
+    node: process.version,
+    dataDirectory: config.dataDirectory,
+    folderPicker: process.platform === "darwin" || process.platform === "win32",
+    codexWindowsBestEffort: process.platform === "win32" && Number.isFinite(windowsBuild) && (windowsBuild ?? 0) < 22_000,
+  };
+}
 
 type Worker = {
   id: string;
@@ -140,11 +163,7 @@ const claudeCapabilityRegistries = new Map<string, CapabilityRegistry>();
 const codexCapabilityRegistries = new Map<string, CodexCapabilityRegistry>();
 
 function registryKey(workspacePath: string): string {
-  try {
-    return realpathSync(workspacePath);
-  } catch {
-    return resolve(workspacePath);
-  }
+  return workspaceIdentity(workspacePath);
 }
 
 function claudeCapabilitiesFor(workspacePath = config.targetRepoPath): CapabilityRegistry {
@@ -301,42 +320,19 @@ function validModel(_provider: ProviderId, model: string): boolean {
 }
 
 function normalizeWorkspacePath(input: unknown): string {
-  const requested = String(input ?? "").trim() || config.targetRepoPath;
-  const expanded = requested === "~" || requested.startsWith("~/")
-    ? resolve(homedir(), requested.slice(2))
-    : resolve(requested);
-  try {
-    const canonical = realpathSync(expanded);
-    if (!statSync(canonical).isDirectory()) throw new Error("工作位置不是資料夾");
-    return canonical;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("找不到這個資料夾，請確認本機絕對路徑");
-    }
-    throw error;
-  }
+  return canonicalWorkspacePath(input, config.targetRepoPath);
 }
 
 function normalizeManagedWorkspacePath(input: unknown): string {
   const canonical = normalizeWorkspacePath(input);
   const managedPaths = [config.targetRepoPath, ...[...workers.values()].map((worker) => worker.runner.workspacePath)];
-  const managed = managedPaths.some((path) => {
-    try {
-      return realpathSync(path) === canonical;
-    } catch {
-      return false;
-    }
-  });
+  const managed = managedPaths.some((path) => sameWorkspace(path, canonical));
   if (!managed) throw new Error("只能管理目前已加入 Pixel Crew 的工作資料夾");
   return canonical;
 }
 
 function sameWorkspacePath(left: string, right: string): boolean {
-  try {
-    return realpathSync(left) === realpathSync(right);
-  } catch {
-    return resolve(left) === resolve(right);
-  }
+  return sameWorkspace(left, right);
 }
 
 function recentWorkspacePaths(): string[] {
@@ -396,9 +392,9 @@ function setHandoff(worker: Worker, progress: HandoffProgress, summary: HandoffS
 async function workspaceGitState(workspacePath: string): Promise<string> {
   try {
     const [branch, head, status] = await Promise.all([
-      execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
-      execFileAsync("git", ["rev-parse", "--short", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
-      execFileAsync("git", ["status", "--short"], { cwd: workspacePath, timeout: 5_000, maxBuffer: 200_000 }),
+      execCli("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
+      execCli("git", ["rev-parse", "--short", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
+      execCli("git", ["status", "--short"], { cwd: workspacePath, timeout: 5_000, maxBuffer: 200_000 }),
     ]);
     return `branch: ${branch.stdout.trim()}\nHEAD: ${head.stdout.trim()}\n${status.stdout.trim()}`.trim();
   } catch {
@@ -587,6 +583,7 @@ wss.on("connection", (socket) => {
     JSON.stringify({
       type: "snapshot",
       targetRepoPath: config.targetRepoPath,
+      system: systemStatus(),
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
       providerUsage: usageRegistry.getStates(),
@@ -607,6 +604,26 @@ app.get("/api/workspaces", (_req, res) => {
   res.json({ defaultPath: config.targetRepoPath, paths: recentWorkspacePaths() });
 });
 
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true, version: "0.1.0", platform: process.platform, arch: process.arch });
+});
+
+app.get("/api/system/status", (_req, res) => {
+  const available = (command: string) => {
+    const resolved = resolveExecutable(command);
+    return resolved !== command || existsSync(resolved);
+  };
+  res.json({
+    ...systemStatus(),
+    providers: {
+      claude: { installed: available(config.claudeBin) },
+      codex: { installed: available(config.codexBin) },
+    },
+    git: { installed: available("git") },
+    windows: process.platform === "win32" ? { codexSupport: "Windows 11 recommended; fully updated Windows 10 is best effort" } : null,
+  });
+});
+
 app.post("/api/workspaces/validate", (req, res) => {
   try {
     res.json({ ok: true, path: normalizeWorkspacePath(req.body?.path) });
@@ -616,22 +633,16 @@ app.post("/api/workspaces/validate", (req, res) => {
 });
 
 app.post("/api/workspaces/pick", async (_req, res) => {
-  if (process.platform !== "darwin") {
-    res.status(501).json({ error: "目前只有 macOS 支援原生資料夾選擇器，請改用絕對路徑" });
-    return;
-  }
   try {
-    const { stdout } = await execFileAsync("/usr/bin/osascript", [
-      "-e",
-      'POSIX path of (choose folder with prompt "Pixel Crew：選擇工作資料夾")',
-    ], { timeout: 120000 });
-    res.json({ path: normalizeWorkspacePath(stdout.trim()) });
-  } catch (error: any) {
-    if (/cancel|取消|-128/i.test(String(error?.stderr ?? error?.message ?? ""))) {
+    const result = await pickDirectory();
+    if (result.canceled) {
       res.json({ canceled: true });
       return;
     }
-    res.status(500).json({ error: "無法開啟資料夾選擇器，請改用絕對路徑" });
+    res.json({ path: normalizeWorkspacePath(result.path) });
+  } catch (error: any) {
+    res.status(process.platform === "darwin" || process.platform === "win32" ? 500 : 501)
+      .json({ error: "無法開啟系統資料夾選擇器，請改用絕對路徑" });
   }
 });
 
@@ -1303,8 +1314,6 @@ app.delete("/api/persona-templates/:id", (req, res) => {
   res.json({ ok: true, templates: store.listPersonaTemplates() });
 });
 
-const execFileAsync = promisify(execFile);
-
 /** Restart idle workers so their next message picks up provider configuration. */
 function restartIdleWorkers(provider?: ProviderId, workspacePath?: string): void {
   for (const worker of workers.values()) {
@@ -1392,6 +1401,15 @@ app.post("/api/mcp", async (req, res) => {
   }
 
   const isUrl = /^https?:\/\//.test(target);
+  let localTarget: string[] = [];
+  if (!isUrl) {
+    try {
+      localTarget = parseCommandLine(target);
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message || "MCP 指令格式不正確" });
+      return;
+    }
+  }
   const args = provider === "codex"
     ? ["mcp", "add", name]
     : ["mcp", "add", "-s", "user"];
@@ -1401,17 +1419,17 @@ app.post("/api/mcp", async (req, res) => {
       return;
     }
     if (isUrl) args.push("--url", target);
-    else args.push("--", ...target.split(/\s+/));
+    else args.push("--", ...localTarget);
   } else if (isUrl) {
     args.push("-t", target.endsWith("/sse") ? "sse" : "http");
     if (header) args.push("-H", header);
     args.push(name, target);
   } else {
-    args.push(name, "--", ...target.split(/\s+/));
+    args.push(name, "--", ...localTarget);
   }
 
   try {
-    const { stdout } = await execFileAsync(provider === "codex" ? config.codexBin : config.claudeBin, args, {
+    const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, args, {
       cwd: workspacePath,
       timeout: 30000,
     });
@@ -1458,7 +1476,7 @@ app.delete("/api/mcp/:name", async (req, res) => {
     return;
   }
   try {
-    const { stdout } = await execFileAsync(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "remove", name], {
+    const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "remove", name], {
       cwd: workspacePath,
       timeout: 30000,
     });
@@ -1511,8 +1529,51 @@ const usageRefreshTimer = setInterval(() => {
 }, 5 * 60_000);
 usageRefreshTimer.unref();
 
+if (config.production && existsSync(config.webDistPath)) {
+  app.use(express.static(config.webDistPath, {
+    index: false,
+    etag: true,
+    maxAge: "1h",
+    setHeaders(res, path) {
+      if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+      else if (/[\\/]assets[\\/]/.test(path)) res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    },
+  }));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api/") || req.path.startsWith("/internal/") || req.path === "/healthz") {
+      next();
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(join(config.webDistPath, "index.html"));
+  });
+}
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`pixel-crew received ${signal}; shutting down`);
+  clearInterval(usageRefreshTimer);
+  workflowWatcher.stop();
+  for (const worker of workers.values()) worker.runner.stop();
+  for (const client of wss.clients) client.terminate();
+  await new Promise<void>((resolveClose) => wss.close(() => resolveClose()));
+  await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  store.close();
+}
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void shutdown(signal).then(() => { process.exitCode = 0; });
+  });
+}
+
 server.listen(config.port, config.host, () => {
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
   console.log(`local database: ${config.dbPath}`);
+  if (config.production && !existsSync(config.webDistPath)) {
+    console.warn(`web build not found at ${config.webDistPath}; run npm run build first`);
+  }
 });

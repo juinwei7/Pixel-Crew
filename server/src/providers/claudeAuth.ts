@@ -1,9 +1,10 @@
-import { execFile } from "node:child_process";
 import type { AgentAuthProvider, ProviderAuthState } from "./types.js";
 import { config } from "../config.js";
 import { resolveClaudeAuthStatus } from "./claudeAuthStatus.js";
+import { execCli } from "../platform/processes.js";
 
 function shellCommand(value: string): string {
+  if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
   return /^[A-Za-z0-9_./-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -24,19 +25,18 @@ export class ClaudeAuthProvider implements AgentAuthProvider {
     return this.activeCheck;
   }
 
-  private runCheck(): Promise<ProviderAuthState> {
-    return new Promise((resolve) => {
-      execFile(
-        config.claudeBin,
-        ["auth", "status", "--json"],
-        { timeout: 10000 },
-        (error, stdout) => {
-          const checkedAt = new Date().toISOString();
-          const result = resolveClaudeAuthStatus(error as NodeJS.ErrnoException | null, stdout);
-          resolve(this.state(result.status, checkedAt, result.error));
-        },
-      );
-    });
+  private async runCheck(): Promise<ProviderAuthState> {
+    let error: NodeJS.ErrnoException | null = null;
+    let stdout = "";
+    try {
+      ({ stdout } = await execCli(config.claudeBin, ["auth", "status", "--json"], { timeout: 10_000 }));
+    } catch (caught) {
+      error = caught as NodeJS.ErrnoException;
+      stdout = String((caught as any).stdout ?? "");
+    }
+    const checkedAt = new Date().toISOString();
+    const result = resolveClaudeAuthStatus(error, stdout);
+    return this.state(result.status, checkedAt, result.error);
   }
 
   private state(

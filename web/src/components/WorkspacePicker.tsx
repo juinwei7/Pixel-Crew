@@ -14,6 +14,7 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
 
   useEffect(() => setPath(currentPath), [currentPath]);
 
@@ -91,8 +92,8 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
         >
           <span className="workspace-picker__browse-icon" aria-hidden="true" />
           <span className="workspace-picker__browse-copy">
-            <strong>{pending ? "正在開啟…" : "從 Finder 選擇資料夾"}</strong>
-            <small>瀏覽這台 Mac 上的專案</small>
+            <strong>{pending ? "正在開啟…" : "從系統選擇資料夾"}</strong>
+            <small>瀏覽這台電腦上的專案</small>
           </span>
           <span className="workspace-picker__browse-arrow" aria-hidden="true">→</span>
         </button>
@@ -108,7 +109,7 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
             className="workspace-picker__input"
             value={path}
             onChange={(event) => setPath(event.target.value)}
-            placeholder="/Users/name/projects/my-repo"
+            placeholder={windows ? "C:\\Users\\name\\Projects\\my-repo" : "/Users/name/projects/my-repo"}
             autoFocus
           />
         </div>

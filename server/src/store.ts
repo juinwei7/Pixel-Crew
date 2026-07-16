@@ -1,4 +1,3 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { RunnerEvent } from "./claudeRunner.js";
@@ -6,6 +5,7 @@ import type { CapabilityState } from "./capabilities.js";
 import type { ProviderId } from "./providers/types.js";
 import { type Persona, type PersonaTemplate, parsePersona, serializePersona } from "./persona.js";
 import type { HandoffProgress } from "./handoff.js";
+import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 
 export type PersistedWorker = {
   id: string;
@@ -36,9 +36,7 @@ export class LocalStore {
   constructor(path: string) {
     this.path = path;
     const directory = dirname(path);
-    const createdDirectory = !existsSync(directory);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (createdDirectory) chmodSync(directory, 0o700);
+    ensurePrivateDirectorySync(directory);
     this.db = new DatabaseSync(path);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -509,10 +507,15 @@ export class LocalStore {
   private restrictDatabasePermissions(): void {
     for (const file of [this.path, `${this.path}-wal`, `${this.path}-shm`]) {
       try {
-        chmodSync(file, 0o600);
+        protectFileSync(file);
       } catch {
         // WAL/SHM are created lazily and may not exist yet.
       }
     }
+  }
+
+  close(): void {
+    this.flushEvents();
+    this.db.close();
   }
 }

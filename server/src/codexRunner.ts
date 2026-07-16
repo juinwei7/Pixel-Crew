@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
 import type { AgentSession, MessageImage } from "./providers/session.js";
+import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
@@ -93,7 +95,7 @@ export class CodexSession implements AgentSession {
   stop(): void {
     this.generation++;
     this.cancelApprovals();
-    if (this.child) this.child.kill();
+    if (this.child) void terminateProcessTree(this.child);
     this.child = null;
     this.ready = null;
     this.busy = false;
@@ -160,12 +162,12 @@ export class CodexSession implements AgentSession {
     this.clearPersonaFile();
     if (persona) {
       this.personaFilePath = join(dirname(config.dbPath), `.pixel-crew-persona-${randomUUID()}.md`);
-      mkdirSync(dirname(this.personaFilePath), { recursive: true, mode: 0o700 });
+      ensurePrivateDirectorySync(dirname(this.personaFilePath));
       writeFileSync(this.personaFilePath, persona, { mode: 0o600 });
-      chmodSync(this.personaFilePath, 0o600);
+      protectFileSync(this.personaFilePath);
       args.push("-c", codexPersonaConfig(this.personaFilePath));
     }
-    const child = spawn(config.codexBin, args, {
+    const child = spawnCli(config.codexBin, args, {
       cwd: this.workspacePath,
       env: codexChildEnv(process.env),
     });
@@ -415,14 +417,14 @@ export class CodexSession implements AgentSession {
   private stageInputImages(images: MessageImage[]): string[] {
     if (images.length === 0) return [];
     const directory = join(dirname(config.dbPath), "message-images");
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    ensurePrivateDirectorySync(directory);
     const paths: string[] = [];
     try {
       for (const image of images) {
         const extension = image.mimeType === "image/png" ? "png" : image.mimeType === "image/jpeg" ? "jpg" : "webp";
         const path = join(directory, `.pixel-crew-message-${randomUUID()}.${extension}`);
         writeFileSync(path, Buffer.from(image.dataBase64, "base64"), { mode: 0o600 });
-        chmodSync(path, 0o600);
+        protectFileSync(path);
         this.stagedInputImages.add(path);
         paths.push(path);
       }

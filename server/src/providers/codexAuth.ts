@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
 import { config } from "../config.js";
 import type { AgentAuthProvider, ProviderAuthState } from "./types.js";
+import { execCli } from "../platform/processes.js";
 
 function shellCommand(value: string): string {
+  if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
   return /^[A-Za-z0-9_./-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -22,19 +23,17 @@ export class CodexAuthProvider implements AgentAuthProvider {
     return this.activeCheck;
   }
 
-  private runCheck(): Promise<ProviderAuthState> {
-    return new Promise((resolve) => {
-      execFile(config.codexBin, ["login", "status"], { timeout: 10000 }, (error) => {
-        const checkedAt = new Date().toISOString();
-        if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
-          resolve(this.state("cli_missing", checkedAt, "找不到 Codex CLI"));
-        } else if (!error) {
-          resolve(this.state("authenticated", checkedAt));
-        } else {
-          resolve(this.state("unauthenticated", checkedAt));
-        }
-      });
-    });
+  private async runCheck(): Promise<ProviderAuthState> {
+    const checkedAt = new Date().toISOString();
+    try {
+      await execCli(config.codexBin, ["login", "status"], { timeout: 10_000 });
+      return this.state("authenticated", checkedAt);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return this.state("cli_missing", checkedAt, "找不到 Codex CLI");
+      }
+      return this.state("unauthenticated", checkedAt);
+    }
   }
 
   private state(

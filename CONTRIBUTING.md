@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-- Node.js 22.5+ (uses the built-in `node:sqlite`).
+- Node.js 22.13+ (uses the built-in `node:sqlite` without an experimental flag).
 - Claude Code CLI and/or Codex CLI installed. You don't need to be logged in to
   boot the app, but you do to actually run a worker.
 

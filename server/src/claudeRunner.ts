@@ -1,11 +1,13 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import type { AgentSession, MessageImage } from "./providers/session.js";
+import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
@@ -170,7 +172,7 @@ export class ClaudeSession implements AgentSession {
     this.generation++;
     this.cancelApprovals();
     if (this.child) {
-      this.child.kill();
+      void terminateProcessTree(this.child);
       this.child = null;
     }
     this.busy = false;
@@ -255,7 +257,7 @@ export class ClaudeSession implements AgentSession {
     const allowed = [...this.getAllowedTools(), "mcp__pixel_crew_approval__approval_prompt"];
     if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
 
-    const child = spawn(config.claudeBin, args, {
+    const child = spawnCli(config.claudeBin, args, {
       cwd: this.workspacePath,
       env: process.env,
     });
@@ -304,7 +306,7 @@ export class ClaudeSession implements AgentSession {
   }
 
   private writeApprovalConfig(): void {
-    mkdirSync(dirname(this.approvalConfigPath), { recursive: true, mode: 0o700 });
+    ensurePrivateDirectorySync(dirname(this.approvalConfigPath));
     const { args } = approvalBridgeLaunch();
     writeFileSync(this.approvalConfigPath, JSON.stringify({
       mcpServers: {
@@ -318,7 +320,7 @@ export class ClaudeSession implements AgentSession {
         },
       },
     }), { mode: 0o600 });
-    chmodSync(this.approvalConfigPath, 0o600);
+    protectFileSync(this.approvalConfigPath);
   }
 
   private cancelApprovals(): void {

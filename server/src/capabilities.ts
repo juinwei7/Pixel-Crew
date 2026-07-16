@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { promisify } from "node:util";
 import { config } from "./config.js";
 import type { LocalStore } from "./store.js";
-
-const execFileAsync = promisify(execFile);
+import { execCli } from "./platform/processes.js";
 
 export type McpServerState = { name: string; status: string };
 export type ModelOption = { id: string; label: string; description?: string };
@@ -183,7 +180,7 @@ export class CapabilityRegistry {
     let mcpServers = this.state.mcpServers;
     let error: string | null = null;
     try {
-      const mcpResult = await execFileAsync(config.claudeBin, ["mcp", "list"], {
+      const mcpResult = await execCli(config.claudeBin, ["mcp", "list"], {
         cwd: this.workspacePath,
         timeout: 60000,
       });

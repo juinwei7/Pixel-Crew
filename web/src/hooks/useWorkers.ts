@@ -3,12 +3,26 @@ import type { ApprovalDecision, CapabilityState, CommandSubmission, HandoffProgr
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8787";
+const browserWsOrigin = typeof window !== "undefined"
+  ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`
+  : "ws://localhost:8787";
+const WS_URL = import.meta.env.VITE_WS_URL?.trim() || browserWsOrigin;
+
+type SystemStatus = {
+  platform: string;
+  arch: string;
+  release: string;
+  node: string;
+  dataDirectory: string;
+  folderPicker: boolean;
+  codexWindowsBestEffort: boolean;
+};
 
 type ServerMessage =
   | {
       type: "snapshot";
       targetRepoPath: string;
+      system?: SystemStatus;
       workspacePaths: string[];
       auth: ProviderAuthState[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
@@ -74,6 +88,7 @@ export function useWorkers() {
   const [order, setOrder] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
+  const [system, setSystem] = useState<SystemStatus | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -126,6 +141,7 @@ export function useWorkers() {
       switch (data.type) {
         case "snapshot": {
           setTargetRepoPath(data.targetRepoPath);
+          setSystem(data.system ?? null);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
@@ -524,6 +540,7 @@ export function useWorkers() {
     activeId,
     setActiveId,
     targetRepoPath,
+    system,
     workspacePaths,
     wsReady,
     capabilitiesByWorkspace,

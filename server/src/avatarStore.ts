@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
+import { ensurePrivateDirectory, protectFile } from "./platform/fileProtection.js";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const AVATAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|gif)$/i;
@@ -37,15 +38,14 @@ export class AvatarStore {
     if (type === "image/gif") validateGif(data);
     else validatePng(data);
 
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    await chmod(this.directory, 0o700);
+    await ensurePrivateDirectory(this.directory);
     const id = `${randomUUID()}.${type === "image/gif" ? "gif" : "png"}`;
     const target = this.pathFor(id);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, data, { mode: 0o600, flag: "wx" });
       await rename(temporary, target);
-      await chmod(target, 0o600);
+      await protectFile(target);
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => undefined);
       throw error;

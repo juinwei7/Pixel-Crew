@@ -1,7 +1,8 @@
-import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
 import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
+import { protectFile } from "./platform/fileProtection.js";
 
 export type CommandDocument = {
   name: string;
@@ -102,7 +103,7 @@ export async function saveProjectCommand(
   const temporary = `${path}.pixel-crew-${process.pid}-${Date.now()}`;
   await writeFile(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await rename(temporary, path);
-  await chmod(path, 0o600);
+  await protectFile(path);
   if (oldPath && oldPath !== path) await rm(oldPath, { force: true });
   const [saved] = (await listProjectCommands(workspacePath)).filter((command) => command.name === name);
   if (!saved) throw new Error("指令儲存後無法讀取");

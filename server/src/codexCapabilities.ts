@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { config } from "./config.js";
 import type { CapabilityState, McpServerState, ModelOption } from "./capabilities.js";
-
-const execFileAsync = promisify(execFile);
+import { execCli } from "./platform/processes.js";
 
 const FALLBACK_MODELS: ModelOption[] = [
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
@@ -60,12 +57,12 @@ export class CodexCapabilityRegistry {
   async refresh(): Promise<void> {
     this.publish({ ...this.state, loading: true, error: null });
     const [mcpResult, modelResult] = await Promise.allSettled([
-      execFileAsync(config.codexBin, ["mcp", "list", "--json"], {
+      execCli(config.codexBin, ["mcp", "list", "--json"], {
         cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 2 * 1024 * 1024,
       }),
-      execFileAsync(config.codexBin, ["debug", "models"], {
+      execCli(config.codexBin, ["debug", "models"], {
         cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 8 * 1024 * 1024,

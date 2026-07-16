@@ -3,7 +3,15 @@
   "private": true,
   "workspaces": ["server", "web"],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\""
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w server && npm run build -w web",
+    "start": "npm run start -w server",
+    "test": "npm test -w server && npm test -w web",
+    "check": "npm test && npm run build && git diff --check",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

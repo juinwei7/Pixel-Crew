@@ -1,12 +1,8 @@
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import { config } from "./config.js";
 import type { ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
-
-const execFileAsync = promisify(execFile);
+import { execCli, spawnCli, terminateProcessTree } from "./platform/processes.js";
 const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
 export type UsageWindow = {
@@ -128,7 +124,7 @@ export function normalizeCodexUsage(payload: any): UsageWindow[] {
 }
 
 async function readClaudeUsage(): Promise<UsageWindow[]> {
-  const { stdout } = await execFileAsync(config.claudeBin, ["-p", "/usage", "--output-format", "json"], {
+  const { stdout } = await execCli(config.claudeBin, ["-p", "/usage", "--output-format", "json"], {
     cwd: config.targetRepoPath,
     timeout: 30_000,
     maxBuffer: 1_000_000,
@@ -146,7 +142,7 @@ function codexChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 async function readCodexUsage(): Promise<UsageWindow[]> {
   return new Promise((resolve, reject) => {
-    const child = spawn(config.codexBin, ["app-server"], {
+    const child = spawnCli(config.codexBin, ["app-server"], {
       cwd: config.targetRepoPath,
       env: codexChildEnv(process.env),
     });
@@ -158,7 +154,7 @@ async function readCodexUsage(): Promise<UsageWindow[]> {
       settled = true;
       clearTimeout(timer);
       rl.close();
-      child.kill();
+      void terminateProcessTree(child);
       if (error) reject(error);
       else resolve(windows ?? []);
     };

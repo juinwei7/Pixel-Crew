@@ -1,7 +1,8 @@
-import { chmod, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
 import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
+import { protectFile } from "./platform/fileProtection.js";
 
 export type SkillDocument = {
   name: string;
@@ -108,7 +109,7 @@ export async function saveProjectSkill(
       await cp(oldPath, staging, { recursive: true, force: false, errorOnExist: true });
       await rm(join(staging, "SKILL.md"), { force: true });
       await writeFile(join(staging, "SKILL.md"), content, { encoding: "utf8", mode: 0o600, flag: "wx" });
-      await chmod(join(staging, "SKILL.md"), 0o600);
+      await protectFile(join(staging, "SKILL.md"));
       await rename(staging, path);
       try {
         await rm(oldPath, { recursive: true });
@@ -131,7 +132,7 @@ export async function saveProjectSkill(
   const temporary = `${documentPath}.pixel-crew-${process.pid}-${Date.now()}`;
   await writeFile(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await rename(temporary, documentPath);
-  await chmod(documentPath, 0o600);
+  await protectFile(documentPath);
   const saved = (await listProjectSkills(workspacePath)).find((skill) => skill.name === name);
   if (!saved) throw new Error("Skill 儲存後無法讀取");
   return saved;

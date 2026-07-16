@@ -1,5 +1,6 @@
 const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-const SERVER_URL = viteEnv?.VITE_SERVER_URL ?? "http://localhost:8787";
+const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
+const SERVER_URL = viteEnv?.VITE_SERVER_URL?.trim() || browserOrigin;
 
 export function apiAssetUrl(path: string): string {
   return `${SERVER_URL}${path}`;

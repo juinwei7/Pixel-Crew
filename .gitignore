@@ -9,3 +9,4 @@ server/data/
 .env.*
 !.env.example
 docs/
+release/

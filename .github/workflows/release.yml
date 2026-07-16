@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package
+      - name: Create Windows portable archive
+        run: |
+          cd release
+          zip -r pixel-crew-windows-x64.zip pixel-crew
+          sha256sum pixel-crew-windows-x64.zip > pixel-crew-windows-x64.zip.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/pixel-crew-windows-x64.zip
+            release/pixel-crew-windows-x64.zip.sha256
+          generate_release_notes: true

@@ -42,7 +42,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
+    workers, order, activeId, setActiveId, targetRepoPath, system, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage,
@@ -180,6 +180,7 @@ export function App() {
       <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
+      {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。</div>}
 
       <button className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`} onClick={() => updatePreferences({ taskLogOpen: !preferences.taskLogOpen })} title={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌（⌘/Ctrl J）`} aria-label={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌`}>
         {preferences.taskLogOpen ? "▶" : "◀"}
