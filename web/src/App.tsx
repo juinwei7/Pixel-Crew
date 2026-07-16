@@ -12,6 +12,7 @@ import { EnergyHud } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
+import { PersonaEditor } from "./components/PersonaEditor";
 import type { ProviderId } from "./types";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
@@ -43,13 +44,14 @@ export function App() {
     workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
     switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar,
-    send, setModel, interrupt, resolveApproval, refreshAuth, refreshUsage,
+    send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
+  const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -204,6 +206,7 @@ export function App() {
         onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
         onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
         onAvatar={setAvatarWorkerId}
+        onPersona={setPersonaWorkerId}
         onRoom={(id) => { setActiveId(id); setWorkspaceOpen(true); }}
       />
 
@@ -240,6 +243,8 @@ export function App() {
       }} />}
 
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("像素角色已更新"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已恢復預設角色"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
+
+      {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>

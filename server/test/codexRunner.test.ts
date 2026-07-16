@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCodexArgs, codexAppTool, codexChildEnv, codexTool } from "../src/codexRunner.js";
+import { buildCodexArgs, codexAppTool, codexChildEnv, codexPersonaConfig, codexTool } from "../src/codexRunner.js";
 
 test("builds first-turn and resume Codex commands with stable option ordering", () => {
   assert.deepEqual(
@@ -76,6 +76,17 @@ test("removes host Codex runtime flags while preserving user configuration", () 
       PATH: "/bin",
       CODEX_HOME: "/home/user/.codex",
     },
+  );
+});
+
+test("quotes persona instruction paths for Codex config overrides", () => {
+  assert.equal(
+    codexPersonaConfig("/Users/test/data info/persona.md"),
+    'model_instructions_file="/Users/test/data info/persona.md"',
+  );
+  assert.equal(
+    codexPersonaConfig("C:\\Users\\test\\persona.md"),
+    'model_instructions_file="C:\\\\Users\\\\test\\\\persona.md"',
   );
 });
 

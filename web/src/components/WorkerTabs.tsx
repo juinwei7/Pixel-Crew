@@ -18,10 +18,14 @@ type Props = {
   onClose(id: string): void;
   onRename(id: string, name: string): Promise<string | null>;
   onAvatar(id: string): void;
+  onPersona(id: string): void;
   onRoom(id: string): void;
 };
 
 const MAX_WORKERS = 20;
+// Roughly the tallest the row menu gets (5 actions). Used to decide whether to
+// open it downward or flip it up when a row sits near the bottom of the rail.
+const MENU_ESTIMATED_HEIGHT = 210;
 
 function shirtColor(index: number): string {
   const [color] = SHIRT_COLORS[index % SHIRT_COLORS.length];
@@ -41,12 +45,13 @@ function statusCopy(status: WorkerAttention): string {
   return { approval: "等待核准", error: "執行失敗", working: "執行中", done: "已完成", idle: "待命" }[status];
 }
 
-export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onCreate, onClose, onRename, onAvatar, onRoom }: Props) {
+export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onCreate, onClose, onRename, onAvatar, onPersona, onRoom }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [menuDropUp, setMenuDropUp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -103,7 +108,7 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
               if (event.key === "Escape") { setEditingId(null); setRenameError(null); }
             }} />
           ) : <strong>{worker.name}</strong>}
-          <small>{isPinned ? "目前選取 · " : ""}{roomName(worker.workspacePath)}</small>
+          <small>{worker.persona?.role ? <span className="crew-row__role" title={`職務：${worker.persona.role}`}>{worker.persona.role}</span> : null}{isPinned ? "目前選取 · " : ""}{roomName(worker.workspacePath)}</small>
         </div>
         <span className={`crew-row__provider crew-row__provider--${worker.provider}`}>{worker.provider === "claude" ? "CL" : "CX"}</span>
       </>}
@@ -112,11 +117,12 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
     return (
       <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} className={`crew-row crew-row--${status} ${worker.id === activeId ? "crew-row--active" : ""}`} title={`${worker.name} · ${roomName(worker.workspacePath)} · ${statusCopy(status)}`}>
         {editing ? <div className="crew-row__select crew-row__select--editing">{selectContents}</div> : <button type="button" className="crew-row__select" aria-current={worker.id === activeId ? "true" : undefined} onClick={() => { onSelect(worker.id); setMenuId(null); }}>{selectContents}</button>}
-        {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={`${worker.name} 更多操作`} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); setMenuId(menuOpen ? null : worker.id); setConfirmRemoveId(null); }}>•••</button>}
+        {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={`${worker.name} 更多操作`} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); const opening = !menuOpen; if (opening) { const btn = event.currentTarget.getBoundingClientRect(); const railBottom = railRef.current?.getBoundingClientRect().bottom ?? window.innerHeight; setMenuDropUp(railBottom - btn.bottom < MENU_ESTIMATED_HEIGHT); } setMenuId(opening ? worker.id : null); setConfirmRemoveId(null); }}>•••</button>}
         {menuOpen && !collapsed && (
-          <div className="crew-row__menu" onClick={(event) => event.stopPropagation()}>
+          <div className={`crew-row__menu ${menuDropUp ? "crew-row__menu--up" : ""}`} onClick={(event) => event.stopPropagation()}>
             {confirmRemoveId === worker.id ? <div className="crew-row__confirm"><span>確定移除？</span><button type="button" onClick={() => { onClose(worker.id); setMenuId(null); }}>移除</button><button type="button" onClick={() => setConfirmRemoveId(null)}>取消</button></div> : <>
               <button type="button" onClick={() => { setEditingId(worker.id); setDraft(worker.name); setRenameError(null); }}>重新命名</button>
+              <button type="button" onClick={() => { onPersona(worker.id); setMenuId(null); }}>個性 / 職務</button>
               <button type="button" onClick={() => { onAvatar(worker.id); setMenuId(null); }}>像素角色</button>
               <button type="button" onClick={() => { onRoom(worker.id); setMenuId(null); }}>切換房間</button>
               {workers.length > 1 && <button type="button" className="crew-row__danger" onClick={() => worker.busy || worker.turns.length > 0 ? setConfirmRemoveId(worker.id) : (onClose(worker.id), setMenuId(null))}>移除人員</button>}

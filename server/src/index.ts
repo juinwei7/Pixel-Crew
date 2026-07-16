@@ -24,6 +24,7 @@ import { isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
+import { composePersonaPrompt, normalizePersona, type Persona } from "./persona.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -69,6 +70,7 @@ type Worker = {
   history: RunnerEvent[];
   colorIndex: number;
   avatarId: string | null;
+  persona: Persona | null;
 };
 
 const workers = new Map<string, Worker>();
@@ -84,6 +86,7 @@ function workerSummary(w: Worker) {
     avatarId: w.avatarId,
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
+    persona: w.persona,
   };
 }
 
@@ -154,6 +157,7 @@ function persistWorker(worker: Worker): boolean {
     avatarId: worker.avatarId,
     provider: worker.runner.provider,
     workspacePath: worker.runner.workspacePath,
+    persona: worker.persona,
     ...session,
   });
 }
@@ -214,6 +218,7 @@ function createWorker(
     history: persisted?.events ?? [],
     colorIndex: persisted?.colorIndex ?? workerCounter % 6,
     avatarId: persisted?.avatarId ?? null,
+    persona: persisted?.persona ?? null,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -243,11 +248,17 @@ function createRunner(
   initialState?: { sessionId: string; completedTurns: number },
 ): AgentSession {
   return provider === "codex"
-    ? new CodexSession((event) => record(worker, event), workspacePath, initialState)
+    ? new CodexSession(
+        (event) => record(worker, event),
+        workspacePath,
+        () => composePersonaPrompt(worker.persona),
+        initialState,
+      )
     : new ClaudeSession(
         (event) => record(worker, event),
         workspacePath,
         () => claudeCapabilitiesFor(workspacePath).getAllowedTools(),
+        () => composePersonaPrompt(worker.persona),
         initialState,
       );
 }
@@ -803,6 +814,27 @@ app.post("/api/workers/:id/model", (req, res) => {
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
+});
+
+app.post("/api/workers/:id/persona", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  if (worker.runner.busy) {
+    res.status(409).json({ error: "worker busy" });
+    return;
+  }
+  worker.persona = normalizePersona(req.body?.persona);
+  // Re-spawn so the new persona is injected via --append-system-prompt. The
+  // conversation is preserved because the CLI resumes the same session id;
+  // a signed-out provider simply stores it until it next starts.
+  worker.runner.stop();
+  if (providerReady(worker.runner.provider)) worker.runner.warmup();
+  persistWorker(worker);
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  res.json({ ok: true, persona: worker.persona });
 });
 
 const execFileAsync = promisify(execFile);

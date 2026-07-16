@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
 import type { AgentSession } from "./providers/session.js";
@@ -8,6 +10,12 @@ import type { AgentSession } from "./providers/session.js";
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
 type PendingApproval = { rpcId: RpcId; method: string; params: any; request: ApprovalRequest };
+
+export function codexPersonaConfig(path: string): string {
+  // `-c` values use TOML syntax. JSON string quoting is TOML-compatible for
+  // ordinary absolute paths and keeps spaces/backslashes inside the value.
+  return `model_instructions_file=${JSON.stringify(path)}`;
+}
 
 export class CodexSession implements AgentSession {
   readonly provider = "codex" as const;
@@ -29,9 +37,15 @@ export class CodexSession implements AgentSession {
   busy = false;
   name = "";
 
+  private personaFilePath: string | null = null;
+
   constructor(
     private readonly onEvent: (event: RunnerEvent) => void,
     readonly workspacePath: string,
+    // Composed persona system-prompt for this worker, or "" for none. Read at
+    // spawn time and written to a per-NPC instructions file so it survives
+    // /clear, model switches, and restarts (re-applied on every app-server).
+    private readonly getPersonaPrompt: () => string = () => "",
     initialState?: { sessionId: string; completedTurns: number },
   ) {
     this.sessionId = initialState?.sessionId || randomUUID();
@@ -84,6 +98,7 @@ export class CodexSession implements AgentSession {
     this.currentTurnId = null;
     for (const pending of this.pendingRpc.values()) pending.reject(new Error("Codex app-server stopped"));
     this.pendingRpc.clear();
+    this.clearPersonaFile();
   }
 
   resolveApproval(id: string, decision: ApprovalDecision): boolean {
@@ -132,7 +147,22 @@ export class CodexSession implements AgentSession {
   }
 
   private async startAppServer(): Promise<string> {
-    const child = spawn(config.codexBin, ["app-server"], {
+    // Codex applies `model_instructions_file` on top of its base coding
+    // instructions (verified: the persona is adopted while apply_patch/tool
+    // knowledge is retained), mirroring Claude's --append-system-prompt.
+    const args = ["app-server"];
+    const persona = this.getPersonaPrompt().trim();
+    // An app-server may exit unexpectedly and be recreated without `stop()`.
+    // Remove its superseded instructions file before assigning a new one.
+    this.clearPersonaFile();
+    if (persona) {
+      this.personaFilePath = join(dirname(config.dbPath), `.pixel-crew-persona-${randomUUID()}.md`);
+      mkdirSync(dirname(this.personaFilePath), { recursive: true, mode: 0o700 });
+      writeFileSync(this.personaFilePath, persona, { mode: 0o600 });
+      chmodSync(this.personaFilePath, 0o600);
+      args.push("-c", codexPersonaConfig(this.personaFilePath));
+    }
+    const child = spawn(config.codexBin, args, {
       cwd: this.workspacePath,
       env: codexChildEnv(process.env),
     });
@@ -176,6 +206,12 @@ export class CodexSession implements AgentSession {
     });
     this.sessionId = String(started.thread.id);
     return this.sessionId;
+  }
+
+  private clearPersonaFile(): void {
+    if (!this.personaFilePath) return;
+    rmSync(this.personaFilePath, { force: true });
+    this.personaFilePath = null;
   }
 
   private handleRpcLine(line: string, generation: number): void {

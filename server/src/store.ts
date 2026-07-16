@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { RunnerEvent } from "./claudeRunner.js";
 import type { CapabilityState } from "./capabilities.js";
 import type { ProviderId } from "./providers/types.js";
+import { type Persona, parsePersona, serializePersona } from "./persona.js";
 
 export type PersistedWorker = {
   id: string;
@@ -15,6 +16,7 @@ export type PersistedWorker = {
   workspacePath: string;
   sessionId: string;
   completedTurns: number;
+  persona: Persona | null;
   events: RunnerEvent[];
 };
 
@@ -90,12 +92,17 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to avatar-aware workers.
     }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN persona TEXT");
+    } catch {
+      // Existing databases already migrated to persona-aware workers.
+    }
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns
+      SELECT id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns, persona
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -121,6 +128,7 @@ export class LocalStore {
         workspacePath: row.workspace_path == null ? "" : String(row.workspace_path),
         sessionId: String(row.claude_session_id),
         completedTurns: Number(row.completed_turns),
+        persona: parsePersona(row.persona),
         events,
       };
     });
@@ -130,8 +138,8 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns, persona
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -141,6 +149,7 @@ export class LocalStore {
           workspace_path = excluded.workspace_path,
           claude_session_id = excluded.claude_session_id,
           completed_turns = excluded.completed_turns,
+          persona = excluded.persona,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -152,6 +161,7 @@ export class LocalStore {
         worker.workspacePath,
         worker.sessionId,
         worker.completedTurns,
+        serializePersona(worker.persona),
       );
     });
   }

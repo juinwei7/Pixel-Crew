@@ -140,6 +140,11 @@ export type ProviderUsageState = {
   error: string | null;
 };
 
+export type Persona = {
+  role: string;
+  instructions: string;
+};
+
 export type WorkerState = {
   id: string;
   name: string;
@@ -149,6 +154,7 @@ export type WorkerState = {
   avatarId: string | null;
   provider: ProviderId;
   workspacePath: string;
+  persona: Persona | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

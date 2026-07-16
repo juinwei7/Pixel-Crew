@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, Persona, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -22,6 +22,7 @@ type ServerMessage =
         avatarId: string | null;
         provider: ProviderId;
         workspacePath: string;
+        persona: Persona | null;
         events: RunnerEvent[];
       }>;
     }
@@ -44,6 +45,7 @@ type WorkerSummary = {
   avatarId: string | null;
   provider: ProviderId;
   workspacePath: string;
+  persona: Persona | null;
 };
 
 function defaultAuth(
@@ -134,6 +136,7 @@ export function useWorkers() {
               w.provider,
               w.workspacePath,
               w.avatarId,
+              w.persona ?? null,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             // A persisted running turn cannot still have a live provider
@@ -175,6 +178,7 @@ export function useWorkers() {
               data.worker.provider,
               data.worker.workspacePath,
               data.worker.avatarId,
+              data.worker.persona,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -215,6 +219,7 @@ export function useWorkers() {
                   data.worker.provider,
                   data.worker.workspacePath,
                   data.worker.avatarId,
+                  data.worker.persona,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -389,6 +394,15 @@ export function useWorkers() {
     }
   }, []);
 
+  const setPersona = useCallback(async (id: string, persona: Persona | null): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/persona`, { method: "POST", body: { persona } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const interrupt = useCallback(async (id: string): Promise<string | null> => {
     try {
       await apiRequest(`/api/workers/${id}/interrupt`, { method: "POST" });
@@ -472,6 +486,7 @@ export function useWorkers() {
     resetAvatar,
     send,
     setModel,
+    setPersona,
     interrupt,
     resolveApproval,
     refreshAuth,

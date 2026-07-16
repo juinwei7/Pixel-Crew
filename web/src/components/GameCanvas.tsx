@@ -17,6 +17,7 @@ type VisualWorker = {
   temporary: boolean;
   provider: WorkerState["provider"];
   model: string | null;
+  role: string | null;
   workspacePath: string;
 };
 
@@ -34,6 +35,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       temporary: false,
       provider: worker.provider,
       model: worker.model,
+      role: worker.persona?.role ?? null,
       workspacePath: worker.workspacePath,
     };
     const subagents: VisualWorker[] = (worker.subagents ?? []).map((agent, index) => ({
@@ -54,6 +56,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       temporary: true,
       provider: worker.provider,
       model: worker.model,
+      role: null,
       workspacePath: worker.workspacePath,
     }));
     return [parent, ...subagents];
@@ -218,6 +221,7 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
               }} className="npc-identity-card">
                 <strong>{w.name}</strong>
                 <span>{w.character.activity === "working" ? "執行中" : w.busy ? "思考中" : "待命"}</span>
+                {w.role && <small className="npc-identity-card__role">{w.role}</small>}
                 <small>{w.provider === "claude" ? "Claude Code" : "Codex"} · {w.model || "預設模型"}</small>
                 <small>{roomName(w.workspacePath)}</small>
               </div>

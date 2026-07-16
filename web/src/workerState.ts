@@ -75,6 +75,7 @@ export function emptyWorker(
   provider: WorkerState["provider"],
   workspacePath: string,
   avatarId: string | null = null,
+  persona: WorkerState["persona"] = null,
 ): WorkerState {
   return {
     id,
@@ -85,6 +86,7 @@ export function emptyWorker(
     avatarId,
     provider,
     workspacePath,
+    persona,
     turns: [],
     character: INITIAL_CHARACTER,
     subagents: [],

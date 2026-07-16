@@ -22,6 +22,7 @@ function renderRail(collapsed: boolean, count: number) {
     onClose={() => {}}
     onRename={async () => null}
     onAvatar={() => {}}
+    onPersona={() => {}}
     onRoom={() => {}}
   />);
 }

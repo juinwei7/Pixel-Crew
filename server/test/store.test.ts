@@ -21,6 +21,7 @@ test("persists workers, bounded events, and capability cache", () => {
       workspacePath: "/repo",
       sessionId: "session-1",
       completedTurns: 3,
+      persona: { role: "前端 QA", instructions: "回報 bug 附重現步驟" },
     });
     store.appendEvent("worker-1", { type: "user_message", text: "first" }, 2);
     store.appendEvent("worker-1", { type: "text_delta", text: "hello" }, 2);
@@ -61,6 +62,7 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(worker.provider, "claude");
     assert.equal(worker.workspacePath, "/repo");
     assert.equal(worker.avatarId, "avatar-1");
+    assert.deepEqual(worker.persona, { role: "前端 QA", instructions: "回報 bug 附重現步驟" });
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
     assert.deepEqual(reopened.loadProviderUsage("claude"), usage);

@@ -87,6 +87,10 @@ export class ClaudeSession implements AgentSession {
     private readonly onEvent: (event: RunnerEvent) => void,
     readonly workspacePath: string,
     private readonly getAllowedTools: () => string[] = () => [],
+    // Returns the composed persona system-prompt for this worker, or "" for
+    // none. Read at spawn time so a persona change survives /clear, model
+    // switches, and restarts by being re-applied on the next `ensureChild`.
+    private readonly getPersonaPrompt: () => string = () => "",
     initialState?: { sessionId: string; completedTurns: number },
   ) {
     this.claudeSessionId = initialState?.sessionId || randomUUID();
@@ -210,6 +214,8 @@ export class ClaudeSession implements AgentSession {
       args.push("--session-id", this.claudeSessionId);
     }
     if (this.model) args.push("--model", this.model);
+    const personaPrompt = this.getPersonaPrompt().trim();
+    if (personaPrompt) args.push("--append-system-prompt", personaPrompt);
     const allowed = [...this.getAllowedTools(), "mcp__pixel_crew_approval__approval_prompt"];
     if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
 
