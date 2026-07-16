@@ -39,6 +39,7 @@ type ServerMessage =
         provider: ProviderId;
         workspacePath: string;
         persona: Persona | null;
+        autoApprove: boolean;
         handoff: HandoffProgress | null;
         events: RunnerEvent[];
       }>;
@@ -65,6 +66,7 @@ type WorkerSummary = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
+  autoApprove: boolean;
   handoff: HandoffProgress | null;
 };
 
@@ -170,6 +172,7 @@ export function useWorkers() {
               w.avatarKind,
               w.avatarPresetId,
               w.handoff ?? null,
+              w.autoApprove ?? false,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             // A persisted running turn cannot still have a live provider
@@ -215,6 +218,7 @@ export function useWorkers() {
               data.worker.avatarKind,
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
+              data.worker.autoApprove,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -259,6 +263,7 @@ export function useWorkers() {
                   data.worker.avatarKind,
                   data.worker.avatarPresetId,
                   data.worker.handoff ?? null,
+                  data.worker.autoApprove,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -481,6 +486,15 @@ export function useWorkers() {
     }
   }, []);
 
+  const setAutoApprove = useCallback(async (id: string, enabled: boolean): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/auto-approve`, { method: "POST", body: { enabled } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const interrupt = useCallback(async (id: string): Promise<string | null> => {
     try {
       await apiRequest(`/api/workers/${id}/interrupt`, { method: "POST" });
@@ -598,6 +612,7 @@ export function useWorkers() {
     send,
     setModel,
     setPersona,
+    setAutoApprove,
     interrupt,
     resolveApproval,
     refreshAuth,

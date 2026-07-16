@@ -1,0 +1,67 @@
+/**
+ * Approval policy for the opt-in auto-approve mode. A denylist alone cannot
+ * safely classify shell or MCP actions, so automatic approval is based on a
+ * narrow allowlist. The dangerous patterns below only improve the reason
+ * shown when a known destructive command is rejected.
+ */
+
+export type DangerousMatch = { dangerous: boolean; reason?: string };
+export type AutoApprovalMatch = { allowed: boolean; reason?: string };
+
+const RM_RECURSIVE_OR_FORCE = /\brm\b[^|&;\n]*\s(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive|--force)\b/;
+const RM_WITH_RISKY_TARGET = /\brm\b[^|&;\n]*[^\w.\-\/](\/|~|\$HOME|\*|\.\.)(?:[\s/]|$)/;
+const RM_BARE_ROOT_ISH = /\brm\b\s+(-\S+\s+)*(\/|~\/?|\*)\s*$/;
+
+const PATTERNS: Array<{ test: RegExp; reason: string }> = [
+  { test: RM_RECURSIVE_OR_FORCE, reason: "遞迴或強制刪除（rm -r / -f）" },
+  { test: RM_WITH_RISKY_TARGET, reason: "刪除目標包含根目錄、家目錄、萬用字元或上層目錄" },
+  { test: RM_BARE_ROOT_ISH, reason: "刪除目標是根目錄、家目錄或萬用字元" },
+  { test: /\bsudo\b/, reason: "使用 sudo 提升權限" },
+  { test: /\bmkfs(\.\w+)?\b/, reason: "格式化磁區（mkfs）" },
+  { test: /\bdd\b[^|&;\n]*\b(if|of)=\/dev\//, reason: "直接讀寫裝置檔（dd ...=/dev/...）" },
+  { test: />\s*\/dev\/(sd|nvme|disk|hd)/, reason: "直接寫入裝置檔" },
+  { test: /\b(shutdown|reboot|halt|poweroff)\b/, reason: "關機或重新啟動系統" },
+  { test: /:\(\)\s*\{\s*:\s*\|\s*:\s*&?\s*\}\s*;\s*:/, reason: "fork bomb" },
+  { test: /\bchmod\b[^|&;\n]*(-R|--recursive)[^|&;\n]*\b777\b/, reason: "遞迴開放所有權限（chmod -R 777）" },
+  { test: /\b(curl|wget)\b[^|&;\n]*\|\s*(sudo\s+)?(sh|bash|zsh)\b/, reason: "下載並直接執行遠端指令" },
+  { test: /\bgit\s+push\b[^|&;\n]*(--force\b|(?<!--)\s-f\b)/, reason: "強制推送（git push --force）覆蓋遠端歷史" },
+  { test: /\bgit\s+reset\b[^|&;\n]*--hard\b/, reason: "硬重置（git reset --hard）可能捨棄未提交的變更" },
+];
+
+export function isDangerousCommand(command: string): DangerousMatch {
+  const normalized = command.trim();
+  if (!normalized) return { dangerous: false };
+  for (const { test, reason } of PATTERNS) {
+    if (test.test(normalized)) return { dangerous: true, reason };
+  }
+  return { dangerous: false };
+}
+
+const READ_ONLY_TOOLS = new Set(["Read", "Glob", "Grep", "WebSearch", "WebFetch"]);
+const SHELL_META = /[\r\n;&|<>`]|\$[({]/;
+const SAFE_BASH_COMMANDS = [
+  /^(pwd|ls|cat|head|tail|wc)(?:\s|$)/,
+  /^(rg|grep)(?:\s|$)/,
+  /^sed\s+-n(?:\s|$)/,
+  /^git\s+(status|diff|log|show)(?:\s|$)/,
+  /^(npm|pnpm)\s+test(?:\s|$)/,
+  /^(npm|pnpm)\s+run\s+(test|build|check|lint|typecheck)(?:\s|$)/,
+  /^yarn\s+(test|build|check|lint|typecheck)(?:\s|$)/,
+  /^(tsc|eslint)(?:\s|$)/,
+];
+
+export function autoApprovalPolicy(toolName: string, command?: string): AutoApprovalMatch {
+  if (READ_ONLY_TOOLS.has(toolName)) return { allowed: true };
+  if (toolName !== "Bash") {
+    return { allowed: false, reason: `${toolName} 可能修改本機或外部資料` };
+  }
+  const normalized = command?.trim() ?? "";
+  if (!normalized) return { allowed: false, reason: "無法辨識指令內容" };
+  const danger = isDangerousCommand(normalized);
+  if (danger.dangerous) return { allowed: false, reason: danger.reason };
+  if (SHELL_META.test(normalized)) {
+    return { allowed: false, reason: "指令包含串接、重導向、展開或多行 shell 語法" };
+  }
+  if (SAFE_BASH_COMMANDS.some((pattern) => pattern.test(normalized))) return { allowed: true };
+  return { allowed: false, reason: "指令不在唯讀／驗證安全清單" };
+}

@@ -17,6 +17,7 @@ type Props = {
   onRoom(): void;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
+  onAutoApprove(enabled: boolean): void;
   onRefreshAuth(): void;
   onResetUi(): void;
 };
@@ -33,6 +34,7 @@ export function TopBar({
   onRoom,
   onProvider,
   onModel,
+  onAutoApprove,
   onRefreshAuth,
   onResetUi,
 }: Props) {
@@ -99,6 +101,18 @@ export function TopBar({
           ))}
         </select>
         {capabilities.loading && <span className="top-bar__agent-loading" role="status" aria-label="正在背景更新模型" title="正在背景更新模型"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></span>}
+        {provider === "claude" && (
+          <button
+            type="button"
+            className={`top-bar__auto-approve ${active?.autoApprove ? "top-bar__auto-approve--on" : ""}`}
+            disabled={!active}
+            aria-pressed={Boolean(active?.autoApprove)}
+            onClick={() => onAutoApprove(!active?.autoApprove)}
+            title="開啟後唯讀工具與安全驗證指令會自動核准；寫入、外部工具與高風險操作仍會詢問"
+          >
+            <i />安全自動核准
+          </button>
+        )}
       </div>
 
       <div ref={mcpRef} className="mcp-chip-wrap top-bar__mcp">

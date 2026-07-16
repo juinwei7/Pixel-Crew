@@ -1,7 +1,7 @@
 import type { StationKey } from "./stations";
 
 export type ProviderId = "claude" | "codex";
-export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
+export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
 
 export type MessageImagePayload = {
   name: string;
@@ -206,6 +206,7 @@ export type WorkerState = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
+  autoApprove: boolean;
   handoff: HandoffProgress | null;
   turns: Turn[];
   character: CharacterState;

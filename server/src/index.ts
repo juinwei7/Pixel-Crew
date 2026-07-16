@@ -113,6 +113,11 @@ type Worker = {
   avatarKind: "preset" | "custom";
   avatarPresetId: string;
   persona: Persona | null;
+  // Claude-only: auto-approve tool calls instead of prompting for each one.
+  // Commands matched by isDangerousCommand always still prompt (see
+  // claudeRunner.ts). Read live by ClaudeSession, so toggling takes effect
+  // immediately without restarting the session.
+  autoApprove: boolean;
   handoff: HandoffProgress | null;
 };
 
@@ -133,6 +138,7 @@ function workerSummary(w: Worker) {
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
     persona: w.persona,
+    autoApprove: w.autoApprove,
     handoff: w.handoff,
   };
 }
@@ -207,6 +213,7 @@ function persistWorker(worker: Worker): boolean {
     provider: worker.runner.provider,
     workspacePath: worker.runner.workspacePath,
     persona: worker.persona,
+    autoApprove: worker.autoApprove,
     ...session,
   });
 }
@@ -270,6 +277,7 @@ function createWorker(
     avatarKind: persisted?.avatarKind ?? (persisted?.avatarId ? "custom" : "preset"),
     avatarPresetId: AVATAR_PRESET_IDS.has(persisted?.avatarPresetId ?? "") ? persisted!.avatarPresetId : "classic",
     persona: persisted?.persona ?? null,
+    autoApprove: persisted?.autoApprove ?? false,
     handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
   };
   const initialState = persisted
@@ -311,6 +319,7 @@ function createRunner(
         workspacePath,
         () => claudeCapabilitiesFor(workspacePath).getAllowedTools(),
         () => composePersonaPrompt(worker.persona),
+        () => worker.autoApprove,
         initialState,
       );
 }
@@ -416,7 +425,7 @@ function detachedRunner(
 ): AgentSession {
   const runner: AgentSession = provider === "codex"
     ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), initialState)
-    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), initialState);
+    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), () => false, initialState);
   if (model && validModel(provider, model)) runner.setModel(model);
   return runner;
 }
@@ -1321,6 +1330,28 @@ app.post("/api/workers/:id/persona", (req, res) => {
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, persona: worker.persona });
+});
+
+app.post("/api/workers/:id/auto-approve", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  if (worker.runner.provider !== "claude") {
+    res.status(400).json({ error: "auto-approve 目前只支援 Claude" });
+    return;
+  }
+  if (typeof req.body?.enabled !== "boolean") {
+    res.status(400).json({ error: "enabled 必須是 boolean" });
+    return;
+  }
+  worker.autoApprove = req.body.enabled;
+  // No restart needed — ClaudeSession reads this live on the next approval
+  // request, so the toggle takes effect on the worker's very next tool call.
+  persistWorker(worker);
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  res.json({ ok: true, autoApprove: worker.autoApprove });
 });
 
 app.get("/api/persona-templates", (_req, res) => {

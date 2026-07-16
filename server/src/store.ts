@@ -20,6 +20,7 @@ export type PersistedWorker = {
   sessionId: string;
   completedTurns: number;
   persona: Persona | null;
+  autoApprove: boolean;
   events: RunnerEvent[];
 };
 
@@ -165,12 +166,17 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to workspace-scoped checkpoints.
     }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // Existing databases already migrated to auto-approve-aware workers.
+    }
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -199,6 +205,7 @@ export class LocalStore {
         sessionId: String(row.claude_session_id),
         completedTurns: Number(row.completed_turns),
         persona: parsePersona(row.persona),
+        autoApprove: Number(row.auto_approve) === 1,
         events,
       };
     });
@@ -208,8 +215,8 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -222,6 +229,7 @@ export class LocalStore {
           claude_session_id = excluded.claude_session_id,
           completed_turns = excluded.completed_turns,
           persona = excluded.persona,
+          auto_approve = excluded.auto_approve,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -236,6 +244,7 @@ export class LocalStore {
         worker.sessionId,
         worker.completedTurns,
         serializePersona(worker.persona),
+        worker.autoApprove ? 1 : 0,
       );
     });
   }

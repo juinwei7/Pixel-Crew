@@ -2021,7 +2021,8 @@ body {
 }
 
 .approval-card__decision--allow_once,
-.approval-card__decision--allow_session {
+.approval-card__decision--allow_session,
+.approval-card__decision--auto_allow {
   color: var(--ok);
 }
 
@@ -4053,6 +4054,26 @@ body {
 .top-bar__agent-loading svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 .top-bar__agent-loading circle { stroke: rgba(77,227,255,.18); }
 .top-bar__agent-loading path { transform-origin: 12px 12px; animation: modelRefreshSpin 1s linear infinite; }
+
+.top-bar__auto-approve {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #7186a3;
+  font: 700 10px var(--mono);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.top-bar__auto-approve i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+.top-bar__auto-approve:disabled { cursor: default; opacity: 0.4; }
+.top-bar__auto-approve--on { background: rgba(55, 214, 163, 0.14); color: #6fe6bd; }
+.top-bar__auto-approve--on i { background: var(--ok); opacity: 1; box-shadow: 0 0 6px rgba(55, 214, 163, 0.7); }
 @keyframes modelRefreshSpin { to { transform: rotate(360deg); } }
 
 .top-bar__capability {

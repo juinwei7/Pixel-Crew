@@ -45,7 +45,7 @@ export function App() {
     workers, order, activeId, setActiveId, targetRepoPath, system, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
-    send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
+    send, setModel, setPersona, setAutoApprove, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -171,6 +171,13 @@ export function App() {
           void setModel(activeId, model).then((error) => {
             if (error) notify(error, "error");
             else notify("模型設定已更新");
+          });
+        }}
+        onAutoApprove={(enabled) => {
+          if (!activeId) return;
+          void setAutoApprove(activeId, enabled).then((error) => {
+            if (error) notify(error, "error");
+            else notify(enabled ? "安全自動核准已開啟；寫入、外部工具與高風險操作仍會詢問" : "安全自動核准已關閉");
           });
         }}
         onRefreshAuth={() => void refreshAuth(activeProvider)}

@@ -93,7 +93,9 @@ function ApprovalCard({ item, onApprove }: {
     ? "已允許一次"
     : item.decision === "allow_session"
       ? "本次工作階段已允許"
-      : "已拒絕";
+      : item.decision === "auto_allow"
+        ? "已自動核准"
+        : "已拒絕";
 
   return (
     <div className={`approval-card ${pending ? "approval-card--pending" : "approval-card--resolved"}`}>
