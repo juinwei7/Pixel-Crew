@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { delimiter, join } from "node:path";
 import { ProviderInstaller, providerInstallRecipe, refreshProviderPath } from "../src/providerInstaller.js";
 
 test("uses fixed official standalone installers without npm", () => {
@@ -67,5 +68,6 @@ test("refreshes known standalone install directories without duplicating PATH", 
   const first = env.PATH;
   refreshProviderPath("linux", env);
   assert.equal(env.PATH, first);
-  assert.match(env.PATH ?? "", /\.local\/bin/);
+  const entries = (env.PATH ?? "").split(delimiter);
+  assert.ok(entries.some((entry) => entry.endsWith(join(".local", "bin"))));
 });
