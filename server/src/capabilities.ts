@@ -33,6 +33,16 @@ const EMPTY_STATE: CapabilityState = {
   error: null,
 };
 
+// Only seed commands that Claude Code itself provides in every workspace.
+// The init frame also contains user/project commands; persisting that entire
+// list globally would leak room-specific commands into unrelated projects.
+const PORTABLE_CLAUDE_COMMANDS = new Set([
+  "clear", "compact", "config", "context", "cost", "doctor", "exit", "export",
+  "help", "hooks", "ide", "init", "login", "logout", "mcp", "memory", "model",
+  "permissions", "pr-comments", "release-notes", "rename", "resume", "review",
+  "security-review", "status", "terminal-setup", "usage", "vim",
+]);
+
 export const DEFAULT_CLAUDE_MODELS: ModelOption[] = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
@@ -67,6 +77,10 @@ function mergeModels(...groups: ModelOption[][]): ModelOption[] {
 
 function uniqueSorted(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function portableClaudeCommands(values: string[]): string[] {
+  return uniqueSorted(values).filter((name) => PORTABLE_CLAUDE_COMMANDS.has(name));
 }
 
 async function commandFiles(root: string): Promise<string[]> {
@@ -123,10 +137,15 @@ export class CapabilityRegistry {
     private readonly onUpdate: (state: CapabilityState) => void,
     private readonly workspacePath = config.targetRepoPath,
   ) {
+    // Seed portable built-in commands from the global cache so a fresh NPC or
+    // not-yet-messaged room shows them immediately. Room/user commands still
+    // come from that workspace's filesystem scan and never cross rooms.
+    this.runtimeCommands = portableClaudeCommands(store.loadSlashCommandSeed());
     const cached = store.loadCapabilities(workspacePath);
+    const seededCommands = uniqueSorted([...(cached?.slashCommands ?? []), ...this.runtimeCommands]);
     this.state = cached
-      ? { ...cached, models: mergeModels(DEFAULT_CLAUDE_MODELS, cached.models ?? []), loading: true, source: "cache", error: null }
-      : { ...EMPTY_STATE, models: [...DEFAULT_CLAUDE_MODELS] };
+      ? { ...cached, slashCommands: seededCommands, models: mergeModels(DEFAULT_CLAUDE_MODELS, cached.models ?? []), loading: true, source: "cache", error: null }
+      : { ...EMPTY_STATE, slashCommands: seededCommands, models: [...DEFAULT_CLAUDE_MODELS] };
     this.rebuildAllowRules();
   }
 
@@ -211,7 +230,11 @@ export class CapabilityRegistry {
     // Resumed/background Claude sessions sometimes emit an init/meta frame
     // without slash_commands. That frame is not evidence that commands were
     // removed, so do not let it erase a previously discovered palette.
-    if (discoveredCommands.length > 0) this.runtimeCommands = discoveredCommands;
+    if (discoveredCommands.length > 0) {
+      this.runtimeCommands = discoveredCommands;
+      // Refresh only the portable subset for other/new workspaces.
+      this.store.saveSlashCommandSeed(portableClaudeCommands(discoveredCommands));
+    }
     const byName = new Map(this.state.mcpServers.map((server) => [server.name, server]));
     for (const server of meta.mcpServers) byName.set(server.name, server);
     this.publish({

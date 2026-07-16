@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { RunnerEvent } from "./claudeRunner.js";
 import type { CapabilityState } from "./capabilities.js";
 import type { ProviderId } from "./providers/types.js";
-import { type Persona, parsePersona, serializePersona } from "./persona.js";
+import { type Persona, type PersonaTemplate, parsePersona, serializePersona } from "./persona.js";
 
 export type PersistedWorker = {
   id: string;
@@ -74,6 +74,21 @@ export class LocalStore {
       CREATE TABLE IF NOT EXISTS provider_usage_cache (
         provider TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS slash_command_seed (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        commands TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS persona_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -237,6 +252,68 @@ export class LocalStore {
           payload = excluded.payload,
           updated_at = CURRENT_TIMESTAMP
       `).run(provider, JSON.stringify(payload));
+    });
+  }
+
+  /**
+   * A global cache of portable Claude built-ins selected from the last init
+   * event. Workspace and user commands are intentionally excluded by the
+   * capability registry so room-specific commands cannot leak across repos.
+   */
+  loadSlashCommandSeed(): string[] {
+    const row = this.db.prepare(
+      "SELECT commands FROM slash_command_seed WHERE id = 1",
+    ).get() as { commands?: string } | undefined;
+    if (!row?.commands) return [];
+    try {
+      const parsed = JSON.parse(row.commands);
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  saveSlashCommandSeed(commands: string[]): void {
+    this.safeWrite("save slash command seed", () => {
+      this.db.prepare(`
+        INSERT INTO slash_command_seed (id, commands, updated_at)
+        VALUES (1, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          commands = excluded.commands,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(JSON.stringify(commands));
+    });
+  }
+
+  listPersonaTemplates(): PersonaTemplate[] {
+    const rows = this.db.prepare(
+      "SELECT id, name, role, instructions FROM persona_templates ORDER BY updated_at DESC, rowid DESC",
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      role: row.role == null ? "" : String(row.role),
+      instructions: row.instructions == null ? "" : String(row.instructions),
+    }));
+  }
+
+  savePersonaTemplate(template: PersonaTemplate): boolean {
+    return this.safeWrite("save persona template", () => {
+      this.db.prepare(`
+        INSERT INTO persona_templates (id, name, role, instructions, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          role = excluded.role,
+          instructions = excluded.instructions,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(template.id, template.name, template.role, template.instructions);
+    });
+  }
+
+  deletePersonaTemplate(id: string): void {
+    this.safeWrite("delete persona template", () => {
+      this.db.prepare("DELETE FROM persona_templates WHERE id = ?").run(id);
     });
   }
 

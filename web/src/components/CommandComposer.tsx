@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityState, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
 import { deriveCommandHistory } from "../commandHistory";
-import { composerEnterAction } from "../commandInteraction";
+import { composerEnterAction, mergePaletteNames } from "../commandInteraction";
 
 type PaletteItem = { key: string; label: string; description: string; value: string; kind: "recent" | "project" };
 type LibraryEntry = { name: string; description: string; argumentHint?: string };
@@ -36,9 +36,13 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const history = useMemo(() => deriveCommandHistory(workers, provider, workspacePath), [workers, provider, workspacePath]);
   const query = draft.startsWith("/") || draft.startsWith("$") ? draft.slice(1).toLowerCase() : draft.toLowerCase();
   const items = useMemo<PaletteItem[]>(() => {
-    const names: LibraryEntry[] = library.length > 0 ? library : provider === "claude"
-      ? capabilities.slashCommands.map((name) => ({ name, description: "Claude 專案指令" }))
-      : [];
+    // Project commands (with metadata) merged with the provider's full
+    // slash-command set, so a room that has disk commands doesn't hide the
+    // built-in /clear, /compact, … once the palette fetch completes. Codex
+    // has no built-in slash set here, so it stays library (skills) only.
+    const names: LibraryEntry[] = provider === "claude"
+      ? mergePaletteNames(library, capabilities.slashCommands)
+      : library;
     const project = names.map((entry) => ({
       key: `project-${entry.name}`,
       label: `${provider === "claude" ? "/" : "$"}${entry.name}`,

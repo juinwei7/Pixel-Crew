@@ -145,6 +145,11 @@ export type Persona = {
   instructions: string;
 };
 
+export type PersonaTemplate = Persona & {
+  id: string;
+  name: string;
+};
+
 export type WorkerState = {
   id: string;
   name: string;

@@ -76,3 +76,27 @@ test("persists workers, bounded events, and capability cache", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("stores, updates, and deletes reusable persona templates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-"));
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    store.savePersonaTemplate({ id: "t1", name: "QA", role: "QA 工程師", instructions: "測 UI" });
+    store.savePersonaTemplate({ id: "t2", name: "Reviewer", role: "審查員", instructions: "挑毛病" });
+
+    const reopened = new LocalStore(path);
+    assert.equal(reopened.listPersonaTemplates().length, 2);
+
+    reopened.savePersonaTemplate({ id: "t1", name: "資深 QA", role: "QA 工程師", instructions: "測 UI 與 API" });
+    const updated = reopened.listPersonaTemplates().find((template) => template.id === "t1");
+    assert.deepEqual(updated, { id: "t1", name: "資深 QA", role: "QA 工程師", instructions: "測 UI 與 API" });
+
+    reopened.deletePersonaTemplate("t2");
+    const remaining = reopened.listPersonaTemplates();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].id, "t1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

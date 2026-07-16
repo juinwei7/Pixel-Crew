@@ -4,7 +4,9 @@ import {
   composePersonaPrompt,
   MAX_PERSONA_INSTRUCTIONS,
   MAX_PERSONA_ROLE,
+  MAX_PERSONA_TEMPLATE_NAME,
   normalizePersona,
+  normalizePersonaTemplate,
   parsePersona,
   serializePersona,
 } from "../src/persona.js";
@@ -36,4 +38,18 @@ test("serialize/parse persona round-trips and tolerates junk", () => {
   assert.equal(serializePersona(null), null);
   assert.equal(parsePersona(null), null);
   assert.equal(parsePersona("{not json"), null);
+});
+
+test("normalizePersonaTemplate requires content, defaults name to role, and preserves id", () => {
+  assert.equal(normalizePersonaTemplate({ name: "只有名字" }), null);
+  assert.equal(normalizePersonaTemplate({ role: "", instructions: "" }), null);
+
+  const defaulted = normalizePersonaTemplate({ role: "QA 工程師", instructions: "測 UI" });
+  assert.deepEqual(defaulted, { id: null, name: "QA 工程師", role: "QA 工程師", instructions: "測 UI" });
+
+  const named = normalizePersonaTemplate({ id: "t1", name: "  嚴格審查員  ", role: "Reviewer", instructions: "挑毛病" });
+  assert.deepEqual(named, { id: "t1", name: "嚴格審查員", role: "Reviewer", instructions: "挑毛病" });
+
+  const capped = normalizePersonaTemplate({ name: "x".repeat(200), instructions: "y" });
+  assert.equal(capped?.name.length, MAX_PERSONA_TEMPLATE_NAME);
 });

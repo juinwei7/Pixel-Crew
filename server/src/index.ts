@@ -24,7 +24,7 @@ import { isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
-import { composePersonaPrompt, normalizePersona, type Persona } from "./persona.js";
+import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -835,6 +835,31 @@ app.post("/api/workers/:id/persona", (req, res) => {
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, persona: worker.persona });
+});
+
+app.get("/api/persona-templates", (_req, res) => {
+  res.json({ templates: store.listPersonaTemplates() });
+});
+
+app.post("/api/persona-templates", (req, res) => {
+  const normalized = normalizePersonaTemplate(req.body);
+  if (!normalized) {
+    res.status(400).json({ error: "範本需要名稱，且至少要有職務或指示" });
+    return;
+  }
+  const template: PersonaTemplate = {
+    id: normalized.id ?? randomUUID(),
+    name: normalized.name,
+    role: normalized.role,
+    instructions: normalized.instructions,
+  };
+  store.savePersonaTemplate(template);
+  res.json({ ok: true, template, templates: store.listPersonaTemplates() });
+});
+
+app.delete("/api/persona-templates/:id", (req, res) => {
+  store.deletePersonaTemplate(req.params.id);
+  res.json({ ok: true, templates: store.listPersonaTemplates() });
 });
 
 const execFileAsync = promisify(execFile);

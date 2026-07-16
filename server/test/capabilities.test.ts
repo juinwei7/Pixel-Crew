@@ -127,6 +127,27 @@ test("collapses full model ids already persisted in the cache when loading", () 
   }
 });
 
+test("seeds native slash commands globally without leaking project commands", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  try {
+    const store = new LocalStore(join(dir, "test.sqlite"));
+
+    // A worker in one room discovers the built-in command set.
+    const roomA = new CapabilityRegistry(store, () => undefined, "/repo-a");
+    roomA.mergeWorkerMeta({ slashCommands: ["clear", "compact", "usage", "repo-a-only"], mcpServers: [], toolCount: 3 });
+    assert.deepEqual(store.loadSlashCommandSeed(), ["clear", "compact", "usage"]);
+
+    // A brand-new room (never messaged) still shows those native commands.
+    const roomB = new CapabilityRegistry(store, () => undefined, "/repo-b");
+    for (const name of ["clear", "compact", "usage"]) {
+      assert.equal(roomB.getState().slashCommands.includes(name), true);
+    }
+    assert.equal(roomB.getState().slashCommands.includes("repo-a-only"), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("parses claude mcp list statuses, including remote servers needing authentication", () => {
   const servers = parseMcpList([
     "fontrip: https://mcp.sre.fontrip.com/mcp - ✔ Connected",

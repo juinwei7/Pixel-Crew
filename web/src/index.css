@@ -2194,6 +2194,20 @@ body {
 .persona-editor__eyebrow { color: #ffcf8a; font: 700 9px var(--mono); letter-spacing: 0.18em; }
 .persona-editor__header h2 { margin: 6px 0 4px; font-size: 17px; }
 .persona-editor__header p { color: #8394ab; font-size: 11px; line-height: 1.5; }
+.persona-editor__templates { margin-bottom: 16px; }
+.persona-editor__templates-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 11px; border: 1px solid rgba(255,183,94,.2); border-radius: 9px; background: rgba(255,183,94,.05); color: #ffcf8a; font: 700 10px var(--mono); letter-spacing: .08em; cursor: pointer; }
+.persona-editor__caret { margin-left: auto; transition: transform .15s ease; font-style: normal; }
+.persona-editor__caret--open { transform: rotate(180deg); }
+.persona-editor__template-list { margin-top: 7px; display: grid; gap: 5px; max-height: 168px; overflow-y: auto; }
+.persona-editor__template-empty { padding: 9px; color: #8394ab; font-size: 11px; text-align: center; }
+.persona-editor__template-item { display: flex; align-items: stretch; gap: 5px; }
+.persona-editor__template-apply { flex: 1; min-width: 0; display: grid; gap: 1px; padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255,255,255,.02); color: var(--text); text-align: left; cursor: pointer; }
+.persona-editor__template-apply:hover { border-color: rgba(255,183,94,.4); background: rgba(255,183,94,.07); }
+.persona-editor__template-apply strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.persona-editor__template-apply small { overflow: hidden; color: #8394ab; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.persona-editor__template-delete { flex: 0 0 auto; width: 34px; border: 1px solid var(--panel-border); border-radius: 8px; background: transparent; color: #8394ab; font-size: 16px; cursor: pointer; }
+.persona-editor__template-delete:hover { border-color: rgba(255,92,122,.4); color: #ff9aae; }
+.persona-editor__template-save { border-color: rgba(255,183,94,.3) !important; color: #ffcf8a !important; }
 .persona-editor__field { display: block; margin-bottom: 14px; }
 .persona-editor__field > span { display: flex; justify-content: space-between; margin-bottom: 5px; color: #c5d6e9; font: 700 10px var(--mono); letter-spacing: 0.08em; }
 .persona-editor__field > span small { color: #5f7089; font-weight: 400; }
