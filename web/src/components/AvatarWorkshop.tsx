@@ -7,10 +7,14 @@ import {
   renderNormalizedAvatar,
   type AvatarControls,
 } from "../avatar/normalizeAvatar";
+import { AVATAR_PRESETS, paintPresetPreview, type AvatarPresetId } from "../game/avatarPresets";
+import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/person";
 
 type Props = {
   worker: WorkerState;
   onSave(workerId: string, dataBase64: string, mimeType: "image/png" | "image/gif"): Promise<string | null>;
+  onPreset(workerId: string, presetId: string): Promise<string | null>;
+  onActivateCustom(workerId: string): Promise<string | null>;
   onReset(workerId: string): Promise<string | null>;
   onClose(): void;
 };
@@ -24,7 +28,9 @@ const DEFAULT_CONTROLS: AvatarControls = {
 };
 const MAX_GIF_DIMENSION = 320;
 
-export function AvatarWorkshop({ worker, onSave, onReset, onClose }: Props) {
+export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onReset, onClose }: Props) {
+  const [mode, setMode] = useState<"official" | "custom">(worker.avatarKind === "custom" ? "custom" : "official");
+  const [selectedPreset, setSelectedPreset] = useState<AvatarPresetId>((worker.avatarPresetId || "classic") as AvatarPresetId);
   const [source, setSource] = useState<ImageBitmap | null>(null);
   const [fileName, setFileName] = useState("");
   const [gifFile, setGifFile] = useState<File | null>(null);
@@ -115,8 +121,17 @@ export function AvatarWorkshop({ worker, onSave, onReset, onClose }: Props) {
     }
   }
 
-  async function save() {
-    if (!output && !gifFile) return;
+  async function saveCustom() {
+    if (!output && !gifFile) {
+      if (!worker.avatarId) return;
+      setSaving(true);
+      setError(null);
+      const activateError = await onActivateCustom(worker.id);
+      setSaving(false);
+      if (activateError) setError(activateError);
+      else onClose();
+      return;
+    }
     setSaving(true);
     setError(null);
     const dataBase64 = gifFile
@@ -125,6 +140,15 @@ export function AvatarWorkshop({ worker, onSave, onReset, onClose }: Props) {
     const saveError = await onSave(worker.id, dataBase64, gifFile ? "image/gif" : "image/png");
     setSaving(false);
     if (saveError) setError(saveError);
+    else onClose();
+  }
+
+  async function saveOfficial() {
+    setSaving(true);
+    setError(null);
+    const presetError = await onPreset(worker.id, selectedPreset);
+    setSaving(false);
+    if (presetError) setError(presetError);
     else onClose();
   }
 
@@ -147,13 +171,36 @@ export function AvatarWorkshop({ worker, onSave, onReset, onClose }: Props) {
           <span className="avatar-workshop__eyebrow">AVATAR WORKSHOP · {AVATAR_WIDTH}×{AVATAR_HEIGHT}</span>
           <h2 id="avatar-workshop-title">替 {worker.name} 換一個樣子</h2>
           <p>
-            {gifMode
+            {mode === "official"
+              ? "從官方隊員中選一位；每個造型都有完整辦公室動作，切換不會刪除你的自訂角色。"
+              : gifMode
               ? "GIF 會保留原始動畫，並自動適配 NPC 在辦公室裡的顯示尺寸。"
               : `圖片只在瀏覽器內縮圖與降色；伺服器只保存最後的 ${AVATAR_WIDTH}×${AVATAR_HEIGHT} PNG。`}
           </p>
         </header>
 
-        <div className="avatar-workshop__body">
+        <div className="avatar-workshop__source-tabs" role="tablist" aria-label="角色來源">
+          <button type="button" role="tab" aria-selected={mode === "official"} className={mode === "official" ? "is-active" : ""} onClick={() => setMode("official")}><span>OFFICIAL</span>官方角色</button>
+          <button type="button" role="tab" aria-selected={mode === "custom"} className={mode === "custom" ? "is-active" : ""} onClick={() => setMode("custom")}><span>CUSTOM</span>自訂上傳{worker.avatarId && <i>已保存</i>}</button>
+        </div>
+
+        {mode === "official" ? (
+          <section className="avatar-workshop__official" aria-label="官方角色選擇">
+            <div className="avatar-workshop__official-copy">
+              <strong>PIXEL CREW 官方隊員</strong>
+              <span>每一位都保留走路、工作與歡呼動畫。</span>
+            </div>
+            <div className="avatar-workshop__preset-grid">
+              {AVATAR_PRESETS.map((preset) => (
+                <button key={preset.id} type="button" className={selectedPreset === preset.id ? "avatar-workshop__preset is-active" : "avatar-workshop__preset"} style={{ "--preset-accent": preset.accent } as React.CSSProperties} onClick={() => setSelectedPreset(preset.id)}>
+                  <span className="avatar-workshop__preset-art"><PresetPreview presetId={preset.id} colorIndex={worker.colorIndex} /></span>
+                  <span className="avatar-workshop__preset-copy"><strong>{preset.name}</strong><small>{preset.role}</small></span>
+                  <span className="avatar-workshop__preset-check">{selectedPreset === preset.id ? "✓" : ""}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : <div className="avatar-workshop__body">
           <section className="avatar-workshop__preview-panel">
             <div className="avatar-workshop__preview-frame">
               {gifPreviewUrl ? (
@@ -220,18 +267,30 @@ export function AvatarWorkshop({ worker, onSave, onReset, onClose }: Props) {
             </label>
           </section>
           )}
-        </div>
+        </div>}
 
         {error && <div className="avatar-workshop__error" role="alert">{error}</div>}
         <footer className="avatar-workshop__actions">
-          <button type="button" className="avatar-workshop__reset" disabled={!worker.avatarId || saving} onClick={() => void restoreDefault()}>恢復預設角色</button>
+          {mode === "custom" ? <button type="button" className="avatar-workshop__reset" disabled={!worker.avatarId || saving} onClick={() => void restoreDefault()}>刪除自訂角色</button> : <span />}
           <span />
           <button type="button" disabled={saving} onClick={onClose}>取消</button>
-          <button type="button" className="avatar-workshop__save" disabled={(!output && !gifFile) || saving} onClick={() => void save()}>{saving ? "儲存中…" : "套用角色"}</button>
+          {mode === "official" ? (
+            <button type="button" className="avatar-workshop__save" disabled={saving || (worker.avatarKind === "preset" && worker.avatarPresetId === selectedPreset)} onClick={() => void saveOfficial()}>{saving ? "儲存中…" : "套用官方角色"}</button>
+          ) : (
+            <button type="button" className="avatar-workshop__save" disabled={(!output && !gifFile && (!worker.avatarId || worker.avatarKind === "custom")) || saving} onClick={() => void saveCustom()}>{saving ? "儲存中…" : output || gifFile ? "上傳並套用" : "切回自訂角色"}</button>
+          )}
         </footer>
       </div>
     </div>
   );
+}
+
+function PresetPreview({ presetId, colorIndex }: { presetId: string; colorIndex: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (ref.current) paintPresetPreview(ref.current, FRONT_IDLE_0, presetId, colorIndex, SHIRT_COLORS);
+  }, [presetId, colorIndex]);
+  return <canvas ref={ref} aria-hidden="true" />;
 }
 
 function imageDimensions(url: string): Promise<{ width: number; height: number }> {

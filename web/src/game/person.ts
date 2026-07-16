@@ -1,11 +1,12 @@
 import { Assets, Container, Graphics, Sprite, Texture } from "pixi.js";
 import { GifSprite, type GifSource } from "pixi.js/gif";
 import type { CharacterActivity } from "../types";
-import { PAL, texFromMap } from "./pixels";
+import { texFromMap } from "./pixels";
+import { avatarPresetPalette, avatarPresetRows } from "./avatarPresets";
 
 // ---------- Front (facing camera) ----------
 
-const FRONT_IDLE_0 = [
+export const FRONT_IDLE_0 = [
   "....HHHH....",
   "...HHHHHH...",
   "..HHHHHHHH..",
@@ -257,12 +258,13 @@ export class Person {
   private readonly marker = new Graphics();
   active = false;
 
-  private readonly idleFrames: Texture[];
-  private readonly sideWalk: Texture[];
-  private readonly frontWalk: Texture[];
-  private readonly backWalk: Texture[];
-  private readonly workFrames: Texture[];
-  private readonly cheerFrame: Texture;
+  private idleFrames: Texture[];
+  private sideWalk: Texture[];
+  private frontWalk: Texture[];
+  private backWalk: Texture[];
+  private workFrames: Texture[];
+  private cheerFrame: Texture;
+  private presetKey: string;
   private customTexture: Texture | null = null;
   private gifSprite: GifSprite | null = null;
   private customScale = 1;
@@ -284,26 +286,36 @@ export class Person {
 
   private static readonly SPEED = 0.05; // art px per ms
 
-  constructor(colorIndex = 0) {
-    const [shirt, shade] = SHIRT_COLORS[colorIndex % SHIRT_COLORS.length];
-    const pal = { ...PAL, B: shirt, b: shade };
-
-    this.idleFrames = [texFromMap(FRONT_IDLE_0, pal), texFromMap(FRONT_IDLE_1, pal)];
-    this.sideWalk = [
-      texFromMap(SIDE_STRIDE_A, pal),
-      texFromMap(SIDE_PASS, pal),
-      texFromMap(SIDE_STRIDE_B, pal),
-      texFromMap(SIDE_PASS, pal),
-    ];
-    this.frontWalk = [texFromMap(FRONT_WALK_0, pal), texFromMap(FRONT_WALK_1, pal)];
-    this.backWalk = [texFromMap(BACK_WALK_0, pal), texFromMap(BACK_WALK_1, pal)];
-    this.workFrames = [texFromMap(BACK_0, pal), texFromMap(BACK_TYPE_1, pal)];
-    this.cheerFrame = texFromMap(CHEER, pal);
+  constructor(colorIndex = 0, presetId = "classic") {
+    const frames = createPresetFrames(presetId, colorIndex);
+    this.idleFrames = frames.idleFrames;
+    this.sideWalk = frames.sideWalk;
+    this.frontWalk = frames.frontWalk;
+    this.backWalk = frames.backWalk;
+    this.workFrames = frames.workFrames;
+    this.cheerFrame = frames.cheerFrame;
+    this.presetKey = `${presetId}:${colorIndex}`;
 
     this.sprite = new Sprite(this.idleFrames[0]);
     this.sprite.anchor.set(0.5, 1);
     this.shadow.ellipse(0, 0, 5.5, 1.8).fill({ color: 0x000000, alpha: 0.4 });
     this.container.addChild(this.shadow, this.sprite, this.thinkDots, this.marker);
+  }
+
+  setPreset(presetId: string, colorIndex: number): void {
+    const nextKey = `${presetId}:${colorIndex}`;
+    if (nextKey === this.presetKey) return;
+    const previous = this.presetTextures();
+    const frames = createPresetFrames(presetId, colorIndex);
+    this.idleFrames = frames.idleFrames;
+    this.sideWalk = frames.sideWalk;
+    this.frontWalk = frames.frontWalk;
+    this.backWalk = frames.backWalk;
+    this.workFrames = frames.workFrames;
+    this.cheerFrame = frames.cheerFrame;
+    this.presetKey = nextKey;
+    if (!this.customTexture) this.sprite.texture = this.idleFrames[0];
+    for (const texture of previous) texture.destroy(true);
   }
 
   /** Walk like a person in a room: horizontal leg first, then vertical. */
@@ -384,16 +396,20 @@ export class Person {
     this.customTexture = null;
     if (url) void unloadAvatar(url);
     this.container.destroy({ children: true });
-    for (const texture of new Set([
+    for (const texture of this.presetTextures()) {
+      texture.destroy(true);
+    }
+  }
+
+  private presetTextures(): Set<Texture> {
+    return new Set([
       ...this.idleFrames,
       ...this.sideWalk,
       ...this.frontWalk,
       ...this.backWalk,
       ...this.workFrames,
       this.cheerFrame,
-    ])) {
-      texture.destroy(true);
-    }
+    ]);
   }
 
   private async releaseAvatar(): Promise<void> {
@@ -531,6 +547,24 @@ export class Person {
       });
     }
   }
+}
+
+function createPresetFrames(presetId: string, colorIndex: number) {
+  const pal = avatarPresetPalette(presetId, colorIndex, SHIRT_COLORS);
+  const tex = (rows: string[]) => texFromMap(avatarPresetRows(rows, presetId), pal);
+  return {
+    idleFrames: [tex(FRONT_IDLE_0), tex(FRONT_IDLE_1)],
+    sideWalk: [
+      tex(SIDE_STRIDE_A),
+      tex(SIDE_PASS),
+      tex(SIDE_STRIDE_B),
+      tex(SIDE_PASS),
+    ],
+    frontWalk: [tex(FRONT_WALK_0), tex(FRONT_WALK_1)],
+    backWalk: [tex(BACK_WALK_0), tex(BACK_WALK_1)],
+    workFrames: [tex(BACK_0), tex(BACK_TYPE_1)],
+    cheerFrame: tex(CHEER),
+  };
 }
 
 async function unloadAvatar(url: string): Promise<void> {

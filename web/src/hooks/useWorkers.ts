@@ -20,6 +20,8 @@ type ServerMessage =
         busy: boolean;
         colorIndex: number;
         avatarId: string | null;
+        avatarKind: "preset" | "custom";
+        avatarPresetId: string;
         provider: ProviderId;
         workspacePath: string;
         persona: Persona | null;
@@ -43,6 +45,8 @@ type WorkerSummary = {
   busy: boolean;
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
@@ -137,6 +141,8 @@ export function useWorkers() {
               w.workspacePath,
               w.avatarId,
               w.persona ?? null,
+              w.avatarKind,
+              w.avatarPresetId,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             // A persisted running turn cannot still have a live provider
@@ -179,6 +185,8 @@ export function useWorkers() {
               data.worker.workspacePath,
               data.worker.avatarId,
               data.worker.persona,
+              data.worker.avatarKind,
+              data.worker.avatarPresetId,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -220,6 +228,8 @@ export function useWorkers() {
                   data.worker.workspacePath,
                   data.worker.avatarId,
                   data.worker.persona,
+                  data.worker.avatarKind,
+                  data.worker.avatarPresetId,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -373,6 +383,24 @@ export function useWorkers() {
     }
   }, []);
 
+  const selectAvatarPreset = useCallback(async (id: string, presetId: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/avatar-preset`, { method: "PUT", body: { presetId } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const activateCustomAvatar = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/avatar/custom`, { method: "POST" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const send = useCallback(async (id: string, message: string): Promise<string | null> => {
     try {
       await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
@@ -484,6 +512,8 @@ export function useWorkers() {
     renameWorker,
     saveAvatar,
     resetAvatar,
+    selectAvatarPreset,
+    activateCustomAvatar,
     send,
     setModel,
     setPersona,

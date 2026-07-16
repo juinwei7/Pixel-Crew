@@ -12,6 +12,8 @@ export type PersistedWorker = {
   model: string | null;
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   provider: ProviderId;
   workspacePath: string;
   sessionId: string;
@@ -47,6 +49,8 @@ export class LocalStore {
         model TEXT,
         color_index INTEGER NOT NULL,
         avatar_id TEXT,
+        avatar_kind TEXT NOT NULL DEFAULT 'preset',
+        avatar_preset_id TEXT NOT NULL DEFAULT 'classic',
         provider TEXT NOT NULL DEFAULT 'claude',
         workspace_path TEXT,
         claude_session_id TEXT NOT NULL,
@@ -108,6 +112,17 @@ export class LocalStore {
       // Existing databases already migrated to avatar-aware workers.
     }
     try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_kind TEXT");
+    } catch {
+      // Existing databases already migrated to avatar source selection.
+    }
+    this.db.exec("UPDATE workers SET avatar_kind = CASE WHEN avatar_id IS NULL THEN 'preset' ELSE 'custom' END WHERE avatar_kind IS NULL");
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_preset_id TEXT NOT NULL DEFAULT 'classic'");
+    } catch {
+      // Existing databases already migrated to official avatar presets.
+    }
+    try {
       this.db.exec("ALTER TABLE workers ADD COLUMN persona TEXT");
     } catch {
       // Existing databases already migrated to persona-aware workers.
@@ -117,7 +132,7 @@ export class LocalStore {
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns, persona
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -139,6 +154,8 @@ export class LocalStore {
         model: row.model == null ? null : String(row.model),
         colorIndex: Number(row.color_index),
         avatarId: row.avatar_id == null ? null : String(row.avatar_id),
+        avatarKind: row.avatar_kind === "custom" && row.avatar_id != null ? "custom" : "preset",
+        avatarPresetId: row.avatar_preset_id == null ? "classic" : String(row.avatar_preset_id),
         provider: row.provider === "codex" ? "codex" : "claude",
         workspacePath: row.workspace_path == null ? "" : String(row.workspace_path),
         sessionId: String(row.claude_session_id),
@@ -153,13 +170,15 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, provider, workspace_path, claude_session_id, completed_turns, persona
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
           color_index = excluded.color_index,
           avatar_id = excluded.avatar_id,
+          avatar_kind = excluded.avatar_kind,
+          avatar_preset_id = excluded.avatar_preset_id,
           provider = excluded.provider,
           workspace_path = excluded.workspace_path,
           claude_session_id = excluded.claude_session_id,
@@ -172,6 +191,8 @@ export class LocalStore {
         worker.model,
         worker.colorIndex,
         worker.avatarId,
+        worker.avatarKind,
+        worker.avatarPresetId,
         worker.provider,
         worker.workspacePath,
         worker.sessionId,

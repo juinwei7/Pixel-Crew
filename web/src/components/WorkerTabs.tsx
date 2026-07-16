@@ -99,7 +99,7 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
     const menuOpen = menuId === worker.id;
     const editing = editingId === worker.id;
     const selectContents = <>
-      <span className="crew-row__avatar" style={{ background: shirtColor(worker.colorIndex) }}>{worker.avatarId ? "◆" : ""}</span>
+      <span className="crew-row__avatar" style={{ background: shirtColor(worker.colorIndex) }}>{worker.avatarKind === "custom" ? "◆" : ""}</span>
       {!collapsed && <>
         <div className="crew-row__identity">
           {editing ? (

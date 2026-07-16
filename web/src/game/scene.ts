@@ -34,6 +34,8 @@ export type WorkerSceneState = {
   active: boolean;
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   selectId: string;
   temporary: boolean;
 };
@@ -58,6 +60,8 @@ type PersonEntry = {
   last: CharacterState | null;
   index: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   temporary: boolean;
   transition: "entering" | "ready" | "removing";
   transitionMs: number;
@@ -265,6 +269,8 @@ export async function createScene(
             last: null,
             index: workerIndex,
             avatarId: null,
+            avatarKind: "preset",
+            avatarPresetId: "classic",
             temporary: w.temporary,
             transition: entering ? "entering" : "ready",
             transitionMs: 0,
@@ -285,10 +291,13 @@ export async function createScene(
         entry.index = workerIndex;
         entry.targetX = desiredSpot.x;
         entry.targetY = desiredSpot.y;
-        if (entry.avatarId !== w.avatarId) {
+        if (entry.avatarId !== w.avatarId || entry.avatarKind !== w.avatarKind || entry.avatarPresetId !== w.avatarPresetId) {
           entry.avatarId = w.avatarId;
+          entry.avatarKind = w.avatarKind;
+          entry.avatarPresetId = w.avatarPresetId;
+          entry.person.setPreset(w.avatarPresetId, w.colorIndex);
           void entry.person
-            .setAvatar(w.avatarId ? apiAssetUrl(`/api/avatars/${w.avatarId}`) : null)
+            .setAvatar(w.avatarKind === "custom" && w.avatarId ? apiAssetUrl(`/api/avatars/${w.avatarId}`) : null)
             .then((message) => {
               if (message) callbacks.onAvatarError(w.selectId, message);
             });

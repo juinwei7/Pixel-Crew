@@ -157,6 +157,8 @@ export type WorkerState = {
   busy: boolean;
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;

@@ -13,6 +13,8 @@ type VisualWorker = {
   active: boolean;
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: WorkerState["avatarKind"];
+  avatarPresetId: string;
   busy: boolean;
   temporary: boolean;
   provider: WorkerState["provider"];
@@ -31,6 +33,8 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
       avatarId: worker.avatarId,
+      avatarKind: worker.avatarKind,
+      avatarPresetId: worker.avatarPresetId,
       busy: worker.busy,
       temporary: false,
       provider: worker.provider,
@@ -52,6 +56,8 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       active: false,
       colorIndex: (worker.colorIndex + index + 1) % SHIRT_COLORS.length,
       avatarId: null,
+      avatarKind: "preset",
+      avatarPresetId: "classic",
       busy: true,
       temporary: true,
       provider: worker.provider,

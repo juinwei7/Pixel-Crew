@@ -43,7 +43,7 @@ export function App() {
   const {
     workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
-    switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar,
+    switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar,
     send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -242,10 +242,11 @@ export function App() {
         return error;
       }} />}
 
-      {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("像素角色已更新"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已恢復預設角色"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
+      {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("自訂角色已套用"); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify("官方角色已套用"); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify("已切回自訂角色"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已刪除自訂角色並恢復經典隊員"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
       {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 
+      <footer className="app-copyright" aria-label="版權資訊">© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

@@ -46,6 +46,7 @@ const wss = new WebSocketServer({
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
+const AVATAR_PRESET_IDS = new Set(["classic", "cyber", "signal", "spark", "ops"]);
 const store = new LocalStore(config.dbPath);
 const avatarStore = new AvatarStore(config.avatarDir);
 const usageRegistry = new ProviderUsageRegistry(
@@ -70,6 +71,8 @@ type Worker = {
   history: RunnerEvent[];
   colorIndex: number;
   avatarId: string | null;
+  avatarKind: "preset" | "custom";
+  avatarPresetId: string;
   persona: Persona | null;
 };
 
@@ -84,6 +87,8 @@ function workerSummary(w: Worker) {
     busy: w.runner.busy,
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
+    avatarKind: w.avatarKind,
+    avatarPresetId: w.avatarPresetId,
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
     persona: w.persona,
@@ -155,6 +160,8 @@ function persistWorker(worker: Worker): boolean {
     model: worker.runner.getModel() ?? null,
     colorIndex: worker.colorIndex,
     avatarId: worker.avatarId,
+    avatarKind: worker.avatarKind,
+    avatarPresetId: worker.avatarPresetId,
     provider: worker.runner.provider,
     workspacePath: worker.runner.workspacePath,
     persona: worker.persona,
@@ -218,6 +225,8 @@ function createWorker(
     history: persisted?.events ?? [],
     colorIndex: persisted?.colorIndex ?? workerCounter % 6,
     avatarId: persisted?.avatarId ?? null,
+    avatarKind: persisted?.avatarKind ?? (persisted?.avatarId ? "custom" : "preset"),
+    avatarPresetId: AVATAR_PRESET_IDS.has(persisted?.avatarPresetId ?? "") ? persisted!.avatarPresetId : "classic",
     persona: persisted?.persona ?? null,
   };
   const initialState = persisted
@@ -576,10 +585,13 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
   }
   try {
     const previousId = worker.avatarId;
+    const previousKind = worker.avatarKind;
     const avatarId = await avatarStore.save(req.body?.dataBase64 ?? req.body?.pngBase64, req.body?.mimeType ?? "image/png");
     worker.avatarId = avatarId;
+    worker.avatarKind = "custom";
     if (!persistWorker(worker)) {
       worker.avatarId = previousId;
+      worker.avatarKind = previousKind;
       await avatarStore.delete(avatarId);
       res.status(500).json({ error: "無法將角色圖片寫入本機資料庫" });
       return;
@@ -598,6 +610,54 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
   }
 });
 
+app.put("/api/workers/:id/avatar-preset", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const presetId = typeof req.body?.presetId === "string" ? req.body.presetId.trim() : "";
+  if (!AVATAR_PRESET_IDS.has(presetId)) {
+    res.status(400).json({ error: "未知的官方角色" });
+    return;
+  }
+  const previousKind = worker.avatarKind;
+  const previousPresetId = worker.avatarPresetId;
+  worker.avatarKind = "preset";
+  worker.avatarPresetId = presetId;
+  if (!persistWorker(worker)) {
+    worker.avatarKind = previousKind;
+    worker.avatarPresetId = previousPresetId;
+    res.status(500).json({ error: "無法更新本機角色設定" });
+    return;
+  }
+  const summary = workerSummary(worker);
+  broadcast({ type: "worker_updated", worker: summary });
+  res.json(summary);
+});
+
+app.post("/api/workers/:id/avatar/custom", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  if (!worker.avatarId) {
+    res.status(409).json({ error: "尚未上傳自訂角色" });
+    return;
+  }
+  const previousKind = worker.avatarKind;
+  worker.avatarKind = "custom";
+  if (!persistWorker(worker)) {
+    worker.avatarKind = previousKind;
+    res.status(500).json({ error: "無法更新本機角色設定" });
+    return;
+  }
+  const summary = workerSummary(worker);
+  broadcast({ type: "worker_updated", worker: summary });
+  res.json(summary);
+});
+
 app.delete("/api/workers/:id/avatar", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
@@ -605,9 +665,15 @@ app.delete("/api/workers/:id/avatar", async (req, res) => {
     return;
   }
   const previousId = worker.avatarId;
+  const previousKind = worker.avatarKind;
+  const previousPresetId = worker.avatarPresetId;
   worker.avatarId = null;
+  worker.avatarKind = "preset";
+  worker.avatarPresetId = "classic";
   if (!persistWorker(worker)) {
     worker.avatarId = previousId;
+    worker.avatarKind = previousKind;
+    worker.avatarPresetId = previousPresetId;
     res.status(500).json({ error: "無法更新本機角色設定" });
     return;
   }

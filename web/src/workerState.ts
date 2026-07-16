@@ -76,6 +76,8 @@ export function emptyWorker(
   workspacePath: string,
   avatarId: string | null = null,
   persona: WorkerState["persona"] = null,
+  avatarKind: WorkerState["avatarKind"] = avatarId ? "custom" : "preset",
+  avatarPresetId = "classic",
 ): WorkerState {
   return {
     id,
@@ -84,6 +86,8 @@ export function emptyWorker(
     busy,
     colorIndex,
     avatarId,
+    avatarKind,
+    avatarPresetId,
     provider,
     workspacePath,
     persona,

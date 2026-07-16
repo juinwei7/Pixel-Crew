@@ -12,6 +12,8 @@ const worker: WorkerState = {
   busy: false,
   colorIndex: 0,
   avatarId: "b3bb8e8a-4040-4e89-9bb7-c64fb4b7943b.gif",
+  avatarKind: "custom",
+  avatarPresetId: "classic",
   provider: "codex",
   workspacePath: "/tmp/project",
   turns: [],
@@ -25,7 +27,7 @@ const worker: WorkerState = {
 
 test("shows GIF playback information without static-image adjustment controls", () => {
   const html = renderToStaticMarkup(
-    <AvatarWorkshop worker={worker} onSave={async () => null} onReset={async () => null} onClose={() => undefined} />,
+    <AvatarWorkshop worker={worker} onSave={async () => null} onPreset={async () => null} onActivateCustom={async () => null} onReset={async () => null} onClose={() => undefined} />,
   );
   assert.match(html, /保留原始動畫/);
   assert.match(html, /320 × 320/);
@@ -35,8 +37,21 @@ test("shows GIF playback information without static-image adjustment controls", 
 
 test("keeps adjustment controls for a static custom avatar", () => {
   const html = renderToStaticMarkup(
-    <AvatarWorkshop worker={{ ...worker, avatarId: worker.avatarId!.replace(".gif", ".png") }} onSave={async () => null} onReset={async () => null} onClose={() => undefined} />,
+    <AvatarWorkshop worker={{ ...worker, avatarId: worker.avatarId!.replace(".gif", ".png") }} onSave={async () => null} onPreset={async () => null} onActivateCustom={async () => null} onReset={async () => null} onClose={() => undefined} />,
   );
   assert.match(html, /type="range"/);
   assert.match(html, /縮放/);
+});
+
+test("shows five official animated presets in the official source tab", () => {
+  const html = renderToStaticMarkup(
+    <AvatarWorkshop worker={{ ...worker, avatarKind: "preset", avatarPresetId: "signal" }} onSave={async () => null} onPreset={async () => null} onActivateCustom={async () => null} onReset={async () => null} onClose={() => undefined} />,
+  );
+  assert.match(html, /官方角色/);
+  assert.match(html, /經典隊員/);
+  assert.match(html, /霓虹工程師/);
+  assert.match(html, /訊號分析師/);
+  assert.match(html, /火花設計師/);
+  assert.match(html, /夜班維運/);
+  assert.match(html, /每一位都保留走路、工作與歡呼動畫/);
 });
