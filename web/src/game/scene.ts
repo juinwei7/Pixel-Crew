@@ -1,3 +1,10 @@
+// Pixi generates some of its render code with `new Function(...)` at runtime.
+// Our server sends a strict CSP (`script-src 'self'`, no `unsafe-eval`), which
+// blocks that and throws "Current environment does not allow unsafe-eval"
+// before a single frame renders. This official polyfill module patches Pixi
+// to use precompiled fallbacks instead, so it works under strict CSP without
+// loosening it. Must be imported before the first `Application` is created.
+import "pixi.js/unsafe-eval";
 import { Application, Container, Text } from "pixi.js";
 import type { CharacterState } from "../types";
 import type { StationKey } from "../stations";
