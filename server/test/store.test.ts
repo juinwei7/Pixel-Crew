@@ -95,6 +95,17 @@ test("persists workers, bounded events, and capability cache", () => {
       error: null,
     };
     store.saveProviderUsage("claude", usage);
+    store.saveProviderCheckpoint("worker-1", "claude", "/tmp/project", "sonnet", { sessionId: "session-checkpoint", completedTurns: 4 });
+    store.saveProviderHandoff("worker-1", {
+      id: "handoff-1",
+      fromProvider: "claude",
+      toProvider: "codex",
+      toModel: null,
+      stage: "completed",
+      message: "Codex 已接手",
+      source: "agent",
+      error: null,
+    }, { version: 1, goal: "continue" });
 
     const reopened = new LocalStore(path);
     const [worker] = reopened.loadWorkers(20);
@@ -109,6 +120,13 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
     assert.deepEqual(reopened.loadProviderUsage("claude"), usage);
+    assert.deepEqual(reopened.loadProviderCheckpoint("worker-1", "claude", "/tmp/project"), {
+      model: "sonnet",
+      sessionId: "session-checkpoint",
+      completedTurns: 4,
+    });
+    assert.equal(reopened.loadProviderCheckpoint("worker-1", "claude", "/tmp/other-project"), null);
+    assert.equal(reopened.listProviderHandoffs("worker-1").length, 1);
 
     reopened.clearWorkerEvents("worker-1");
     assert.deepEqual(reopened.loadWorkers(20)[0].events, []);

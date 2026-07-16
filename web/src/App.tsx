@@ -12,6 +12,7 @@ import { EnergyHud } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
+import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import type { ProviderId } from "./types";
 
@@ -43,7 +44,7 @@ export function App() {
   const {
     workers, order, activeId, setActiveId, targetRepoPath, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
-    switchProvider, switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar,
+    switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -51,6 +52,7 @@ export function App() {
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
+  const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -123,15 +125,8 @@ export function App() {
 
   async function changeProvider(provider: ProviderId) {
     if (provider === activeProvider) return;
-    if (active && active.turns.length === 0) {
-      const error = await switchProvider(active.id, provider);
-      if (error) notify(error, "error");
-      else notify(`已切換為 ${provider === "claude" ? "Claude Code" : "Codex"}`);
-      return;
-    }
-    const result = await createWorker(undefined, provider, activeWorkspace);
-    if (result.error) notify(result.error, "error");
-    else notify("已建立新的 Agent 人員");
+    if (!active) return;
+    setHandoffTarget(provider);
   }
 
   return (
@@ -243,6 +238,8 @@ export function App() {
       }} />}
 
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("自訂角色已套用"); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify("官方角色已套用"); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify("已切回自訂角色"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已刪除自訂角色並恢復經典隊員"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
+
+      {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onClose={() => setHandoffTarget(null)} />}
 
       {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 

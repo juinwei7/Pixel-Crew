@@ -25,6 +25,17 @@ import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
 import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
+import {
+  bootstrapPrompt,
+  buildLocalHandoff,
+  parseHandoffSummary,
+  recentConversation,
+  summaryMarkdown,
+  summaryPrompt,
+  usageBlockReason,
+  type HandoffProgress,
+  type HandoffSummary,
+} from "./handoff.js";
 
 const app = express();
 const loopbackCors: CorsOptions = {
@@ -74,17 +85,19 @@ type Worker = {
   avatarKind: "preset" | "custom";
   avatarPresetId: string;
   persona: Persona | null;
+  handoff: HandoffProgress | null;
 };
 
 const workers = new Map<string, Worker>();
 let workerCounter = 0;
 
 function workerSummary(w: Worker) {
+  const handoffBusy = handoffInProgress(w);
   return {
     id: w.id,
     name: w.runner.name,
     model: w.runner.getModel() ?? null,
-    busy: w.runner.busy,
+    busy: w.runner.busy || handoffBusy,
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
     avatarKind: w.avatarKind,
@@ -92,7 +105,12 @@ function workerSummary(w: Worker) {
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
     persona: w.persona,
+    handoff: w.handoff,
   };
+}
+
+function handoffInProgress(worker: Worker): boolean {
+  return Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
 }
 
 function broadcast(payload: unknown): void {
@@ -228,6 +246,7 @@ function createWorker(
     avatarKind: persisted?.avatarKind ?? (persisted?.avatarId ? "custom" : "preset"),
     avatarPresetId: AVATAR_PRESET_IDS.has(persisted?.avatarPresetId ?? "") ? persisted!.avatarPresetId : "classic",
     persona: persisted?.persona ?? null,
+    handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -343,6 +362,195 @@ function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
     if (type === "user_message") return true;
   }
   return false;
+}
+
+function providerLabel(provider: ProviderId): string {
+  return provider === "claude" ? "Claude Code" : "Codex";
+}
+
+function handoffActivityBlock(events: RunnerEvent[]): string | null {
+  const pendingApprovals = new Set<string>();
+  const openAgents = new Set<string>();
+  for (const event of events) {
+    if (event.type === "approval_requested") pendingApprovals.add(event.request.id);
+    if (event.type === "approval_resolved") pendingApprovals.delete(event.id);
+    if (event.type === "tool_call_start" && /(^|__)agent$/i.test(event.name)) openAgents.add(event.id);
+    if (event.type === "tool_call_result") openAgents.delete(event.id);
+    if (event.type === "turn_end" || event.type === "error") {
+      pendingApprovals.clear();
+      openAgents.clear();
+    }
+  }
+  if (pendingApprovals.size) return "仍有等待處理的權限確認，請先允許或拒絕";
+  if (openAgents.size) return "仍有背景 Agent 執行中，請等待完成或先中止任務";
+  return null;
+}
+
+function setHandoff(worker: Worker, progress: HandoffProgress, summary: HandoffSummary | null = null): void {
+  worker.handoff = progress;
+  store.saveProviderHandoff(worker.id, progress, summary);
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+async function workspaceGitState(workspacePath: string): Promise<string> {
+  try {
+    const [branch, head, status] = await Promise.all([
+      execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
+      execFileAsync("git", ["rev-parse", "--short", "HEAD"], { cwd: workspacePath, timeout: 5_000 }),
+      execFileAsync("git", ["status", "--short"], { cwd: workspacePath, timeout: 5_000, maxBuffer: 200_000 }),
+    ]);
+    return `branch: ${branch.stdout.trim()}\nHEAD: ${head.stdout.trim()}\n${status.stdout.trim()}`.trim();
+  } catch {
+    return "目前工作位置不是可讀取的 Git repository，請接手後自行確認檔案狀態。";
+  }
+}
+
+function detachedRunner(
+  provider: ProviderId,
+  workspacePath: string,
+  model: string | null,
+  initialState: { sessionId: string; completedTurns: number } | undefined,
+  onEvent: (event: RunnerEvent) => void,
+  persona: Persona | null,
+): AgentSession {
+  const runner: AgentSession = provider === "codex"
+    ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), initialState)
+    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), initialState);
+  if (model && validModel(provider, model)) runner.setModel(model);
+  return runner;
+}
+
+function runDetachedTurn(
+  provider: ProviderId,
+  workspacePath: string,
+  model: string | null,
+  initialState: { sessionId: string; completedTurns: number } | undefined,
+  persona: Persona | null,
+  prompt: string,
+  timeoutMs = 60_000,
+): Promise<{ text: string; state: { sessionId: string; completedTurns: number } }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    let runner: AgentSession | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let streamedText = "";
+    const finish = (error?: Error, text = "") => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      const state = runner?.getPersistenceState();
+      runner?.stop();
+      if (error) rejectPromise(error);
+      else if (!state) rejectPromise(new Error("無法建立 LLM 交接工作階段"));
+      else resolvePromise({ text, state });
+    };
+    runner = detachedRunner(provider, workspacePath, model, initialState, (event) => {
+      if (event.type === "text_delta") streamedText += event.text;
+      else if (event.type === "approval_requested") finish(new Error("交接整理意外要求工具權限"));
+      else if (event.type === "error") finish(new Error(event.message));
+      else if (event.type === "turn_end") {
+        if (event.isError) finish(new Error(event.resultText || "LLM 交接回合失敗"));
+        else {
+          const result = (event.resultText || streamedText).trim();
+          if (!result) finish(new Error("LLM 沒有回傳交接內容"));
+          else finish(undefined, result);
+        }
+      }
+    }, persona);
+    timer = setTimeout(() => finish(new Error("LLM 交接逾時")), timeoutMs);
+    try {
+      runner.send(prompt);
+    } catch (error) {
+      finish(error as Error);
+    }
+  });
+}
+
+async function performProviderHandoff(worker: Worker, progress: HandoffProgress): Promise<void> {
+  const sourceProvider = progress.fromProvider;
+  const sourceModel = worker.runner.getModel() ?? null;
+  const workspacePath = worker.runner.workspacePath;
+  const sourceName = worker.runner.name;
+  let sourceState = worker.runner.getPersistenceState();
+  let summary: HandoffSummary | null = null;
+  let source: HandoffProgress["source"] = "agent";
+
+  try {
+    const gitState = await workspaceGitState(workspacePath);
+    const localSummary = buildLocalHandoff(worker.history, gitState);
+    const hasHistory = worker.history.some((event) => event.type === "user_message");
+    worker.runner.stop();
+
+    if (hasHistory) {
+      setHandoff(worker, { ...progress, stage: "summarizing", message: `請 ${providerLabel(sourceProvider)} 整理工作大綱`, source: null });
+      const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
+      const sourceUsageError = usageBlockReason(sourceProvider, sourceUsage, sourceModel);
+      try {
+        if (sourceUsageError) throw new Error(sourceUsageError);
+        const result = await runDetachedTurn(
+          sourceProvider,
+          workspacePath,
+          sourceModel,
+          sourceState,
+          worker.persona,
+          summaryPrompt(worker.history, localSummary),
+        );
+        sourceState = result.state;
+        summary = parseHandoffSummary(result.text);
+        if (!summary) throw new Error("來源 LLM 沒有回傳有效的交接格式");
+      } catch (error) {
+        source = "local_fallback";
+        summary = localSummary;
+        setHandoff(worker, { ...progress, stage: "fallback", message: `來源 LLM 無法整理，改用本機任務紀錄：${(error as Error).message}`, source });
+      }
+    } else {
+      source = "local_fallback";
+      summary = localSummary;
+    }
+
+    store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState);
+    setHandoff(worker, { ...progress, stage: "bootstrapping", message: `${providerLabel(progress.toProvider)} 正在讀取交接資料`, source });
+    const checkpoint = store.loadProviderCheckpoint(worker.id, progress.toProvider, workspacePath);
+    const targetModel = progress.toModel || checkpoint?.model || null;
+    const targetResult = await runDetachedTurn(
+      progress.toProvider,
+      workspacePath,
+      targetModel,
+      checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
+      worker.persona,
+      bootstrapPrompt(summary, recentConversation(worker.history), sourceProvider),
+    );
+    store.saveProviderCheckpoint(worker.id, progress.toProvider, workspacePath, targetModel, targetResult.state);
+
+    const targetRunner = createRunner(worker, progress.toProvider, workspacePath, targetResult.state);
+    targetRunner.name = sourceName;
+    if (targetModel) targetRunner.setModel(targetModel);
+    worker.runner = targetRunner;
+    if (providerReady(progress.toProvider)) targetRunner.warmup();
+    const completed = { ...progress, stage: "completed" as const, message: `${providerLabel(progress.toProvider)} 已接手`, source, error: null };
+    worker.handoff = completed;
+    if (!persistWorker(worker)) throw new Error("無法保存新的 LLM 工作階段");
+    store.saveProviderHandoff(worker.id, completed, summary);
+    record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
+    record(worker, { type: "text_delta", text: `${summaryMarkdown(summary)}\n\n**接手確認**\n${targetResult.text}` });
+    record(worker, { type: "turn_end", resultText: `${summaryMarkdown(summary)}\n\n接手確認：${targetResult.text}`, costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+    if (progress.toProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+    else void codexCapabilitiesFor(workspacePath).refresh();
+  } catch (error) {
+    const restored = createRunner(worker, sourceProvider, workspacePath, sourceState);
+    restored.name = sourceName;
+    if (sourceModel) restored.setModel(sourceModel);
+    worker.runner = restored;
+    if (providerReady(sourceProvider)) restored.warmup();
+    const failed = { ...progress, stage: "failed" as const, message: "交接失敗，已恢復原本的 LLM", source, error: (error as Error).message };
+    worker.handoff = failed;
+    persistWorker(worker);
+    store.saveProviderHandoff(worker.id, failed, summary);
+    record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
+    record(worker, { type: "error", message: `交接失敗，已恢復 ${providerLabel(sourceProvider)}：${(error as Error).message}` });
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  }
 }
 
 wss.on("connection", (socket) => {
@@ -538,6 +746,10 @@ app.patch("/api/workers/:id", (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
+  if (handoffInProgress(worker)) {
+    res.status(409).json({ error: "NPC 正在進行 LLM 交接，暫時不能改名" });
+    return;
+  }
   const name = String(req.body?.name ?? "").trim();
   if (!name) {
     res.status(400).json({ error: "名稱不能是空白" });
@@ -694,29 +906,131 @@ app.patch("/api/workers/:id/provider", (req, res) => {
     res.json(workerSummary(worker));
     return;
   }
-  if (worker.runner.busy) {
-    res.status(409).json({ error: "NPC 執行中，不能切換類型" });
-    return;
-  }
-  if (worker.history.some((event) => event.type === "user_message")) {
-    res.status(409).json({ error: "已有對話的 NPC 不能直接切換類型，請建立新的 NPC" });
-    return;
-  }
+  res.status(409).json({ error: "切換 LLM 必須先檢查工作能量並確認交接風險，請使用交接流程" });
+});
 
-  const name = worker.runner.name;
-  const workspacePath = worker.runner.workspacePath;
-  worker.runner.stop();
-  worker.history = [];
-  store.clearWorkerEvents(worker.id);
-  worker.runner = createRunner(worker, provider, workspacePath);
-  worker.runner.name = name;
-  if (providerReady(provider)) worker.runner.warmup();
-  persistWorker(worker);
-  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
-  else void codexCapabilitiesFor(workspacePath).refresh();
-  const summary = workerSummary(worker);
-  broadcast({ type: "worker_updated", worker: summary });
-  res.json(summary);
+type PreparedHandoff = {
+  workerId: string;
+  fromProvider: ProviderId;
+  sourceSessionId: string;
+  historyLength: number;
+  toProvider: ProviderId;
+  toModel: string | null;
+  expiresAt: number;
+};
+const preparedHandoffs = new Map<string, PreparedHandoff>();
+
+app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const toProvider: ProviderId = req.body?.toProvider === "codex" ? "codex" : "claude";
+  const toModel = typeof req.body?.toModel === "string" && req.body.toModel.trim() ? req.body.toModel.trim() : null;
+  if (toModel && !validModel(toProvider, toModel)) {
+    res.status(400).json({ error: "目標模型名稱格式無效" });
+    return;
+  }
+  if (toProvider === worker.runner.provider) {
+    res.status(400).json({ error: "已經是目前的 LLM" });
+    return;
+  }
+  if (worker.runner.busy || handoffInProgress(worker)) {
+    res.status(409).json({ error: "NPC 正在工作或交接中，請完成後再切換" });
+    return;
+  }
+  const activityBlock = handoffActivityBlock(worker.history);
+  if (activityBlock) {
+    res.status(409).json({ error: activityBlock });
+    return;
+  }
+  if (!providerReady(toProvider)) {
+    res.status(409).json({ error: `無法切換至 ${providerLabel(toProvider)}：尚未登入`, auth: authStates[toProvider] });
+    return;
+  }
+  const usage = await usageRegistry.refresh(toProvider, true);
+  const usageError = usageBlockReason(toProvider, usage, toModel);
+  if (usageError) {
+    res.status(409).json({ error: `無法切換至 ${providerLabel(toProvider)}：${usageError}`, usage });
+    return;
+  }
+  const handoffToken = randomUUID();
+  for (const [existingToken, existing] of preparedHandoffs) {
+    if (existing.expiresAt < Date.now()) preparedHandoffs.delete(existingToken);
+  }
+  preparedHandoffs.set(handoffToken, {
+    workerId: worker.id,
+    fromProvider: worker.runner.provider,
+    sourceSessionId: worker.runner.getPersistenceState().sessionId,
+    historyLength: worker.history.length,
+    toProvider,
+    toModel,
+    expiresAt: Date.now() + 120_000,
+  });
+  res.json({
+    handoffToken,
+    fromProvider: worker.runner.provider,
+    toProvider,
+    toModel,
+    usage,
+    hasHistory: worker.history.some((event) => event.type === "user_message"),
+    warnings: [
+      "這會建立新的目標 LLM session，不是搬移原生 session。",
+      "MCP、工具進度、背景 Agent 與待核准操作不會直接繼承。",
+      "交接摘要可能遺漏或誤解細節，重要決策請再次確認。",
+      "整理與接手都會消耗 LLM 工作能量。",
+    ],
+  });
+});
+
+app.post("/api/workers/:id/handoff", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const token = String(req.body?.handoffToken ?? "");
+  const prepared = preparedHandoffs.get(token);
+  preparedHandoffs.delete(token);
+  if (!prepared || prepared.workerId !== worker.id || prepared.expiresAt < Date.now()) {
+    res.status(409).json({ error: "切換確認已過期，請重新檢查工作能量" });
+    return;
+  }
+  if (worker.runner.provider !== prepared.fromProvider || worker.runner.getPersistenceState().sessionId !== prepared.sourceSessionId || worker.history.length !== prepared.historyLength) {
+    res.status(409).json({ error: "準備完成後工作狀態已改變，請重新檢查並確認交接" });
+    return;
+  }
+  if (req.body?.warningAcknowledged !== true) {
+    res.status(400).json({ error: "必須先確認跨 LLM 交接風險" });
+    return;
+  }
+  if (worker.runner.busy) {
+    res.status(409).json({ error: "NPC 正在工作，不能開始交接" });
+    return;
+  }
+  const id = randomUUID();
+  const progress: HandoffProgress = {
+    id,
+    fromProvider: worker.runner.provider,
+    toProvider: prepared.toProvider,
+    toModel: prepared.toModel,
+    stage: "checking",
+    message: "正在確認工作狀態",
+    source: null,
+    error: null,
+  };
+  setHandoff(worker, progress);
+  void performProviderHandoff(worker, progress);
+  res.status(202).json({ handoff: progress });
+});
+
+app.get("/api/workers/:id/handoffs", (req, res) => {
+  if (!workers.has(req.params.id)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  res.json({ handoffs: store.listProviderHandoffs(req.params.id) });
 });
 
 app.patch("/api/workers/:id/workspace", (req, res) => {
@@ -725,7 +1039,7 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (worker.runner.busy) {
+  if (worker.runner.busy || handoffInProgress(worker)) {
     res.status(409).json({ error: "NPC 執行中，不能切換工作位置" });
     return;
   }
@@ -779,6 +1093,10 @@ app.delete("/api/workers/:id", async (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
+  if (handoffInProgress(worker)) {
+    res.status(409).json({ error: "NPC 正在進行 LLM 交接，暫時不能移除" });
+    return;
+  }
   worker.runner.stop();
   const avatarId = worker.avatarId;
   workers.delete(worker.id);
@@ -801,6 +1119,10 @@ app.post("/api/workers/:id/message", (req, res) => {
   }
   if (worker.runner.busy) {
     res.status(409).json({ error: "worker busy" });
+    return;
+  }
+  if (handoffInProgress(worker)) {
+    res.status(409).json({ error: "NPC 正在進行 LLM 交接，請等待完成" });
     return;
   }
   const message = String(req.body?.message ?? "").trim();
@@ -866,7 +1188,7 @@ app.post("/api/workers/:id/model", (req, res) => {
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
     return;
   }
-  if (worker.runner.busy) {
+  if (worker.runner.busy || handoffInProgress(worker)) {
     res.status(409).json({ error: "worker busy" });
     return;
   }
@@ -888,7 +1210,7 @@ app.post("/api/workers/:id/persona", (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (worker.runner.busy) {
+  if (worker.runner.busy || handoffInProgress(worker)) {
     res.status(409).json({ error: "worker busy" });
     return;
   }
@@ -1099,6 +1421,10 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
     res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  if (handoffInProgress(worker)) {
+    res.status(409).json({ error: "LLM 交接不能從一般中止按鈕取消，請等待交接完成或回滾" });
     return;
   }
   worker.runner.interrupt();

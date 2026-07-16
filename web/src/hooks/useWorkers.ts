@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, Persona, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -25,6 +25,7 @@ type ServerMessage =
         provider: ProviderId;
         workspacePath: string;
         persona: Persona | null;
+        handoff: HandoffProgress | null;
         events: RunnerEvent[];
       }>;
     }
@@ -50,6 +51,7 @@ type WorkerSummary = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
+  handoff: HandoffProgress | null;
 };
 
 function defaultAuth(
@@ -143,6 +145,7 @@ export function useWorkers() {
               w.persona ?? null,
               w.avatarKind,
               w.avatarPresetId,
+              w.handoff ?? null,
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             // A persisted running turn cannot still have a live provider
@@ -187,6 +190,7 @@ export function useWorkers() {
               data.worker.persona,
               data.worker.avatarKind,
               data.worker.avatarPresetId,
+              data.worker.handoff ?? null,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -230,6 +234,7 @@ export function useWorkers() {
                   data.worker.persona,
                   data.worker.avatarKind,
                   data.worker.avatarPresetId,
+                  data.worker.handoff ?? null,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -318,12 +323,32 @@ export function useWorkers() {
     }
   }, []);
 
-  const switchProvider = useCallback(async (
+  const prepareHandoff = useCallback(async (
     id: string,
-    provider: ProviderId,
+    toProvider: ProviderId,
+    toModel: string | null = null,
+  ): Promise<{ data?: PreparedHandoff; error?: string }> => {
+    try {
+      const data = await apiRequest<PreparedHandoff>(`/api/workers/${id}/handoff/prepare`, {
+        method: "POST",
+        body: { toProvider, toModel },
+        timeoutMs: 35_000,
+      });
+      return { data };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const startHandoff = useCallback(async (
+    id: string,
+    handoffToken: string,
   ): Promise<string | null> => {
     try {
-      await apiRequest(`/api/workers/${id}/provider`, { method: "PATCH", body: { provider } });
+      await apiRequest(`/api/workers/${id}/handoff`, {
+        method: "POST",
+        body: { handoffToken, warningAcknowledged: true },
+      });
       return null;
     } catch (error) {
       return (error as Error).message;
@@ -506,7 +531,8 @@ export function useWorkers() {
     providerUsage,
     createWorker,
     pickWorkspace,
-    switchProvider,
+    prepareHandoff,
+    startHandoff,
     switchWorkspace,
     closeWorker,
     renameWorker,

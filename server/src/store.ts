@@ -5,6 +5,7 @@ import type { RunnerEvent } from "./claudeRunner.js";
 import type { CapabilityState } from "./capabilities.js";
 import type { ProviderId } from "./providers/types.js";
 import { type Persona, type PersonaTemplate, parsePersona, serializePersona } from "./persona.js";
+import type { HandoffProgress } from "./handoff.js";
 
 export type PersistedWorker = {
   id: string;
@@ -95,6 +96,40 @@ export class LocalStore {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS provider_handoffs (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+        from_provider TEXT NOT NULL,
+        to_provider TEXT NOT NULL,
+        to_model TEXT,
+        status TEXT NOT NULL,
+        source TEXT,
+        summary_json TEXT,
+        warning_acknowledged_at TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS provider_handoffs_worker_created
+        ON provider_handoffs(worker_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS provider_checkpoints (
+        worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        workspace_path TEXT,
+        model TEXT,
+        session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (worker_id, provider)
+      );
+    `);
+    this.db.exec(`
+      UPDATE provider_handoffs
+      SET status = 'failed', error = COALESCE(error, '伺服器重啟，交接已中止'), completed_at = CURRENT_TIMESTAMP
+      WHERE status IN ('checking', 'summarizing', 'fallback', 'bootstrapping')
     `);
     try {
       this.db.exec("ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
@@ -126,6 +161,11 @@ export class LocalStore {
       this.db.exec("ALTER TABLE workers ADD COLUMN persona TEXT");
     } catch {
       // Existing databases already migrated to persona-aware workers.
+    }
+    try {
+      this.db.exec("ALTER TABLE provider_checkpoints ADD COLUMN workspace_path TEXT");
+    } catch {
+      // Existing databases already migrated to workspace-scoped checkpoints.
     }
     this.restrictDatabasePermissions();
   }
@@ -336,6 +376,87 @@ export class LocalStore {
     this.safeWrite("delete persona template", () => {
       this.db.prepare("DELETE FROM persona_templates WHERE id = ?").run(id);
     });
+  }
+
+  saveProviderHandoff(workerId: string, progress: HandoffProgress, summary: unknown = null): boolean {
+    return this.safeWrite("save provider handoff", () => {
+      const terminal = progress.stage === "completed" || progress.stage === "failed";
+      this.db.prepare(`
+        INSERT INTO provider_handoffs (
+          id, worker_id, from_provider, to_provider, to_model, status, source,
+          summary_json, warning_acknowledged_at, error, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          status = excluded.status,
+          source = excluded.source,
+          summary_json = COALESCE(excluded.summary_json, provider_handoffs.summary_json),
+          error = excluded.error,
+          completed_at = excluded.completed_at
+      `).run(
+        progress.id,
+        workerId,
+        progress.fromProvider,
+        progress.toProvider,
+        progress.toModel,
+        progress.stage,
+        progress.source,
+        summary == null ? null : JSON.stringify(summary),
+        progress.error,
+        terminal ? new Date().toISOString() : null,
+      );
+    });
+  }
+
+  listProviderHandoffs(workerId: string, limit = 20): Array<Record<string, unknown>> {
+    return this.db.prepare(`
+      SELECT id, from_provider, to_provider, to_model, status, source, summary_json, error, created_at, completed_at
+      FROM provider_handoffs WHERE worker_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `).all(workerId, Math.max(1, Math.min(100, limit))) as Array<Record<string, unknown>>;
+  }
+
+  loadLatestFailedHandoff(workerId: string): HandoffProgress | null {
+    const row = this.db.prepare(`
+      SELECT id, from_provider, to_provider, to_model, status, source, error
+      FROM provider_handoffs WHERE worker_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(workerId) as Record<string, unknown> | undefined;
+    if (!row || row.status !== "failed") return null;
+    return {
+      id: String(row.id),
+      fromProvider: row.from_provider === "codex" ? "codex" : "claude",
+      toProvider: row.to_provider === "codex" ? "codex" : "claude",
+      toModel: row.to_model == null ? null : String(row.to_model),
+      stage: "failed",
+      message: "上次 LLM 交接未完成，已保留原本的工作階段",
+      source: row.source === "agent" ? "agent" : row.source === "local_fallback" ? "local_fallback" : null,
+      error: row.error == null ? "交接未完成" : String(row.error),
+    };
+  }
+
+  saveProviderCheckpoint(workerId: string, provider: ProviderId, workspacePath: string, model: string | null, state: { sessionId: string; completedTurns: number }): boolean {
+    return this.safeWrite("save provider checkpoint", () => {
+      this.db.prepare(`
+        INSERT INTO provider_checkpoints (worker_id, provider, workspace_path, model, session_id, completed_turns, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(worker_id, provider) DO UPDATE SET
+          workspace_path = excluded.workspace_path,
+          model = excluded.model,
+          session_id = excluded.session_id,
+          completed_turns = excluded.completed_turns,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(workerId, provider, workspacePath, model, state.sessionId, state.completedTurns);
+    });
+  }
+
+  loadProviderCheckpoint(workerId: string, provider: ProviderId, workspacePath: string): { model: string | null; sessionId: string; completedTurns: number } | null {
+    const row = this.db.prepare(`
+      SELECT model, session_id, completed_turns FROM provider_checkpoints
+      WHERE worker_id = ? AND provider = ? AND workspace_path = ?
+    `).get(workerId, provider, workspacePath) as Record<string, unknown> | undefined;
+    return row ? {
+      model: row.model == null ? null : String(row.model),
+      sessionId: String(row.session_id),
+      completedTurns: Number(row.completed_turns),
+    } : null;
   }
 
   private flushEvents(): void {

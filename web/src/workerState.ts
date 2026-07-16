@@ -78,6 +78,7 @@ export function emptyWorker(
   persona: WorkerState["persona"] = null,
   avatarKind: WorkerState["avatarKind"] = avatarId ? "custom" : "preset",
   avatarPresetId = "classic",
+  handoff: WorkerState["handoff"] = null,
 ): WorkerState {
   return {
     id,
@@ -91,6 +92,7 @@ export function emptyWorker(
     provider,
     workspacePath,
     persona,
+    handoff,
     turns: [],
     character: INITIAL_CHARACTER,
     subagents: [],

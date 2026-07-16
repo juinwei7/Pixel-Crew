@@ -25,11 +25,12 @@ type VisualWorker = {
 
 function visualWorkers(workers: WorkerState[], activeId: string | null): VisualWorker[] {
   return workers.flatMap((worker) => {
+    const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
     const parent: VisualWorker = {
       id: worker.id,
       selectId: worker.id,
       name: worker.name,
-      character: worker.character,
+      character: handingOff ? { ...worker.character, activity: "thinking", station: "home", speech: "LLM 交接中…" } : worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
       avatarId: worker.avatarId,

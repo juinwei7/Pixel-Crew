@@ -140,6 +140,27 @@ export type ProviderUsageState = {
   error: string | null;
 };
 
+export type HandoffProgress = {
+  id: string;
+  fromProvider: ProviderId;
+  toProvider: ProviderId;
+  toModel: string | null;
+  stage: "checking" | "summarizing" | "fallback" | "bootstrapping" | "completed" | "failed";
+  message: string;
+  source: "agent" | "local_fallback" | null;
+  error: string | null;
+};
+
+export type PreparedHandoff = {
+  handoffToken: string;
+  fromProvider: ProviderId;
+  toProvider: ProviderId;
+  toModel: string | null;
+  usage: ProviderUsageState;
+  hasHistory: boolean;
+  warnings: string[];
+};
+
 export type Persona = {
   role: string;
   instructions: string;
@@ -162,6 +183,7 @@ export type WorkerState = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
+  handoff: HandoffProgress | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

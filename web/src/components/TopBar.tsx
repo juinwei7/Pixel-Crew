@@ -79,7 +79,7 @@ export function TopBar({
         <span className="top-bar__group-label">AGENT</span>
         <select
           value={provider}
-          disabled={Boolean(active?.busy) || (workerCount >= 20 && Boolean(active?.turns.length))}
+          disabled={Boolean(active?.busy)}
           onChange={(event) => onProvider(event.target.value as ProviderId)}
           aria-label="選擇 Agent provider"
         >
