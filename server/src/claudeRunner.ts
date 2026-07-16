@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import type { AgentSession } from "./providers/session.js";
+import type { AgentSession, MessageImage } from "./providers/session.js";
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
@@ -155,13 +155,13 @@ export class ClaudeSession implements AgentSession {
     };
   }
 
-  send(text: string): void {
+  send(text: string, images: MessageImage[] = []): void {
     this.busy = true;
     const child = this.ensureChild();
     const line =
       JSON.stringify({
         type: "user",
-        message: { role: "user", content: [{ type: "text", text }] },
+        message: { role: "user", content: claudeMessageContent(text, images) },
       }) + "\n";
     child.stdin.write(line);
   }
@@ -328,6 +328,18 @@ export class ClaudeSession implements AgentSession {
     }
     this.pendingApprovals.clear();
   }
+}
+
+export function claudeMessageContent(text: string, images: MessageImage[]): Array<Record<string, unknown>> {
+  const content: Array<Record<string, unknown>> = [];
+  if (text.trim()) content.push({ type: "text", text });
+  for (const image of images) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: image.mimeType, data: image.dataBase64 },
+    });
+  }
+  return content;
 }
 
 function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {

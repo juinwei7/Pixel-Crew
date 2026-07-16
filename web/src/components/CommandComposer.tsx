@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CapabilityState, ProviderId, WorkerState } from "../types";
+import type { CapabilityState, CommandSubmission, MessageImagePayload, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
 import { deriveCommandHistory } from "../commandHistory";
 import { composerEnterAction, mergePaletteNames } from "../commandInteraction";
 
 type PaletteItem = { key: string; label: string; description: string; value: string; kind: "recent" | "project" };
 type LibraryEntry = { name: string; description: string; argumentHint?: string };
+type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
+type QueuedCommand = { text: string; images: ComposerImage[] };
+
+const MAX_IMAGES = 4;
+const MAX_QUEUED_COMMANDS = 10;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 type Props = {
   active?: WorkerState;
@@ -15,7 +23,7 @@ type Props = {
   authReady: boolean;
   paletteOpen: boolean;
   onPaletteOpen(open: boolean): void;
-  onSubmit(text: string): Promise<string | null>;
+  onSubmit(command: CommandSubmission): Promise<string | null>;
   onInterrupt(): void;
   onManage(): void;
 };
@@ -25,10 +33,16 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [selected, setSelected] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [error, setError] = useState<string | null>(null);
+  const [images, setImages] = useState<ComposerImage[]>([]);
+  const [queued, setQueued] = useState<QueuedCommand[]>([]);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const wasBusyRef = useRef(Boolean(active?.busy));
+  const dispatchingQueuedRef = useRef(false);
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
   // True while an IME (e.g. 注音/拼音) is mid-composition, so Enter confirms a
   // candidate instead of submitting a half-typed message.
   const composingRef = useRef(false);
@@ -81,6 +95,37 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     }
   }, [paletteOpen]);
 
+  // Keep the composer ready for a follow-up message and automatically send
+  // the next queued command once the worker returns to idle.
+  useEffect(() => {
+    const busy = Boolean(active?.busy);
+    if (wasBusyRef.current && !busy && authReady) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+    wasBusyRef.current = busy;
+  }, [active?.busy, authReady]);
+
+  useEffect(() => {
+    if (active?.busy || !authReady || queued.length === 0 || dispatchingQueuedRef.current) return;
+    const next = queued[0];
+    dispatchingQueuedRef.current = true;
+    setQueued((commands) => commands.slice(1));
+    void onSubmitRef.current({ text: next.text, images: next.images.map(imagePayload) })
+      .then((message) => {
+        if (message) {
+          setError(message);
+          setDraft((current) => current || next.text);
+          setImages((current) => current.length ? current : next.images);
+        }
+      })
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "排隊訊息送出失敗");
+        setDraft((current) => current || next.text);
+        setImages((current) => current.length ? current : next.images);
+      })
+      .finally(() => { dispatchingQueuedRef.current = false; });
+  }, [active?.busy, authReady, queued]);
+
   useEffect(() => {
     if (!paletteOpen) return;
     const closeOutside = (event: PointerEvent) => {
@@ -109,22 +154,79 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
 
   async function submit() {
     if (!active) return;
-    if (active.busy) {
-      onInterrupt();
-      return;
-    }
     if (paletteOpen) return;
     const text = draft.trim();
-    if (!text) return;
+    const command = { text, images };
+    if (active.busy || dispatchingQueuedRef.current) {
+      if (!text && images.length === 0) {
+        onInterrupt();
+        return;
+      }
+      if (queued.length >= MAX_QUEUED_COMMANDS) {
+        setError(`等待佇列最多 ${MAX_QUEUED_COMMANDS} 項`);
+        return;
+      }
+      setDraft("");
+      setImages([]);
+      setError(null);
+      setQueued((commands) => [...commands, command]);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+    if (!text && images.length === 0) return;
     setDraft("");
+    setImages([]);
     onPaletteOpen(false);
-    const message = await onSubmit(text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    const message = await onSubmit({ text, images: images.map(imagePayload) });
     setError(message);
-    if (message) setDraft(text);
+    if (message) {
+      setDraft((current) => current || text);
+      setImages((current) => current.length ? current : images);
+    }
   }
 
+  async function attachPastedImages(files: File[]) {
+    const candidates = files.filter((file) => file.type.startsWith("image/"));
+    if (candidates.length === 0) return;
+    const slots = MAX_IMAGES - images.length;
+    if (slots <= 0 || candidates.length > slots) {
+      setError(`每則訊息最多 ${MAX_IMAGES} 張圖片`);
+      return;
+    }
+    if (candidates.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type))) {
+      setError("只支援 PNG、JPEG 與 WebP 圖片");
+      return;
+    }
+    if (candidates.some((file) => file.size > MAX_IMAGE_BYTES)) {
+      setError("每張圖片不可超過 5 MiB");
+      return;
+    }
+    if (images.reduce((sum, image) => sum + image.size, 0) + candidates.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) {
+      setError("圖片總大小不可超過 10 MiB");
+      return;
+    }
+    try {
+      const added = await Promise.all(candidates.map(readComposerImage));
+      setImages((current) => [...current, ...added]);
+      setError(null);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } catch {
+      setError("無法讀取剪貼簿圖片");
+    }
+  }
+
+  const hasContent = Boolean(draft.trim() || images.length);
+
   return (
-    <form ref={formRef} className="command-composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <form ref={formRef} className={`command-composer ${images.length ? "command-composer--attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      {images.length > 0 && <div className="command-composer__attachments" aria-label="待傳送圖片">
+        {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
+          <img src={image.previewUrl} alt={`圖片 ${index + 1}：${image.name}`} />
+          <span>IMG {index + 1}</span>
+          <button type="button" aria-label={`移除圖片 ${index + 1}`} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button>
+        </div>)}
+      </div>}
       {paletteOpen && (
         <div className="command-palette" role="listbox" aria-label={`${provider} 指令面板`}>
           <div className="command-palette__head"><span>{provider === "claude" ? "CLAUDE COMMANDS" : "CODEX WORKFLOWS"}</span><kbd>Esc</kbd></div>
@@ -149,9 +251,17 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         value={draft}
         rows={1}
         spellCheck={false}
-        disabled={!active || active.busy || !authReady}
-        placeholder={active?.busy ? `${active.name} 執勤中…` : `對 ${active?.name ?? "…"} 下指令（Shift+Enter 換行）`}
+        disabled={!active || !authReady}
+        aria-busy={Boolean(active?.busy)}
+        placeholder={active?.busy ? `${active.name} 執勤中，可輸入或貼圖排隊…` : `對 ${active?.name ?? "…"} 下指令（可貼上圖片）`}
         aria-label="輸入 Agent 指令"
+        onPaste={(event) => {
+          const files = Array.from(event.clipboardData.items).map((item) => item.kind === "file" ? item.getAsFile() : null).filter((file): file is File => Boolean(file));
+          if (files.some((file) => file.type.startsWith("image/"))) {
+            event.preventDefault();
+            void attachPastedImages(files);
+          }
+        }}
         onCompositionStart={() => { composingRef.current = true; }}
         onCompositionEnd={() => { composingRef.current = false; }}
         onChange={(event) => {
@@ -200,9 +310,32 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         }}
       />
       {error && <span className="command-composer__error" role="alert">{error}</span>}
-      <button className={`command-composer__submit ${active?.busy ? "command-composer__submit--stop" : ""}`} type="submit" disabled={!active || !authReady || (!active.busy && !draft.trim())}>
-        {active?.busy ? "中止" : "執行"}
+      {queued.length > 0 && <span className="command-composer__queue" role="status">等待 {queued.length}</span>}
+      <button className={`command-composer__submit ${active?.busy && !hasContent ? "command-composer__submit--stop" : ""}`} type="submit" disabled={!active || !authReady || (!active.busy && !hasContent)}>
+        {active?.busy ? (hasContent ? "排隊" : "中止") : "執行"}
       </button>
     </form>
   );
+}
+
+function imagePayload(image: ComposerImage): MessageImagePayload {
+  return { name: image.name, mimeType: image.mimeType, dataBase64: image.dataBase64 };
+}
+
+async function readComposerImage(file: File): Promise<ComposerImage> {
+  const previewUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("invalid image"));
+    reader.onerror = () => reject(reader.error ?? new Error("image read failed"));
+    reader.readAsDataURL(file);
+  });
+  const dataBase64 = previewUrl.slice(previewUrl.indexOf(",") + 1);
+  return {
+    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+    name: file.name || `clipboard-${Date.now()}`,
+    mimeType: file.type as ComposerImage["mimeType"],
+    dataBase64,
+    previewUrl,
+    size: file.size,
+  };
 }

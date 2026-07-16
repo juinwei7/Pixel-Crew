@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -426,11 +426,12 @@ export function useWorkers() {
     }
   }, []);
 
-  const send = useCallback(async (id: string, message: string): Promise<string | null> => {
+  const send = useCallback(async (id: string, command: CommandSubmission): Promise<string | null> => {
     try {
       await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
         method: "POST",
-        body: { message },
+        body: { message: command.text, images: command.images },
+        timeoutMs: 30000,
       });
       return null;
     } catch (error) {

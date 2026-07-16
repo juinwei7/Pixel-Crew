@@ -3949,6 +3949,15 @@ body {
 .command-composer__submit { min-width: 70px; min-height: 34px; border: 1px solid rgba(55,214,163,.26); border-radius: 9px; background: rgba(55,214,163,.12); color: #80e6bf; cursor: pointer; }
 .command-composer__submit:disabled { opacity: .35; cursor: default; }
 .command-composer__submit--stop { border-color: rgba(255,92,122,.35); background: rgba(255,92,122,.12); color: #ff8fa5; }
+.command-composer__queue { flex: none; padding: 4px 7px; border: 1px solid rgba(255,203,91,.2); border-radius: 999px; background: rgba(255,203,91,.07); color: #e4bd63; font: 700 9px var(--mono); white-space: nowrap; }
+.command-composer__attachments { position: absolute; right: 10px; bottom: calc(100% + 8px); left: 10px; display: flex; gap: 7px; pointer-events: none; }
+.command-composer__attachment { position: relative; width: 62px; height: 62px; overflow: hidden; border: 1px solid rgba(77,227,255,.32); border-radius: 10px; background: rgba(5,11,23,.96); box-shadow: 0 10px 28px rgba(0,0,0,.32); pointer-events: auto; }
+.command-composer__attachment img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.command-composer__attachment span { position: absolute; right: 4px; bottom: 4px; padding: 2px 4px; border-radius: 4px; background: rgba(2,7,16,.82); color: #bceefa; font: 700 7px var(--mono); }
+.command-composer__attachment button { position: absolute; top: 3px; right: 3px; width: 19px; height: 19px; padding: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; background: rgba(5,10,20,.88); color: #d8e7f8; cursor: pointer; line-height: 16px; }
+.command-composer__attachment button:hover { border-color: rgba(255,92,122,.5); color: #ff8fa5; }
+.command-composer--attachments .command-palette { bottom: calc(100% + 78px); }
+.command-composer--attachments .command-composer__error { bottom: calc(100% + 78px); }
 .command-composer__error { position: absolute; right: 88px; bottom: calc(100% + 7px); max-width: 420px; padding: 7px 9px; border: 1px solid rgba(255,92,122,.28); border-radius: 7px; background: rgba(30,8,17,.96); color: #ff9aae; font-size: 10px; }
 .command-palette { position: absolute; right: 0; bottom: calc(100% + 9px); left: 0; overflow: hidden; border: 1px solid rgba(77,227,255,.22); border-radius: 14px; background: rgba(7,13,26,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); }
 .command-palette__head { display: flex; justify-content: space-between; padding: 10px 13px; border-bottom: 1px solid rgba(255,255,255,.06); color: rgba(77,227,255,.7); font: 700 8px var(--mono); letter-spacing: .17em; }

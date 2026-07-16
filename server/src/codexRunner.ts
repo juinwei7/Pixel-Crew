@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
-import type { AgentSession } from "./providers/session.js";
+import type { AgentSession, MessageImage } from "./providers/session.js";
 
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
@@ -34,6 +34,7 @@ export class CodexSession implements AgentSession {
   private streamedReasoning = new Set<string>();
   private currentTurnId: string | null = null;
   private finalText = "";
+  private stagedInputImages = new Set<string>();
   busy = false;
   name = "";
 
@@ -56,8 +57,9 @@ export class CodexSession implements AgentSession {
     void this.ensureThread().catch((error) => console.warn("Codex app-server warmup failed:", error.message));
   }
 
-  send(text: string): void {
+  send(text: string, images: MessageImage[] = []): void {
     if (this.busy) throw new Error("codex worker busy");
+    const imagePaths = this.stageInputImages(images);
     this.busy = true;
     this.startedAt = Date.now();
     this.openTools.clear();
@@ -67,7 +69,7 @@ export class CodexSession implements AgentSession {
     void this.ensureThread()
       .then((threadId) => this.request("turn/start", {
         threadId,
-        input: [{ type: "text", text }],
+        input: codexTurnInput(text, imagePaths),
         cwd: this.workspacePath,
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
@@ -98,6 +100,7 @@ export class CodexSession implements AgentSession {
     this.currentTurnId = null;
     for (const pending of this.pendingRpc.values()) pending.reject(new Error("Codex app-server stopped"));
     this.pendingRpc.clear();
+    this.cleanupInputImages();
     this.clearPersonaFile();
   }
 
@@ -245,6 +248,7 @@ export class CodexSession implements AgentSession {
         this.completedTurns++;
         this.busy = false;
         this.currentTurnId = null;
+        this.cleanupInputImages();
         this.onEvent({
           type: "turn_end",
           resultText: this.finalText,
@@ -404,8 +408,42 @@ export class CodexSession implements AgentSession {
     this.cancelApprovals();
     this.busy = false;
     this.currentTurnId = null;
+    this.cleanupInputImages();
     this.onEvent({ type: "error", message });
   }
+
+  private stageInputImages(images: MessageImage[]): string[] {
+    if (images.length === 0) return [];
+    const directory = join(dirname(config.dbPath), "message-images");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const paths: string[] = [];
+    try {
+      for (const image of images) {
+        const extension = image.mimeType === "image/png" ? "png" : image.mimeType === "image/jpeg" ? "jpg" : "webp";
+        const path = join(directory, `.pixel-crew-message-${randomUUID()}.${extension}`);
+        writeFileSync(path, Buffer.from(image.dataBase64, "base64"), { mode: 0o600 });
+        chmodSync(path, 0o600);
+        this.stagedInputImages.add(path);
+        paths.push(path);
+      }
+      return paths;
+    } catch (error) {
+      this.cleanupInputImages();
+      throw error;
+    }
+  }
+
+  private cleanupInputImages(): void {
+    for (const path of this.stagedInputImages) rmSync(path, { force: true });
+    this.stagedInputImages.clear();
+  }
+}
+
+export function codexTurnInput(text: string, imagePaths: string[]): Array<Record<string, string>> {
+  const input: Array<Record<string, string>> = [];
+  if (text.trim()) input.push({ type: "text", text });
+  for (const path of imagePaths) input.push({ type: "localImage", path });
+  return input;
 }
 
 export function codexAppTool(item: any): { name: string; input: unknown; output: unknown; isError: boolean } | null {

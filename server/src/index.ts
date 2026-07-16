@@ -25,6 +25,7 @@ import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
 import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
+import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
 import {
   bootstrapPrompt,
   buildLocalHandoff,
@@ -44,7 +45,7 @@ const loopbackCors: CorsOptions = {
   },
 };
 app.use(cors(loopbackCors));
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({ limit: "16mb" }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({
@@ -1163,12 +1164,27 @@ app.post("/api/workers/:id/message", (req, res) => {
     return;
   }
   const message = String(req.body?.message ?? "").trim();
-  if (!message) {
-    res.status(400).json({ error: "message required" });
+  let images: ReturnType<typeof parseMessageImages>;
+  try {
+    images = parseMessageImages(req.body?.images);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof MessageImageValidationError ? error.message : "圖片附件無效" });
     return;
   }
-  record(worker, { type: "user_message", text: message });
-  worker.runner.send(message);
+  if (!message && images.length === 0) {
+    res.status(400).json({ error: "message or image required" });
+    return;
+  }
+  const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
+  record(worker, { type: "user_message", text: [message, imageLabels].filter(Boolean).join("\n") });
+  try {
+    worker.runner.send(message, images);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "無法傳送圖片訊息";
+    record(worker, { type: "error", message: detail });
+    res.status(500).json({ error: detail });
+    return;
+  }
   broadcast({ type: "worker_status", workerId: worker.id, busy: true });
   res.json({ ok: true });
 });

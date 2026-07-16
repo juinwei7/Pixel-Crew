@@ -237,7 +237,7 @@ export function App() {
         authReady={activeAuth.status === "authenticated"}
         paletteOpen={commandPaletteOpen}
         onPaletteOpen={setCommandPaletteOpen}
-        onSubmit={(text) => activeId ? send(activeId, text) : Promise.resolve("沒有可用的人員")}
+        onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
         onInterrupt={() => {
           if (!activeId) return;
           void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
@@ -245,7 +245,7 @@ export function App() {
         onManage={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
       />
 
-      {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, message); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
+      {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
 
       <AuthGate auth={activeAuth} providers={auth} onRefresh={refreshAuth} onUseProvider={(provider) => void createWorker(undefined, provider, activeWorkspace)} />
 

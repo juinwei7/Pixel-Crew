@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCodexArgs, codexAppTool, codexChildEnv, codexPersonaConfig, codexTool } from "../src/codexRunner.js";
+import { buildCodexArgs, codexAppTool, codexChildEnv, codexPersonaConfig, codexTool, codexTurnInput } from "../src/codexRunner.js";
 
 test("builds first-turn and resume Codex commands with stable option ordering", () => {
   assert.deepEqual(
@@ -88,6 +88,16 @@ test("quotes persona instruction paths for Codex config overrides", () => {
     codexPersonaConfig("C:\\Users\\test\\persona.md"),
     'model_instructions_file="C:\\\\Users\\\\test\\\\persona.md"',
   );
+});
+
+test("builds structured Codex image inputs instead of prompt placeholders", () => {
+  assert.deepEqual(codexTurnInput("inspect this", ["/tmp/screenshot.png"]), [
+    { type: "text", text: "inspect this" },
+    { type: "localImage", path: "/tmp/screenshot.png" },
+  ]);
+  assert.deepEqual(codexTurnInput("", ["C:\\Temp\\shot.jpg"]), [
+    { type: "localImage", path: "C:\\Temp\\shot.jpg" },
+  ]);
 });
 
 test("normalizes app-server command, MCP, and collab-agent items", () => {

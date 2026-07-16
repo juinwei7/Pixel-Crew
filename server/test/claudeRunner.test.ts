@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { approvalBridgeLaunch, ClaudeSession, type RunnerEvent } from "../src/claudeRunner.js";
+import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, type RunnerEvent } from "../src/claudeRunner.js";
 
 test("approval MCP bridge starts outside the Pixel Crew working directory", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pixel-crew-approval-cwd-"));
@@ -93,4 +93,11 @@ test("rejects bare or cross-tool permission suggestions", () => {
   assert.equal(session.resolveApproval(request.id, "allow_session"), false);
   session.resolveApproval(request.id, "deny");
   session.stop();
+});
+
+test("builds Claude stream-json image content blocks", () => {
+  assert.deepEqual(claudeMessageContent("這是什麼？", [{ name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=" }]), [
+    { type: "text", text: "這是什麼？" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+  ]);
 });

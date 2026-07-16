@@ -3,6 +3,17 @@ import type { StationKey } from "./stations";
 export type ProviderId = "claude" | "codex";
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
 
+export type MessageImagePayload = {
+  name: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  dataBase64: string;
+};
+
+export type CommandSubmission = {
+  text: string;
+  images: MessageImagePayload[];
+};
+
 export type ApprovalRequest = {
   id: string;
   activityId: string | null;
