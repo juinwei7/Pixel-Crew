@@ -57,6 +57,7 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
 
@@ -76,6 +77,12 @@ export function App() {
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
     setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
   }, []);
+
+  const activateNpc = useCallback((id: string) => {
+    setActiveId(id);
+    updatePreferences({ taskLogOpen: true });
+    setComposerFocusRequest((request) => request + 1);
+  }, [setActiveId, updatePreferences]);
 
   const approvalWorker = useMemo(() => workerList.find((worker) => worker.turns.some((turn) =>
     turn.items.some((item) => item.kind === "approval" && item.status === "pending")
@@ -153,7 +160,7 @@ export function App() {
 
   return (
     <div className="game-root" style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
-      <GameCanvas workers={workerList} activeId={activeId} onSelect={setActiveId} onOpenLog={() => updatePreferences({ taskLogOpen: true })} onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }} />
+      <GameCanvas workers={workerList} activeId={activeId} onSelect={activateNpc} onOpenLog={activateNpc} onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }} />
 
       <TopBar
         active={active}
@@ -244,6 +251,7 @@ export function App() {
         capabilities={activeCapabilities}
         authReady={activeAuth.status === "authenticated"}
         paletteOpen={commandPaletteOpen}
+        focusRequest={composerFocusRequest}
         onPaletteOpen={setCommandPaletteOpen}
         onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
         onInterrupt={() => {

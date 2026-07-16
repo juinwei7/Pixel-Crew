@@ -22,13 +22,14 @@ type Props = {
   capabilities: CapabilityState;
   authReady: boolean;
   paletteOpen: boolean;
+  focusRequest?: number;
   onPaletteOpen(open: boolean): void;
   onSubmit(command: CommandSubmission): Promise<string | null>;
   onInterrupt(): void;
   onManage(): void;
 };
 
-export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, paletteOpen, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
+export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, paletteOpen, focusRequest = 0, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -94,6 +95,12 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [paletteOpen]);
+
+  useEffect(() => {
+    if (focusRequest <= 0 || !active || !authReady) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest, active?.id, authReady]);
 
   // Keep the composer ready for a follow-up message and automatically send
   // the next queued command once the worker returns to idle.
@@ -248,6 +255,7 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       <span className="command-composer__prompt">›</span>
       <textarea
         ref={inputRef}
+        autoFocus={focusRequest > 0}
         value={draft}
         rows={1}
         spellCheck={false}
