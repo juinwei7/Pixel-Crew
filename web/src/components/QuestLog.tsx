@@ -250,7 +250,7 @@ function TurnCard({ turn, isLatest, view, onApprove }: { turn: Turn; isLatest: b
           <TurnItems items={turn.items} status={turn.status} view={view} onApprove={onApprove} />
           {turn.status !== "running" && turn.durationMs !== undefined && (
             <div className="turn-card__foot">
-              {(turn.durationMs / 1000).toFixed(1)}s · ${turn.costUsd?.toFixed(4) ?? "0"}
+              {(turn.durationMs / 1000).toFixed(1)}s{turn.costUsd ? ` · $${turn.costUsd.toFixed(4)}` : ""}
             </div>
           )}
         </>

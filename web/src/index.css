@@ -3423,8 +3423,9 @@ body {
 .crew-rail__head { display: flex; align-items: center; gap: 4px; min-height: 45px; padding: 7px; border-bottom: 1px solid rgba(255, 255, 255, 0.055); }
 .crew-rail__head strong { flex: 1; color: #c5d6e9; font: 700 9px var(--mono); letter-spacing: 0.12em; }
 .crew-rail__head strong span { color: #7186a3; }
-.crew-rail__head button { width: 32px; height: 32px; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #7186a3; cursor: pointer; }
+.crew-rail__head button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #7186a3; font-size: 16px; line-height: 1; cursor: pointer; }
 .crew-rail__head button:hover, .crew-rail__head .crew-rail__filter-active { border-color: rgba(77, 227, 255, 0.2); color: var(--cyan); background: rgba(77, 227, 255, 0.06); }
+.crew-rail__head button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .crew-rail__head .crew-rail__add { border-color: rgba(55, 214, 163, 0.25); color: var(--ok); }
 .crew-rail__add:disabled { opacity: 0.3; cursor: not-allowed; }
 .crew-rail__search { margin: 7px; padding: 7px 9px; border: 1px solid rgba(77, 227, 255, 0.2); border-radius: 7px; outline: 0; background: rgba(0,0,0,.26); color: var(--text); font-size: 11px; }

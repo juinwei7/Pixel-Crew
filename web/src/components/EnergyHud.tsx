@@ -31,7 +31,7 @@ function resetCopy(value: string | null): string {
 function ProviderMeter({ provider, state }: { provider: ProviderId; state: ProviderUsageState }) {
   const remaining = headline(state);
   return (
-    <div className={`energy-meter energy-meter--${tone(remaining)}`}>
+    <div className={`energy-meter energy-meter--${tone(remaining)}`} title={remaining == null ? "尚無用量資料" : `剩餘工作能量 ${remaining}%`}>
       <span>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
       <div className="energy-meter__track"><i style={{ width: `${remaining ?? 0}%` }} /></div>
       <strong>{remaining == null ? "--" : `${remaining}%`}</strong>
@@ -42,7 +42,7 @@ function ProviderMeter({ provider, state }: { provider: ProviderId; state: Provi
 
 function WindowRow({ window }: { window: UsageWindow }) {
   return (
-    <div className={`energy-detail__window energy-detail__window--${tone(window.remainingPercent)}`}>
+    <div className={`energy-detail__window energy-detail__window--${tone(window.remainingPercent)}`} title={`剩餘 ${window.remainingPercent}%（已用 ${window.usedPercent}%）`}>
       <div><strong>{window.label}</strong><span>{resetCopy(window.resetsAt)}</span></div>
       <div className="energy-detail__bar"><i style={{ width: `${window.remainingPercent}%` }} /></div>
       <b>{window.remainingPercent}%</b>
