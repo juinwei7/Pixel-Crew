@@ -248,7 +248,16 @@ export function App() {
 
       {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
 
-      <AuthGate auth={activeAuth} providers={auth} onRefresh={refreshAuth} onUseProvider={(provider) => void createWorker(undefined, provider, activeWorkspace)} />
+      <AuthGate
+        auth={activeAuth}
+        providers={auth}
+        platform={system?.platform}
+        onRefresh={refreshAuth}
+        onUseProvider={(provider) => {
+          if (active) void changeProvider(provider);
+          else void createWorker(undefined, provider, activeWorkspace);
+        }}
+      />
 
       {workspaceOpen && <WorkspacePicker currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
         if (!activeId) {
