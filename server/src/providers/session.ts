@@ -7,13 +7,19 @@ export type MessageImage = {
   dataBase64: string;
 };
 
+export type MessageDocument = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
 export interface AgentSession {
   readonly provider: ProviderId;
   readonly workspacePath: string;
   busy: boolean;
   name: string;
   warmup(): void;
-  send(text: string, images?: MessageImage[]): void;
+  send(text: string, images?: MessageImage[], documents?: MessageDocument[]): void;
   interrupt(): void;
   stop(): void;
   resolveApproval(id: string, decision: ApprovalDecision): boolean;

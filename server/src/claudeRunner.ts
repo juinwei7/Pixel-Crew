@@ -5,7 +5,8 @@ import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import type { AgentSession, MessageImage } from "./providers/session.js";
+import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
+import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { autoApprovalPolicy } from "./dangerousCommand.js";
@@ -106,6 +107,8 @@ export class ClaudeSession implements AgentSession {
   private model: string | undefined;
   private readonly approvalToken = randomUUID();
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
+  private readonly documentDirectory = join(dirname(config.dbPath), "message-documents");
+  private stagedInputDocuments = new Set<string>();
   private pendingApprovals = new Map<string, {
     input: unknown;
     permissionUpdates: SessionPermissionUpdate[];
@@ -163,15 +166,23 @@ export class ClaudeSession implements AgentSession {
     };
   }
 
-  send(text: string, images: MessageImage[] = []): void {
-    this.busy = true;
-    const child = this.ensureChild();
-    const line =
-      JSON.stringify({
-        type: "user",
-        message: { role: "user", content: claudeMessageContent(text, images) },
-      }) + "\n";
-    child.stdin.write(line);
+  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): void {
+    const files = this.stageInputDocuments(documents);
+    try {
+      this.busy = true;
+      const child = this.ensureChild();
+      const attachmentNote = documentPrompt(files);
+      const line =
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: claudeMessageContent([text, attachmentNote].filter(Boolean).join("\n\n"), images) },
+        }) + "\n";
+      child.stdin.write(line);
+    } catch (error) {
+      this.cleanupInputDocuments();
+      this.busy = false;
+      throw error;
+    }
   }
 
   stop(): void {
@@ -182,6 +193,7 @@ export class ClaudeSession implements AgentSession {
       this.child = null;
     }
     this.busy = false;
+    this.cleanupInputDocuments();
     rmSync(this.approvalConfigPath, { force: true });
   }
 
@@ -275,6 +287,11 @@ export class ClaudeSession implements AgentSession {
       "--permission-prompt-tool",
       "mcp__pixel_crew_approval__approval_prompt",
     ];
+    // Attachments live in Pixel Crew's private app-data directory rather than
+    // polluting the user's repo. Explicitly grant this one read scope so
+    // Claude can inspect them without an unrelated outside-workspace prompt.
+    ensurePrivateDirectorySync(this.documentDirectory);
+    args.push("--add-dir", this.documentDirectory);
     if (this.completedTurns > 0) {
       args.push("--resume", this.claudeSessionId);
     } else {
@@ -308,6 +325,7 @@ export class ClaudeSession implements AgentSession {
       if (parsed.type === "result") {
         this.completedTurns++;
         this.busy = false;
+        this.cleanupInputDocuments();
         this.cancelApprovals();
       }
       handleLine(parsed, this.onEvent);
@@ -325,6 +343,7 @@ export class ClaudeSession implements AgentSession {
       rmSync(this.approvalConfigPath, { force: true });
       if (this.busy) {
         this.busy = false;
+        this.cleanupInputDocuments();
         this.onEvent({ type: "error", message });
       }
     };
@@ -361,6 +380,17 @@ export class ClaudeSession implements AgentSession {
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
     }
     this.pendingApprovals.clear();
+  }
+
+  private stageInputDocuments(documents: MessageDocument[]): Array<{ name: string; path: string }> {
+    const files = stageMessageDocuments(documents, this.documentDirectory);
+    for (const file of files) this.stagedInputDocuments.add(file.path);
+    return files;
+  }
+
+  private cleanupInputDocuments(): void {
+    for (const path of this.stagedInputDocuments) rmSync(path, { force: true });
+    this.stagedInputDocuments.clear();
   }
 }
 

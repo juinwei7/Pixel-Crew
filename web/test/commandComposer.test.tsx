@@ -38,13 +38,15 @@ test("keeps the composer editable while an agent is busy", () => {
   assert.match(html, /aria-busy="true"/);
   assert.doesNotMatch(html, /<textarea[^>]*disabled=""/);
   assert.doesNotMatch(html, /<textarea[^>]*readonly=""/);
-  assert.match(html, /執勤中，可輸入或貼圖排隊/);
+  assert.match(html, /執勤中，可輸入或附加檔案排隊/);
+  assert.match(html, /aria-label="附加圖片或文件"/);
 });
 
 test("allows input again when the agent is idle", () => {
   const html = render(false);
   assert.doesNotMatch(html, /<textarea[^>]*readonly=""/);
   assert.doesNotMatch(html, /<textarea[^>]*disabled=""/);
+  assert.match(html, /可附加圖片或文件/);
 });
 
 test("marks the composer for immediate focus after an NPC click", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CapabilityState, CommandSubmission, MessageImagePayload, ProviderId, WorkerState } from "../types";
+import type { CapabilityState, CommandSubmission, MessageDocumentPayload, MessageImagePayload, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
 import { deriveCommandHistory } from "../commandHistory";
 import { composerEnterAction, mergePaletteNames } from "../commandInteraction";
@@ -7,13 +7,19 @@ import { composerEnterAction, mergePaletteNames } from "../commandInteraction";
 type PaletteItem = { key: string; label: string; description: string; value: string; kind: "recent" | "project" };
 type LibraryEntry = { name: string; description: string; argumentHint?: string };
 type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
-type QueuedCommand = { text: string; images: ComposerImage[] };
+type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
+type QueuedCommand = { text: string; images: ComposerImage[]; documents: ComposerDocument[] };
 
 const MAX_IMAGES = 4;
+const MAX_DOCUMENTS = 4;
 const MAX_QUEUED_COMMANDS = 10;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "md", "csv", "json", "html", "htm", "xml", "yaml", "yml", "log", "pdf", "docx", "xlsx", "pptx"]);
+const FILE_ACCEPT = "image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
 
 type Props = {
   active?: WorkerState;
@@ -35,11 +41,13 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<ComposerImage[]>([]);
+  const [documents, setDocuments] = useState<ComposerDocument[]>([]);
   const [queued, setQueued] = useState<QueuedCommand[]>([]);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const wasBusyRef = useRef(Boolean(active?.busy));
   const dispatchingQueuedRef = useRef(false);
   const onSubmitRef = useRef(onSubmit);
@@ -117,18 +125,20 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     const next = queued[0];
     dispatchingQueuedRef.current = true;
     setQueued((commands) => commands.slice(1));
-    void onSubmitRef.current({ text: next.text, images: next.images.map(imagePayload) })
+    void onSubmitRef.current({ text: next.text, images: next.images.map(imagePayload), documents: next.documents.map(documentPayload) })
       .then((message) => {
         if (message) {
           setError(message);
           setDraft((current) => current || next.text);
           setImages((current) => current.length ? current : next.images);
+          setDocuments((current) => current.length ? current : next.documents);
         }
       })
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : "排隊訊息送出失敗");
         setDraft((current) => current || next.text);
         setImages((current) => current.length ? current : next.images);
+        setDocuments((current) => current.length ? current : next.documents);
       })
       .finally(() => { dispatchingQueuedRef.current = false; });
   }, [active?.busy, authReady, queued]);
@@ -163,9 +173,9 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     if (!active) return;
     if (paletteOpen) return;
     const text = draft.trim();
-    const command = { text, images };
+    const command = { text, images, documents };
     if (active.busy || dispatchingQueuedRef.current) {
-      if (!text && images.length === 0) {
+      if (!text && images.length === 0 && documents.length === 0) {
         onInterrupt();
         return;
       }
@@ -175,63 +185,92 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       }
       setDraft("");
       setImages([]);
+      setDocuments([]);
       setError(null);
       setQueued((commands) => [...commands, command]);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
-    if (!text && images.length === 0) return;
+    if (!text && images.length === 0 && documents.length === 0) return;
     setDraft("");
     setImages([]);
+    setDocuments([]);
     onPaletteOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
-    const message = await onSubmit({ text, images: images.map(imagePayload) });
+    const message = await onSubmit({ text, images: images.map(imagePayload), documents: documents.map(documentPayload) });
     setError(message);
     if (message) {
       setDraft((current) => current || text);
       setImages((current) => current.length ? current : images);
+      setDocuments((current) => current.length ? current : documents);
     }
   }
 
-  async function attachPastedImages(files: File[]) {
-    const candidates = files.filter((file) => file.type.startsWith("image/"));
-    if (candidates.length === 0) return;
-    const slots = MAX_IMAGES - images.length;
-    if (slots <= 0 || candidates.length > slots) {
+  async function attachFiles(files: File[]) {
+    const imageFiles = files.filter(isImageFile);
+    const documentFiles = files.filter((file) => !isImageFile(file));
+    if (imageFiles.length > MAX_IMAGES - images.length) {
       setError(`每則訊息最多 ${MAX_IMAGES} 張圖片`);
       return;
     }
-    if (candidates.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type))) {
+    if (documentFiles.length > MAX_DOCUMENTS - documents.length) {
+      setError(`每則訊息最多 ${MAX_DOCUMENTS} 份文件`);
+      return;
+    }
+    if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) {
       setError("只支援 PNG、JPEG 與 WebP 圖片");
       return;
     }
-    if (candidates.some((file) => file.size > MAX_IMAGE_BYTES)) {
+    if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) {
       setError("每張圖片不可超過 5 MiB");
       return;
     }
-    if (images.reduce((sum, image) => sum + image.size, 0) + candidates.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) {
+    if (images.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) {
       setError("圖片總大小不可超過 10 MiB");
       return;
     }
+    if (documentFiles.some((file) => !SUPPORTED_DOCUMENT_EXTENSIONS.has(fileExtension(file.name)))) {
+      setError("只支援文字、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件");
+      return;
+    }
+    if (documentFiles.some((file) => file.size > MAX_DOCUMENT_BYTES)) {
+      setError("每份文件不可超過 10 MiB");
+      return;
+    }
+    if (documents.reduce((sum, document) => sum + document.size, 0) + documentFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_DOCUMENT_BYTES) {
+      setError("文件總大小不可超過 20 MiB");
+      return;
+    }
     try {
-      const added = await Promise.all(candidates.map(readComposerImage));
-      setImages((current) => [...current, ...added]);
+      const [addedImages, addedDocuments] = await Promise.all([
+        Promise.all(imageFiles.map(readComposerImage)),
+        Promise.all(documentFiles.map(readComposerDocument)),
+      ]);
+      setImages((current) => [...current, ...addedImages]);
+      setDocuments((current) => [...current, ...addedDocuments]);
       setError(null);
       requestAnimationFrame(() => inputRef.current?.focus());
     } catch {
-      setError("無法讀取剪貼簿圖片");
+      setError("無法讀取附件");
     }
   }
 
-  const hasContent = Boolean(draft.trim() || images.length);
+  const hasContent = Boolean(draft.trim() || images.length || documents.length);
+  const hasAttachments = images.length > 0 || documents.length > 0;
 
   return (
-    <form ref={formRef} className={`command-composer ${images.length ? "command-composer--attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-      {images.length > 0 && <div className="command-composer__attachments" aria-label="待傳送圖片">
+    <form ref={formRef} className={`command-composer ${hasAttachments ? "command-composer--attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      {hasAttachments && <div className="command-composer__attachments" aria-label="待傳送附件">
         {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
           <img src={image.previewUrl} alt={`圖片 ${index + 1}：${image.name}`} />
           <span>IMG {index + 1}</span>
           <button type="button" aria-label={`移除圖片 ${index + 1}`} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button>
+        </div>)}
+        {documents.map((document, index) => <div className="command-composer__attachment command-composer__attachment--document" key={document.id} title={document.name}>
+          <strong>{documentBadge(document.name)}</strong>
+          <em>{document.name}</em>
+          <span>FILE {index + 1}</span>
+          <button type="button" aria-label={`移除文件 ${index + 1}`} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button>
         </div>)}
       </div>}
       {paletteOpen && (
@@ -252,6 +291,12 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       <button className="command-composer__library" type="button" onClick={() => onPaletteOpen(!paletteOpen)} aria-expanded={paletteOpen} title="指令面板（⌘/Ctrl K）">
         ⌘ <span>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
       </button>
+      <input ref={fileInputRef} className="command-composer__file-input" type="file" multiple accept={FILE_ACCEPT} onChange={(event) => {
+        const files = Array.from(event.currentTarget.files ?? []);
+        event.currentTarget.value = "";
+        void attachFiles(files);
+      }} />
+      <button className="command-composer__attach" type="button" onClick={() => fileInputRef.current?.click()} title="附加圖片或文件" aria-label="附加圖片或文件">＋</button>
       <span className="command-composer__prompt">›</span>
       <textarea
         ref={inputRef}
@@ -261,13 +306,13 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         spellCheck={false}
         disabled={!active || !authReady}
         aria-busy={Boolean(active?.busy)}
-        placeholder={active?.busy ? `${active.name} 執勤中，可輸入或貼圖排隊…` : `對 ${active?.name ?? "…"} 下指令（可貼上圖片）`}
+        placeholder={active?.busy ? `${active.name} 執勤中，可輸入或附加檔案排隊…` : `對 ${active?.name ?? "…"} 下指令（可附加圖片或文件）`}
         aria-label="輸入 Agent 指令"
         onPaste={(event) => {
           const files = Array.from(event.clipboardData.items).map((item) => item.kind === "file" ? item.getAsFile() : null).filter((file): file is File => Boolean(file));
-          if (files.some((file) => file.type.startsWith("image/"))) {
+          if (files.length > 0) {
             event.preventDefault();
-            void attachPastedImages(files);
+            void attachFiles(files);
           }
         }}
         onCompositionStart={() => { composingRef.current = true; }}
@@ -330,20 +375,73 @@ function imagePayload(image: ComposerImage): MessageImagePayload {
   return { name: image.name, mimeType: image.mimeType, dataBase64: image.dataBase64 };
 }
 
+function documentPayload(document: ComposerDocument): MessageDocumentPayload {
+  return { name: document.name, mimeType: document.mimeType, dataBase64: document.dataBase64 };
+}
+
 async function readComposerImage(file: File): Promise<ComposerImage> {
-  const previewUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("invalid image"));
-    reader.onerror = () => reject(reader.error ?? new Error("image read failed"));
-    reader.readAsDataURL(file);
-  });
+  const previewUrl = await readFileDataUrl(file);
   const dataBase64 = previewUrl.slice(previewUrl.indexOf(",") + 1);
   return {
     id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
     name: file.name || `clipboard-${Date.now()}`,
-    mimeType: file.type as ComposerImage["mimeType"],
+    mimeType: (file.type || imageMimeType(file.name)) as ComposerImage["mimeType"],
     dataBase64,
     previewUrl,
     size: file.size,
   };
+}
+
+async function readComposerDocument(file: File): Promise<ComposerDocument> {
+  const dataUrl = await readFileDataUrl(file);
+  return {
+    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+    name: file.name,
+    mimeType: file.type || documentMimeType(file.name),
+    dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+    size: file.size,
+  };
+}
+
+function readFileDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("invalid attachment"));
+    reader.onerror = () => reject(reader.error ?? new Error("attachment read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileExtension(name: string): string {
+  return name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || ["png", "jpg", "jpeg", "webp"].includes(fileExtension(file.name));
+}
+
+function imageMimeType(name: string): string {
+  const extension = fileExtension(name);
+  return extension === "png" ? "image/png" : ["jpg", "jpeg"].includes(extension) ? "image/jpeg" : "image/webp";
+}
+
+function documentBadge(name: string): string {
+  const extension = fileExtension(name);
+  return extension === "md" ? "MD" : extension === "pdf" ? "PDF" : extension.startsWith("doc") ? "DOC" : extension.startsWith("xls") ? "XLS" : extension.startsWith("ppt") ? "PPT" : extension.slice(0, 4).toUpperCase() || "FILE";
+}
+
+function documentMimeType(name: string): string {
+  const extension = fileExtension(name);
+  if (["txt", "log"].includes(extension)) return "text/plain";
+  if (extension === "md") return "text/markdown";
+  if (extension === "csv") return "text/csv";
+  if (extension === "json") return "application/json";
+  if (["html", "htm"].includes(extension)) return "text/html";
+  if (extension === "xml") return "application/xml";
+  if (["yaml", "yml"].includes(extension)) return "application/yaml";
+  if (extension === "pdf") return "application/pdf";
+  if (extension === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (extension === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (extension === "pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  return "application/octet-stream";
 }

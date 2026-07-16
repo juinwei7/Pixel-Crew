@@ -24,6 +24,7 @@ import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
 import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
+import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
 import {
   bootstrapPrompt,
   buildLocalHandoff,
@@ -55,7 +56,10 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:");
   next();
 });
-app.use(express.json({ limit: "16mb" }));
+// Four documents (20 MiB total) plus images (10 MiB total) expand by roughly
+// one third when transported as base64. Keep the HTTP ceiling just above the
+// validated attachment budget; individual parsers still enforce tighter caps.
+app.use(express.json({ limit: "44mb" }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({
@@ -1220,22 +1224,28 @@ app.post("/api/workers/:id/message", (req, res) => {
   }
   const message = String(req.body?.message ?? "").trim();
   let images: ReturnType<typeof parseMessageImages>;
+  let documents: ReturnType<typeof parseMessageDocuments>;
   try {
     images = parseMessageImages(req.body?.images);
+    documents = parseMessageDocuments(req.body?.documents);
   } catch (error) {
-    res.status(400).json({ error: error instanceof MessageImageValidationError ? error.message : "圖片附件無效" });
+    const detail = error instanceof MessageImageValidationError || error instanceof MessageDocumentValidationError
+      ? error.message
+      : "附件無效";
+    res.status(400).json({ error: detail });
     return;
   }
-  if (!message && images.length === 0) {
-    res.status(400).json({ error: "message or image required" });
+  if (!message && images.length === 0 && documents.length === 0) {
+    res.status(400).json({ error: "message or attachment required" });
     return;
   }
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
-  record(worker, { type: "user_message", text: [message, imageLabels].filter(Boolean).join("\n") });
+  const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
+  record(worker, { type: "user_message", text: [message, imageLabels, documentLabels].filter(Boolean).join("\n") });
   try {
-    worker.runner.send(message, images);
+    worker.runner.send(message, images, documents);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "無法傳送圖片訊息";
+    const detail = error instanceof Error ? error.message : "無法傳送附件訊息";
     record(worker, { type: "error", message: detail });
     res.status(500).json({ error: detail });
     return;

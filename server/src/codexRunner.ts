@@ -5,7 +5,8 @@ import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
-import type { AgentSession, MessageImage } from "./providers/session.js";
+import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
+import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 
@@ -37,6 +38,7 @@ export class CodexSession implements AgentSession {
   private currentTurnId: string | null = null;
   private finalText = "";
   private stagedInputImages = new Set<string>();
+  private stagedInputDocuments = new Set<string>();
   busy = false;
   name = "";
 
@@ -59,9 +61,18 @@ export class CodexSession implements AgentSession {
     void this.ensureThread().catch((error) => console.warn("Codex app-server warmup failed:", error.message));
   }
 
-  send(text: string, images: MessageImage[] = []): void {
+  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): void {
     if (this.busy) throw new Error("codex worker busy");
-    const imagePaths = this.stageInputImages(images);
+    let imagePaths: string[];
+    let documentFiles: Array<{ name: string; path: string }>;
+    try {
+      imagePaths = this.stageInputImages(images);
+      documentFiles = this.stageInputDocuments(documents);
+    } catch (error) {
+      this.cleanupInputImages();
+      this.cleanupInputDocuments();
+      throw error;
+    }
     this.busy = true;
     this.startedAt = Date.now();
     this.openTools.clear();
@@ -71,7 +82,7 @@ export class CodexSession implements AgentSession {
     void this.ensureThread()
       .then((threadId) => this.request("turn/start", {
         threadId,
-        input: codexTurnInput(text, imagePaths),
+        input: codexTurnInput([text, documentPrompt(documentFiles)].filter(Boolean).join("\n\n"), imagePaths),
         cwd: this.workspacePath,
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
@@ -103,6 +114,7 @@ export class CodexSession implements AgentSession {
     for (const pending of this.pendingRpc.values()) pending.reject(new Error("Codex app-server stopped"));
     this.pendingRpc.clear();
     this.cleanupInputImages();
+    this.cleanupInputDocuments();
     this.clearPersonaFile();
   }
 
@@ -251,6 +263,7 @@ export class CodexSession implements AgentSession {
         this.busy = false;
         this.currentTurnId = null;
         this.cleanupInputImages();
+        this.cleanupInputDocuments();
         this.onEvent({
           type: "turn_end",
           resultText: this.finalText,
@@ -411,6 +424,7 @@ export class CodexSession implements AgentSession {
     this.busy = false;
     this.currentTurnId = null;
     this.cleanupInputImages();
+    this.cleanupInputDocuments();
     this.onEvent({ type: "error", message });
   }
 
@@ -431,6 +445,7 @@ export class CodexSession implements AgentSession {
       return paths;
     } catch (error) {
       this.cleanupInputImages();
+      this.cleanupInputDocuments();
       throw error;
     }
   }
@@ -438,6 +453,17 @@ export class CodexSession implements AgentSession {
   private cleanupInputImages(): void {
     for (const path of this.stagedInputImages) rmSync(path, { force: true });
     this.stagedInputImages.clear();
+  }
+
+  private stageInputDocuments(documents: MessageDocument[]): Array<{ name: string; path: string }> {
+    const files = stageMessageDocuments(documents, join(dirname(config.dbPath), "message-documents"));
+    for (const file of files) this.stagedInputDocuments.add(file.path);
+    return files;
+  }
+
+  private cleanupInputDocuments(): void {
+    for (const path of this.stagedInputDocuments) rmSync(path, { force: true });
+    this.stagedInputDocuments.clear();
   }
 }
 

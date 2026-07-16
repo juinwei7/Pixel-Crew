@@ -460,7 +460,7 @@ export function useWorkers() {
     try {
       await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
         method: "POST",
-        body: { message: command.text, images: command.images },
+        body: { message: command.text, images: command.images, documents: command.documents },
         timeoutMs: 30000,
       });
       return null;

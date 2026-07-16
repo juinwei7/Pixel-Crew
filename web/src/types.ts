@@ -9,9 +9,16 @@ export type MessageImagePayload = {
   dataBase64: string;
 };
 
+export type MessageDocumentPayload = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
 export type CommandSubmission = {
   text: string;
   images: MessageImagePayload[];
+  documents: MessageDocumentPayload[];
 };
 
 export type ApprovalRequest = {

@@ -17,8 +17,8 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 - **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
 - **Folders as rooms** — bind each worker to a local folder; the agent runs there.
 - **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
-- **Image prompts** — paste PNG, JPEG or WebP screenshots directly into the composer and send them as native multimodal input.
-- **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their images run in order.
+- **Image and document prompts** — paste or pick PNG/JPEG/WebP images plus text, Markdown, CSV, JSON, HTML, XML, YAML, PDF and modern Office documents. Images use native multimodal input; documents are staged privately for the selected CLI and removed after the turn.
+- **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their attachments run in order.
 - **Interactive approvals** — allow once, deny, or grant a supported scoped session rule directly in the task log.
 - **Work-energy HUD** — shows each provider's remaining usage at a glance.
 - **Local-first** — Pixel Crew binds to `127.0.0.1`, stores its own state in local SQLite, and adds no hosted backend or API-key form. Tasks still go through the selected provider's official CLI and service under that CLI's terms.
