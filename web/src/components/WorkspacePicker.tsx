@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { roomName } from "../workspace";
 
 type Props = {
+  required?: boolean;
   currentPath: string;
   recentPaths: string[];
   resetsConversation: boolean;
@@ -10,7 +11,7 @@ type Props = {
   onBrowse(): Promise<{ path?: string; canceled?: boolean; error?: string }>;
 };
 
-export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, onClose, onSelect, onBrowse }: Props) {
+export function WorkspacePicker({ required = false, currentPath, recentPaths, resetsConversation, onClose, onSelect, onBrowse }: Props) {
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +60,7 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
           void choose(path);
         }}
       >
-        <button
+        {!required && <button
           type="button"
           className="workspace-picker__close"
           aria-label="關閉"
@@ -67,16 +68,24 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
           disabled={pending}
         >
           ×
-        </button>
+        </button>}
 
         <header className="workspace-picker__header">
           <div className="workspace-picker__glyph" aria-hidden="true" />
           <div>
-            <div className="workspace-picker__eyebrow">ENTER A ROOM</div>
-            <h2 id="workspace-title">選擇工作位置</h2>
-            <p>一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。</p>
+            <div className="workspace-picker__eyebrow">{required ? "FIRST ROOM SETUP" : "ENTER A ROOM"}</div>
+            <h2 id="workspace-title">{required ? "先設定安全工作區" : "選擇工作位置"}</h2>
+            <p>{required ? "Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。" : "一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。"}</p>
           </div>
         </header>
+
+        {required && (
+          <button type="button" className="workspace-picker__default" disabled={pending} onClick={() => void choose(currentPath)}>
+            <span className="workspace-picker__default-mark" aria-hidden="true">✓</span>
+            <span><strong>使用 Pixel Crew 專用工作區</strong><small>{currentPath}</small></span>
+            <b>建議</b>
+          </button>
+        )}
 
         {resetsConversation && (
           <div className="workspace-picker__reset-warning">
@@ -98,7 +107,7 @@ export function WorkspacePicker({ currentPath, recentPaths, resetsConversation, 
           <span className="workspace-picker__browse-arrow" aria-hidden="true">→</span>
         </button>
 
-        <div className="workspace-picker__divider"><span>或貼上完整路徑</span></div>
+        <div className="workspace-picker__divider"><span>{required ? "或指定現有專案" : "或貼上完整路徑"}</span></div>
 
         <label className="workspace-picker__label" htmlFor="workspace-path">
           本機絕對路徑

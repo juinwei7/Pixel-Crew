@@ -16,6 +16,15 @@ export function appDataDirectory(
   return posix.join(env.XDG_DATA_HOME?.trim() || posix.join(home, ".local", "share"), "pixel-crew");
 }
 
+export function defaultWorkspaceDirectory(
+  platform: PlatformName = process.platform,
+  home = homedir(),
+): string {
+  return platform === "win32"
+    ? win32.join(home, "Pixel Crew Workspace")
+    : posix.join(home, "Pixel Crew Workspace");
+}
+
 export function expandHomePath(value: string, home = homedir()): string {
   const input = value.trim();
   if (input === "~") return home;

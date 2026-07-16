@@ -1,9 +1,9 @@
 import "dotenv/config";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { appDataDirectory, migrateLegacyData } from "./platform/paths.js";
+import { appDataDirectory, defaultWorkspaceDirectory, migrateLegacyData } from "./platform/paths.js";
+import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
 
 const dataDirectory = process.env.PIXEL_CREW_DATA_DIR?.trim() || appDataDirectory();
 const legacyDbPath = fileURLToPath(new URL("../data/cockpit.sqlite", import.meta.url));
@@ -16,15 +16,22 @@ if (!["127.0.0.1", "localhost", "::1"].includes(configuredHost)) {
   throw new Error("Pixel Crew has no remote authentication; HOST must remain a loopback address");
 }
 const configuredTarget = process.env.TARGET_REPO_PATH?.trim();
-let targetRepoPath = homedir();
+const generatedTarget = defaultWorkspaceDirectory();
+let targetRepoPath = "";
+let targetRepoConfigured = false;
 if (configuredTarget) {
   try {
     const canonical = realpathSync(configuredTarget);
     if (!statSync(canonical).isDirectory()) throw new Error("not a directory");
     targetRepoPath = canonical;
+    targetRepoConfigured = true;
   } catch {
-    console.warn(`TARGET_REPO_PATH is not an accessible directory; starting in the user home instead: ${configuredTarget}`);
+    console.warn(`TARGET_REPO_PATH is not an accessible directory; using the dedicated Pixel Crew workspace instead: ${configuredTarget}`);
   }
+}
+if (!targetRepoConfigured) {
+  ensurePrivateDirectorySync(generatedTarget);
+  targetRepoPath = realpathSync(generatedTarget);
 }
 
 try {
@@ -34,9 +41,11 @@ try {
 }
 
 export const config = {
-  // A first launch no longer crashes without .env. The user's home is a safe,
-  // existing room until they choose their actual project in the UI.
+  // Never expose the user's home directory itself as an agent workspace.
+  // First launch asks the user to accept this dedicated directory or choose
+  // another project before any worker is created.
   targetRepoPath,
+  targetRepoConfigured,
   permissionMode: process.env.PERMISSION_MODE ?? "acceptEdits",
   claudeBin: process.env.CLAUDE_BIN ?? "claude",
   codexBin: process.env.CODEX_BIN ?? "codex",

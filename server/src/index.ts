@@ -100,6 +100,7 @@ function systemStatus() {
     node: process.version,
     dataDirectory: config.dataDirectory,
     folderPicker: process.platform === "darwin" || process.platform === "win32",
+    workspaceSetupRequired: workers.size === 0 && !config.targetRepoConfigured,
     codexWindowsBestEffort: process.platform === "win32" && Number.isFinite(windowsBuild) && (windowsBuild ?? 0) < 22_000,
   };
 }
@@ -1571,7 +1572,9 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
 for (const savedWorker of store.loadWorkers(MAX_HISTORY).slice(0, MAX_WORKERS)) {
   createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker);
 }
-if (workers.size === 0) createWorker(undefined, undefined, "claude", config.targetRepoPath);
+if (workers.size === 0 && config.targetRepoConfigured) {
+  createWorker(undefined, undefined, "claude", config.targetRepoPath);
+}
 
 const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ workspacePath, provider, revision }) => {
   broadcast({ type: "workflow_library_updated", workspacePath, provider, revision });

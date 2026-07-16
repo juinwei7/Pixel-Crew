@@ -15,6 +15,7 @@ type SystemStatus = {
   node: string;
   dataDirectory: string;
   folderPicker: boolean;
+  workspaceSetupRequired: boolean;
   codexWindowsBestEffort: boolean;
 };
 

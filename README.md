@@ -134,7 +134,7 @@ cd Pixel-Crew
 cp server/.env.example server/.env
 ```
 
-`TARGET_REPO_PATH` 現在是選填；未設定時會先以使用者主目錄啟動，再從介面選擇專案。若要固定預設房間，可編輯 `server/.env`：
+`TARGET_REPO_PATH` 是選填。未設定且沒有既有 NPC 時，首次啟動會要求選擇工作資料夾；也可使用系統自動建立的 `Pixel Crew Workspace`。Pixel Crew 不會直接把整個使用者主目錄交給 Agent。若要固定預設房間，可編輯 `server/.env`：
 
 ```dotenv
 TARGET_REPO_PATH=/absolute/path/to/your/repo
@@ -173,7 +173,7 @@ npm run dev
 
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
-| `TARGET_REPO_PATH` | 使用者主目錄 | 選填的預設房間絕對路徑；各 Worker 可在介面另選工作位置 |
+| `TARGET_REPO_PATH` | `~/Pixel Crew Workspace` | 選填的預設房間絕對路徑；未指定且無既有 NPC 時會先要求確認工作區 |
 | `PERMISSION_MODE` | `acceptEdits` | 傳給 Claude CLI 的權限模式 |
 | `CLAUDE_BIN` | `claude` | Claude CLI 指令或絕對路徑 |
 | `CODEX_BIN` | `codex` | Codex CLI 指令或絕對路徑 |

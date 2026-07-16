@@ -65,6 +65,7 @@ export function App() {
   const active = activeId ? workers[activeId] : undefined;
   const activeProvider: ProviderId = active?.provider ?? "claude";
   const activeWorkspace = active?.workspacePath || targetRepoPath;
+  const workspaceSetupRequired = Boolean(system?.workspaceSetupRequired && workerList.length === 0);
   const activeAuth = auth[activeProvider];
   const activeCapabilities = capabilitiesByWorkspace[activeWorkspace]?.[activeProvider] ?? EMPTY_CAPABILITIES;
   const modelOptions = mergeModelOptions(
@@ -83,6 +84,10 @@ export function App() {
     updatePreferences({ taskLogOpen: true });
     setComposerFocusRequest((request) => request + 1);
   }, [setActiveId, updatePreferences]);
+
+  useEffect(() => {
+    if (workspaceSetupRequired) setWorkspaceOpen(true);
+  }, [workspaceSetupRequired]);
 
   const approvalWorker = useMemo(() => workerList.find((worker) => worker.turns.some((turn) =>
     turn.items.some((item) => item.kind === "approval" && item.status === "pending")
@@ -263,7 +268,7 @@ export function App() {
 
       {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
 
-      <AuthGate
+      {!workspaceSetupRequired && <AuthGate
         auth={activeAuth}
         providers={auth}
         installs={providerInstalls}
@@ -274,9 +279,9 @@ export function App() {
           if (active) void changeProvider(provider);
           else void createWorker(undefined, provider, activeWorkspace);
         }}
-      />
+      />}
 
-      {workspaceOpen && <WorkspacePicker currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
+      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
         if (!activeId) {
           const result = await createWorker(undefined, activeProvider, path);
           if (!result.error) notify("已進入新房間");

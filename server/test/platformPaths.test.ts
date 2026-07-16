@@ -3,12 +3,19 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { appDataDirectory, expandHomePath, migrateLegacyData, sameWorkspace, workspaceIdentity } from "../src/platform/paths.js";
+import { appDataDirectory, defaultWorkspaceDirectory, expandHomePath, migrateLegacyData, sameWorkspace, workspaceIdentity } from "../src/platform/paths.js";
 
 test("selects conventional per-user app data directories", () => {
   assert.equal(appDataDirectory("win32", { LOCALAPPDATA: "C:\\Users\\Wei\\AppData\\Local" }, "C:\\Users\\Wei"), "C:\\Users\\Wei\\AppData\\Local\\Pixel Crew");
   assert.equal(appDataDirectory("darwin", {}, "/Users/wei"), "/Users/wei/Library/Application Support/Pixel Crew");
   assert.equal(appDataDirectory("linux", { XDG_DATA_HOME: "/data" }, "/home/wei"), "/data/pixel-crew");
+});
+
+test("uses a dedicated workspace instead of the user home on every platform", () => {
+  assert.equal(defaultWorkspaceDirectory("win32", "C:\\Users\\Wei"), "C:\\Users\\Wei\\Pixel Crew Workspace");
+  assert.equal(defaultWorkspaceDirectory("darwin", "/Users/wei"), "/Users/wei/Pixel Crew Workspace");
+  assert.equal(defaultWorkspaceDirectory("linux", "/home/wei"), "/home/wei/Pixel Crew Workspace");
+  assert.notEqual(defaultWorkspaceDirectory("darwin", "/Users/wei"), "/Users/wei");
 });
 
 test("expands both Unix and Windows home syntax", () => {
