@@ -6,7 +6,7 @@ import test from "node:test";
 import { appDataDirectory, expandHomePath, migrateLegacyData, sameWorkspace, workspaceIdentity } from "../src/platform/paths.js";
 
 test("selects conventional per-user app data directories", () => {
-  assert.equal(appDataDirectory("win32", { LOCALAPPDATA: "C:\\Users\\Wei\\AppData\\Local" }, "C:\\Users\\Wei"), "C:\\Users\\Wei\\AppData\\Local/Pixel Crew");
+  assert.equal(appDataDirectory("win32", { LOCALAPPDATA: "C:\\Users\\Wei\\AppData\\Local" }, "C:\\Users\\Wei"), "C:\\Users\\Wei\\AppData\\Local\\Pixel Crew");
   assert.equal(appDataDirectory("darwin", {}, "/Users/wei"), "/Users/wei/Library/Application Support/Pixel Crew");
   assert.equal(appDataDirectory("linux", { XDG_DATA_HOME: "/data" }, "/home/wei"), "/data/pixel-crew");
 });
@@ -14,6 +14,8 @@ test("selects conventional per-user app data directories", () => {
 test("expands both Unix and Windows home syntax", () => {
   assert.equal(expandHomePath("~/repo", "/home/wei"), "/home/wei/repo");
   assert.equal(expandHomePath("~\\repo", "/home/wei"), "/home/wei/repo");
+  assert.equal(expandHomePath("~/repo", "C:\\Users\\Wei"), "C:\\Users\\Wei\\repo");
+  assert.equal(expandHomePath("~\\repo", "C:\\Users\\Wei"), "C:\\Users\\Wei\\repo");
 });
 
 test("Windows workspace identities ignore path casing", () => {

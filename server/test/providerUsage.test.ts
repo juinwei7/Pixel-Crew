@@ -47,8 +47,8 @@ test("ignores malformed reset timestamps without crashing", () => {
 
 test("does not spawn the provider CLI for a provider that has not started", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-usage-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const store = new LocalStore(join(dir, "test.sqlite"));
     const registry = new ProviderUsageRegistry(store, () => undefined, () => false);
 
     // A forced refresh on a not-ready provider must resolve to a neutral,
@@ -60,6 +60,7 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
     assert.equal(state.updatedAt, null);
     assert.deepEqual(state.windows, []);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

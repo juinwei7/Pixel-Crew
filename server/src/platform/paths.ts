@@ -1,6 +1,6 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, posix, resolve, win32 } from "node:path";
 
 export type PlatformName = NodeJS.Platform;
 
@@ -10,16 +10,19 @@ export function appDataDirectory(
   home = homedir(),
 ): string {
   if (platform === "win32") {
-    return join(env.LOCALAPPDATA?.trim() || join(home, "AppData", "Local"), "Pixel Crew");
+    return win32.join(env.LOCALAPPDATA?.trim() || win32.join(home, "AppData", "Local"), "Pixel Crew");
   }
-  if (platform === "darwin") return join(home, "Library", "Application Support", "Pixel Crew");
-  return join(env.XDG_DATA_HOME?.trim() || join(home, ".local", "share"), "pixel-crew");
+  if (platform === "darwin") return posix.join(home, "Library", "Application Support", "Pixel Crew");
+  return posix.join(env.XDG_DATA_HOME?.trim() || posix.join(home, ".local", "share"), "pixel-crew");
 }
 
 export function expandHomePath(value: string, home = homedir()): string {
   const input = value.trim();
   if (input === "~") return home;
-  if (input.startsWith("~/") || input.startsWith("~\\")) return resolve(home, input.slice(2));
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    const pathApi = /^[a-z]:[\\/]/i.test(home) || home.startsWith("\\\\") ? win32 : posix;
+    return pathApi.resolve(home, input.slice(2));
+  }
   return input;
 }
 

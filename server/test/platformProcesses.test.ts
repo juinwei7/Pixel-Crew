@@ -42,7 +42,7 @@ test("executes an npm-style cmd shim with spaced arguments on Windows", { skip: 
   const directory = mkdtempSync(join(tmpdir(), "pixel-crew-cmd-"));
   try {
     const shim = join(directory, "fixture.cmd");
-    writeFileSync(shim, "@echo off\r\necho %1^|%2\r\n");
+    writeFileSync(shim, "@echo off\r\necho %~1^|%~2\r\n");
     const { stdout } = await execCli(shim, ["alpha", "hello world"], { timeout: 5_000 });
     assert.equal(stdout.trim(), "alpha|hello world");
   } finally {

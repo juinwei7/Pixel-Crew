@@ -14,7 +14,9 @@ test("stores only validated 24x32 PNG files with private permissions", async () 
     const id = await store.save(png.toString("base64"));
     assert.match(id, /^[0-9a-f-]{36}\.png$/);
     assert.deepEqual(await store.read(id), { data: png, mimeType: "image/png" });
-    assert.equal(statSync(join(directory, "avatars", id)).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(join(directory, "avatars", id)).mode & 0o777, 0o600);
+    }
     assert.equal(await store.read("../../secret"), null);
     await store.delete(id);
     assert.equal(await store.read(id), null);

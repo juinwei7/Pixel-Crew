@@ -9,6 +9,7 @@ import type { CapabilityState } from "../src/capabilities.js";
 
 test("migrates existing custom avatars to the custom source without losing them", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-legacy-avatar-"));
+  let store: LocalStore | null = null;
   try {
     const path = join(dir, "test.sqlite");
     const legacy = new DatabaseSync(path);
@@ -34,22 +35,25 @@ test("migrates existing custom avatars to the custom source without losing them"
     `);
     legacy.close();
 
-    const store = new LocalStore(path);
+    store = new LocalStore(path);
     const workers = store.loadWorkers(10);
     assert.deepEqual(workers.map(({ id, avatarId, avatarKind, avatarPresetId }) => ({ id, avatarId, avatarKind, avatarPresetId })), [
       { id: "legacy-custom", avatarId: "kept-avatar.gif", avatarKind: "custom", avatarPresetId: "classic" },
       { id: "legacy-default", avatarId: null, avatarKind: "preset", avatarPresetId: "classic" },
     ]);
   } finally {
+    store?.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("persists workers, bounded events, and capability cache", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-"));
+  const stores: LocalStore[] = [];
   try {
     const path = join(dir, "test.sqlite");
     const store = new LocalStore(path);
+    stores.push(store);
     store.saveWorker({
       id: "worker-1",
       name: "一號機",
@@ -108,6 +112,7 @@ test("persists workers, bounded events, and capability cache", () => {
     }, { version: 1, goal: "continue" });
 
     const reopened = new LocalStore(path);
+    stores.push(reopened);
     const [worker] = reopened.loadWorkers(20);
     assert.equal(worker.name, "一號機");
     assert.equal(worker.completedTurns, 3);
@@ -134,19 +139,23 @@ test("persists workers, bounded events, and capability cache", () => {
     reopened.deleteWorker("worker-1");
     assert.equal(reopened.loadWorkers(20).length, 0);
   } finally {
+    for (const store of stores.reverse()) store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("stores, updates, and deletes reusable persona templates", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-"));
+  const stores: LocalStore[] = [];
   try {
     const path = join(dir, "test.sqlite");
     const store = new LocalStore(path);
+    stores.push(store);
     store.savePersonaTemplate({ id: "t1", name: "QA", role: "QA 工程師", instructions: "測 UI" });
     store.savePersonaTemplate({ id: "t2", name: "Reviewer", role: "審查員", instructions: "挑毛病" });
 
     const reopened = new LocalStore(path);
+    stores.push(reopened);
     assert.equal(reopened.listPersonaTemplates().length, 2);
 
     reopened.savePersonaTemplate({ id: "t1", name: "資深 QA", role: "QA 工程師", instructions: "測 UI 與 API" });
@@ -158,6 +167,7 @@ test("stores, updates, and deletes reusable persona templates", () => {
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].id, "t1");
   } finally {
+    for (const store of stores.reverse()) store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

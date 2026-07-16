@@ -9,10 +9,11 @@ import { saveProjectCommand } from "../src/commandLibrary.js";
 
 test("an empty resumed-session meta frame does not erase discovered slash commands", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
     const updates: string[][] = [];
     const registry = new CapabilityRegistry(
-      new LocalStore(join(dir, "test.sqlite")),
+      store,
       (state) => updates.push(state.slashCommands),
     );
 
@@ -29,6 +30,7 @@ test("an empty resumed-session meta frame does not erase discovered slash comman
 
     assert.deepEqual(updates.at(-1), ["review", "verify"]);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -37,12 +39,12 @@ test("keeps slash commands isolated by workspace registry", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
   const first = join(dir, "first");
   const second = join(dir, "second");
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
     mkdirSync(first);
     mkdirSync(second);
     await saveProjectCommand(first, "first-only", "---\ndescription: First\n---\nDo first");
     await saveProjectCommand(second, "second-only", "---\ndescription: Second\n---\nDo second");
-    const store = new LocalStore(join(dir, "test.sqlite"));
     const firstRegistry = new CapabilityRegistry(store, () => undefined, first);
     const secondRegistry = new CapabilityRegistry(store, () => undefined, second);
     await Promise.all([firstRegistry.refreshCommands(), secondRegistry.refreshCommands()]);
@@ -51,14 +53,15 @@ test("keeps slash commands isolated by workspace registry", async () => {
     assert.equal(secondRegistry.getState().slashCommands.includes("second-only"), true);
     assert.equal(secondRegistry.getState().slashCommands.includes("first-only"), false);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("serves cached Claude models immediately and merges later runtime discovery", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const store = new LocalStore(join(dir, "test.sqlite"));
     store.saveCapabilities("/repo", {
       slashCommands: [],
       mcpServers: [],
@@ -81,14 +84,15 @@ test("serves cached Claude models immediately and merges later runtime discovery
     const reopened = new CapabilityRegistry(store, () => undefined, "/repo");
     assert.equal(reopened.getState().models.some((model) => model.id === "runtime-model"), true);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("collapses the CLI's full model id back to its alias instead of adding a duplicate option", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const store = new LocalStore(join(dir, "test.sqlite"));
     const registry = new CapabilityRegistry(store, () => undefined, "/repo");
 
     registry.mergeWorkerMeta({ model: "claude-sonnet-5", slashCommands: [], mcpServers: [], toolCount: 1 });
@@ -99,14 +103,15 @@ test("collapses the CLI's full model id back to its alias instead of adding a du
     registry.mergeWorkerMeta({ model: "claude-fable-5", slashCommands: [], mcpServers: [], toolCount: 1 });
     assert.equal(registry.getState().models.some((model) => model.id === "fable"), true);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("collapses full model ids already persisted in the cache when loading", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const store = new LocalStore(join(dir, "test.sqlite"));
     // Simulates a cache written before model-id normalization existed.
     store.saveCapabilities("/repo", {
       slashCommands: [],
@@ -123,14 +128,15 @@ test("collapses full model ids already persisted in the cache when loading", () 
     assert.equal(models.filter((model) => model.id === "fable").length, 1);
     assert.equal(models.filter((model) => model.id === "sonnet").length, 1);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("seeds native slash commands globally without leaking project commands", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const store = new LocalStore(join(dir, "test.sqlite"));
 
     // A worker in one room discovers the built-in command set.
     const roomA = new CapabilityRegistry(store, () => undefined, "/repo-a");
@@ -144,6 +150,7 @@ test("seeds native slash commands globally without leaking project commands", ()
     }
     assert.equal(roomB.getState().slashCommands.includes("repo-a-only"), false);
   } finally {
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
