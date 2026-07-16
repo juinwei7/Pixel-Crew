@@ -13,6 +13,7 @@ type Props = {
   wsReady: boolean;
   modelOptions: ModelOption[];
   workerCount: number;
+  providerChanging?: boolean;
   onRoom(): void;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
@@ -28,6 +29,7 @@ export function TopBar({
   wsReady,
   modelOptions,
   workerCount,
+  providerChanging = false,
   onRoom,
   onProvider,
   onModel,
@@ -79,7 +81,7 @@ export function TopBar({
         <span className="top-bar__group-label">AGENT</span>
         <select
           value={provider}
-          disabled={Boolean(active?.busy)}
+          disabled={Boolean(active?.busy) || providerChanging}
           onChange={(event) => onProvider(event.target.value as ProviderId)}
           aria-label="選擇 Agent provider"
         >

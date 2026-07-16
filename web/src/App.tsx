@@ -53,6 +53,7 @@ export function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
+  const [providerChanging, setProviderChanging] = useState(false);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -124,8 +125,29 @@ export function App() {
   }
 
   async function changeProvider(provider: ProviderId) {
-    if (provider === activeProvider) return;
+    if (provider === activeProvider || providerChanging) return;
     if (!active) return;
+    if (active.turns.length === 0) {
+      setProviderChanging(true);
+      const prepared = await prepareHandoff(active.id, provider);
+      if (prepared.error || !prepared.data) {
+        notify(prepared.error || "無法檢查目標 LLM", "error");
+        setProviderChanging(false);
+        return;
+      }
+      // Trust the server's persisted history check over the local projection.
+      // If the UI was stale, fall back to the normal warning dialog.
+      if (prepared.data.hasHistory) {
+        setProviderChanging(false);
+        setHandoffTarget(provider);
+        return;
+      }
+      const error = await startHandoff(active.id, prepared.data.handoffToken);
+      setProviderChanging(false);
+      if (error) notify(error, "error");
+      else notify(`正在切換至 ${provider === "claude" ? "Claude Code" : "Codex"}`, "info");
+      return;
+    }
     setHandoffTarget(provider);
   }
 
@@ -141,6 +163,7 @@ export function App() {
         wsReady={wsReady}
         modelOptions={modelOptions}
         workerCount={workerList.length}
+        providerChanging={providerChanging}
         onRoom={() => setWorkspaceOpen(true)}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={(model) => {

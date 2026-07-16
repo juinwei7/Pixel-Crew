@@ -473,42 +473,63 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
   const sourceName = worker.runner.name;
   let sourceState = worker.runner.getPersistenceState();
   let summary: HandoffSummary | null = null;
-  let source: HandoffProgress["source"] = "agent";
+  let source: HandoffProgress["source"] = null;
+  const hasHistory = worker.history.some((event) => event.type === "user_message");
 
   try {
-    const gitState = await workspaceGitState(workspacePath);
-    const localSummary = buildLocalHandoff(worker.history, gitState);
-    const hasHistory = worker.history.some((event) => event.type === "user_message");
     worker.runner.stop();
 
-    if (hasHistory) {
-      setHandoff(worker, { ...progress, stage: "summarizing", message: `請 ${providerLabel(sourceProvider)} 整理工作大綱`, source: null });
-      const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
-      const sourceUsageError = usageBlockReason(sourceProvider, sourceUsage, sourceModel);
-      try {
-        if (sourceUsageError) throw new Error(sourceUsageError);
-        const result = await runDetachedTurn(
-          sourceProvider,
-          workspacePath,
-          sourceModel,
-          sourceState,
-          worker.persona,
-          summaryPrompt(worker.history, localSummary),
-        );
-        sourceState = result.state;
-        summary = parseHandoffSummary(result.text);
-        if (!summary) throw new Error("來源 LLM 沒有回傳有效的交接格式");
-      } catch (error) {
-        source = "local_fallback";
-        summary = localSummary;
-        setHandoff(worker, { ...progress, stage: "fallback", message: `來源 LLM 無法整理，改用本機任務紀錄：${(error as Error).message}`, source });
+    // A completely empty NPC has no memory to summarize or bootstrap. Keep
+    // the usage/auth gate, but switch to a fresh target session without
+    // consuming an LLM turn or adding a synthetic task-log entry.
+    if (!hasHistory) {
+      if (!store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState)) {
+        throw new Error("無法保存原本的 LLM 工作階段");
       }
-    } else {
-      source = "local_fallback";
-      summary = localSummary;
+      const targetModel = progress.toModel || null;
+      const targetRunner = createRunner(worker, progress.toProvider, workspacePath);
+      targetRunner.name = sourceName;
+      if (targetModel) targetRunner.setModel(targetModel);
+      worker.runner = targetRunner;
+      if (providerReady(progress.toProvider)) targetRunner.warmup();
+      const completed = { ...progress, stage: "completed" as const, message: `${providerLabel(progress.toProvider)} 已切換`, source: null, error: null };
+      worker.handoff = completed;
+      if (!persistWorker(worker)) throw new Error("無法保存新的 LLM 工作階段");
+      if (!store.saveProviderHandoff(worker.id, completed, null)) throw new Error("無法保存 LLM 切換紀錄");
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      if (progress.toProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+      else void codexCapabilitiesFor(workspacePath).refresh();
+      return;
     }
 
-    store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState);
+    const gitState = await workspaceGitState(workspacePath);
+    const localSummary = buildLocalHandoff(worker.history, gitState);
+    source = "agent";
+    setHandoff(worker, { ...progress, stage: "summarizing", message: `請 ${providerLabel(sourceProvider)} 整理工作大綱`, source: null });
+    const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
+    const sourceUsageError = usageBlockReason(sourceProvider, sourceUsage, sourceModel);
+    try {
+      if (sourceUsageError) throw new Error(sourceUsageError);
+      const result = await runDetachedTurn(
+        sourceProvider,
+        workspacePath,
+        sourceModel,
+        sourceState,
+        worker.persona,
+        summaryPrompt(worker.history, localSummary),
+      );
+      sourceState = result.state;
+      summary = parseHandoffSummary(result.text);
+      if (!summary) throw new Error("來源 LLM 沒有回傳有效的交接格式");
+    } catch (error) {
+      source = "local_fallback";
+      summary = localSummary;
+      setHandoff(worker, { ...progress, stage: "fallback", message: `來源 LLM 無法整理，改用本機任務紀錄：${(error as Error).message}`, source });
+    }
+
+    if (!store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState)) {
+      throw new Error("無法保存原本的 LLM 工作階段");
+    }
     setHandoff(worker, { ...progress, stage: "bootstrapping", message: `${providerLabel(progress.toProvider)} 正在讀取交接資料`, source });
     const checkpoint = store.loadProviderCheckpoint(worker.id, progress.toProvider, workspacePath);
     const targetModel = progress.toModel || checkpoint?.model || null;
@@ -520,7 +541,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       worker.persona,
       bootstrapPrompt(summary, recentConversation(worker.history), sourceProvider),
     );
-    store.saveProviderCheckpoint(worker.id, progress.toProvider, workspacePath, targetModel, targetResult.state);
+    if (!store.saveProviderCheckpoint(worker.id, progress.toProvider, workspacePath, targetModel, targetResult.state)) {
+      throw new Error("無法保存目標 LLM 工作階段");
+    }
 
     const targetRunner = createRunner(worker, progress.toProvider, workspacePath, targetResult.state);
     targetRunner.name = sourceName;
@@ -530,7 +553,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     const completed = { ...progress, stage: "completed" as const, message: `${providerLabel(progress.toProvider)} 已接手`, source, error: null };
     worker.handoff = completed;
     if (!persistWorker(worker)) throw new Error("無法保存新的 LLM 工作階段");
-    store.saveProviderHandoff(worker.id, completed, summary);
+    if (!store.saveProviderHandoff(worker.id, completed, summary)) throw new Error("無法保存 LLM 交接紀錄");
     record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
     record(worker, { type: "text_delta", text: `${summaryMarkdown(summary)}\n\n**接手確認**\n${targetResult.text}` });
     record(worker, { type: "turn_end", resultText: `${summaryMarkdown(summary)}\n\n接手確認：${targetResult.text}`, costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
@@ -538,6 +561,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     if (progress.toProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
   } catch (error) {
+    // The target runner may already have spawned during warmup. Always stop
+    // whichever runner is currently attached before rebuilding the source.
+    worker.runner.stop();
     const restored = createRunner(worker, sourceProvider, workspacePath, sourceState);
     restored.name = sourceName;
     if (sourceModel) restored.setModel(sourceModel);
@@ -547,8 +573,10 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     worker.handoff = failed;
     persistWorker(worker);
     store.saveProviderHandoff(worker.id, failed, summary);
-    record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
-    record(worker, { type: "error", message: `交接失敗，已恢復 ${providerLabel(sourceProvider)}：${(error as Error).message}` });
+    if (hasHistory) {
+      record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
+      record(worker, { type: "error", message: `交接失敗，已恢復 ${providerLabel(sourceProvider)}：${(error as Error).message}` });
+    }
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   }
 }
@@ -984,7 +1012,7 @@ app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
   });
 });
 
-app.post("/api/workers/:id/handoff", (req, res) => {
+app.post("/api/workers/:id/handoff", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
     res.status(404).json({ error: "unknown worker" });
@@ -1021,6 +1049,15 @@ app.post("/api/workers/:id/handoff", (req, res) => {
     error: null,
   };
   setHandoff(worker, progress);
+  if (!worker.history.some((event) => event.type === "user_message")) {
+    await performProviderHandoff(worker, progress);
+    if (worker.handoff?.stage === "failed") {
+      res.status(500).json({ error: worker.handoff.error || "無法切換 LLM", handoff: worker.handoff });
+      return;
+    }
+    res.json({ handoff: worker.handoff, worker: workerSummary(worker) });
+    return;
+  }
   void performProviderHandoff(worker, progress);
   res.status(202).json({ handoff: progress });
 });
