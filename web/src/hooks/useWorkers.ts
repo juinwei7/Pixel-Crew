@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -115,6 +115,14 @@ export function useWorkers() {
   const [providerUsage, setProviderUsage] = useState<Record<ProviderId, ProviderUsageState>>({
     claude: emptyUsage("claude"),
     codex: emptyUsage("codex"),
+  });
+  const emptyInstall = (provider: ProviderId): ProviderInstallState => ({
+    provider, status: "idle", phase: "尚未開始", command: "", sourceUrl: "",
+    startedAt: null, finishedAt: null, output: "", error: null,
+  });
+  const [providerInstalls, setProviderInstalls] = useState<Record<ProviderId, ProviderInstallState>>({
+    claude: emptyInstall("claude"),
+    codex: emptyInstall("codex"),
   });
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
@@ -525,6 +533,34 @@ export function useWorkers() {
     }
   }, []);
 
+  const installProvider = useCallback(async (provider: ProviderId): Promise<string | null> => {
+    try {
+      const started = await apiRequest<{ install: ProviderInstallState }>(`/api/providers/${provider}/install`, {
+        method: "POST",
+        timeoutMs: 15_000,
+      });
+      setProviderInstalls((current) => ({ ...current, [provider]: started.install }));
+      let state = started.install;
+      while (state.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        const result = await apiRequest<{ install: ProviderInstallState }>(`/api/providers/${provider}/install`, {
+          timeoutMs: 15_000,
+        });
+        state = result.install;
+        setProviderInstalls((current) => ({ ...current, [provider]: state }));
+      }
+      await refreshAuth(provider);
+      return state.status === "failed" ? state.error || "安裝失敗" : null;
+    } catch (error) {
+      const message = (error as Error).message;
+      setProviderInstalls((current) => ({
+        ...current,
+        [provider]: { ...current[provider], status: "failed", phase: "安裝失敗", error: message },
+      }));
+      return message;
+    }
+  }, [refreshAuth]);
+
   useEffect(() => {
     const pending = (Object.keys(auth) as ProviderId[]).filter(
       (provider) => auth[provider].status !== "authenticated" && auth[provider].status !== "checking",
@@ -547,6 +583,7 @@ export function useWorkers() {
     workflowRevisions,
     auth,
     providerUsage,
+    providerInstalls,
     createWorker,
     pickWorkspace,
     prepareHandoff,
@@ -565,5 +602,6 @@ export function useWorkers() {
     resolveApproval,
     refreshAuth,
     refreshUsage,
+    installProvider,
   };
 }

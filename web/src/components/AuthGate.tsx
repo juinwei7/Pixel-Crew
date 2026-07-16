@@ -1,11 +1,13 @@
 import { useState } from "react";
-import type { ProviderAuthState, ProviderId } from "../types";
+import type { ProviderAuthState, ProviderId, ProviderInstallState } from "../types";
 
 type Props = {
   auth: ProviderAuthState;
   providers: Record<ProviderId, ProviderAuthState>;
+  installs: Record<ProviderId, ProviderInstallState>;
   platform?: string;
   onRefresh(provider?: ProviderId): void | Promise<void>;
+  onInstall(provider: ProviderId): void | Promise<string | null>;
   onUseProvider(provider: ProviderId): void;
 };
 
@@ -15,7 +17,9 @@ const DOCS: Record<ProviderId, string> = {
 };
 
 export function providerInstallCommand(provider: ProviderId, platform = ""): string {
-  if (provider === "codex") return "npm install --global @openai/codex";
+  if (provider === "codex") return platform === "win32"
+    ? "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
+    : "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh";
   return platform === "win32"
     ? "winget install Anthropic.ClaudeCode"
     : "curl -fsSL https://claude.ai/install.sh | bash";
@@ -33,8 +37,9 @@ function statusLabel(auth: ProviderAuthState): string {
   return "連線異常";
 }
 
-export function AuthGate({ auth, providers, platform, onRefresh, onUseProvider }: Props) {
+export function AuthGate({ auth, providers, installs, platform, onRefresh, onInstall, onUseProvider }: Props) {
   const [copied, setCopied] = useState<string | null>(null);
+  const [confirmProvider, setConfirmProvider] = useState<ProviderId | null>(null);
   const readyProviders = (Object.keys(providers) as ProviderId[]).filter(
     (provider) => providers[provider].status === "authenticated",
   );
@@ -83,6 +88,7 @@ export function AuthGate({ auth, providers, platform, onRefresh, onUseProvider }
         <div className={`auth-provider-grid ${blocking ? "" : "auth-provider-grid--single"}`}>
           {visibleProviders.map((provider) => {
             const state = providers[provider];
+            const install = installs[provider];
             const installCommand = providerInstallCommand(provider, platform);
             const verifyCommand = providerVerifyCommand(provider);
             const showInstall = state.status === "cli_missing" || state.status === "error";
@@ -119,6 +125,27 @@ export function AuthGate({ auth, providers, platform, onRefresh, onUseProvider }
                   </ol>
                 )}
 
+                {showInstall && (
+                  <div className={`auth-install-status auth-install-status--${install.status}`}>
+                    {install.status !== "idle" && (
+                      <div>
+                        {install.status === "running" && <span className="spinner" />}
+                        <strong>{install.phase}</strong>
+                        {install.error && <p>{install.error}</p>}
+                        {install.output && <details><summary>安裝器輸出</summary><pre>{install.output}</pre></details>}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="auth-install-button"
+                      onClick={() => setConfirmProvider(provider)}
+                      disabled={install.status === "running"}
+                    >
+                      {install.status === "running" ? "安裝中…" : install.status === "failed" ? "重新安裝／修復" : "一鍵安裝／修復"}
+                    </button>
+                  </div>
+                )}
+
                 {state.error && <div className="auth-gate__error">{state.error}</div>}
                 {state.status !== "authenticated" && (
                   <div className="auth-provider-card__footer">
@@ -143,6 +170,27 @@ export function AuthGate({ auth, providers, platform, onRefresh, onUseProvider }
           </div>
         )}
         {blocking && <div className="auth-gate__hint">完成安裝或登入後按「重新檢查」；系統也會每 3 秒自動確認。</div>}
+
+        {confirmProvider && (
+          <div className="auth-install-confirm" role="alertdialog" aria-modal="true" aria-labelledby="install-confirm-title">
+            <div className="auth-install-confirm__card">
+              <div className="auth-gate__eyebrow">OFFICIAL INSTALLER</div>
+              <h2 id="install-confirm-title">安裝 {providers[confirmProvider].displayName}？</h2>
+              <p>Pixel Crew 將執行下列固定的官方安裝器。它會修改你的使用者程式目錄，但不會安裝 npm，也不會取得帳號密碼或 token。</p>
+              <div className="auth-gate__command"><code>{providerInstallCommand(confirmProvider, platform)}</code></div>
+              <a href={DOCS[confirmProvider]} target="_blank" rel="noreferrer">查看官方安裝說明 ↗</a>
+              <p className="auth-install-confirm__note">安裝完成後仍需由你在官方 CLI 完成登入。</p>
+              <div className="auth-install-confirm__actions">
+                <button type="button" onClick={() => setConfirmProvider(null)}>取消</button>
+                <button type="button" className="auth-install-button" onClick={() => {
+                  const provider = confirmProvider;
+                  setConfirmProvider(null);
+                  void onInstall(provider);
+                }}>確認並安裝</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

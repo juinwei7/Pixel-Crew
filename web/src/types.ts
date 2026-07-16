@@ -133,6 +133,18 @@ export type ProviderAuthState = {
   error: string | null;
 };
 
+export type ProviderInstallState = {
+  provider: ProviderId;
+  status: "idle" | "running" | "succeeded" | "failed";
+  phase: string;
+  command: string;
+  sourceUrl: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  output: string;
+  error: string | null;
+};
+
 export type UsageWindow = {
   id: string;
   label: string;

@@ -1113,6 +1113,127 @@ body {
   padding: 6px 10px;
 }
 
+.auth-install-status {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.auth-install-status > div {
+  padding: 10px 12px;
+  border: 1px solid rgba(100, 172, 205, 0.16);
+  border-radius: 9px;
+  color: var(--text-dim);
+  background: rgba(4, 9, 19, 0.72);
+  font-size: 11px;
+}
+
+.auth-install-status > div > strong {
+  margin-left: 8px;
+}
+
+.auth-install-status p {
+  margin: 7px 0 0;
+  color: var(--err);
+  line-height: 1.5;
+}
+
+.auth-install-status details {
+  margin-top: 8px;
+}
+
+.auth-install-status summary {
+  cursor: pointer;
+  color: var(--cyan);
+}
+
+.auth-install-status pre {
+  max-height: 120px;
+  margin: 8px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.auth-install-button {
+  padding: 9px 14px;
+  border: 1px solid rgba(77, 227, 255, 0.42);
+  border-radius: 9px;
+  color: var(--cyan);
+  background: rgba(77, 227, 255, 0.1);
+  font-weight: 700;
+}
+
+.auth-install-button:disabled {
+  cursor: wait;
+  opacity: 0.52;
+}
+
+.auth-install-confirm {
+  position: fixed;
+  z-index: 130;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 5, 12, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.auth-install-confirm__card {
+  width: min(560px, 100%);
+  padding: 26px;
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  background: rgba(9, 14, 28, 0.99);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 42px rgba(77, 227, 255, 0.14);
+}
+
+.auth-install-confirm__card h2 {
+  margin: 6px 0 10px;
+  color: var(--text);
+  font-size: 23px;
+}
+
+.auth-install-confirm__card p {
+  color: var(--text-dim);
+  line-height: 1.65;
+}
+
+.auth-install-confirm__card > a {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--cyan);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.auth-install-confirm__note {
+  margin-bottom: 0;
+  color: var(--warn) !important;
+}
+
+.auth-install-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(100, 172, 205, 0.16);
+}
+
+.auth-install-confirm__actions > button:first-child {
+  padding: 9px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  color: var(--text-dim);
+  background: transparent;
+}
+
 .auth-gate__actions {
   display: flex;
   align-items: center;

@@ -3,7 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthGate, providerInstallCommand, providerVerifyCommand } from "../src/components/AuthGate";
-import type { ProviderAuthState, ProviderId } from "../src/types";
+import type { ProviderAuthState, ProviderId, ProviderInstallState } from "../src/types";
 
 function auth(provider: ProviderId, status: ProviderAuthState["status"]): ProviderAuthState {
   return {
@@ -16,13 +16,22 @@ function auth(provider: ProviderId, status: ProviderAuthState["status"]): Provid
   };
 }
 
+function installs(): Record<ProviderId, ProviderInstallState> {
+  return Object.fromEntries((["claude", "codex"] as ProviderId[]).map((provider) => [provider, {
+    provider, status: "idle", phase: "尚未開始", command: "", sourceUrl: "",
+    startedAt: null, finishedAt: null, output: "", error: null,
+  }])) as Record<ProviderId, ProviderInstallState>;
+}
+
 test("does not block the office when Codex is ready and Claude is missing", () => {
   const providers = { claude: auth("claude", "cli_missing"), codex: auth("codex", "authenticated") };
   const html = renderToStaticMarkup(<AuthGate
     auth={providers.claude}
     providers={providers}
+    installs={installs()}
     platform="win32"
     onRefresh={() => {}}
+    onInstall={() => null}
     onUseProvider={() => {}}
   />);
 
@@ -38,14 +47,16 @@ test("does not block the office when Claude is ready and Codex is missing", () =
   const html = renderToStaticMarkup(<AuthGate
     auth={providers.codex}
     providers={providers}
+    installs={installs()}
     platform="darwin"
     onRefresh={() => {}}
+    onInstall={() => null}
     onUseProvider={() => {}}
   />);
 
   assert.match(html, /辦公室仍可使用 Claude Code/);
   assert.match(html, /改用 Claude Code/);
-  assert.match(html, /npm install --global @openai\/codex/);
+  assert.match(html, /chatgpt\.com\/codex\/install\.sh/);
 });
 
 test("shows provider-neutral installation guides when neither provider is ready", () => {
@@ -53,8 +64,10 @@ test("shows provider-neutral installation guides when neither provider is ready"
   const html = renderToStaticMarkup(<AuthGate
     auth={providers.claude}
     providers={providers}
+    installs={installs()}
     platform="darwin"
     onRefresh={() => {}}
+    onInstall={() => null}
     onUseProvider={() => {}}
   />);
 
@@ -62,7 +75,8 @@ test("shows provider-neutral installation guides when neither provider is ready"
   assert.match(html, /aria-modal="true"/);
   assert.match(html, /連接一位 AI 隊員/);
   assert.match(html, /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
-  assert.match(html, /npm install --global @openai\/codex/);
+  assert.match(html, /chatgpt\.com\/codex\/install\.sh/);
+  assert.match(html, /一鍵安裝／修復/);
   assert.match(html, /claude auth login/);
   assert.match(html, /codex login/);
   assert.match(html, /官方安裝說明/);
@@ -73,8 +87,10 @@ test("renders no onboarding UI for an authenticated active provider", () => {
   const html = renderToStaticMarkup(<AuthGate
     auth={providers.claude}
     providers={providers}
+    installs={installs()}
     platform="linux"
     onRefresh={() => {}}
+    onInstall={() => null}
     onUseProvider={() => {}}
   />);
   assert.equal(html, "");
@@ -83,7 +99,7 @@ test("renders no onboarding UI for an authenticated active provider", () => {
 test("selects official platform install and verification commands", () => {
   assert.equal(providerInstallCommand("claude", "win32"), "winget install Anthropic.ClaudeCode");
   assert.equal(providerInstallCommand("claude", "linux"), "curl -fsSL https://claude.ai/install.sh | bash");
-  assert.equal(providerInstallCommand("codex", "win32"), "npm install --global @openai/codex");
+  assert.equal(providerInstallCommand("codex", "win32"), "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex");
   assert.equal(providerVerifyCommand("claude"), "claude --version");
   assert.equal(providerVerifyCommand("codex"), "codex --version");
 });

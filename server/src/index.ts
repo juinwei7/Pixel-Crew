@@ -39,6 +39,7 @@ import { canonicalWorkspacePath, sameWorkspace, workspaceIdentity } from "./plat
 import { execCli, resolveExecutable } from "./platform/processes.js";
 import { pickDirectory } from "./platform/directoryPicker.js";
 import { parseCommandLine } from "./platform/commandLine.js";
+import { ProviderInstaller } from "./providerInstaller.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -85,6 +86,9 @@ const authStates: Record<ProviderId, ProviderAuthState> = {
   claude: initialAuthState(authProviders.claude),
   codex: initialAuthState(authProviders.codex),
 };
+const providerInstaller = new ProviderInstaller(async (provider) => {
+  await refreshOneAuth(provider);
+});
 
 function systemStatus() {
   const release = osRelease();
@@ -756,6 +760,36 @@ app.post("/api/auth/refresh", async (req, res) => {
   const provider = requested === "claude" || requested === "codex" ? requested : undefined;
   const auth = await refreshAuth(provider);
   res.json({ auth });
+});
+
+function requestedProvider(value: unknown): ProviderId | null {
+  return value === "claude" || value === "codex" ? value : null;
+}
+
+app.get("/api/providers/:provider/install", (req, res) => {
+  const provider = requestedProvider(req.params.provider);
+  if (!provider) {
+    res.status(400).json({ error: "不支援的 AI provider" });
+    return;
+  }
+  res.json({ install: providerInstaller.get(provider) });
+});
+
+app.post("/api/providers/:provider/install", (req, res) => {
+  if (!isAllowedLoopbackOrigin(req.headers.origin)) {
+    res.status(403).json({ error: "安裝只能從本機 Pixel Crew 介面啟動" });
+    return;
+  }
+  const provider = requestedProvider(req.params.provider);
+  if (!provider) {
+    res.status(400).json({ error: "不支援的 AI provider" });
+    return;
+  }
+  if (authStates[provider].status === "authenticated") {
+    res.status(409).json({ error: `${authStates[provider].displayName} 已經可以使用` });
+    return;
+  }
+  res.status(202).json({ install: providerInstaller.start(provider) });
 });
 
 app.post("/api/workers", (req, res) => {

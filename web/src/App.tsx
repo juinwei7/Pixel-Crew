@@ -43,9 +43,9 @@ const EMPTY_CAPABILITIES = {
 export function App() {
   const {
     workers, order, activeId, setActiveId, targetRepoPath, system, workspacePaths, wsReady,
-    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, createWorker, pickWorkspace,
+    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
-    send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage,
+    send, setModel, setPersona, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -251,8 +251,10 @@ export function App() {
       <AuthGate
         auth={activeAuth}
         providers={auth}
+        installs={providerInstalls}
         platform={system?.platform}
         onRefresh={refreshAuth}
+        onInstall={installProvider}
         onUseProvider={(provider) => {
           if (active) void changeProvider(provider);
           else void createWorker(undefined, provider, activeWorkspace);
