@@ -3979,7 +3979,9 @@ body {
 @media (max-width: 1279px) {
   .top-bar__group-label, .top-bar__health span { display: none; }
   .top-bar__room { max-width: 190px; }
-  .crew-rail { width: 205px; }
+  /* Exclude the collapsed rail so it keeps its 52px width (matches the
+     :not() pattern used in the narrower breakpoint below). */
+  .crew-rail:not(.crew-rail--collapsed) { width: 205px; }
 }
 
 @media (max-width: 899px) {
