@@ -9,7 +9,7 @@ import type { AgentSession, MessageDocument, MessageImage } from "./providers/se
 import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
-import { autoApprovalPolicy } from "./dangerousCommand.js";
+import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
@@ -125,11 +125,11 @@ export class ClaudeSession implements AgentSession {
     // none. Read at spawn time so a persona change survives /clear, model
     // switches, and restarts by being re-applied on the next `ensureChild`.
     private readonly getPersonaPrompt: () => string = () => "",
-    // Whether this worker should auto-approve tool calls instead of prompting.
-    // Read live on every approval request (no restart needed to toggle), so a
-    // change takes effect on the worker's very next tool call. Commands
-    // outside the narrow autoApprovalPolicy allowlist still prompt.
-    private readonly getAutoApprove: () => boolean = () => false,
+    // Auto-approve mode for this worker's tool calls, read live on every
+    // approval request (no restart needed to switch). "off" always prompts,
+    // "safe" only allows a narrow read-only/verified-safe set, "full" allows
+    // everything except isDangerousCommand matches. See dangerousCommand.ts.
+    private readonly getAutoApproveMode: () => AutoApproveMode = () => "off",
     initialState?: { sessionId: string; completedTurns: number },
   ) {
     this.claudeSessionId = initialState?.sessionId || randomUUID();
@@ -223,9 +223,10 @@ export class ClaudeSession implements AgentSession {
     const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
       ? String((originalInput as Record<string, unknown>).command ?? "").slice(0, 20_000)
       : undefined;
-    const autoApproval = autoApprovalPolicy(toolName, command);
+    const mode = this.getAutoApproveMode();
+    const autoApproval = evaluateAutoApproval(mode, toolName, command);
 
-    if (this.getAutoApprove() && autoApproval.allowed) {
+    if (autoApproval.allowed) {
       // Still surface it in the task log as an already-resolved item, so the
       // user can see what ran without having to act on it.
       const id = randomUUID();
@@ -239,7 +240,7 @@ export class ClaudeSession implements AgentSession {
           input,
           command,
           cwd: this.workspacePath,
-          reason: "自動核准已開啟",
+          reason: mode === "full" ? "完全自動核准已開啟" : "安全自動核准已開啟",
           decisions: [],
         },
       });
@@ -256,8 +257,8 @@ export class ClaudeSession implements AgentSession {
       input,
       command,
       cwd: this.workspacePath,
-      reason: this.getAutoApprove() && !autoApproval.allowed
-        ? `安全自動核准已開啟，但此操作仍需確認（${autoApproval.reason}）`
+      reason: mode !== "off"
+        ? `${mode === "full" ? "完全" : "安全"}自動核准已開啟，但此操作仍需確認（${autoApproval.reason}）`
         : permissionUpdates.length
           ? `Claude Code 需要額外權限；「本次皆允許」只套用目前工作階段的建議規則：${permissionUpdates.flatMap((update) => update.rules.map((rule) => `${rule.toolName}(${rule.ruleContent})`)).join("、").slice(0, 500)}`
           : "Claude Code 需要額外權限才能繼續目前回合",

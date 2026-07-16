@@ -3,6 +3,12 @@ import type { StationKey } from "./stations";
 export type ProviderId = "claude" | "codex";
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
 
+// "off": always prompts. "safe": narrow allowlist (read-only tools + a
+// curated set of verified-safe commands) — still asks for anything else.
+// "full": allows everything except commands matched by the dangerous-command
+// denylist (rm -rf, sudo, git push --force, …).
+export type AutoApproveMode = "off" | "safe" | "full";
+
 export type MessageImagePayload = {
   name: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
@@ -213,7 +219,7 @@ export type WorkerState = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
-  autoApprove: boolean;
+  autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
   turns: Turn[];
   character: CharacterState;

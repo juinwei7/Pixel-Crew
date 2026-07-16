@@ -70,18 +70,24 @@ test("shows the auto-approve toggle for Claude and reflects the worker's current
   const off = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
   const offHtml = renderToStaticMarkup(<TopBar {...commonProps} active={off} />);
   assert.match(offHtml, /安全自動核准/);
-  assert.match(offHtml, /aria-pressed="false"/);
+  assert.match(offHtml, /top-bar__auto-approve--off/);
+  assert.match(offHtml, /<option value="off" selected="">/);
 
-  const on = { ...off, autoApprove: true };
-  const onHtml = renderToStaticMarkup(<TopBar {...commonProps} active={on} />);
-  assert.match(onHtml, /aria-pressed="true"/);
-  assert.match(onHtml, /top-bar__auto-approve--on/);
+  const safe = { ...off, autoApproveMode: "safe" as const };
+  const safeHtml = renderToStaticMarkup(<TopBar {...commonProps} active={safe} />);
+  assert.match(safeHtml, /top-bar__auto-approve--safe/);
+  assert.match(safeHtml, /<option value="safe" selected="">/);
+
+  const full = { ...off, autoApproveMode: "full" as const };
+  const fullHtml = renderToStaticMarkup(<TopBar {...commonProps} active={full} />);
+  assert.match(fullHtml, /top-bar__auto-approve--full/);
+  assert.match(fullHtml, /<option value="full" selected="">/);
 });
 
-test("hides the auto-approve toggle for Codex", () => {
-  const worker = emptyWorker("worker", "Ada", null, false, 0, "codex", "/repo/my-room");
+test("also shows the auto-approve control for Codex", () => {
+  const off = emptyWorker("worker", "Ada", null, false, 0, "codex", "/repo/my-room");
   const html = renderToStaticMarkup(<TopBar
-    active={worker}
+    active={off}
     activeWorkspace="/repo/my-room"
     capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: false, source: "live", updatedAt: null, error: null }}
     auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null }}
@@ -95,5 +101,6 @@ test("hides the auto-approve toggle for Codex", () => {
     onRefreshAuth={() => {}}
     onResetUi={() => {}}
   />);
-  assert.doesNotMatch(html, /安全自動核准/);
+  assert.match(html, /安全自動核准/);
+  assert.match(html, /top-bar__auto-approve--off/);
 });

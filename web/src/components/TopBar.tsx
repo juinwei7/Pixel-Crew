@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CapabilityState, ProviderAuthState, ProviderId, WorkerState } from "../types";
+import type { AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, WorkerState } from "../types";
 import { roomName } from "../workspace";
 import { McpPanel } from "./McpPanel";
 
@@ -17,7 +17,7 @@ type Props = {
   onRoom(): void;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
-  onAutoApprove(enabled: boolean): void;
+  onAutoApprove(mode: AutoApproveMode): void;
   onRefreshAuth(): void;
   onResetUi(): void;
 };
@@ -101,18 +101,18 @@ export function TopBar({
           ))}
         </select>
         {capabilities.loading && <span className="top-bar__agent-loading" role="status" aria-label="正在背景更新模型" title="正在背景更新模型"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></span>}
-        {provider === "claude" && (
-          <button
-            type="button"
-            className={`top-bar__auto-approve ${active?.autoApprove ? "top-bar__auto-approve--on" : ""}`}
-            disabled={!active}
-            aria-pressed={Boolean(active?.autoApprove)}
-            onClick={() => onAutoApprove(!active?.autoApprove)}
-            title="開啟後唯讀工具與安全驗證指令會自動核准；寫入、外部工具與高風險操作仍會詢問"
-          >
-            <i />安全自動核准
-          </button>
-        )}
+        <select
+          className={`top-bar__auto-approve top-bar__auto-approve--${active?.autoApproveMode ?? "off"}`}
+          value={active?.autoApproveMode ?? "off"}
+          disabled={!active}
+          onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
+          aria-label="自動核准模式"
+          title="安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了 rm -rf、sudo 等高風險指令，其他都直接放行"
+        >
+          <option value="off">自動核准：關閉</option>
+          <option value="safe">安全自動核准</option>
+          <option value="full">完全自動核准</option>
+        </select>
       </div>
 
       <div ref={mcpRef} className="mcp-chip-wrap top-bar__mcp">

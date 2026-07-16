@@ -28,3 +28,11 @@ test("normal room switching remains dismissible", () => {
   assert.match(html, /aria-label="關閉"/);
   assert.doesNotMatch(html, /FIRST ROOM SETUP/);
 });
+
+test("new NPC flow asks for a workspace before creating the station", () => {
+  const html = renderToStaticMarkup(<WorkspacePicker {...common} mode="create" />);
+  assert.match(html, /新 NPC 要在哪裡工作？/);
+  assert.match(html, /確認後才會建立人員與工位/);
+  assert.match(html, /在此建立工位/);
+  assert.doesNotMatch(html, /目前 NPC 會直接搬到新位置/);
+});

@@ -5,7 +5,12 @@ import type { CapabilityState } from "./capabilities.js";
 import type { ProviderId } from "./providers/types.js";
 import { type Persona, type PersonaTemplate, parsePersona, serializePersona } from "./persona.js";
 import type { HandoffProgress } from "./handoff.js";
+import type { AutoApproveMode } from "./dangerousCommand.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+
+function normalizeAutoApproveMode(value: unknown): AutoApproveMode {
+  return value === "safe" || value === "full" ? value : "off";
+}
 
 export type PersistedWorker = {
   id: string;
@@ -20,7 +25,7 @@ export type PersistedWorker = {
   sessionId: string;
   completedTurns: number;
   persona: Persona | null;
-  autoApprove: boolean;
+  autoApproveMode: AutoApproveMode;
   events: RunnerEvent[];
 };
 
@@ -171,12 +176,20 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to auto-approve-aware workers.
     }
+    try {
+      // Superseded by the three-state auto_approve_mode below (off/safe/full);
+      // kept only as the source for the one-time backfill of it.
+      this.db.exec("ALTER TABLE workers ADD COLUMN auto_approve_mode TEXT");
+    } catch {
+      // Existing databases already migrated to graded auto-approve modes.
+    }
+    this.db.exec("UPDATE workers SET auto_approve_mode = CASE WHEN auto_approve = 1 THEN 'safe' ELSE 'off' END WHERE auto_approve_mode IS NULL");
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode
       FROM workers ORDER BY created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -205,7 +218,7 @@ export class LocalStore {
         sessionId: String(row.claude_session_id),
         completedTurns: Number(row.completed_turns),
         persona: parsePersona(row.persona),
-        autoApprove: Number(row.auto_approve) === 1,
+        autoApproveMode: normalizeAutoApproveMode(row.auto_approve_mode),
         events,
       };
     });
@@ -215,7 +228,7 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
@@ -229,7 +242,7 @@ export class LocalStore {
           claude_session_id = excluded.claude_session_id,
           completed_turns = excluded.completed_turns,
           persona = excluded.persona,
-          auto_approve = excluded.auto_approve,
+          auto_approve_mode = excluded.auto_approve_mode,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -244,7 +257,7 @@ export class LocalStore {
         worker.sessionId,
         worker.completedTurns,
         serializePersona(worker.persona),
-        worker.autoApprove ? 1 : 0,
+        worker.autoApproveMode,
       );
     });
   }

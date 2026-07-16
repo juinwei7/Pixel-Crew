@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -40,7 +40,7 @@ type ServerMessage =
         provider: ProviderId;
         workspacePath: string;
         persona: Persona | null;
-        autoApprove: boolean;
+        autoApproveMode: AutoApproveMode;
         handoff: HandoffProgress | null;
         events: RunnerEvent[];
       }>;
@@ -67,7 +67,7 @@ type WorkerSummary = {
   provider: ProviderId;
   workspacePath: string;
   persona: Persona | null;
-  autoApprove: boolean;
+  autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
 };
 
@@ -173,7 +173,7 @@ export function useWorkers() {
               w.avatarKind,
               w.avatarPresetId,
               w.handoff ?? null,
-              w.autoApprove ?? false,
+              w.autoApproveMode ?? "off",
             );
             for (const event of w.events) state = applyRunnerEvent(state, event);
             // A persisted running turn cannot still have a live provider
@@ -219,7 +219,7 @@ export function useWorkers() {
               data.worker.avatarKind,
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
-              data.worker.autoApprove,
+              data.worker.autoApproveMode,
             ),
           }));
           setWorkspacePaths((current) =>
@@ -264,7 +264,7 @@ export function useWorkers() {
                   data.worker.avatarKind,
                   data.worker.avatarPresetId,
                   data.worker.handoff ?? null,
-                  data.worker.autoApprove,
+                  data.worker.autoApproveMode,
                 );
             return { ...prev, [data.worker.id]: updated };
           });
@@ -487,9 +487,9 @@ export function useWorkers() {
     }
   }, []);
 
-  const setAutoApprove = useCallback(async (id: string, enabled: boolean): Promise<string | null> => {
+  const setAutoApproveMode = useCallback(async (id: string, mode: AutoApproveMode): Promise<string | null> => {
     try {
-      await apiRequest(`/api/workers/${id}/auto-approve`, { method: "POST", body: { enabled } });
+      await apiRequest(`/api/workers/${id}/auto-approve`, { method: "POST", body: { mode } });
       return null;
     } catch (error) {
       return (error as Error).message;
@@ -613,7 +613,7 @@ export function useWorkers() {
     send,
     setModel,
     setPersona,
-    setAutoApprove,
+    setAutoApproveMode,
     interrupt,
     resolveApproval,
     refreshAuth,

@@ -79,7 +79,7 @@ export function emptyWorker(
   avatarKind: WorkerState["avatarKind"] = avatarId ? "custom" : "preset",
   avatarPresetId = "classic",
   handoff: WorkerState["handoff"] = null,
-  autoApprove = false,
+  autoApproveMode: WorkerState["autoApproveMode"] = "off",
 ): WorkerState {
   return {
     id,
@@ -93,7 +93,7 @@ export function emptyWorker(
     provider,
     workspacePath,
     persona,
-    autoApprove,
+    autoApproveMode,
     handoff,
     turns: [],
     character: INITIAL_CHARACTER,

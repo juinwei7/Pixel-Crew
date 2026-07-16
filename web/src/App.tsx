@@ -45,10 +45,12 @@ export function App() {
     workers, order, activeId, setActiveId, targetRepoPath, system, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
-    send, setModel, setPersona, setAutoApprove, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
+    send, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceMode, setWorkspaceMode] = useState<"create" | "move">("move");
+  const [newWorkerProvider, setNewWorkerProvider] = useState<ProviderId>("claude");
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
@@ -86,8 +88,23 @@ export function App() {
   }, [setActiveId, updatePreferences]);
 
   useEffect(() => {
-    if (workspaceSetupRequired) setWorkspaceOpen(true);
-  }, [workspaceSetupRequired]);
+    if (workspaceSetupRequired) {
+      setWorkspaceMode("create");
+      setNewWorkerProvider(activeProvider);
+      setWorkspaceOpen(true);
+    }
+  }, [workspaceSetupRequired, activeProvider]);
+
+  const openWorkspaceForCreate = useCallback((provider: ProviderId) => {
+    setNewWorkerProvider(provider);
+    setWorkspaceMode("create");
+    setWorkspaceOpen(true);
+  }, []);
+
+  const openWorkspaceForMove = useCallback(() => {
+    setWorkspaceMode("move");
+    setWorkspaceOpen(true);
+  }, []);
 
   const approvalWorker = useMemo(() => workerList.find((worker) => worker.turns.some((turn) =>
     turn.items.some((item) => item.kind === "approval" && item.status === "pending")
@@ -176,7 +193,7 @@ export function App() {
         modelOptions={modelOptions}
         workerCount={workerList.length}
         providerChanging={providerChanging}
-        onRoom={() => setWorkspaceOpen(true)}
+        onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={(model) => {
           if (!activeId) return;
@@ -185,11 +202,13 @@ export function App() {
             else notify("模型設定已更新");
           });
         }}
-        onAutoApprove={(enabled) => {
+        onAutoApprove={(mode) => {
           if (!activeId) return;
-          void setAutoApprove(activeId, enabled).then((error) => {
-            if (error) notify(error, "error");
-            else notify(enabled ? "安全自動核准已開啟；寫入、外部工具與高風險操作仍會詢問" : "安全自動核准已關閉");
+          void setAutoApproveMode(activeId, mode).then((error) => {
+            if (error) { notify(error, "error"); return; }
+            if (mode === "off") notify("自動核准已關閉");
+            else if (mode === "safe") notify("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問");
+            else notify("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問");
           });
         }}
         onRefreshAuth={() => void refreshAuth(activeProvider)}
@@ -240,12 +259,12 @@ export function App() {
         onFilter={(crewFilter) => updatePreferences({ crewFilter })}
         onCollapsed={(crewRailCollapsed) => updatePreferences({ crewRailCollapsed })}
         onSelect={setActiveId}
-        onCreate={() => void createWorker(undefined, activeProvider, activeWorkspace).then((result) => result.error ? notify(result.error, "error") : notify("新工位建造中"))}
+        onCreate={() => openWorkspaceForCreate(activeProvider)}
         onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
         onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
         onAvatar={setAvatarWorkerId}
         onPersona={setPersonaWorkerId}
-        onRoom={(id) => { setActiveId(id); setWorkspaceOpen(true); }}
+        onRoom={(id) => { setActiveId(id); openWorkspaceForMove(); }}
       />
 
       <CommandComposer
@@ -277,16 +296,17 @@ export function App() {
         onInstall={installProvider}
         onUseProvider={(provider) => {
           if (active) void changeProvider(provider);
-          else void createWorker(undefined, provider, activeWorkspace);
+          else openWorkspaceForCreate(provider);
         }}
       />}
 
-      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
-        if (!activeId) {
-          const result = await createWorker(undefined, activeProvider, path);
-          if (!result.error) notify("已進入新房間");
+      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
+        if (workspaceMode === "create") {
+          const result = await createWorker(undefined, newWorkerProvider, path);
+          if (!result.error) notify("新工位建造中");
           return result.error ?? null;
         }
+        if (!activeId) return "請先選擇要搬遷的 NPC";
         const error = await switchWorkspace(activeId, path);
         if (!error) notify("人員已搬到新房間");
         return error;

@@ -8,9 +8,15 @@
 export type DangerousMatch = { dangerous: boolean; reason?: string };
 export type AutoApprovalMatch = { allowed: boolean; reason?: string };
 
-const RM_RECURSIVE_OR_FORCE = /\brm\b[^|&;\n]*\s(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive|--force)\b/;
-const RM_WITH_RISKY_TARGET = /\brm\b[^|&;\n]*[^\w.\-\/](\/|~|\$HOME|\*|\.\.)(?:[\s/]|$)/;
-const RM_BARE_ROOT_ISH = /\brm\b\s+(-\S+\s+)*(\/|~\/?|\*)\s*$/;
+// `rm` is a subcommand name for several wrapper tools (git rm, docker rm,
+// npm/yarn/pnpm rm) that have nothing to do with the destructive shell `rm`.
+// Excluding them here is what keeps auto-approve actually useful — without
+// it, routine commands like `git rm -f old.txt` or `docker rm -f container`
+// would always fall back to a manual prompt.
+const NOT_A_WRAPPER_SUBCOMMAND = "(?<!\\b(?:git|docker|docker-compose|npm|yarn|pnpm)\\s)";
+const RM_RECURSIVE_OR_FORCE = new RegExp(`${NOT_A_WRAPPER_SUBCOMMAND}\\brm\\b[^|&;\\n]*\\s(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive|--force)\\b`);
+const RM_WITH_RISKY_TARGET = new RegExp(`${NOT_A_WRAPPER_SUBCOMMAND}\\brm\\b[^|&;\\n]*[^\\w.\\-\\/](\\/|~|\\$HOME|\\*|\\.\\.)(?:[\\s/]|$)`);
+const RM_BARE_ROOT_ISH = new RegExp(`${NOT_A_WRAPPER_SUBCOMMAND}\\brm\\b\\s+(-\\S+\\s+)*(\\/|~\\/?|\\*)\\s*$`);
 
 const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: RM_RECURSIVE_OR_FORCE, reason: "遞迴或強制刪除（rm -r / -f）" },
@@ -64,4 +70,22 @@ export function autoApprovalPolicy(toolName: string, command?: string): AutoAppr
   }
   if (SAFE_BASH_COMMANDS.some((pattern) => pattern.test(normalized))) return { allowed: true };
   return { allowed: false, reason: "指令不在唯讀／驗證安全清單" };
+}
+
+/**
+ * "safe" only lets through a narrow, curated allowlist (autoApprovalPolicy) —
+ * it still asks for anything it doesn't specifically recognize, which is
+ * correct-but-conservative. "full" flips the default to allow: everything
+ * auto-approves except commands matched by the isDangerousCommand denylist,
+ * so day-to-day work (git rm, docker rm, arbitrary npm scripts, …) stops
+ * prompting, while the well-known catastrophic patterns still do.
+ */
+export type AutoApproveMode = "off" | "safe" | "full";
+
+export function evaluateAutoApproval(mode: AutoApproveMode, toolName: string, command?: string): AutoApprovalMatch {
+  if (mode === "off") return { allowed: false };
+  if (mode === "safe") return autoApprovalPolicy(toolName, command);
+  if (toolName !== "Bash") return { allowed: true };
+  const danger = isDangerousCommand(command?.trim() ?? "");
+  return danger.dangerous ? { allowed: false, reason: danger.reason } : { allowed: true };
 }

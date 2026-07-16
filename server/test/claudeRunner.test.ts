@@ -102,7 +102,7 @@ test("auto-approve resolves allowlisted tool calls without prompting, but still 
     "/repo",
     () => [],
     () => "",
-    () => true, // auto-approve on
+    () => "safe", // narrow allowlist — anything not on it still prompts
   );
   session.busy = true;
   const token = (session as unknown as { approvalToken: string }).approvalToken;
@@ -131,6 +131,39 @@ test("auto-approve resolves allowlisted tool calls without prompting, but still 
   assert.match(unknownRequest.reason ?? "", /仍需確認/);
   session.resolveApproval(unknownRequest.id, "deny");
   assert.deepEqual(await unknownPromise, { behavior: "deny", message: "使用者拒絕這項操作" });
+  session.stop();
+});
+
+test("full auto-approve mode allows non-Bash tools and everyday shell commands, but still blocks known-dangerous ones", async () => {
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession(
+    (event) => events.push(event),
+    "/repo",
+    () => [],
+    () => "",
+    () => "full",
+  );
+  session.busy = true;
+  const token = (session as unknown as { approvalToken: string }).approvalToken;
+  const requests = () => events.filter((event): event is Extract<RunnerEvent, { type: "approval_requested" }> => event.type === "approval_requested");
+  const resolved = () => events.filter((event): event is Extract<RunnerEvent, { type: "approval_resolved" }> => event.type === "approval_resolved");
+
+  // Not on the "safe" allowlist, but not dangerous either — full mode allows it.
+  const gitRm = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "git rm -f old.txt" } });
+  assert.deepEqual(gitRm, { behavior: "allow", updatedInput: { command: "git rm -f old.txt" } });
+
+  // Arbitrary non-Bash tools (e.g. an MCP call) are also blanket-allowed.
+  const mcpCall = await session.handleApprovalBridge(token, { tool_name: "mcp__gmail__send_message", input: { to: "x@example.com" } });
+  assert.deepEqual(mcpCall, { behavior: "allow", updatedInput: { to: "x@example.com" } });
+  assert.equal(resolved().length, 2);
+  assert.ok(resolved().every((event) => event.decision === "auto_allow"));
+
+  // The denylist is still the hard floor even in the more permissive mode.
+  const dangerousPromise = session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "rm -rf /" } });
+  const dangerousRequest = requests().at(-1)!.request;
+  assert.match(dangerousRequest.reason ?? "", /完全自動核准已開啟，但此操作仍需確認/);
+  session.resolveApproval(dangerousRequest.id, "deny");
+  await dangerousPromise;
   session.stop();
 });
 

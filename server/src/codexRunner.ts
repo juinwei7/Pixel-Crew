@@ -9,6 +9,7 @@ import type { AgentSession, MessageDocument, MessageImage } from "./providers/se
 import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
@@ -51,6 +52,12 @@ export class CodexSession implements AgentSession {
     // spawn time and written to a per-NPC instructions file so it survives
     // /clear, model switches, and restarts (re-applied on every app-server).
     private readonly getPersonaPrompt: () => string = () => "",
+    // Auto-approve mode for this worker's tool calls, read live on every
+    // approval request Codex's app-server sends us (no restart needed).
+    // "off" always prompts, "safe" only allows a narrow read-only/verified
+    // -safe set, "full" allows everything except isDangerousCommand matches.
+    // See dangerousCommand.ts.
+    private readonly getAutoApproveMode: () => AutoApproveMode = () => "off",
     initialState?: { sessionId: string; completedTurns: number },
   ) {
     this.sessionId = initialState?.sessionId || randomUUID();
@@ -362,17 +369,56 @@ export class CodexSession implements AgentSession {
       this.sendRpcError(message.id, -32601, "Unsupported client request");
       return;
     }
-    const id = randomUUID();
     const category = method.includes("commandExecution") ? "command" : method.includes("fileChange") ? "file_change" : "permissions";
+    const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
+    // Under "safe" mode, file changes and permission escalations are never in
+    // autoApprovalPolicy's allowlist, so only commandExecution can auto
+    // -approve. Under "full" mode, evaluateAutoApproval treats any non-Bash
+    // action as blanket-safe (mirroring Claude), so these two categories can
+    // auto-approve too — that's the whole point of the more permissive mode.
+    const mode = this.getAutoApproveMode();
+    const autoApproval = evaluateAutoApproval(mode, category === "command" ? "Bash" : "Edit", command);
+
+    if (autoApproval.allowed) {
+      const id = randomUUID();
+      this.onEvent({
+        type: "approval_requested",
+        request: {
+          id,
+          activityId: params.itemId ? String(params.itemId) : null,
+          category,
+          title: "Codex 執行了這個指令",
+          input: boundedValue({ command: params.command ?? "", actions: params.commandActions ?? [] }),
+          command,
+          cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
+          reason: mode === "full" ? "完全自動核准已開啟" : "安全自動核准已開啟",
+          decisions: [],
+        },
+      });
+      this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
+      // item/permissions/requestApproval expects a differently-shaped
+      // response than the other two categories — mirror resolveApproval's
+      // accept path exactly, or Codex's app-server will reject the reply.
+      if (method === "item/permissions/requestApproval") {
+        this.sendRpcResult(message.id, { permissions: params.permissions, scope: "turn" });
+      } else {
+        this.sendRpcResult(message.id, { decision: "accept" });
+      }
+      return;
+    }
+
+    const id = randomUUID();
     const request: ApprovalRequest = {
       id,
       activityId: params.itemId ? String(params.itemId) : null,
       category,
       title: category === "command" ? "允許執行這個指令？" : category === "file_change" ? "允許套用檔案變更？" : "允許提高工作權限？",
       input: boundedValue(category === "command" ? { command: params.command ?? "", actions: params.commandActions ?? [] } : params),
-      command: params.command ? String(params.command).slice(0, 20_000) : undefined,
+      command,
       cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
-      reason: params.reason ? String(params.reason).slice(0, 4_000) : undefined,
+      reason: mode !== "off"
+        ? `${mode === "full" ? "完全" : "安全"}自動核准已開啟，但此操作仍需確認（${autoApproval.reason}）`
+        : params.reason ? String(params.reason).slice(0, 4_000) : undefined,
       decisions: ["allow_once", "allow_session", "deny"],
     };
     this.approvals.set(id, { rpcId: message.id, method, params, request });

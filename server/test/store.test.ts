@@ -67,7 +67,7 @@ test("persists workers, bounded events, and capability cache", () => {
       sessionId: "session-1",
       completedTurns: 3,
       persona: { role: "前端 QA", instructions: "回報 bug 附重現步驟" },
-      autoApprove: true,
+      autoApproveMode: "full",
     });
     store.appendEvent("worker-1", { type: "user_message", text: "first" }, 2);
     store.appendEvent("worker-1", { type: "text_delta", text: "hello" }, 2);
@@ -123,7 +123,7 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(worker.avatarKind, "custom");
     assert.equal(worker.avatarPresetId, "signal");
     assert.deepEqual(worker.persona, { role: "前端 QA", instructions: "回報 bug 附重現步驟" });
-    assert.equal(worker.autoApprove, true);
+    assert.equal(worker.autoApproveMode, "full");
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
     assert.deepEqual(reopened.loadProviderUsage("claude"), usage);
@@ -142,6 +142,50 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(reopened.loadWorkers(20).length, 0);
   } finally {
     for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("backfills the graded auto-approve mode from a legacy boolean auto_approve column", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-"));
+  try {
+    const path = join(dir, "test.sqlite");
+    // Simulate a DB from before auto_approve_mode existed: the base schema
+    // plus the older boolean auto_approve column, no auto_approve_mode.
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model TEXT,
+        color_index INTEGER NOT NULL,
+        avatar_id TEXT,
+        avatar_kind TEXT NOT NULL DEFAULT 'preset',
+        avatar_preset_id TEXT NOT NULL DEFAULT 'classic',
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
+        claude_session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        auto_approve INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    legacy.prepare("INSERT INTO workers (id, name, color_index, claude_session_id, auto_approve) VALUES (?, ?, ?, ?, ?)")
+      .run("legacy-on", "曾經開過自動核准", 0, "session-a", 1);
+    legacy.prepare("INSERT INTO workers (id, name, color_index, claude_session_id, auto_approve) VALUES (?, ?, ?, ?, ?)")
+      .run("legacy-off", "從沒開過", 1, "session-b", 0);
+    legacy.close();
+
+    const store = new LocalStore(path);
+    try {
+      const byId = new Map(store.loadWorkers(20).map((worker) => [worker.id, worker]));
+      assert.equal(byId.get("legacy-on")?.autoApproveMode, "safe");
+      assert.equal(byId.get("legacy-off")?.autoApproveMode, "off");
+    } finally {
+      store.close();
+    }
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -3,6 +3,7 @@ import { roomName } from "../workspace";
 
 type Props = {
   required?: boolean;
+  mode?: "create" | "move";
   currentPath: string;
   recentPaths: string[];
   resetsConversation: boolean;
@@ -11,11 +12,12 @@ type Props = {
   onBrowse(): Promise<{ path?: string; canceled?: boolean; error?: string }>;
 };
 
-export function WorkspacePicker({ required = false, currentPath, recentPaths, resetsConversation, onClose, onSelect, onBrowse }: Props) {
+export function WorkspacePicker({ required = false, mode = "move", currentPath, recentPaths, resetsConversation, onClose, onSelect, onBrowse }: Props) {
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
+  const creating = required || mode === "create";
 
   useEffect(() => setPath(currentPath), [currentPath]);
 
@@ -73,9 +75,13 @@ export function WorkspacePicker({ required = false, currentPath, recentPaths, re
         <header className="workspace-picker__header">
           <div className="workspace-picker__glyph" aria-hidden="true" />
           <div>
-            <div className="workspace-picker__eyebrow">{required ? "FIRST ROOM SETUP" : "ENTER A ROOM"}</div>
-            <h2 id="workspace-title">{required ? "先設定安全工作區" : "選擇工作位置"}</h2>
-            <p>{required ? "Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。" : "一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。"}</p>
+            <div className="workspace-picker__eyebrow">{required ? "FIRST ROOM SETUP" : creating ? "NEW CREW STATION" : "ENTER A ROOM"}</div>
+            <h2 id="workspace-title">{required ? "先設定安全工作區" : creating ? "新 NPC 要在哪裡工作？" : "選擇工作位置"}</h2>
+            <p>{required
+              ? "Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。"
+              : creating
+                ? "先選擇一個本機資料夾作為新 NPC 的房間；確認後才會建立人員與工位。"
+                : "一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。"}</p>
           </div>
         </header>
 
@@ -151,7 +157,7 @@ export function WorkspacePicker({ required = false, currentPath, recentPaths, re
         <div className="workspace-picker__actions">
           <button type="button" onClick={onClose} disabled={pending}>取消</button>
           <button type="submit" className="workspace-picker__confirm" disabled={pending || !path.trim()}>
-            {pending ? "請稍候…" : resetsConversation ? "搬遷並重設對話" : "搬到此位置"}
+            {pending ? "請稍候…" : creating ? "在此建立工位" : resetsConversation ? "搬遷並重設對話" : "搬到此位置"}
           </button>
         </div>
       </form>
