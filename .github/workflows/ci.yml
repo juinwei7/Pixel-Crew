@@ -83,8 +83,8 @@ jobs:
           tar -czf "release/assets/pixel-crew-${GITHUB_REF_NAME}-portable.tar.gz" -C release pixel-crew
           cd release
           zip -r "assets/pixel-crew-${GITHUB_REF_NAME}-portable.zip" pixel-crew
-          cd ..
-          sha256sum release/assets/*.tar.gz release/assets/*.zip > release/assets/SHA256SUMS.txt
+          cd assets
+          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

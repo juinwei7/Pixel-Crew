@@ -10,7 +10,7 @@ await mkdir(join(releaseRoot, "server"), { recursive: true });
 await mkdir(join(releaseRoot, "web"), { recursive: true });
 await mkdir(join(releaseRoot, "scripts", "windows"), { recursive: true });
 
-for (const file of ["package.json", "package-lock.json", "README.md", "LICENSE"]) {
+for (const file of ["package.json", "package-lock.json", "README.md", "LICENSE", "MACOS_SETUP.md"]) {
   await cp(join(root, file), join(releaseRoot, file));
 }
 await cp(join(root, "server", "package.json"), join(releaseRoot, "server", "package.json"));

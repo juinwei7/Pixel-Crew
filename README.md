@@ -35,7 +35,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173> in development. A production build runs the UI, API and WebSocket from one service at <http://127.0.0.1:8787>. You need Node.js 22.13+ and at least one of the Claude Code / Codex CLIs installed. Windows users can use the one-click setup described in [WINDOWS_SETUP.md](./WINDOWS_SETUP.md).
+Open <http://localhost:5173> in development. A production build runs the UI, API and WebSocket from one service at <http://127.0.0.1:8787>. You need Node.js 22.13+ and at least one of the Claude Code / Codex CLIs installed. See the platform guides for [macOS](./MACOS_SETUP.md) and [Windows](./WINDOWS_SETUP.md).
 
 ## Disclaimer
 
@@ -128,6 +128,9 @@ start-pixel-crew.cmd
 Release ZIP 可直接雙擊安裝與啟動。完整步驟、CLI 安裝、更新與疑難排解請見 [Windows 安裝教學](./WINDOWS_SETUP.md)。
 
 ### macOS / Linux / 通用開發模式
+
+一般 macOS 使用者請見 [macOS 完整安裝教學](./MACOS_SETUP.md)，包含 Release
+安裝、AI CLI、production 啟動、更新與疑難排解。以下為原始碼開發模式：
 
 ```bash
 git clone https://github.com/juinwei7/Pixel-Crew.git
