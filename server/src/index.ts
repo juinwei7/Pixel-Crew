@@ -262,6 +262,10 @@ function record(worker: Worker, event: RunnerEvent): void {
   }
   if (event.type === "turn_end" || event.type === "error") persistWorker(worker);
   if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
+  if (event.type === "turn_end" && !event.isError) {
+    const completedTurns = store.incrementCounter("completed_turns");
+    broadcast({ type: "stats_updated", stats: { completedTurns } });
+  }
   broadcast({ type: "event", workerId: worker.id, event });
 }
 
@@ -605,6 +609,7 @@ wss.on("connection", (socket) => {
       type: "snapshot",
       targetRepoPath: config.targetRepoPath,
       system: systemStatus(),
+      stats: { completedTurns: store.getCounter("completed_turns") },
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
       providerUsage: usageRegistry.getStates(),

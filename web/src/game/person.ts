@@ -250,12 +250,17 @@ export const SHIRT_COLORS: Array<[number, number]> = [
   [0xf29e4c, 0xb56f2f], // orange
 ];
 
+export type EmoteKind = "question" | "cloud" | "chat" | "coffee";
+
 export class Person {
   readonly container = new Container();
   private readonly shadow = new Graphics();
   private readonly sprite: Sprite;
   private readonly thinkDots = new Graphics();
   private readonly marker = new Graphics();
+  private readonly emoteG = new Graphics();
+  private emoteKind: EmoteKind | null = null;
+  private emoteT = 0;
   active = false;
 
   private idleFrames: Texture[];
@@ -299,7 +304,7 @@ export class Person {
     this.sprite = new Sprite(this.idleFrames[0]);
     this.sprite.anchor.set(0.5, 1);
     this.shadow.ellipse(0, 0, 5.5, 1.8).fill({ color: 0x000000, alpha: 0.4 });
-    this.container.addChild(this.shadow, this.sprite, this.thinkDots, this.marker);
+    this.container.addChild(this.shadow, this.sprite, this.thinkDots, this.marker, this.emoteG);
   }
 
   setPreset(presetId: string, colorIndex: number): void {
@@ -333,6 +338,27 @@ export class Person {
     this.flashColor = color;
     this.flashT = 650;
     if (cheer) this.cheerT = 900;
+  }
+
+  /** Cheer pose without the colour flash — e.g. neighbours applauding. */
+  cheer(): void {
+    this.cheerT = 900;
+  }
+
+  /** Pixel emote bubble above the head; ms <= 0 clears it. */
+  emote(kind: EmoteKind, ms: number): void {
+    if (ms <= 0) {
+      this.emoteKind = null;
+      this.emoteT = 0;
+      this.emoteG.clear();
+      return;
+    }
+    this.emoteKind = kind;
+    this.emoteT = ms;
+  }
+
+  get emoting(): EmoteKind | null {
+    return this.emoteKind;
   }
 
   async setAvatar(url: string | null): Promise<string | null> {
@@ -514,8 +540,57 @@ export class Person {
     this.container.position.set(Math.round(this.x), Math.round(this.y));
     this.container.zIndex = this.y;
 
+    if (this.emoteT > 0) {
+      this.emoteT -= dtMs;
+      if (this.emoteT <= 0) {
+        this.emoteKind = null;
+        this.emoteG.clear();
+      }
+    }
+
     this.drawThinkDots(tMs, moving);
     this.drawMarker(tMs);
+    this.drawEmote(tMs);
+  }
+
+  /** Small pixel-art emote hovering above the head. */
+  private drawEmote(tMs: number): void {
+    const g = this.emoteG;
+    g.clear();
+    if (!this.emoteKind) return;
+    const bob = Math.floor((tMs % 800) / 400); // 0 or 1
+    const top = -27 - bob;
+    if (this.emoteKind === "question") {
+      // Yellow "?" built from pixels.
+      g.rect(-2, top, 4, 1.4).fill(0xffd166);
+      g.rect(1, top + 1.4, 1.4, 1.6).fill(0xffd166);
+      g.rect(-0.4, top + 3, 1.8, 1.4).fill(0xffd166);
+      g.rect(-0.4, top + 5.2, 1.6, 1.6).fill(0xffd166);
+    } else if (this.emoteKind === "cloud") {
+      // Grey storm cloud with a couple of rain pixels.
+      g.ellipse(-2, top + 2.5, 3, 2).fill(0x5a6a83);
+      g.ellipse(1.6, top + 2, 2.6, 2.2).fill(0x677894);
+      g.ellipse(0, top + 3.4, 4.2, 1.8).fill(0x4d5c74);
+      const drip = Math.floor(tMs / 320) % 2;
+      g.rect(-2.5, top + 5.6 + drip, 1, 1.4).fill(0x4de3ff);
+      g.rect(1.5, top + 6.2 - drip, 1, 1.4).fill(0x4de3ff);
+    } else if (this.emoteKind === "chat") {
+      // Tiny speech bubble with animated dots.
+      g.roundRect(-4.5, top, 9, 5.4, 1.6).fill({ color: 0x0d1a30, alpha: 0.92 }).stroke({ color: 0x4de3ff, width: 0.5, alpha: 0.6 });
+      g.rect(-1, top + 5.4, 1.6, 1.2).fill({ color: 0x0d1a30, alpha: 0.92 });
+      const active = Math.floor(tMs / 300) % 3;
+      for (let i = 0; i < 3; i++) {
+        g.rect(-2.6 + i * 2.2, top + 2.2, 1.2, 1.2).fill({ color: 0x9eeaff, alpha: i === active ? 1 : 0.4 });
+      }
+    } else if (this.emoteKind === "coffee") {
+      // Mug with rising steam.
+      g.rect(-2, top + 2.4, 4, 3.4).fill(0xb56f2f);
+      g.rect(2, top + 3, 1.2, 1.8).fill(0xb56f2f);
+      g.rect(-2, top + 2.4, 4, 0.9).fill(0x6e4218);
+      const s = Math.floor(tMs / 260) % 2;
+      g.rect(-1.4, top + s * 0.6, 0.9, 1.2).fill({ color: 0xcfe3f7, alpha: 0.8 });
+      g.rect(0.6, top + 1 - s * 0.6, 0.9, 1.2).fill({ color: 0xcfe3f7, alpha: 0.8 });
+    }
   }
 
   /** Yellow pixel arrow above the active worker's head. */

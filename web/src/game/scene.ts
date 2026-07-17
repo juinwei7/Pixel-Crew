@@ -14,6 +14,7 @@ import { Person } from "./person";
 import { ParticleSystem } from "./particles";
 import { PersonalDeskLayer, personalDeskSpot } from "./personalDesks";
 import { OfficeDecor } from "./officeDecor";
+import { Cat } from "./cat";
 import { apiAssetUrl } from "../api";
 
 const GREEN = 0x37d6a3;
@@ -45,6 +46,8 @@ export type WorkerSceneState = {
   avatarPresetId: string;
   selectId: string;
   temporary: boolean;
+  /** True while a tool-call approval is waiting on the user. */
+  waiting: boolean;
 };
 
 export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
@@ -58,6 +61,8 @@ export type SceneHandle = {
   setZoom(nextScale: number): void;
   /** Back to auto-fit scale, centered. */
   resetView(): void;
+  /** Office growth decorations (0–3), from all-time completed turns. */
+  setMilestone(level: number): void;
   destroy(): void;
 };
 
@@ -90,6 +95,11 @@ type PersonEntry = {
   baseAlpha: number;
   targetX: number;
   targetY: number;
+  waiting: boolean;
+  paceT: number;
+  paceDir: number;
+  /** True while this NPC is off on a social stroll — home re-targeting pauses. */
+  strolling: boolean;
 };
 
 const PERSON_ENTER_MS = 1_350;
@@ -125,10 +135,11 @@ export async function createScene(
   const particles = new ParticleSystem();
   const personalDesks = new PersonalDeskLayer(callbacks.onSelect);
   const officeDecor = new OfficeDecor();
+  const cat = new Cat();
 
   room.container.zIndex = -1000;
   particles.g.zIndex = 10000;
-  world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g);
+  world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g, cat.container);
   for (const child of [...furniture.container.children]) {
     world.addChild(child);
   }
@@ -265,6 +276,84 @@ export async function createScene(
   const entries = new Map<string, PersonEntry>();
   let elapsed = 0;
 
+  // --- Idle social: occasionally one idle NPC strolls over to another for a
+  // short coffee chat, then walks home. Purely visual; aborts the moment
+  // either participant gets real work.
+  type Social = {
+    stage: "walking" | "chatting" | "returning";
+    visitor: PersonEntry;
+    host: PersonEntry;
+    chatMs: number;
+  };
+  let social: Social | null = null;
+  let socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
+
+  function socialEligible(entry: PersonEntry): boolean {
+    return entry.transition === "ready" && !entry.temporary && !entry.waiting &&
+      entry.last?.station === "home" && entry.last.activity !== "working" && entry.last.activity !== "thinking";
+  }
+
+  function endSocial(): void {
+    if (!social) return;
+    social.visitor.person.emote("coffee", 0);
+    social.host.person.emote("chat", 0);
+    social.visitor.strolling = false;
+    social.visitor.person.setTarget(social.visitor.targetX, social.visitor.targetY);
+    social = null;
+    socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
+  }
+
+  function updateSocial(dt: number): void {
+    if (social) {
+      const { visitor, host } = social;
+      if (!socialEligible(visitor) || !socialEligible(host) || !entries.has(idOf(visitor)) || !entries.has(idOf(host))) {
+        endSocial();
+        return;
+      }
+      if (social.stage === "walking") {
+        if (!visitor.person.isMoving) {
+          social.stage = "chatting";
+          social.chatMs = 4_000;
+        }
+      } else if (social.stage === "chatting") {
+        visitor.person.emote("coffee", 600);
+        host.person.emote("chat", 600);
+        social.chatMs -= dt;
+        if (social.chatMs <= 0) {
+          social.stage = "returning";
+          visitor.person.emote("coffee", 0);
+          host.person.emote("chat", 0);
+          visitor.person.setTarget(visitor.targetX, visitor.targetY);
+        }
+      } else if (!visitor.person.isMoving) {
+        visitor.strolling = false;
+        social = null;
+        socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
+      }
+      return;
+    }
+    socialCooldown -= dt;
+    if (socialCooldown > 0) return;
+    socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
+    const idle = [...entries.values()].filter(socialEligible);
+    if (idle.length < 2) return;
+    const visitor = idle[Math.floor(Math.random() * idle.length)];
+    const others = idle.filter((entry) => entry !== visitor);
+    const host = others[Math.floor(Math.random() * others.length)];
+    visitor.strolling = true;
+    const side = visitor.person.x <= host.person.x ? -1 : 1;
+    visitor.person.setTarget(
+      Math.max(8, Math.min(ART_W - 8, host.person.x + side * 12)),
+      Math.max(52, Math.min(ART_H - 6, host.person.y + 2)),
+    );
+    social = { stage: "walking", visitor, host, chatMs: 0 };
+  }
+
+  function idOf(entry: PersonEntry): string {
+    for (const [id, candidate] of entries) if (candidate === entry) return id;
+    return "";
+  }
+
   function standSpot(station: StationKey, index: number): { x: number; y: number } {
     if (station === "home") return personalDeskSpot(index, entries.size || 1);
     const def = furniture.def(station);
@@ -290,6 +379,15 @@ export async function createScene(
       const success = next.mood === "success";
       person.flash(success ? GREEN : RED, success);
       particles.burst(person.x, person.y - 8, success ? GREEN : RED, success ? 14 : 18, 0.045);
+      if (success) {
+        // Nearby colleagues turn and applaud.
+        for (const other of entries.values()) {
+          if (other === entry || other.temporary || other.transition !== "ready") continue;
+          if (Math.hypot(other.person.x - person.x, other.person.y - person.y) <= 60) other.person.cheer();
+        }
+      } else {
+        person.emote("cloud", 4_000);
+      }
     }
   }
 
@@ -301,6 +399,8 @@ export async function createScene(
     furniture.update(elapsed);
     personalDesks.update(dt);
     particles.update(dt);
+    updateSocial(dt);
+    cat.update(elapsed, dt);
 
     const positions: PersonScreenPos[] = [];
     for (const [id, entry] of entries) {
@@ -326,6 +426,23 @@ export async function createScene(
           continue;
         }
       }
+      if (entry.waiting && entry.transition === "ready" && !entry.temporary) {
+        // Keep the "?" bubble alive and pace nervously around the spot until
+        // the user resolves the approval.
+        entry.person.emote("question", 1_500);
+        entry.paceT += dt;
+        if (entry.paceT >= 1_400 && !entry.person.isMoving) {
+          entry.paceT = 0;
+          entry.paceDir = -entry.paceDir;
+          entry.person.setTarget(
+            Math.max(8, Math.min(ART_W - 8, entry.targetX + entry.paceDir * 6)),
+            entry.targetY,
+          );
+        }
+      } else if (entry.paceT !== 0) {
+        entry.paceT = 0;
+      }
+
       entry.person.update(elapsed, dt);
 
       const state = entry.last;
@@ -407,6 +524,10 @@ export async function createScene(
             baseAlpha: w.temporary ? 0.88 : 1,
             targetX: desiredSpot.x,
             targetY: desiredSpot.y,
+            waiting: false,
+            paceT: 0,
+            paceDir: 1,
+            strolling: false,
           };
           entries.set(w.id, entry);
           person.x = desiredSpot.x;
@@ -433,8 +554,10 @@ export async function createScene(
             });
         }
         entry.person.active = w.active;
+        entry.waiting = w.waiting;
+        if (!w.waiting && entry.person.emoting === "question") entry.person.emote("question", 0);
         if (entry.last !== w.character) applyCharacter(entry, w.character);
-        if (entry.transition === "ready" && w.character.station === "home") {
+        if (entry.transition === "ready" && w.character.station === "home" && !entry.strolling) {
           entry.person.setTarget(desiredSpot.x, desiredSpot.y);
         }
       }
@@ -461,6 +584,9 @@ export async function createScene(
       zoomAnchored(nextScale, app.screen.width / 2, app.screen.height / 2);
     },
     resetView,
+    setMilestone(level: number) {
+      officeDecor.setMilestone(level);
+    },
     destroy() {
       app.renderer.off("resize", layout);
       window.removeEventListener("pointermove", onPointerMove);

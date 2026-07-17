@@ -512,9 +512,12 @@ body {
 .canvas-zoom__value { min-width: 20px; color: #8fb8e8; font: 700 10px var(--mono); text-align: center; }
 .canvas-zoom__reset svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-@media (max-width: 900px) {
-  .canvas-zoom { left: 12px; bottom: 76px; }
-  .canvas-zoom input[type="range"] { width: 64px; }
+/* Below the wide-desktop layout the centered command composer overlaps the
+   bottom-left corner (and sits above it in z-order), so dock the zoom pill
+   right above the composer instead. */
+@media (max-width: 1279px) {
+  .canvas-zoom { left: 50%; bottom: 92px; transform: translateX(-50%); }
+  .canvas-zoom input[type="range"] { width: 72px; }
 }
 
 .npc-approval-bar {
@@ -4247,6 +4250,7 @@ body {
 
 .top-bar__room,
 .top-bar__capability,
+.top-bar__bell,
 .top-bar__health {
   min-height: 32px;
   border: 1px solid rgba(100, 172, 205, 0.18);
@@ -4342,6 +4346,10 @@ body {
 }
 .top-bar__capability strong { color: var(--cyan); }
 .top-bar__capability--warn { border-color: rgba(255, 209, 102, 0.4); }
+
+.top-bar__bell { display: grid; place-items: center; width: 32px; padding: 0; color: #62748f; }
+.top-bar__bell svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.top-bar__bell--on { border-color: rgba(255, 209, 102, 0.4) !important; color: #ffd166; }
 
 .top-bar__health-wrap { position: relative; }
 .top-bar__health { display: flex; align-items: center; gap: 7px; padding: 0 9px; }

@@ -217,3 +217,27 @@ test("stores, updates, and deletes reusable persona templates", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("meta counter accumulates and survives a reopen", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-counter-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+
+    assert.equal(store.getCounter("completed_turns"), 0);
+    assert.equal(store.incrementCounter("completed_turns"), 1);
+    assert.equal(store.incrementCounter("completed_turns"), 2);
+    assert.equal(store.incrementCounter("completed_turns", 5), 7);
+    // Unrelated keys stay independent.
+    assert.equal(store.getCounter("other"), 0);
+
+    const reopened = new LocalStore(path);
+    stores.push(reopened);
+    assert.equal(reopened.getCounter("completed_turns"), 7);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

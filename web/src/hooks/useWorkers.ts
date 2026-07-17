@@ -24,6 +24,7 @@ type ServerMessage =
       type: "snapshot";
       targetRepoPath: string;
       system?: SystemStatus;
+      stats?: { completedTurns: number };
       workspacePaths: string[];
       auth: ProviderAuthState[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
@@ -53,7 +54,8 @@ type ServerMessage =
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState }
-  | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState };
+  | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
+  | { type: "stats_updated"; stats: { completedTurns: number } };
 
 type WorkerSummary = {
   id: string;
@@ -92,6 +94,7 @@ export function useWorkers() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
+  const [stats, setStats] = useState<{ completedTurns: number }>({ completedTurns: 0 });
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -153,6 +156,7 @@ export function useWorkers() {
         case "snapshot": {
           setTargetRepoPath(data.targetRepoPath);
           setSystem(data.system ?? null);
+          if (data.stats) setStats(data.stats);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
@@ -307,6 +311,10 @@ export function useWorkers() {
         }
         case "usage_updated": {
           setProviderUsage((current) => ({ ...current, [data.provider]: data.usage }));
+          break;
+        }
+        case "stats_updated": {
+          setStats(data.stats);
           break;
         }
       }
@@ -592,6 +600,7 @@ export function useWorkers() {
     setActiveId,
     targetRepoPath,
     system,
+    stats,
     workspacePaths,
     wsReady,
     capabilitiesByWorkspace,

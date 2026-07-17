@@ -20,6 +20,8 @@ type Props = {
   onAutoApprove(mode: AutoApproveMode): void;
   onRefreshAuth(): void;
   onResetUi(): void;
+  notificationsEnabled: boolean;
+  onNotificationsToggle(): void;
 };
 
 export function TopBar({
@@ -37,6 +39,8 @@ export function TopBar({
   onAutoApprove,
   onRefreshAuth,
   onResetUi,
+  notificationsEnabled,
+  onNotificationsToggle,
 }: Props) {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
@@ -127,6 +131,17 @@ export function TopBar({
         </button>
         {mcpOpen && <McpPanel capabilities={capabilities} provider={provider} workspacePath={activeWorkspace} />}
       </div>
+
+      <button
+        type="button"
+        className={`top-bar__bell ${notificationsEnabled ? "top-bar__bell--on" : ""}`}
+        aria-pressed={notificationsEnabled}
+        aria-label="桌面通知"
+        title={notificationsEnabled ? "桌面通知：開啟（任務完成、等待核准時通知）" : "桌面通知：關閉"}
+        onClick={onNotificationsToggle}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6z" /><path d="M10 19a2 2 0 0 0 4 0" /></svg>
+      </button>
 
       <div ref={healthRef} className="top-bar__health-wrap">
         <button

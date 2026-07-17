@@ -129,6 +129,11 @@ export class LocalStore {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (worker_id, provider)
       );
+
+      CREATE TABLE IF NOT EXISTS meta_counters (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL DEFAULT 0
+      );
     `);
     this.db.exec(`
       UPDATE provider_handoffs
@@ -286,6 +291,19 @@ export class LocalStore {
       this.flushTimer = setTimeout(() => this.flushEvents(), 150);
       this.flushTimer.unref();
     }
+  }
+
+  getCounter(key: string): number {
+    const row = this.db.prepare("SELECT value FROM meta_counters WHERE key = ?").get(key) as { value?: number } | undefined;
+    return typeof row?.value === "number" ? row.value : 0;
+  }
+
+  incrementCounter(key: string, by = 1): number {
+    this.db.prepare(`
+      INSERT INTO meta_counters (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = value + excluded.value
+    `).run(key, by);
+    return this.getCounter(key);
   }
 
   loadCapabilities(repoPath: string): CapabilityState | null {

@@ -5,6 +5,7 @@ import { SHIRT_COLORS } from "../game/person";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
 import { FURNITURE_DEFS } from "../game/furniture";
 import { roomName } from "../workspace";
+import { milestoneLevel } from "../milestones";
 import type { StationKey } from "../stations";
 import { NpcRadialMenu } from "./NpcRadialMenu";
 
@@ -24,6 +25,7 @@ type VisualWorker = {
   avatarPresetId: string;
   busy: boolean;
   temporary: boolean;
+  waiting: boolean;
   provider: WorkerState["provider"];
   model: string | null;
   role: string | null;
@@ -50,6 +52,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       avatarPresetId: worker.avatarPresetId,
       busy: worker.busy,
       temporary: false,
+      waiting: Boolean(pendingApprovalFor(worker)),
       provider: worker.provider,
       model: worker.model,
       role: worker.persona?.role ?? null,
@@ -73,6 +76,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       avatarPresetId: "classic",
       busy: true,
       temporary: true,
+      waiting: false,
       provider: worker.provider,
       model: worker.model,
       role: null,
@@ -85,6 +89,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
 type Props = {
   workers: WorkerState[];
   activeId: string | null;
+  completedTurns?: number;
   onSelect(id: string): void;
   onOpenLog?(id: string): void;
   onAvatarError?(id: string, message: string): void;
@@ -102,7 +107,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -131,6 +136,8 @@ export function GameCanvas({
   });
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const milestoneRef = useRef(0);
+  milestoneRef.current = milestoneLevel(completedTurns);
   const onAvatarErrorRef = useRef(onAvatarError);
   onAvatarErrorRef.current = onAvatarError;
 
@@ -219,6 +226,7 @@ export function GameCanvas({
       handle = h;
       sceneRef.current = h;
       setSceneError(null);
+      h.setMilestone(milestoneRef.current);
       pushWorkers();
     }).catch((error: unknown) => {
       // Most commonly WebGL being unavailable (hardware acceleration off,
@@ -245,6 +253,11 @@ export function GameCanvas({
     latest.current = { workers, activeId };
     sceneRef.current?.setWorkers(visualWorkers(workers, activeId));
   }, [workers, activeId]);
+
+
+  useEffect(() => {
+    sceneRef.current?.setMilestone(milestoneLevel(completedTurns));
+  }, [completedTurns]);
 
   useEffect(() => {
     const starts = turnStartRef.current;

@@ -14,6 +14,7 @@ import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
+import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import type { ProviderId } from "./types";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
@@ -42,7 +43,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, order, activeId, setActiveId, targetRepoPath, system, workspacePaths, wsReady,
+    workers, order, activeId, setActiveId, targetRepoPath, system, stats, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
@@ -86,6 +87,42 @@ export function App() {
     updatePreferences({ taskLogOpen: true });
     setComposerFocusRequest((request) => request + 1);
   }, [setActiveId, updatePreferences]);
+
+  const notifySnapshots = useRef(new Map<string, WorkerSnapshot>());
+  useEffect(() => {
+    const prev = notifySnapshots.current;
+    const events = diffNotifications(prev, workerList);
+    notifySnapshots.current = new Map(workerList.map((worker) => [worker.id, snapshotWorker(worker)]));
+    if (!preferences.notificationsEnabled || !events.length) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;
+    for (const event of events) {
+      try {
+        const shown = new Notification(event.title, { body: event.body, tag: event.tag });
+        shown.onclick = () => window.focus();
+      } catch {
+        // Some browsers require a ServiceWorker for constructor Notifications.
+      }
+    }
+  }, [workerList, preferences.notificationsEnabled]);
+
+  const toggleNotifications = useCallback(() => {
+    if (preferences.notificationsEnabled) {
+      updatePreferences({ notificationsEnabled: false });
+      return;
+    }
+    if (typeof Notification === "undefined") {
+      notify("這個瀏覽器不支援桌面通知", "error");
+      return;
+    }
+    void Notification.requestPermission().then((permission) => {
+      if (permission === "granted") {
+        updatePreferences({ notificationsEnabled: true });
+        notify("桌面通知已開啟：任務完成或等待核准時通知（分頁在背景才會跳）");
+      } else {
+        notify("瀏覽器未授權通知，請在網址列旁的權限設定允許", "error");
+      }
+    });
+  }, [preferences.notificationsEnabled, updatePreferences, notify]);
 
   useEffect(() => {
     if (workspaceSetupRequired) {
@@ -185,6 +222,7 @@ export function App() {
       <GameCanvas
         workers={workerList}
         activeId={activeId}
+        completedTurns={stats.completedTurns}
         onSelect={activateNpc}
         onOpenLog={activateNpc}
         onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }}
@@ -225,6 +263,8 @@ export function App() {
         }}
         onRefreshAuth={() => void refreshAuth(activeProvider)}
         onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
+        notificationsEnabled={preferences.notificationsEnabled}
+        onNotificationsToggle={toggleNotifications}
       />
 
       <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />

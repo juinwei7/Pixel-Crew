@@ -11,6 +11,7 @@ export type UiPreferencesV2 = {
   crewRailCollapsed: boolean;
   crewFilter: CrewFilter;
   reducedDetail: boolean;
+  notificationsEnabled: boolean;
 };
 
 export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
@@ -23,6 +24,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   crewRailCollapsed: false,
   crewFilter: "all",
   reducedDetail: false,
+  notificationsEnabled: false,
 };
 
 const VIEWS = new Set<TaskLogView>(["summary", "activity"]);
@@ -51,6 +53,9 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
       ? raw.crewFilter as CrewFilter
       : DEFAULT_UI_PREFERENCES.crewFilter,
     reducedDetail: typeof raw.reducedDetail === "boolean" ? raw.reducedDetail : DEFAULT_UI_PREFERENCES.reducedDetail,
+    notificationsEnabled: typeof raw.notificationsEnabled === "boolean"
+      ? raw.notificationsEnabled
+      : DEFAULT_UI_PREFERENCES.notificationsEnabled,
   };
 }
 
