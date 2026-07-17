@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, WorkerState } from "../types";
+import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -25,6 +25,7 @@ type ServerMessage =
       targetRepoPath: string;
       system?: SystemStatus;
       stats?: { completedTurns: number };
+      updateInfo?: UpdateInfo;
       workspacePaths: string[];
       auth: ProviderAuthState[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
@@ -55,7 +56,8 @@ type ServerMessage =
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState }
   | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
-  | { type: "stats_updated"; stats: { completedTurns: number } };
+  | { type: "stats_updated"; stats: { completedTurns: number } }
+  | { type: "update_info"; updateInfo: UpdateInfo };
 
 type WorkerSummary = {
   id: string;
@@ -95,6 +97,7 @@ export function useWorkers() {
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [stats, setStats] = useState<{ completedTurns: number }>({ completedTurns: 0 });
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -157,6 +160,7 @@ export function useWorkers() {
           setTargetRepoPath(data.targetRepoPath);
           setSystem(data.system ?? null);
           if (data.stats) setStats(data.stats);
+          if (data.updateInfo) setUpdateInfo(data.updateInfo);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
@@ -315,6 +319,10 @@ export function useWorkers() {
         }
         case "stats_updated": {
           setStats(data.stats);
+          break;
+        }
+        case "update_info": {
+          setUpdateInfo(data.updateInfo);
           break;
         }
       }
@@ -601,6 +609,7 @@ export function useWorkers() {
     targetRepoPath,
     system,
     stats,
+    updateInfo,
     workspacePaths,
     wsReady,
     capabilitiesByWorkspace,

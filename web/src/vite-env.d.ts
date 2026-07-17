@@ -8,3 +8,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** Injected by Vite `define` from the workspace-root package.json. */
+declare const __APP_VERSION__: string;

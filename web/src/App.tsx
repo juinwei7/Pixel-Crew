@@ -43,7 +43,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, order, activeId, setActiveId, targetRepoPath, system, stats, workspacePaths, wsReady,
+    workers, order, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
@@ -265,6 +265,7 @@ export function App() {
         onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
         notificationsEnabled={preferences.notificationsEnabled}
         onNotificationsToggle={toggleNotifications}
+        updateInfo={updateInfo}
       />
 
       <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />

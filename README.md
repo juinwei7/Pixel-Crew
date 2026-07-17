@@ -2,6 +2,8 @@
 
 > A local multi-agent cockpit for Claude Code and Codex — run several coding-agent sessions as pixel NPCs in one office.
 
+[![CI](https://github.com/juinwei7/Pixel-Crew/actions/workflows/ci.yml/badge.svg)](https://github.com/juinwei7/Pixel-Crew/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/juinwei7/Pixel-Crew?display_name=tag&color=ffd166)](https://github.com/juinwei7/Pixel-Crew/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node-22.13%2B-brightgreen.svg)](#系統需求)
 [![Windows](https://img.shields.io/badge/Windows-10%2022H2%20%7C%2011-36a2ff.svg)](./WINDOWS_SETUP.md)

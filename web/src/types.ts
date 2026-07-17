@@ -101,6 +101,14 @@ export type Turn = {
   durationMs?: number;
 };
 
+export type UpdateInfo = {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  checkedAt: string | null;
+};
+
 export type CharacterActivity = "idle" | "walking" | "working" | "thinking";
 export type CharacterMood = "neutral" | "success" | "error";
 

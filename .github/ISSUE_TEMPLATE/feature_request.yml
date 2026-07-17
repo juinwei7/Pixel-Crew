@@ -1,0 +1,21 @@
+name: "✨ Feature request / 功能許願"
+description: "Suggest an idea / 提出想法"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What problem does this solve? / 想解決什麼問題？"
+      description: "What are you trying to do that's hard today? / 現在做起來卡在哪？"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Proposed solution / 你想像中的做法"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered / 其他替代方案（選填）"

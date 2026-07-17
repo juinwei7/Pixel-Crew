@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, WorkerState } from "../types";
+import type { AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
+import { APP_VERSION } from "../appVersion";
 import { roomName } from "../workspace";
 import { McpPanel } from "./McpPanel";
 
@@ -22,6 +23,7 @@ type Props = {
   onResetUi(): void;
   notificationsEnabled: boolean;
   onNotificationsToggle(): void;
+  updateInfo?: UpdateInfo | null;
 };
 
 export function TopBar({
@@ -41,9 +43,12 @@ export function TopBar({
   onResetUi,
   notificationsEnabled,
   onNotificationsToggle,
+  updateInfo = null,
 }: Props) {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const updateRef = useRef<HTMLDivElement>(null);
   const mcpRef = useRef<HTMLDivElement>(null);
   const healthRef = useRef<HTMLDivElement>(null);
   const provider = active?.provider ?? "claude";
@@ -57,12 +62,14 @@ export function TopBar({
       if (event.key === "Escape") {
         setMcpOpen(false);
         setHealthOpen(false);
+        setUpdateOpen(false);
       }
     };
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!mcpRef.current?.contains(target)) setMcpOpen(false);
       if (!healthRef.current?.contains(target)) setHealthOpen(false);
+      if (!updateRef.current?.contains(target)) setUpdateOpen(false);
     };
     window.addEventListener("keydown", close);
     window.addEventListener("pointerdown", closeOutside);
@@ -132,6 +139,35 @@ export function TopBar({
         {mcpOpen && <McpPanel capabilities={capabilities} provider={provider} workspacePath={activeWorkspace} />}
       </div>
 
+      {updateInfo?.updateAvailable && (
+        <div ref={updateRef} className="top-bar__update-wrap">
+          <button
+            type="button"
+            className="top-bar__update"
+            aria-expanded={updateOpen}
+            onClick={() => { setMcpOpen(false); setHealthOpen(false); setUpdateOpen((open) => !open); }}
+          >
+            ⬆ 有新版 v{updateInfo.latestVersion}
+          </button>
+          {updateOpen && (
+            <div className="update-popover">
+              <strong>Pixel Crew v{updateInfo.latestVersion} 已發布</strong>
+              <small>目前版本 v{updateInfo.currentVersion}</small>
+              <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">
+                查看 Release（打包版下載新 zip）
+              </a>
+              <small>git clone 使用者更新方式：</small>
+              <code>git pull && npm install && npm run build</code>
+              <button
+                type="button"
+                onClick={() => { void navigator.clipboard?.writeText("git pull && npm install && npm run build"); }}
+              >
+                複製更新指令
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <button
         type="button"
         className={`top-bar__bell ${notificationsEnabled ? "top-bar__bell--on" : ""}`}
@@ -161,6 +197,10 @@ export function TopBar({
             <div><i className={`health-dot health-dot--${wsReady ? "ok" : "error"}`} /><span>Local server</span><strong>{wsReady ? "已連線" : "重新連線中"}</strong></div>
             {!authReady && <button type="button" onClick={onRefreshAuth}>重新檢查</button>}
             <button type="button" className="health-popover__secondary" onClick={() => { onResetUi(); setHealthOpen(false); }}>重設介面配置</button>
+            <small className="health-popover__version">
+              Pixel Crew v{updateInfo?.currentVersion ?? APP_VERSION}
+              {updateInfo?.updateAvailable ? `（最新 v${updateInfo.latestVersion}）` : ""}
+            </small>
           </div>
         )}
       </div>

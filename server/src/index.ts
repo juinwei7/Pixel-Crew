@@ -17,6 +17,7 @@ import { CodexSession } from "./codexRunner.js";
 import type { AgentSession } from "./providers/session.js";
 import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./providers/types.js";
 import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
+import { UpdateChecker, readCurrentVersion } from "./updateCheck.js";
 import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
 import { isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
@@ -83,6 +84,10 @@ const usageRegistry = new ProviderUsageRegistry(
   },
   providerReady,
 );
+const updateChecker = new UpdateChecker(readCurrentVersion(), (info) => {
+  broadcast({ type: "update_info", updateInfo: info });
+});
+updateChecker.start();
 const authProviders: Record<ProviderId, AgentAuthProvider> = {
   claude: new ClaudeAuthProvider(),
   codex: new CodexAuthProvider(),
@@ -610,6 +615,7 @@ wss.on("connection", (socket) => {
       targetRepoPath: config.targetRepoPath,
       system: systemStatus(),
       stats: { completedTurns: store.getCounter("completed_turns") },
+      updateInfo: updateChecker.getInfo(),
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
       providerUsage: usageRegistry.getStates(),

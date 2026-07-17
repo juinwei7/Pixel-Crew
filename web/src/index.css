@@ -4347,6 +4347,57 @@ body {
 .top-bar__capability strong { color: var(--cyan); }
 .top-bar__capability--warn { border-color: rgba(255, 209, 102, 0.4); }
 
+.top-bar__update-wrap { position: relative; }
+.top-bar__update {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 8px;
+  background: rgba(255, 209, 102, 0.1);
+  color: #ffd166;
+  cursor: pointer;
+  font: 700 10px var(--mono);
+  white-space: nowrap;
+  animation: hudPulse 2.4s ease-in-out infinite;
+}
+.update-popover {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid rgba(255, 209, 102, 0.3);
+  border-radius: 11px;
+  background: rgba(9, 16, 30, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.update-popover strong { color: #ffd166; font-size: 12px; }
+.update-popover small { color: #8399b6; font-size: 10px; }
+.update-popover a { color: var(--cyan); font-size: 11px; text-decoration: none; }
+.update-popover a:hover { text-decoration: underline; }
+.update-popover code {
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #9eeaff;
+  font: 10px var(--mono);
+  white-space: nowrap;
+}
+.update-popover button {
+  min-height: 28px;
+  border: 1px solid rgba(77, 227, 255, 0.25);
+  border-radius: 7px;
+  background: rgba(77, 227, 255, 0.07);
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 10px;
+}
+.health-popover__version { padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); color: #62748f; font: 9px var(--mono); }
+
 .top-bar__bell { display: grid; place-items: center; width: 32px; padding: 0; color: #62748f; }
 .top-bar__bell svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .top-bar__bell--on { border-color: rgba(255, 209, 102, 0.4) !important; color: #ffd166; }

@@ -8,7 +8,21 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag must match package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match package.json version $PKG — bump the version before tagging."
+            exit 1
+          fi
+
   test:
+    needs: verify-version
     strategy:
       fail-fast: false
       matrix:
@@ -36,14 +50,18 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run package
-      - name: Create Windows portable archive
+      - name: Create portable archives
         run: |
           cd release
           zip -r pixel-crew-windows-x64.zip pixel-crew
           sha256sum pixel-crew-windows-x64.zip > pixel-crew-windows-x64.zip.sha256
+          tar -czf pixel-crew-portable.tar.gz pixel-crew
+          sha256sum pixel-crew-portable.tar.gz > pixel-crew-portable.tar.gz.sha256
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             release/pixel-crew-windows-x64.zip
             release/pixel-crew-windows-x64.zip.sha256
+            release/pixel-crew-portable.tar.gz
+            release/pixel-crew-portable.tar.gz.sha256
           generate_release_notes: true

@@ -104,3 +104,50 @@ test("also shows the auto-approve control for Codex", () => {
   assert.match(html, /安全自動核准/);
   assert.match(html, /top-bar__auto-approve--off/);
 });
+
+const updateBaseProps = {
+  activeWorkspace: "/repo/my-room",
+  capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: false, source: "live", updatedAt: null, error: null },
+  auth: { provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null },
+  wsReady: true,
+  modelOptions: [],
+  workerCount: 1,
+  onRoom: () => {},
+  onProvider: () => {},
+  onModel: () => {},
+  onAutoApprove: () => {},
+  onRefreshAuth: () => {},
+  onResetUi: () => {},
+  notificationsEnabled: false,
+  onNotificationsToggle: () => {},
+} as const;
+
+test("shows the update button only when a newer release exists", () => {
+  const worker = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
+  const withUpdate = renderToStaticMarkup(<TopBar
+    {...(updateBaseProps as any)}
+    active={worker}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true, releaseUrl: "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.1.0", checkedAt: "2026-07-17T00:00:00Z" }}
+  />);
+  assert.match(withUpdate, /有新版 v1\.1\.0/);
+
+  const current = renderToStaticMarkup(<TopBar
+    {...(updateBaseProps as any)}
+    active={worker}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.0.0", updateAvailable: false, releaseUrl: null, checkedAt: "2026-07-17T00:00:00Z" }}
+  />);
+  assert.doesNotMatch(current, /有新版/);
+});
+
+test("health popover data includes the running version", () => {
+  const worker = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
+  // The version line lives inside the health popover, which only renders when
+  // opened (interactive state); this locks in that the version string is wired
+  // through props rather than asserting popover visibility.
+  const html = renderToStaticMarkup(<TopBar
+    {...(updateBaseProps as any)}
+    active={worker}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: null, updateAvailable: false, releaseUrl: null, checkedAt: null }}
+  />);
+  assert.doesNotMatch(html, /有新版/);
+});

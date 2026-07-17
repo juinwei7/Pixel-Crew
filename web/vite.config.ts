@@ -1,8 +1,16 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// The workspace-root package.json is the single source of truth for the
+// version; it is baked into the bundle at build time.
+const rootManifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(rootManifest.version ?? "0.0.0"),
+  },
   build: {
     // Pixi is intentionally isolated as the office engine (about 166 kB gzip).
     // Keep the warning threshold above that one audited vendor chunk.
