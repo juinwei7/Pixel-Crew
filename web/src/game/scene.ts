@@ -48,9 +48,16 @@ export type WorkerSceneState = {
 };
 
 export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
+export type FurnitureScreenPos = { key: StationKey; x: number; y: number };
+
+export type SceneView = { scale: number; minScale: number; maxScale: number; isDefault: boolean };
 
 export type SceneHandle = {
   setWorkers(list: WorkerSceneState[]): void;
+  /** Zoom to an integer scale, keeping the screen center anchored. */
+  setZoom(nextScale: number): void;
+  /** Back to auto-fit scale, centered. */
+  resetView(): void;
   destroy(): void;
 };
 
@@ -60,6 +67,14 @@ type SceneCallbacks = {
   onOpen(id: string): void;
   onHover(id: string | null): void;
   onAvatarError(id: string, message: string): void;
+  // Furniture doesn't move, so these only fire once on init and on resize —
+  // unlike onPositions, which reports moving people every frame.
+  onFurniturePositions?(list: FurnitureScreenPos[]): void;
+  onFurnitureHover?(key: StationKey | null): void;
+  onFurnitureClick?(key: StationKey): void;
+  onContextMenu?(id: string): void;
+  /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
+  onViewChange?(view: SceneView): void;
 };
 
 type PersonEntry = {
@@ -93,12 +108,20 @@ export async function createScene(
     autoDensity: true,
   });
   host.appendChild(app.canvas);
+  // Right-click drives our own quick menu instead of the browser's context menu.
+  app.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
   const world = new Container();
   world.sortableChildren = true;
 
   const room = new Room();
-  const furniture = new FurnitureLayer();
+  const furniture = new FurnitureLayer(
+    (key) => {
+      overInteractive = key !== null;
+      callbacks.onFurnitureHover?.(key);
+    },
+    (key) => callbacks.onFurnitureClick?.(key),
+  );
   const particles = new ParticleSystem();
   const personalDesks = new PersonalDeskLayer(callbacks.onSelect);
   const officeDecor = new OfficeDecor();
@@ -129,25 +152,115 @@ export async function createScene(
   app.stage.addChild(world, labelLayer);
 
   let scale = 1;
+  let fitScale = 2;
+  // User camera: null scale = auto-fit; pan offsets are relative to the
+  // centered position, clamped so the room can never be dragged fully
+  // off-screen. Double-click on empty floor resets everything.
+  let userScale: number | null = null;
+  let panX = 0;
+  let panY = 0;
 
-  function layout(): void {
+  function applyView(): void {
     const w = app.screen.width;
     const h = app.screen.height;
-    scale = Math.max(2, Math.floor(Math.min(w / ART_W, h / ART_H)));
+    scale = Math.max(2, Math.min(userScale ?? fitScale, fitScale + 4));
     world.scale.set(scale);
-    world.position.set(
-      Math.floor((w - ART_W * scale) / 2),
-      Math.floor((h - ART_H * scale) / 2),
-    );
+    const baseX = Math.floor((w - ART_W * scale) / 2);
+    const baseY = Math.floor((h - ART_H * scale) / 2);
+    const keep = 140;
+    panX = Math.min(w - keep - baseX, Math.max(keep - (baseX + ART_W * scale), panX));
+    panY = Math.min(h - keep - baseY, Math.max(keep - (baseY + ART_H * scale), panY));
+    world.position.set(Math.round(baseX + panX), Math.round(baseY + panY));
     for (const { def, text } of labels) {
       text.position.set(
         world.position.x + def.x * scale,
         world.position.y + (def.bottom + 3) * scale,
       );
     }
+    callbacks.onFurniturePositions?.(FURNITURE_DEFS.filter((def) => def.label).map((def) => ({
+      key: def.key,
+      x: world.position.x + def.x * scale,
+      y: world.position.y + (def.bottom - def.map.length / 2) * scale,
+    })));
+    callbacks.onViewChange?.({
+      scale,
+      minScale: 2,
+      maxScale: fitScale + 4,
+      isDefault: userScale === null && panX === 0 && panY === 0,
+    });
+  }
+
+  function layout(): void {
+    fitScale = Math.max(2, Math.floor(Math.min(app.screen.width / ART_W, app.screen.height / ART_H)));
+    applyView();
   }
   layout();
   app.renderer.on("resize", layout);
+
+  // --- Camera controls: drag empty space to pan, wheel to zoom (anchored at
+  // the cursor), double-click the floor to reset. Sprite/furniture handlers
+  // keep working — a drag only starts panning past a small threshold, so
+  // ordinary clicks are unaffected.
+  let overInteractive = false;
+  let dragId: number | null = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragLastX = 0;
+  let dragLastY = 0;
+  let dragPanning = false;
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    dragId = event.pointerId;
+    dragPanning = false;
+    dragStartX = dragLastX = event.clientX;
+    dragStartY = dragLastY = event.clientY;
+  };
+  const onPointerMove = (event: PointerEvent) => {
+    if (dragId !== event.pointerId) return;
+    if (!dragPanning && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
+    dragPanning = true;
+    panX += event.clientX - dragLastX;
+    panY += event.clientY - dragLastY;
+    dragLastX = event.clientX;
+    dragLastY = event.clientY;
+    applyView();
+  };
+  const onPointerUp = (event: PointerEvent) => {
+    if (dragId === event.pointerId) dragId = null;
+  };
+  function zoomAnchored(next: number, cx: number, cy: number): void {
+    const clamped = Math.max(2, Math.min(fitScale + 4, Math.round(next)));
+    if (clamped === scale) return;
+    const wx = (cx - world.position.x) / scale;
+    const wy = (cy - world.position.y) / scale;
+    userScale = clamped;
+    panX = cx - wx * clamped - Math.floor((app.screen.width - ART_W * clamped) / 2);
+    panY = cy - wy * clamped - Math.floor((app.screen.height - ART_H * clamped) / 2);
+    applyView();
+  }
+
+  const onWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const rect = app.canvas.getBoundingClientRect();
+    zoomAnchored(scale + (event.deltaY < 0 ? 1 : -1), event.clientX - rect.left, event.clientY - rect.top);
+  };
+  function resetView(): void {
+    userScale = null;
+    panX = 0;
+    panY = 0;
+    applyView();
+  }
+
+  const onDoubleClick = () => {
+    if (overInteractive) return;
+    resetView();
+  };
+  app.canvas.addEventListener("pointerdown", onPointerDown);
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  app.canvas.addEventListener("wheel", onWheel, { passive: false });
+  app.canvas.addEventListener("dblclick", onDoubleClick);
 
   const entries = new Map<string, PersonEntry>();
   let elapsed = 0;
@@ -267,8 +380,18 @@ export async function createScene(
           person.container.on("pointertap", (event) => {
             if (event.detail >= 2) callbacks.onOpen(w.selectId);
           });
-          person.container.on("pointerover", () => callbacks.onHover(w.temporary ? null : w.id));
-          person.container.on("pointerout", () => callbacks.onHover(null));
+          person.container.on("rightclick", (event) => {
+            event.preventDefault();
+            callbacks.onContextMenu?.(w.selectId);
+          });
+          person.container.on("pointerover", () => {
+            overInteractive = true;
+            callbacks.onHover(w.temporary ? null : w.id);
+          });
+          person.container.on("pointerout", () => {
+            overInteractive = false;
+            callbacks.onHover(null);
+          });
           world.addChild(person.container);
           const entering = !w.temporary;
           entry = {
@@ -334,8 +457,14 @@ export async function createScene(
       }
       furniture.setActive(activeStations);
     },
+    setZoom(nextScale: number) {
+      zoomAnchored(nextScale, app.screen.width / 2, app.screen.height / 2);
+    },
+    resetView,
     destroy() {
       app.renderer.off("resize", layout);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
       for (const entry of entries.values()) entry.person.destroy();
       entries.clear();
       app.destroy(true, { children: true, texture: true });

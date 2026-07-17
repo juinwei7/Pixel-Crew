@@ -182,7 +182,19 @@ export function App() {
 
   return (
     <div className="game-root" style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
-      <GameCanvas workers={workerList} activeId={activeId} onSelect={activateNpc} onOpenLog={activateNpc} onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }} />
+      <GameCanvas
+        workers={workerList}
+        activeId={activeId}
+        onSelect={activateNpc}
+        onOpenLog={activateNpc}
+        onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }}
+        onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
+        onAvatarWorkshop={setAvatarWorkerId}
+        onPersonaEditor={setPersonaWorkerId}
+        onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
+        onRemove={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
+        onResolveApproval={resolveApproval}
+      />
 
       <TopBar
         active={active}

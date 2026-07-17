@@ -187,10 +187,22 @@ export class FurnitureLayer {
   readonly container = new Container();
   private readonly sprites = new Map<StationKey, FurnitureSprite>();
 
-  constructor() {
+  constructor(
+    private readonly onHover: (key: StationKey | null) => void = () => {},
+    private readonly onSelect: (key: StationKey) => void = () => {},
+  ) {
     this.container.sortableChildren = true;
     for (const def of FURNITURE_DEFS) {
       const sprite = new FurnitureSprite(def);
+      // Invisible rendezvous/home spots (empty label) aren't real furniture —
+      // nothing for the user to point at or click.
+      if (def.label) {
+        sprite.container.eventMode = "static";
+        sprite.container.cursor = "pointer";
+        sprite.container.on("pointerover", () => this.onHover(def.key));
+        sprite.container.on("pointerout", () => this.onHover(null));
+        sprite.container.on("pointerdown", () => this.onSelect(def.key));
+      }
       this.sprites.set(def.key, sprite);
       this.container.addChild(sprite.container);
     }

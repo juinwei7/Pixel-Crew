@@ -1,9 +1,16 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { WorkerState } from "../types";
-import { createScene, type SceneHandle } from "../game/scene";
+import type { ApprovalDecision, ApprovalItem, WorkerState } from "../types";
+import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/person";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
+import { FURNITURE_DEFS } from "../game/furniture";
 import { roomName } from "../workspace";
+import type { StationKey } from "../stations";
+import { NpcRadialMenu } from "./NpcRadialMenu";
+
+const STATION_LABELS: Record<string, string> = Object.fromEntries(
+  FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
+);
 
 type VisualWorker = {
   id: string;
@@ -22,6 +29,11 @@ type VisualWorker = {
   role: string | null;
   workspacePath: string;
 };
+
+function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
+  const last = worker.turns[worker.turns.length - 1];
+  return last?.items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending") ?? null;
+}
 
 function visualWorkers(workers: WorkerState[], activeId: string | null): VisualWorker[] {
   return workers.flatMap((worker) => {
@@ -76,15 +88,42 @@ type Props = {
   onSelect(id: string): void;
   onOpenLog?(id: string): void;
   onAvatarError?(id: string, message: string): void;
+  // Per-NPC quick actions, anchored directly on the sprite. Optional —
+  // when omitted (e.g. in isolated tests) the "•••" trigger just doesn't
+  // render, matching the existing onOpenLog/onAvatarError pattern.
+  onRename?(id: string, name: string): Promise<string | null>;
+  onAvatarWorkshop?(id: string): void;
+  onPersonaEditor?(id: string): void;
+  onRoomSwitch?(id: string): void;
+  onRemove?(id: string): void;
+  // Lets a pending approval be resolved right on the sprite instead of
+  // requiring the task log panel to be open. Optional, same reasoning as above.
+  onResolveApproval?(workerId: string, approvalId: string, decision: ApprovalDecision): Promise<string | null>;
 };
 
-export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarError }: Props) {
+export function GameCanvas({
+  workers, activeId, onSelect, onOpenLog, onAvatarError,
+  onRename, onAvatarWorkshop, onPersonaEditor, onRoomSwitch, onRemove, onResolveApproval,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
+  const menuAnchorRefs = useRef(new Map<string, HTMLDivElement>());
+  const approvalRefs = useRef(new Map<string, HTMLDivElement>());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  const [resolvingApproval, setResolvingApproval] = useState<string | null>(null);
+  const hasQuickMenu = Boolean(onRename && onAvatarWorkshop && onPersonaEditor && onRoomSwitch && onRemove);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  const [view, setView] = useState<SceneView | null>(null);
+  const [furniturePositions, setFurniturePositions] = useState<Map<StationKey, FurnitureScreenPos>>(new Map());
+  const [hoveredStation, setHoveredStation] = useState<StationKey | null>(null);
+  const [pinnedStation, setPinnedStation] = useState<StationKey | null>(null);
+  // Wall-clock start time per busy worker, purely for the "已執行 Ns" live
+  // readout — not persisted, just a local ticking display.
+  const turnStartRef = useRef(new Map<string, number>());
+  const [, forceTick] = useState(0);
   const sceneRef = useRef<SceneHandle | null>(null);
   const latest = useRef<{ workers: WorkerState[]; activeId: string | null }>({
     workers,
@@ -112,7 +151,24 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
             nameplate.style.opacity = String(pos.opacity);
           }
           const identity = identityRefs.current.get(pos.id);
-          if (identity) identity.style.transform = `translate(-50%, 10px) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`;
+          if (identity) {
+            // Beside the sprite instead of on top of it; flip to the left
+            // when the NPC stands near the right edge of the canvas.
+            const sideGap = Math.round(14 + pos.scale * 4);
+            const flip = pos.x + 230 + sideGap > bounds.width;
+            identity.style.transform = flip
+              ? `translate(calc(-100% - ${sideGap}px), -20%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`
+              : `translate(${sideGap}px, -20%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`;
+          }
+          const menuAnchor = menuAnchorRefs.current.get(pos.id);
+          if (menuAnchor) {
+            menuAnchor.style.transform = `translate(-50%, 6px) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`;
+            // Lets the radial menu / trigger scale their offsets with the
+            // camera zoom so they hug the sprite at any zoom level.
+            menuAnchor.style.setProperty("--npc-zoom", (Math.max(4, pos.scale) / 4).toFixed(3));
+          }
+          const approval = approvalRefs.current.get(pos.id);
+          if (approval) approval.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y - 34}px)`;
         }
         const occupied: BubbleRect[] = [];
         const ordered = [...positions].sort((a, b) =>
@@ -150,6 +206,11 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
       },
       onHover: setHoveredId,
       onAvatarError: (id, message) => onAvatarErrorRef.current?.(id, message),
+      onFurniturePositions: (list) => setFurniturePositions(new Map(list.map((pos) => [pos.key, pos]))),
+      onFurnitureHover: setHoveredStation,
+      onFurnitureClick: (key) => setPinnedStation((current) => (current === key ? null : key)),
+      onContextMenu: (id) => setMenuOpenFor(id),
+      onViewChange: setView,
     }).then((h) => {
       if (cancelled) {
         h.destroy();
@@ -185,6 +246,41 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
     sceneRef.current?.setWorkers(visualWorkers(workers, activeId));
   }, [workers, activeId]);
 
+  useEffect(() => {
+    const starts = turnStartRef.current;
+    const busyIds = new Set(workers.filter((w) => w.busy).map((w) => w.id));
+    for (const id of busyIds) if (!starts.has(id)) starts.set(id, Date.now());
+    for (const id of [...starts.keys()]) if (!busyIds.has(id)) starts.delete(id);
+    if (busyIds.size === 0) return;
+    const timer = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [workers]);
+
+  useEffect(() => {
+    if (!pinnedStation) return;
+    // Clicks inside the canvas are already handled by the scene's own
+    // furniture click callback (which does its own pin/unpin toggle); this
+    // only needs to close the tooltip for clicks elsewhere on the page.
+    const unpin = (event: PointerEvent) => {
+      if (hostRef.current?.contains(event.target as Node)) return;
+      setPinnedStation(null);
+    };
+    window.addEventListener("pointerdown", unpin);
+    return () => window.removeEventListener("pointerdown", unpin);
+  }, [pinnedStation]);
+
+  useEffect(() => {
+    if (!menuOpenFor) return;
+    const anchor = menuAnchorRefs.current.get(menuOpenFor);
+    const close = (event: PointerEvent) => {
+      if (anchor?.contains(event.target as Node)) return;
+      setMenuOpenFor(null);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menuOpenFor]);
+
+
   if (sceneError) {
     return (
       <>
@@ -199,10 +295,49 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
     );
   }
 
+  const allVisual = visualWorkers(workers, activeId);
+  const workersById = new Map(workers.map((worker) => [worker.id, worker]));
+
   return (
     <>
       <div className="game-host" ref={hostRef} />
-      {visualWorkers(workers, activeId).map((w) => {
+      {view && (
+        <div className="canvas-zoom" role="group" aria-label="畫面縮放">
+          <button
+            type="button"
+            aria-label="縮小"
+            disabled={view.scale <= view.minScale}
+            onClick={() => sceneRef.current?.setZoom(view.scale - 1)}
+          >−</button>
+          <input
+            type="range"
+            aria-label="縮放倍率"
+            min={view.minScale}
+            max={view.maxScale}
+            step={1}
+            value={view.scale}
+            onChange={(event) => sceneRef.current?.setZoom(Number(event.target.value))}
+          />
+          <button
+            type="button"
+            aria-label="放大"
+            disabled={view.scale >= view.maxScale}
+            onClick={() => sceneRef.current?.setZoom(view.scale + 1)}
+          >＋</button>
+          <span className="canvas-zoom__value">{view.scale}x</span>
+          <button
+            type="button"
+            className="canvas-zoom__reset"
+            aria-label="恢復預設視角"
+            title="恢復預設視角（大小與位置）"
+            disabled={view.isDefault}
+            onClick={() => sceneRef.current?.resetView()}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 0 1 14-4.5" /><path d="M18 2v4h-4" /><path d="M20 14a8 8 0 0 1-14 4.5" /><path d="M6 22v-4h4" /></svg>
+          </button>
+        </div>
+      )}
+      {allVisual.map((w) => {
         const speech = w.character.speech.trim();
         const isActive = w.id === activeId;
         const compact = !isActive;
@@ -212,6 +347,8 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
         const shown = source.length > maxSpeech ? `…${source.slice(-maxSpeech)}` : source;
         const [shirtColor] = SHIRT_COLORS[w.colorIndex % SHIRT_COLORS.length];
         const accent = `#${shirtColor.toString(16).padStart(6, "0")}`;
+        const startedAt = turnStartRef.current.get(w.id);
+        const elapsedSec = w.busy && startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : null;
         return (
           <Fragment key={w.id}>
             <div
@@ -227,7 +364,9 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
               ].join(" ")}
               style={{ borderColor: accent }}
             >
-              {w.name}
+              <span className="npc-nameplate__name">{w.name}</span>
+              {w.role && <span className="npc-nameplate__role">{w.role}</span>}
+              {elapsedSec != null && <span className="npc-nameplate__elapsed">{elapsedSec}s</span>}
             </div>
             <div
               ref={(el) => {
@@ -245,7 +384,7 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
             >
               {shown}
             </div>
-            {hoveredId === w.id && !w.temporary && (
+            {hoveredId === w.id && !w.temporary && menuOpenFor !== w.id && (
               <div ref={(element) => {
                 if (element) identityRefs.current.set(w.id, element);
                 else identityRefs.current.delete(w.id);
@@ -257,9 +396,78 @@ export function GameCanvas({ workers, activeId, onSelect, onOpenLog, onAvatarErr
                 <small>{roomName(w.workspacePath)}</small>
               </div>
             )}
+            {hasQuickMenu && !w.temporary && menuOpenFor === w.id && (
+              <div
+                ref={(element) => {
+                  if (element) menuAnchorRefs.current.set(w.id, element);
+                  else menuAnchorRefs.current.delete(w.id);
+                }}
+                className="npc-menu-anchor"
+              >
+                {workersById.get(w.selectId) && (
+                  <NpcRadialMenu
+                    worker={workersById.get(w.selectId)!}
+                    canRemove={workers.length > 1}
+                    onRename={onRename!}
+                    onAvatar={onAvatarWorkshop!}
+                    onPersona={onPersonaEditor!}
+                    onRoom={onRoomSwitch!}
+                    onRemove={onRemove!}
+                    onClose={() => setMenuOpenFor(null)}
+                  />
+                )}
+              </div>
+            )}
+            {!w.temporary && onResolveApproval && (() => {
+              const worker = workersById.get(w.selectId);
+              const pending = worker && pendingApprovalFor(worker);
+              if (!worker || !pending) return null;
+              const busyKey = `${worker.id}:${pending.request.id}`;
+              const decide = (decision: ApprovalDecision) => {
+                setResolvingApproval(busyKey);
+                void onResolveApproval(worker.id, pending.request.id, decision).finally(() => setResolvingApproval(null));
+              };
+              return (
+                <div
+                  ref={(element) => {
+                    if (element) approvalRefs.current.set(w.id, element);
+                    else approvalRefs.current.delete(w.id);
+                  }}
+                  className="npc-approval-bar"
+                >
+                  <strong>{pending.request.title}</strong>
+                  <div className="npc-approval-bar__actions">
+                    <button type="button" disabled={resolvingApproval === busyKey} onClick={() => decide("deny")}>拒絕</button>
+                    {pending.request.decisions.includes("allow_session") && (
+                      <button type="button" disabled={resolvingApproval === busyKey} onClick={() => decide("allow_session")}>本次皆允許</button>
+                    )}
+                    <button type="button" className="npc-approval-bar__allow" disabled={resolvingApproval === busyKey} onClick={() => decide("allow_once")}>允許</button>
+                  </div>
+                </div>
+              );
+            })()}
           </Fragment>
         );
       })}
+      {(() => {
+        const activeStation = hoveredStation ?? pinnedStation;
+        const pos = activeStation ? furniturePositions.get(activeStation) : null;
+        if (!activeStation || !pos) return null;
+        const bounds = hostRef.current?.getBoundingClientRect();
+        if (!bounds) return null;
+        const occupants = allVisual.filter((w) => !w.temporary && w.character.station === activeStation);
+        return (
+          <div
+            className="station-tooltip"
+            style={{ transform: `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)` }}
+          >
+            <strong>{STATION_LABELS[activeStation] ?? activeStation}</strong>
+            {occupants.length === 0
+              ? <small>目前沒有人在使用</small>
+              : occupants.map((w) => <small key={w.id}>{w.name}</small>)}
+          </div>
+        );
+      })()}
     </>
   );
 }
