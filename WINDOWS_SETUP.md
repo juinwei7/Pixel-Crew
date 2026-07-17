@@ -107,7 +107,7 @@ Doctor 會檢查 Windows、Node、npm、Git、Claude Code、Codex 與實際執�
 Server 必須由互動式桌面帳號啟動。若公司政策阻止 PowerShell WinForms，仍可在欄位貼上完整路徑，例如：
 
 ```text
-C:\Users\weiwei\Projects\my-repo
+C:\Users\name\Projects\my-repo
 ```
 
 ### Port 8787 被占用

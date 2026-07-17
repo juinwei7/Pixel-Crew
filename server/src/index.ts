@@ -19,7 +19,7 @@ import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./provide
 import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
 import { UpdateChecker, readCurrentVersion } from "./updateCheck.js";
 import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
-import { isAllowedLoopbackOrigin } from "./localAccess.js";
+import { isAllowedLocalRequest, isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { ProviderUsageRegistry } from "./providerUsage.js";
@@ -46,6 +46,13 @@ import { ProviderInstaller } from "./providerInstaller.js";
 
 const app = express();
 app.disable("x-powered-by");
+app.use((req, res, next) => {
+  if (!isAllowedLocalRequest(req.headers.host, req.headers.origin)) {
+    res.status(403).json({ error: "Pixel Crew only accepts requests addressed to its local interface" });
+    return;
+  }
+  next();
+});
 const loopbackCors: CorsOptions = {
   origin(origin, callback) {
     callback(null, isAllowedLoopbackOrigin(origin));
@@ -68,7 +75,7 @@ const wss = new WebSocketServer({
   server,
   path: "/ws",
   verifyClient(info, done) {
-    done(isAllowedLoopbackOrigin(info.origin));
+    done(isAllowedLocalRequest(info.req.headers.host, info.origin));
   },
 });
 

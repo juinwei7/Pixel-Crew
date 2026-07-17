@@ -1,6 +1,16 @@
 {
   "name": "pixel-crew",
   "version": "1.0.0",
+  "description": "A local multi-agent office for Claude Code and Codex.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/juinwei7/Pixel-Crew.git"
+  },
+  "homepage": "https://github.com/juinwei7/Pixel-Crew#readme",
+  "bugs": {
+    "url": "https://github.com/juinwei7/Pixel-Crew/issues"
+  },
   "private": true,
   "workspaces": ["server", "web"],
   "scripts": {
