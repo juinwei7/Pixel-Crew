@@ -57,6 +57,8 @@
   .nav-links { display: flex; gap: 24px; font: 700 11px var(--mono); letter-spacing: 0.12em; }
   .nav-links a { color: var(--dim); }
   .nav-links a:hover { color: var(--cyan); text-decoration: none; }
+  .lang-toggle { margin-left: 14px; padding: 5px 9px; border: 1px solid var(--line); background: transparent; color: var(--dim); font: 700 10px var(--mono); letter-spacing: .08em; cursor: pointer; }
+  .lang-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
 
   /* ============ HERO ============ */
   .hero { position: relative; padding: 52px 0 0; }
@@ -249,6 +251,7 @@
       <a href="#start">快速開始</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <button class="lang-toggle" type="button" aria-label="Switch language">EN</button>
     </div>
   </nav>
 </div>
@@ -595,5 +598,32 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
   </div>
 </footer>
 
+<script>
+(() => {
+  const translations = {
+    'nav a[href="#start"]': ['快速開始', 'GET STARTED'],
+    '.hero h1': ['把 Claude Code 與 Codex，變成同一間像素辦公室裡<em>看得見的工作夥伴</em>。', 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.'],
+    '.hero p.sub': ['Pixel Crew 是一個跑在你電腦上的多 agent 工作台。每一個 CLI session 都是一個 NPC——派任務、看它走到工位開工、即時讀它的輸出與思考、在畫布上直接核准它想執行的指令。', 'Pixel Crew is a multi-agent cockpit that runs on your computer. Each CLI session becomes an NPC: assign work, watch it walk to a workstation, follow its output and reasoning, and approve commands directly on the canvas.'],
+    '.hero-cta .btn--primary': ['⬇ 下載 v1.0.1', '⬇ Download v1.0.1'],
+    '.hero-cta .btn:not(.btn--primary)': ['GitHub 原始碼', 'GitHub source'],
+    '.hero-badges': ['<span>MIT 開源</span><span>Local-first・不需要 API key</span><span>macOS／Windows／Linux</span><span>官方 CLI 原生整合</span>', '<span>MIT open source</span><span>Local-first・No API key</span><span>macOS／Windows／Linux</span><span>Native official CLI integration</span>'],
+    '.security .headline': ['你的 API key 很安全——<em>因為根本沒有 API key。</em>', 'Your API key is safe—<em>because there is no API key.</em>'],
+    '.security > .wrap > p': ['Pixel Crew 不是另一個要你貼金鑰的服務。它編排與視覺化的，是你機器上<strong>已經安裝、已經登入</strong>的官方 CLI。認證、額度、帳單全部留在原本的工具裡，Pixel Crew 一概碰不到。', 'Pixel Crew is not another service asking for your keys. It orchestrates and visualizes the official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage, and billing stay in those tools.'],
+    '#start h2': ['三種上車方式，挑一個。', 'Three ways to get started.'],
+    '#start .lead': ['前提只有兩個：Node.js 22.13+（原始碼模式才需要），以及 Claude Code／Codex CLI 至少安裝並登入一個。', 'Just two prerequisites: Node.js 22.13+ for source mode, and at least one signed-in Claude Code or Codex CLI.'],
+    '#faq h2': ['常見問題', 'FAQ'],
+    '.lang-toggle': ['EN', '中'],
+  };
+  let english = false;
+  const apply = () => {
+    document.documentElement.lang = english ? 'en' : 'zh-Hant';
+    for (const [selector, values] of Object.entries(translations)) {
+      document.querySelectorAll(selector).forEach((el) => { el.innerHTML = values[english ? 1 : 0]; });
+    }
+    document.title = english ? 'Pixel Crew — Claude Code and Codex in one pixel office' : 'Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室';
+  };
+  document.querySelector('.lang-toggle').addEventListener('click', () => { english = !english; apply(); });
+})();
+</script>
 </body>
 </html>
