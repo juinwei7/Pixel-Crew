@@ -27,6 +27,9 @@ await cp(join(root, "WINDOWS_SETUP.md"), join(releaseRoot, "WINDOWS_SETUP.md"));
 const manifestPath = join(releaseRoot, "package.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 delete manifest.devDependencies;
+delete manifest.private;
+manifest.name = "@juinwei7/pixel-crew";
+manifest.publishConfig = { access: "public" };
 manifest.scripts = { start: "npm run start -w server" };
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 

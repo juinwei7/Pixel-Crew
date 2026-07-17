@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -36,3 +39,67 @@ jobs:
         with:
           name: pixel-crew-portable
           path: release/pixel-crew
+
+  publish:
+    name: Publish release
+    needs: package
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate semantic version tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not a semantic version (for example, v1.0.0)."
+            exit 1
+          fi
+
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "$TAG_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download portable package
+        uses: actions/download-artifact@v7
+        with:
+          name: pixel-crew-portable
+          path: release/pixel-crew
+
+      - name: Create portable release assets
+        shell: bash
+        run: |
+          mkdir -p release/assets
+          tar -czf "release/assets/pixel-crew-${GITHUB_REF_NAME}-portable.tar.gz" -C release pixel-crew
+          cd release
+          zip -r "assets/pixel-crew-${GITHUB_REF_NAME}-portable.zip" pixel-crew
+          cd ..
+          sha256sum release/assets/*.tar.gz release/assets/*.zip > release/assets/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/assets/pixel-crew-${{ github.ref_name }}-portable.tar.gz
+            release/assets/pixel-crew-${{ github.ref_name }}-portable.zip
+            release/assets/SHA256SUMS.txt
+
+      - name: Publish package to npm
+        if: ${{ always() && env.NPM_TOKEN != '' }}
+        working-directory: release/pixel-crew
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: npm publish --access public
