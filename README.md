@@ -8,6 +8,8 @@
 [![Node](https://img.shields.io/badge/Node-22.13%2B-brightgreen.svg)](#系統需求)
 [![Windows](https://img.shields.io/badge/Windows-10%2022H2%20%7C%2011-36a2ff.svg)](./WINDOWS_SETUP.md)
 
+🌐 [Official website](https://pixelcrew.weibuilds.com/)
+
 **English** · [繁體中文](#zh-tw)
 
 Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pixel-art office. Each session is an NPC you can task, watch stream its output/thinking/tool calls in real time, and approve or deny permission requests — all running against the **official CLIs already installed on your machine**. Pixel Crew never asks you to paste an API key; authentication and usage stay in the underlying CLIs.
