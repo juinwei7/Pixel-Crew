@@ -2,40 +2,35 @@
 
 Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 Codex 原生沙箱的建議環境；完整更新的 Windows 10 可使用，但 Codex 官方將其列為 best-effort。
 
-## 最快方式：使用 Release ZIP
+## 最快方式：免安裝 Release ZIP
 
-1. 從 GitHub Releases 下載 `pixel-crew-windows-x64.zip`，並解壓縮到一般使用者可寫入的目錄，例如：
+1. [直接下載最新版 `pixel-crew-windows-x64.zip`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip)，並解壓縮到一般使用者可寫入的目錄，例如：
 
    ```text
    C:\Users\你的名字\Apps\Pixel Crew
    ```
 
-2. 確認已安裝 Node.js 22.13+：
-
-   ```powershell
-   winget install OpenJS.NodeJS.LTS
-   ```
-
-3. 至少安裝一個 AI CLI：
+2. 至少安裝一個 AI CLI：
 
    ```powershell
    # Claude Code
    winget install Anthropic.ClaudeCode
 
    # Codex
-   npm install -g @openai/codex
+   irm https://chatgpt.com/codex/install.ps1 | iex
    ```
 
-4. 雙擊 `install-pixel-crew.cmd`。它只安裝 Pixel Crew 的 production dependencies，不會要求或保存 AI 帳號密碼。
-5. 雙擊 `start-pixel-crew.cmd`。視窗需保持開啟，瀏覽器會自動前往 <http://127.0.0.1:8787>。
-6. 第一次進入後點上方房間名稱，使用 Windows 原生資料夾選擇器選擇 repository。
-7. 如果 CLI 還沒登入，依介面提示在 PowerShell 執行：
+3. 雙擊 `start-pixel-crew.cmd`。視窗需保持開啟，瀏覽器會自動前往 <http://127.0.0.1:8787>。
+4. 第一次進入後點上方房間名稱，使用 Windows 原生資料夾選擇器選擇 repository。
+5. 如果 CLI 還沒登入，依介面提示在 PowerShell 執行：
 
    ```powershell
    claude auth login
    # 或
    codex login
    ```
+
+這個 ZIP 已內含固定且經 SHA-256 驗證的 Windows x64 Node.js runtime 與 production dependencies；一般使用者不需要安裝 Node.js、npm、Git 或執行 dependency installer。
 
 ## 從原始碼一鍵安裝
 
@@ -70,7 +65,7 @@ git pull
 scripts\windows\setup-windows.cmd
 ```
 
-Release ZIP：下載新版、解壓到新目錄、執行 `install-pixel-crew.cmd`。NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式目錄而消失。
+Release ZIP：從上方固定連結下載新版並解壓到新目錄。NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式目錄而消失。
 
 ## 環境診斷
 
@@ -78,7 +73,7 @@ Release ZIP：下載新版、解壓到新目錄、執行 `install-pixel-crew.cmd
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\doctor.ps1
 ```
 
-Doctor 會檢查 Windows、Node、npm、Git、Claude Code、Codex 與實際執行檔位置，不會輸出 token。
+Doctor 會檢查 Windows、內附或系統 Node、開發工具、Claude Code、Codex 與實際執行檔位置，不會輸出 token。
 
 ## Windows 10 注意事項
 

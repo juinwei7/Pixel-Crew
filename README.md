@@ -33,6 +33,8 @@ macOS users can install the self-contained app without Node.js or npm:
 curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
 ```
 
+Windows x64 users can download the [self-contained ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip), extract it, and double-click `start-pixel-crew.cmd`. Node.js and npm are bundled.
+
 For source development on any platform:
 
 ```bash
@@ -43,7 +45,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173> in development. A production build runs the UI, API and WebSocket from one service at <http://127.0.0.1:8787>. You need Node.js 22.13+ and at least one of the Claude Code / Codex CLIs installed. See the platform guides for [macOS](./MACOS_SETUP.md) and [Windows](./WINDOWS_SETUP.md).
+Open <http://localhost:5173> in development. A production build runs the UI, API and WebSocket from one service at <http://127.0.0.1:8787>. Source development needs Node.js 22.13+; self-contained macOS and Windows releases bundle it. At least one Claude Code / Codex CLI is required. See the platform guides for [macOS](./MACOS_SETUP.md) and [Windows](./WINDOWS_SETUP.md).
 
 ## Disclaimer
 
@@ -101,7 +103,7 @@ flowchart LR
 
 ## 系統需求
 
-- Node.js 22.13 或更新版本（使用 Node 內建 SQLite）
+- 從原始碼開發需 Node.js 22.13 或更新版本；macOS／Windows 一般使用者版本已內附
 - macOS、Linux，或 64-bit Windows 10 22H2 / Windows 11
 - 至少安裝 Claude Code CLI 或 Codex CLI 其中一種（尚未登入也能啟動，介面會引導完成登入）
 - 一個允許所選 Agent 操作的本機 repository
@@ -126,14 +128,9 @@ codex login
 
 ### Windows 快速安裝
 
-```powershell
-git clone https://github.com/juinwei7/Pixel-Crew.git
-cd Pixel-Crew
-scripts\windows\setup-windows.cmd
-start-pixel-crew.cmd
-```
+[下載免安裝 Windows x64 ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip)，解壓縮後直接雙擊 `start-pixel-crew.cmd`。一般使用者不需要另外安裝 Node.js、npm 或 Git。
 
-Release ZIP 可直接雙擊安裝與啟動。完整步驟、CLI 安裝、更新與疑難排解請見 [Windows 安裝教學](./WINDOWS_SETUP.md)。
+完整步驟、CLI 安裝、更新與疑難排解請見 [Windows 安裝教學](./WINDOWS_SETUP.md)。
 
 ### macOS / Linux / 通用開發模式
 

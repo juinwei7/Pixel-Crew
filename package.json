@@ -1,6 +1,6 @@
 {
   "name": "pixel-crew",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A local multi-agent office for Claude Code and Codex.",
   "license": "MIT",
   "repository": {
@@ -20,7 +20,8 @@
     "test": "npm test -w server && npm test -w web",
     "check": "npm test && npm run build && git diff --check",
     "package": "npm run build && node scripts/package.mjs",
-    "package:macos": "node scripts/macos/package-app.mjs"
+    "package:macos": "node scripts/macos/package-app.mjs",
+    "package:windows": "node scripts/windows/package-app.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

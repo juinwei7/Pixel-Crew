@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -92,9 +93,51 @@ jobs:
           name: pixel-crew-macos-${{ matrix.arch }}
           path: release/assets/pixel-crew-macos-${{ matrix.arch }}.tar.gz
 
+  windows-package:
+    name: Package Windows (x64)
+    needs: test
+    if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'workflow_dispatch' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+
+      - name: Download verified Node runtime
+        shell: pwsh
+        env:
+          NODE_VERSION: 22.23.1
+          NODE_CHECKSUM: 7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29
+        run: |
+          $Archive = "node-v$env:NODE_VERSION-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_VERSION/$Archive" -OutFile $Archive
+          $Actual = (Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant()
+          if ($Actual -ne $env:NODE_CHECKSUM) { throw "Node runtime checksum mismatch" }
+          Expand-Archive -LiteralPath $Archive -DestinationPath .
+          "NODE_RUNTIME=$pwd\$($Archive.Replace('.zip', ''))" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build self-contained Windows bundle
+        run: npm run package:windows -- --runtime "$env:NODE_RUNTIME"
+
+      - name: Archive Windows bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release/assets | Out-Null
+          Compress-Archive -LiteralPath "release/windows/x64/Pixel Crew" `
+            -DestinationPath "release/assets/pixel-crew-windows-x64.zip"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pixel-crew-windows-x64
+          path: release/assets/pixel-crew-windows-x64.zip
+
   publish:
     name: Publish release
-    needs: [package, macos-package]
+    needs: [package, macos-package, windows-package]
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     permissions:
@@ -135,6 +178,12 @@ jobs:
           path: release/assets
           merge-multiple: true
 
+      - name: Download Windows package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: pixel-crew-windows-x64
+          path: release/assets
+
       - name: Create portable release assets
         shell: bash
         run: |
@@ -155,6 +204,7 @@ jobs:
             release/assets/pixel-crew-${{ github.ref_name }}-portable.zip
             release/assets/pixel-crew-macos-arm64.tar.gz
             release/assets/pixel-crew-macos-x64.tar.gz
+            release/assets/pixel-crew-windows-x64.zip
             release/assets/install-pixel-crew-macos.sh
             release/assets/SHA256SUMS.txt
 

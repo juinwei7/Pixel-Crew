@@ -15,8 +15,16 @@ function Report-Command([string]$Name, [string[]]$VersionArgs) {
 
 Write-Host "PIXEL CREW DOCTOR" -ForegroundColor Cyan
 Write-Host "Windows: $([Environment]::OSVersion.VersionString) / 64-bit=$([Environment]::Is64BitOperatingSystem)"
-Report-Command "node.exe" @("--version")
-Report-Command "npm.cmd" @("--version")
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$BundledNode = Join-Path $Root "runtime\node.exe"
+if (Test-Path $BundledNode) {
+  Write-Host "  [OK] bundled node.exe - $((& $BundledNode --version).Trim())" -ForegroundColor Green
+  Write-Host "       $BundledNode" -ForegroundColor DarkGray
+  Write-Host "  [OK] npm is not required by the self-contained release" -ForegroundColor Green
+} else {
+  Report-Command "node.exe" @("--version")
+  Report-Command "npm.cmd" @("--version")
+}
 Report-Command "git.exe" @("--version")
 Report-Command "claude" @("--version")
 Report-Command "codex" @("--version")
