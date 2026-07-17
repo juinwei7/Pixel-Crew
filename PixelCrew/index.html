@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
+<meta name="description" content="Pixel Crew 是一個 local-first 的多 agent 工作台：把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC。不需要 API key，直接編排你已登入的官方 CLI。MIT 開源。">
+<meta property="og:title" content="Pixel Crew — 像素辦公室裡的 AI Coding Agents">
+<meta property="og:description" content="多個 Claude Code / Codex session＝一間辦公室裡看得見的 NPC。無 API key、local-first、MIT 開源。">
+<meta property="og:image" content="assets/hero.png">
+<style>
+  :root {
+    --bg: #070a14;
+    --bg-raise: #0b1120;
+    --panel: rgba(13, 22, 38, 0.72);
+    --line: rgba(77, 227, 255, 0.16);
+    --line-soft: rgba(143, 184, 232, 0.1);
+    --cyan: #4de3ff;
+    --green: #37d6a3;
+    --gold: #ffd166;
+    --pink: #ff5c9d;
+    --text: #dce9f7;
+    --dim: #8fa3bf;
+    --faint: #5f7089;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Cascadia Mono", monospace;
+    --sans: "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", "Helvetica Neue", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 480px at 72% -8%, rgba(77, 227, 255, 0.06), transparent 60%),
+      radial-gradient(860px 420px at 8% 4%, rgba(255, 92, 157, 0.045), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 16px/1.85 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(77, 227, 255, 0.28); }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+  img { max-width: 100%; height: auto; display: block; }
+  code { font-family: var(--mono); }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .eyebrow { color: var(--cyan); font: 700 11px var(--mono); letter-spacing: 0.3em; }
+  .eyebrow i { color: var(--faint); font-style: normal; }
+  h2 { margin: 12px 0 14px; font: 700 clamp(24px, 3.4vw, 33px)/1.35 var(--sans); text-wrap: balance; }
+
+  /* ============ 頂欄 ============ */
+  .nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .nav-logo { display: flex; align-items: center; gap: 11px; color: #fff; font: 800 15px var(--mono); letter-spacing: 0.26em; }
+  .nav-logo i { width: 8px; height: 8px; background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .nav-links { display: flex; gap: 24px; font: 700 11px var(--mono); letter-spacing: 0.12em; }
+  .nav-links a { color: var(--dim); }
+  .nav-links a:hover { color: var(--cyan); text-decoration: none; }
+
+  /* ============ HERO ============ */
+  .hero { position: relative; padding: 52px 0 0; }
+  .hero-grid {
+    position: absolute; inset: 0; z-index: -1;
+    background:
+      linear-gradient(rgba(77, 227, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(77, 227, 255, 0.04) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(180deg, #000 0%, #000 70%, transparent);
+  }
+  .hero h1 {
+    margin: 0;
+    max-width: 20em;
+    font: 700 clamp(30px, 4.6vw, 46px)/1.32 var(--sans);
+    letter-spacing: 0.01em;
+    text-wrap: balance;
+  }
+  .hero h1 em { color: var(--cyan); font-style: normal; text-shadow: 0 0 26px rgba(77, 227, 255, 0.4); }
+  .hero p.sub { max-width: 37em; margin: 20px 0 0; color: var(--dim); font-size: 17px; }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    min-height: 46px; padding: 0 22px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font: 700 13px var(--mono);
+    letter-spacing: 0.08em;
+  }
+  .btn:hover { text-decoration: none; border-color: rgba(77, 227, 255, 0.55); color: var(--cyan); }
+  .btn--primary { border-color: rgba(55, 214, 163, 0.5); background: rgba(55, 214, 163, 0.12); color: #86ecc4; }
+  .btn--primary:hover { color: #b8f7dd; border-color: var(--green); box-shadow: 0 0 22px rgba(55, 214, 163, 0.22); }
+  .hero-badges { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 24px 0 0; color: var(--faint); font: 11px var(--mono); letter-spacing: 0.1em; }
+  .hero-badges span::before { content: "■ "; font-size: 8px; vertical-align: 2px; color: var(--cyan); }
+
+  /* 終端機式窗框（所有媒體共用） */
+  .win {
+    border: 1px solid var(--line);
+    background: #0a1120;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 26px 70px rgba(0, 0, 0, 0.5);
+  }
+  .win-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(13, 22, 38, 0.9);
+  }
+  .win-bar i { width: 9px; height: 9px; border-radius: 50%; background: #2b3a55; }
+  .win-bar i:nth-child(1) { background: #ff5c7a; }
+  .win-bar i:nth-child(2) { background: var(--gold); }
+  .win-bar i:nth-child(3) { background: var(--green); }
+  .win-bar span { margin-left: 8px; overflow: hidden; color: var(--faint); font: 10px var(--mono); letter-spacing: 0.16em; text-overflow: ellipsis; white-space: nowrap; }
+  .win-bar b { margin-left: auto; flex: none; padding: 2px 8px; border: 1px solid rgba(55, 214, 163, 0.3); color: var(--green); font: 700 9px var(--mono); letter-spacing: 0.12em; }
+
+  .hero-shot { position: relative; margin-top: 52px; }
+  .note {
+    position: absolute; z-index: 3;
+    padding: 5px 11px;
+    border: 1px solid rgba(255, 209, 102, 0.5);
+    background: rgba(20, 16, 5, 0.92);
+    color: var(--gold);
+    font: 700 11px var(--mono);
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  }
+  .note::after {
+    content: "";
+    position: absolute; top: 100%; left: 22px;
+    width: 1px; height: var(--drop, 26px);
+    background: rgba(255, 209, 102, 0.55);
+  }
+  .hero-caption { margin: 14px 2px 0; color: var(--faint); font: 11px var(--mono); letter-spacing: 0.1em; }
+  .hero-caption b { color: var(--dim); }
+
+  /* ============ 數字帶 ============ */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    margin-top: 88px;
+    border-block: 1px solid var(--line-soft);
+    background: var(--line-soft);
+  }
+  .stats div { background: var(--bg); padding: 22px 18px; text-align: center; }
+  .stats b { display: block; color: var(--cyan); font: 700 21px var(--mono); }
+  .stats span { color: var(--faint); font: 11px var(--mono); letter-spacing: 0.14em; }
+
+  /* ============ 展示窗（左右交錯） ============ */
+  .scenes { padding-top: 24px; }
+  .scene-row {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: 44px;
+    align-items: center;
+    padding: 72px 0 0;
+  }
+  .scene-row:nth-child(even) .scene-media { order: 2; }
+  .scene-row:nth-child(even) .scene-copy { order: 1; }
+  .scene-copy h2 { margin-top: 10px; }
+  .scene-copy p { margin: 0; color: var(--dim); font-size: 15px; }
+  .scene-copy p + p { margin-top: 12px; }
+  .scene-copy .kbd {
+    display: inline-block;
+    padding: 1px 7px;
+    border: 1px solid var(--line);
+    background: rgba(77, 227, 255, 0.06);
+    color: #9eeaff;
+    font: 12px var(--mono);
+  }
+  .scene-points { margin: 18px 0 0; padding: 0; list-style: none; color: var(--dim); font-size: 14px; }
+  .scene-points li { padding-left: 18px; text-indent: -18px; }
+  .scene-points li + li { margin-top: 7px; }
+  .scene-points li::before { content: "▪ "; color: var(--cyan); }
+  .scene-points li b { color: var(--text); }
+
+  .media-stack { display: grid; gap: 14px; }
+  .media-stack--pair { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+
+  /* 全寬場景：文案在上、雙圖滿版在下（給直式面板足夠寬度） */
+  .scene-row--full { display: block; }
+  .scene-row--full .scene-head {
+    display: grid;
+    grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+    gap: 12px 56px;
+    align-items: end;
+    margin-bottom: 30px;
+  }
+  .scene-row--full .scene-head .scene-points { margin-top: 6px; }
+  @media (max-width: 760px) {
+    .scene-row--full .scene-head { grid-template-columns: 1fr; }
+  }
+
+  /* ============ 安全性 ============ */
+  .security { margin-top: 96px; padding: 70px 0; border-block: 1px solid var(--line-soft); background: var(--bg-raise); }
+  .security .headline { margin: 10px 0 8px; font: 700 clamp(25px, 3.8vw, 36px)/1.35 var(--sans); text-wrap: balance; }
+  .security .headline em { font-style: normal; color: var(--green); }
+  .security > .wrap > p { max-width: 40em; color: var(--dim); }
+  .sec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 34px; }
+  .sec-item { padding: 20px 22px; border-left: 2px solid var(--green); background: var(--panel); }
+  .sec-item b { display: block; margin-bottom: 5px; font-size: 15px; }
+  .sec-item p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.75; }
+
+  /* ============ 快速開始 ============ */
+  .section { padding: 88px 0 0; }
+  .section > .wrap > p.lead { max-width: 40em; margin: 0 0 34px; color: var(--dim); }
+  .starts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .start { display: flex; flex-direction: column; padding: 24px; border: 1px solid var(--line); background: var(--panel); }
+  .start .tag { align-self: flex-start; padding: 3px 10px; margin-bottom: 14px; border: 1px solid var(--line); color: var(--cyan); font: 700 10px var(--mono); letter-spacing: 0.2em; }
+  .start h3 { margin: 0 0 6px; font-size: 17px; }
+  .start p { margin: 0 0 16px; color: var(--dim); font-size: 13.5px; }
+  .start pre { margin: auto 0 0; padding: 14px 16px; overflow-x: auto; border: 1px solid rgba(0, 0, 0, 0.5); background: #04070f; color: #9eeaff; font: 12px/1.8 var(--mono); }
+  .start pre .c { color: var(--faint); }
+  .req { margin: 22px 0 0; color: var(--faint); font: 12px var(--mono); letter-spacing: 0.06em; }
+  .req b { color: var(--dim); }
+
+  /* ============ FAQ ============ */
+  .faq details { border: 1px solid var(--line-soft); background: var(--panel); }
+  .faq details + details { margin-top: 10px; }
+  .faq summary { padding: 18px 22px; cursor: pointer; font-weight: 700; list-style: none; }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::before { content: "+"; margin-right: 14px; color: var(--cyan); font: 700 16px var(--mono); }
+  .faq details[open] summary::before { content: "−"; }
+  .faq details > p { margin: 0; padding: 0 22px 20px 47px; color: var(--dim); font-size: 14.5px; }
+  .faq details > p code { padding: 1px 6px; background: rgba(77, 227, 255, 0.08); color: #9eeaff; font-size: 12.5px; }
+
+  /* ============ Footer ============ */
+  footer { margin-top: 96px; padding: 44px 0 52px; border-top: 1px solid var(--line-soft); }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 10px 26px; font: 12px var(--mono); letter-spacing: 0.08em; }
+  footer .legal { margin: 26px 0 0; max-width: 52em; color: var(--faint); font-size: 12px; line-height: 1.9; }
+
+  @media (max-width: 980px) {
+    .scene-row { grid-template-columns: 1fr; gap: 22px; padding-top: 60px; }
+    .scene-row:nth-child(even) .scene-media { order: 0; }
+    .scene-row:nth-child(even) .scene-copy { order: 0; }
+    .section { padding-top: 68px; }
+    .security { margin-top: 72px; padding: 54px 0; }
+    .note { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav class="nav">
+    <span class="nav-logo"><i></i>PIXEL CREW</span>
+    <div class="nav-links">
+      <a href="#start">快速開始</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+    </div>
+  </nav>
+</div>
+
+<!-- ============================== HERO ============================== -->
+<header class="hero">
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="wrap">
+    <h1>把 Claude Code 與 Codex，變成同一間像素辦公室裡<em>看得見的工作夥伴</em>。</h1>
+    <p class="sub">
+      Pixel Crew 是一個跑在你電腦上的多 agent 工作台。每一個 CLI session 都是一個 NPC——
+      派任務、看它走到工位開工、即時讀它的輸出與思考、在畫布上直接核准它想執行的指令。
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v1.0.1</a>
+      <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub 原始碼</a>
+    </div>
+    <div class="hero-badges">
+      <span>MIT 開源</span>
+      <span>Local-first・不需要 API key</span>
+      <span>macOS／Windows／Linux</span>
+      <span>官方 CLI 原生整合</span>
+    </div>
+
+    <div class="hero-shot">
+      <span class="note" style="left: 2.5%; top: 6%; --drop: 40px;">四個並行 session</span>
+      <span class="note" style="left: 55%; top: 50%; --drop: 52px;">NPC 的真實回覆，不是合成圖</span>
+      <span class="note" style="left: 76.5%; top: 15%; --drop: 46px;">回覆同步寫進任務日誌</span>
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>PIXEL CREW — ROOM AAAA</span><b>LIVE CAPTURE</b></div>
+        <img src="assets/hero.png" width="1721" height="960" alt="Pixel Crew 完整畫面：像素辦公室中四位 NPC 各自在工位，五號機被選取並冒出「早安！今天想一起做點什麼？」的對話泡泡，右側任務日誌同步顯示同一句回覆，左側是人員列表，下方是指令輸入列">
+      </figure>
+      <p class="hero-caption">▲ 實際畫面直出——五號機說了早安，右邊的任務日誌記下同一句話。</p>
+    </div>
+  </div>
+
+  <div class="stats" role="list">
+    <div role="listitem"><b>2</b><span>官方 CLI 整合</span></div>
+    <div role="listitem"><b>20</b><span>同時併行的 NPC</span></div>
+    <div role="listitem"><b>0</b><span>需要貼上的 API KEY</span></div>
+    <div role="listitem"><b>100%</b><span>資料留在本機</span></div>
+    <div role="listitem"><b>MIT</b><span>授權條款</span></div>
+  </div>
+</header>
+
+<!-- ============================== 展示窗 ============================== -->
+<main class="scenes wrap">
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>ASSIGN — 一號機 收到任務</span><b>REC</b></div>
+        <img src="assets/task.gif" width="1330" height="880" loading="lazy" alt="錄影：派任務給 NPC 後，它從座位走到讀檔案工位開始工作，頭上顯示執行秒數與輸出氣泡，完成時鄰座同事歡呼">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 01 <i>·</i> 派任務</span>
+      <h2>派下去，然後看著它走去上班。</h2>
+      <p>
+        在輸入列打一句話，NPC 就動身走到對應的工位——讀檔案、寫程式、上網查、跑終端機。
+        名牌上跳著已執行秒數，頭上的氣泡即時串流它正在說什麼。
+      </p>
+      <ul class="scene-points">
+        <li><b>工位＝工具</b>：角色站在哪，就代表 agent 正在用什麼</li>
+        <li><b>完成慶祝</b>：任務成功時鄰桌同事會轉頭歡呼，失敗則飄出小烏雲</li>
+        <li>這段錄影是真實任務的螢幕錄製，沒有剪接</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack">
+        <figure class="win" style="margin: 0;">
+          <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>APPROVAL — 等待核准中</span><b>LIVE</b></div>
+          <img src="assets/approval.png" width="920" height="760" loading="lazy" alt="特寫：一號機頭上浮著「允許執行這個指令？」的核准列，提供拒絕、本次皆允許、允許三個按鈕，名牌顯示已等待 9 秒">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 02 <i>·</i> 核准</span>
+      <h2>誰在等你，一眼就看到。</h2>
+      <p>
+        Agent 要執行指令時，NPC 會停下來、頭上冒出「?」原地踱步，
+        核准按鈕直接浮在角色旁邊。不用切視窗、不用翻日誌——遠遠掃一眼就知道誰卡住了。
+      </p>
+      <ul class="scene-points">
+        <li><b>三個選擇</b>：拒絕／本次皆允許／允許這一次</li>
+        <li><b>三段自動核准</b>：關閉、安全（唯讀白名單放行）、完全（危險指令仍強制確認）</li>
+        <li>每個 NPC 獨立設定，互不影響</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>RADIAL — 右鍵選單</span><b>LIVE</b></div>
+        <img src="assets/radial.png" width="974" height="719" loading="lazy" alt="對一號機按右鍵，五顆圓形圖示按鈕沿弧線展開——重新命名、個性職務、像素造型、切換房間、移除人員；貓正好走過左邊的地板">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 03 <i>·</i> 圓弧選單</span>
+      <h2>右鍵一按，整套人事作業。</h2>
+      <p>
+        對任何 NPC 按右鍵，五顆按鈕沿弧線彈開：重新命名、個性／職務、像素造型、切換房間、移除人員。
+      </p>
+      <ul class="scene-points">
+        <li><b>個性系統</b>：給 NPC 一個持久的角色設定（「你是前端 QA，只提問題不改 code」），透過各 CLI 原生機制注入，重啟不會忘</li>
+        <li><b>像素工作坊</b>：換造型、上傳自己的動態 GIF 頭像</li>
+        <li><b>跨 LLM 交接</b>：Claude 做到一半，整理好進度摘要交給 Codex 接手（或反過來）</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>CAMERA — 縮放與平移</span><b>REC</b></div>
+        <img src="assets/camera.gif" width="1330" height="880" loading="lazy" alt="錄影：使用左下角拉桿放大辦公室、拖曳平移視角，再一鍵恢復預設構圖">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 04 <i>·</i> 鏡頭</span>
+      <h2>你的辦公室，你的視角。</h2>
+      <p>
+        拖曳空白處平移、滾輪或左下拉桿縮放——整數倍率，像素永遠銳利。
+        雙擊地板或按 <span class="kbd">⟳</span> 一鍵回到預設構圖。
+      </p>
+      <ul class="scene-points">
+        <li>NPC 一多，放大追某一個、拉遠看全局</li>
+        <li>名牌、氣泡、核准列全部跟著鏡頭走</li>
+        <li>平板可用：單指拖曳平移＋拉桿縮放</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 05 <i>·</i> 任務日誌</span>
+        <h2>每一步，都攤在陽光下。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          左圖是進行中：agent 說明它要查什麼，WebSearch 的輸入輸出逐字串流。
+          右圖是收工：最終回覆以 Markdown 完整渲染——清單、連結、資料來源，外加工具活動數與總耗時。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>兩種視角</b>：摘要模式只看結論，活動模式攤開每一次工具呼叫</li>
+        <li><b>可搜尋</b>：跨任務全文搜尋目前 NPC 的日誌；程式碼區塊一鍵複製</li>
+        <li><b>桌面通知</b>：切去別的視窗時，任務完成或等核准會發系統通知（預設關閉）</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>執行中 — 工具串流</span><b>LIVE</b></div>
+        <img src="assets/log-activity.png" width="401" height="679" loading="lazy" alt="任務日誌執行中：五號機說明查詢計畫，下方即時串流 WebSearch 工具的 INPUT 與 OUTPUT JSON 內容">
+      </figure>
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>完成 — FINAL RESPONSE</span><b>LIVE</b></div>
+        <img src="assets/log-result.png" width="401" height="580" loading="lazy" alt="任務完成：FINAL RESPONSE 以 Markdown 渲染清單與連結，標示工具活動 3 項與 36.1 秒耗時">
+      </figure>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack media-stack--pair">
+        <figure class="win" style="margin: 0;">
+          <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>SHIFT CHANGE — 交接班</span><b>LIVE</b></div>
+          <img src="assets/handoff.png" width="703" height="693" loading="lazy" alt="交接班對話框：五號機從 Codex 交接給 Claude Code，顯示目標 LLM 的工作能量條，並列出跨 LLM 交接的注意事項與確認核取方塊">
+        </figure>
+        <figure class="win" style="margin: 0;">
+          <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFICE POWER — 全域能量</span><b>LIVE</b></div>
+          <img src="assets/energy.png" width="450" height="472" loading="lazy" alt="全域工作能量面板：Claude Code 顯示本次時段、本週與模型層級的用量條與重置時間，Codex 顯示七天用量">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 06 <i>·</i> 跨 LLM 交接與能量</span>
+      <h2>換一顆大腦，不丟工作。</h2>
+      <p>
+        Codex 額度見底、或這題 Claude 更擅長？替 NPC 辦交接班：
+        系統先整理目前的工作摘要，再交給另一個 LLM 的新 session 接手。
+      </p>
+      <ul class="scene-points">
+        <li><b>全域工作能量</b>：頂欄常駐兩家 CLI 的即時用量，點開看本次時段／本週／各層級的重置時間</li>
+        <li><b>先看能量再換</b>：交接前顯示目標 LLM 的即時用量，避免換過去馬上斷糧</li>
+        <li><b>誠實的告知</b>：明確列出跨 LLM 會遺漏什麼（工具狀態、待核准操作），勾選確認才執行；Claude ⇄ Codex 雙向皆可</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 07 <i>·</i> 像素工作坊</span>
+        <h2>你的隊員，長你想要的樣子。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          五位官方隊員造型直接換，或上傳自己的像素 GIF——動畫原樣保留，
+          自動適配 NPC 在辦公室裡的尺寸，走路、工作、歡呼動作照常。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>GIF 動態頭像</b>：最大 320×320、120 幀，依原始幀時間循環播放</li>
+        <li><b>不怕手滑</b>：切換官方造型不會刪除你的自訂角色，隨時換回來</li>
+        <li>搭配個性系統，讓「財報分析師」看起來真的像財報分析師</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFICIAL — 官方隊員</span><b>LIVE</b></div>
+        <img src="assets/workshop-official.png" width="796" height="628" loading="lazy" alt="像素工作坊官方分頁：五位官方隊員造型可選——經典隊員、霓虹工程師、訊號分析師、火花設計師、夜班維運">
+      </figure>
+      <figure class="win" style="margin: 0;">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>CUSTOM — 自訂 GIF</span><b>LIVE</b></div>
+        <img src="assets/workshop-custom.png" width="803" height="709" loading="lazy" alt="像素工作坊自訂分頁：上傳一張貓耳女孩的像素 GIF 作為頭像，右側列出尺寸、檔案與影格限制">
+      </figure>
+    </div>
+  </div>
+
+</main>
+
+<!-- ============================== 安全性 ============================== -->
+<section class="security">
+  <div class="wrap">
+    <span class="eyebrow">SECURITY MODEL</span>
+    <p class="headline">你的 API key 很安全——<em>因為根本沒有 API key。</em></p>
+    <p>
+      Pixel Crew 不是另一個要你貼金鑰的服務。它編排與視覺化的，是你機器上<strong>已經安裝、已經登入</strong>的官方
+      CLI。認證、額度、帳單全部留在原本的工具裡，Pixel Crew 一概碰不到。
+    </p>
+    <div class="sec-grid">
+      <div class="sec-item">
+        <b>只綁 localhost</b>
+        <p>伺服器監聽 127.0.0.1，不對外開放；瀏覽器與伺服器之間走本機 WebSocket。</p>
+      </div>
+      <div class="sec-item">
+        <b>CLI 原生認證</b>
+        <p>登入狀態由 <code>claude</code>／<code>codex</code> 自己管理，Pixel Crew 只呼叫、不儲存任何憑證。</p>
+      </div>
+      <div class="sec-item">
+        <b>資料留在本機</b>
+        <p>對話歷史、NPC 設定、頭像全部存在本機 SQLite 與資料夾，沒有任何雲端上傳或遙測。</p>
+      </div>
+      <div class="sec-item">
+        <b>危險指令攔截</b>
+        <p>即使開啟完全自動核准，<code>rm -rf</code>、磁碟操作等危險指令仍會強制跳出確認；打包產物另有自動稽核防止洩漏本機資訊。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 快速開始 ============================== -->
+<section class="section" id="start">
+  <div class="wrap">
+    <span class="eyebrow">GET STARTED</span>
+    <h2>三種上車方式，挑一個。</h2>
+    <p class="lead">前提只有兩個：Node.js 22.13+（原始碼模式才需要），以及 Claude Code／Codex CLI 至少安裝並登入一個。</p>
+
+    <div class="starts">
+      <div class="start">
+        <span class="tag">MACOS</span>
+        <h3>一行安裝</h3>
+        <p>自帶執行環境的獨立 App，不需要 Node.js 與 npm。</p>
+        <pre>curl -fsSL https://github.com/juinwei7/\
+Pixel-Crew/releases/latest/download/\
+install-pixel-crew-macos.sh | /bin/bash</pre>
+      </div>
+      <div class="start">
+        <span class="tag">WINDOWS</span>
+        <h3>免安裝打包版</h3>
+        <p>下載 zip 解壓即用，附 SHA-256 校驗檔與安裝指引。</p>
+        <pre><span class="c"># Releases 頁下載後</span>
+install-pixel-crew.cmd
+start-pixel-crew.cmd</pre>
+      </div>
+      <div class="start">
+        <span class="tag">SOURCE</span>
+        <h3>原始碼模式</h3>
+        <p>任何平台，開發與客製都走這條。</p>
+        <pre>git clone https://github.com/\
+juinwei7/Pixel-Crew.git
+cd Pixel-Crew
+npm install
+npm run dev   <span class="c"># localhost:5173</span></pre>
+      </div>
+    </div>
+
+    <p class="req"><b>系統需求</b> ─ Node.js 22.13+（僅原始碼模式）・Claude Code 或 Codex CLI・macOS / Windows 10 22H2+ / Linux</p>
+  </div>
+</section>
+
+<!-- ============================== FAQ ============================== -->
+<section class="section faq" id="faq">
+  <div class="wrap">
+    <span class="eyebrow">FAQ</span>
+    <h2>常見問題</h2>
+
+    <details>
+      <summary>要付費嗎？會多花我的額度嗎？</summary>
+      <p>Pixel Crew 本身完全免費（MIT 開源）。它不經手任何計費——你用的是自己 CLI 訂閱或帳號的額度，用量跟直接在終端機跑 CLI 一樣，介面右上還有用量電量條幫你盯著。</p>
+    </details>
+    <details>
+      <summary>支援哪些 agent？</summary>
+      <p>目前支援 Anthropic 的 <code>claude</code>（Claude Code）與 OpenAI 的 <code>codex</code> CLI，兩者可以在同一間辦公室混用，也支援互相交接工作。裝一個就能用，不必兩個都有。</p>
+    </details>
+    <details>
+      <summary>我的程式碼跟對話會被送到哪裡？</summary>
+      <p>Agent 與模型供應商之間的傳輸由官方 CLI 自己處理，跟你直接用 CLI 完全相同。Pixel Crew 新增的部分（對話歷史、NPC 設定）只存在本機 SQLite，伺服器只綁 localhost，沒有任何遙測或雲端同步。</p>
+    </details>
+    <details>
+      <summary>自動核准安全嗎？</summary>
+      <p>三段可調，而且是每個 NPC 獨立設定。「安全」模式只放行唯讀操作白名單；「完全」模式仍有危險指令黑名單（<code>rm</code> 系列、磁碟操作、權限變更等）強制人工確認。不確定就維持預設的「關閉」，每一條指令都會問你。</p>
+    </details>
+    <details>
+      <summary>可以同時開很多個 agent 嗎？</summary>
+      <p>可以，上限 20 個 NPC，並且可以分屬不同的工作資料夾（房間）。左側人員列表支援搜尋、篩選（執行中／需處理／依 provider），畫布可縮放平移，人多也不會迷路。</p>
+    </details>
+    <details>
+      <summary>跟 Anthropic 或 OpenAI 是什麼關係？</summary>
+      <p>沒有任何關係。Pixel Crew 是獨立的非官方工具，未受 Anthropic 或 OpenAI 授權、背書或贊助；「Claude」「Codex」等商標屬於其各自所有者。它做的事情是編排並視覺化你自己安裝、自己登入的官方 CLI。</p>
+    </details>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew 是獨立的非官方開源專案，與 Anthropic、OpenAI 均無隸屬、授權、背書或贊助關係。
+      「Claude」、「Claude Code」、「Codex」及相關商標屬於其各自所有者。
+      本工具僅編排與視覺化使用者自行安裝並登入的官方 CLI；使用各 CLI 請遵守其服務條款。
+      頁面中的所有截圖與錄影均為實際軟體畫面。
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
