@@ -5,9 +5,61 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
 <meta name="description" content="Pixel Crew 是一個 local-first 的多 agent 工作台：把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC。不需要 API key，直接編排你已登入的官方 CLI。MIT 開源。">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="theme-color" content="#070a14">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/">
 <meta property="og:title" content="Pixel Crew — 像素辦公室裡的 AI Coding Agents">
 <meta property="og:description" content="多個 Claude Code / Codex session＝一間辦公室裡看得見的 NPC。無 API key、local-first、MIT 開源。">
-<meta property="og:image" content="assets/hero.png">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.png">
+<meta property="og:image:secure_url" content="https://pixelcrew.weibuilds.com/assets/hero.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1721">
+<meta property="og:image:height" content="960">
+<meta property="og:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Pixel Crew — 像素辦公室裡的 AI Coding Agents">
+<meta name="twitter:description" content="把多個 Claude Code 與 Codex session 變成看得見的像素 NPC。Local-first、無 API key、MIT 開源。">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.png">
+<meta name="twitter:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://pixelcrew.weibuilds.com/#website",
+      "url": "https://pixelcrew.weibuilds.com/",
+      "name": "Pixel Crew",
+      "inLanguage": ["zh-Hant", "en"]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://pixelcrew.weibuilds.com/#software",
+      "name": "Pixel Crew",
+      "url": "https://pixelcrew.weibuilds.com/",
+      "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
+      "softwareVersion": "1.0.1",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "macOS, Windows, Linux",
+      "description": "Local-first multi-agent cockpit for Claude Code and Codex.",
+      "image": "https://pixelcrew.weibuilds.com/assets/hero.png",
+      "license": "https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE",
+      "isAccessibleForFree": true,
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "sameAs": "https://github.com/juinwei7/Pixel-Crew"
+    }
+  ]
+}
+</script>
 <style>
   :root {
     --bg: #070a14;
@@ -57,8 +109,18 @@
   .nav-links { display: flex; gap: 24px; font: 700 11px var(--mono); letter-spacing: 0.12em; }
   .nav-links a { color: var(--dim); }
   .nav-links a:hover { color: var(--cyan); text-decoration: none; }
-  .lang-toggle { margin-left: 14px; padding: 5px 9px; border: 1px solid var(--line); background: transparent; color: var(--dim); font: 700 10px var(--mono); letter-spacing: .08em; cursor: pointer; }
-  .lang-toggle:hover { color: var(--cyan); border-color: var(--cyan); }
+  .lang-toggle {
+    display: inline-grid; grid-template-columns: 1fr 1fr; flex: none;
+    margin-left: 4px; padding: 3px; gap: 2px;
+    border: 1px solid rgba(77, 227, 255, .24); border-radius: 8px;
+    background: rgba(7, 10, 20, .74); color: var(--dim);
+    font: 700 10px var(--mono); letter-spacing: .08em; cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .02), 0 5px 18px rgba(0, 0, 0, .2);
+  }
+  .lang-toggle span { min-width: 32px; padding: 5px 7px; border-radius: 5px; text-align: center; transition: color .16s ease, background .16s ease, box-shadow .16s ease; }
+  .lang-toggle[data-active="zh"] .lang-zh,
+  .lang-toggle[data-active="en"] .lang-en { background: rgba(77, 227, 255, .14); color: #b9f4ff; box-shadow: 0 0 12px rgba(77, 227, 255, .12); }
+  .lang-toggle:hover { border-color: rgba(77, 227, 255, .58); }
 
   /* ============ HERO ============ */
   .hero { position: relative; padding: 52px 0 0; }
@@ -239,6 +301,18 @@
     .security { margin-top: 72px; padding: 54px 0; }
     .note { display: none; }
   }
+  @media (max-width: 640px) {
+    .wrap { padding-inline: 18px; }
+    .nav { align-items: flex-start; flex-direction: column; gap: 16px; }
+    .nav-links { width: 100%; align-items: center; gap: 14px; }
+    .nav-links a { letter-spacing: .06em; }
+    .lang-toggle { margin-left: auto; }
+    .hero { padding-top: 32px; }
+    .hero h1 { font-size: clamp(29px, 9vw, 38px); }
+    .hero p.sub { font-size: 15px; }
+    .hero-cta .btn { width: 100%; justify-content: center; }
+    .media-stack--pair, .starts { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
 </head>
@@ -251,7 +325,9 @@
       <a href="#start">快速開始</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
-      <button class="lang-toggle" type="button" aria-label="Switch language">EN</button>
+      <button class="lang-toggle" type="button" aria-label="Switch to English" data-active="zh">
+        <span class="lang-zh" lang="zh-Hant">中文</span><span class="lang-en" lang="en">EN</span>
+      </button>
     </div>
   </nav>
 </div>
@@ -600,29 +676,73 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
 
 <script>
 (() => {
-  const translations = {
-    'nav a[href="#start"]': ['快速開始', 'GET STARTED'],
-    '.hero h1': ['把 Claude Code 與 Codex，變成同一間像素辦公室裡<em>看得見的工作夥伴</em>。', 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.'],
-    '.hero p.sub': ['Pixel Crew 是一個跑在你電腦上的多 agent 工作台。每一個 CLI session 都是一個 NPC——派任務、看它走到工位開工、即時讀它的輸出與思考、在畫布上直接核准它想執行的指令。', 'Pixel Crew is a multi-agent cockpit that runs on your computer. Each CLI session becomes an NPC: assign work, watch it walk to a workstation, follow its output and reasoning, and approve commands directly on the canvas.'],
-    '.hero-cta .btn--primary': ['⬇ 下載 v1.0.1', '⬇ Download v1.0.1'],
-    '.hero-cta .btn:not(.btn--primary)': ['GitHub 原始碼', 'GitHub source'],
-    '.hero-badges': ['<span>MIT 開源</span><span>Local-first・不需要 API key</span><span>macOS／Windows／Linux</span><span>官方 CLI 原生整合</span>', '<span>MIT open source</span><span>Local-first・No API key</span><span>macOS／Windows／Linux</span><span>Native official CLI integration</span>'],
-    '.security .headline': ['你的 API key 很安全——<em>因為根本沒有 API key。</em>', 'Your API key is safe—<em>because there is no API key.</em>'],
-    '.security > .wrap > p': ['Pixel Crew 不是另一個要你貼金鑰的服務。它編排與視覺化的，是你機器上<strong>已經安裝、已經登入</strong>的官方 CLI。認證、額度、帳單全部留在原本的工具裡，Pixel Crew 一概碰不到。', 'Pixel Crew is not another service asking for your keys. It orchestrates and visualizes the official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage, and billing stay in those tools.'],
-    '#start h2': ['三種上車方式，挑一個。', 'Three ways to get started.'],
-    '#start .lead': ['前提只有兩個：Node.js 22.13+（原始碼模式才需要），以及 Claude Code／Codex CLI 至少安裝並登入一個。', 'Just two prerequisites: Node.js 22.13+ for source mode, and at least one signed-in Claude Code or Codex CLI.'],
-    '#faq h2': ['常見問題', 'FAQ'],
-    '.lang-toggle': ['EN', '中'],
+  const html = {
+    'nav a[href="#start"]': 'GET STARTED',
+    '.hero h1': 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.',
+    '.hero p.sub': 'Pixel Crew is a multi-agent cockpit that runs on your computer. Each CLI session becomes an NPC: assign work, watch it walk to a workstation, follow its output and reasoning in real time, and approve commands directly on the canvas.',
+    '.hero-cta .btn--primary': '⬇ Download v1.0.1',
+    '.hero-cta .btn:not(.btn--primary)': 'GitHub source',
+    '.hero-badges': '<span>MIT open source</span><span>Local-first・No API key</span><span>macOS／Windows／Linux</span><span>Native official CLI integration</span>',
+    '.hero-caption': '▲ Captured from the real app—the NPC says good morning and the task log records the same response.',
+    '.stats': '<div role="listitem"><b>2</b><span>OFFICIAL CLI INTEGRATIONS</span></div><div role="listitem"><b>20</b><span>CONCURRENT NPCS</span></div><div role="listitem"><b>0</b><span>API KEYS TO PASTE</span></div><div role="listitem"><b>100%</b><span>DATA STAYS LOCAL</span></div><div role="listitem"><b>MIT</b><span>LICENSE</span></div>',
+    '.security .wrap': '<span class="eyebrow">SECURITY MODEL</span><p class="headline">Your API key is safe—<em>because there is no API key.</em></p><p>Pixel Crew is not another service asking for your keys. It orchestrates and visualizes the official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage, and billing stay in those tools.</p><div class="sec-grid"><div class="sec-item"><b>Localhost only</b><p>The server listens on 127.0.0.1 and is never exposed publicly; the browser connects through a local WebSocket.</p></div><div class="sec-item"><b>Native CLI authentication</b><p>Sign-in is managed by <code>claude</code> and <code>codex</code>. Pixel Crew invokes them without storing credentials.</p></div><div class="sec-item"><b>Data stays local</b><p>Conversation history, NPC settings, and avatars stay in local SQLite and folders. There is no cloud upload or telemetry.</p></div><div class="sec-item"><b>Dangerous-command guardrails</b><p>Even with full auto-approval, destructive operations such as <code>rm -rf</code> and disk commands still require confirmation. Release artifacts are also audited for local-data leaks.</p></div></div>',
+    '#start .wrap': '<span class="eyebrow">GET STARTED</span><h2>Three ways to get started.</h2><p class="lead">Just two prerequisites: Node.js 22.13+ for source mode, and at least one signed-in Claude Code or Codex CLI.</p><div class="starts"><div class="start"><span class="tag">MACOS</span><h3>One-command install</h3><p>A self-contained app with its own runtime. No Node.js or npm required.</p><pre>curl -fsSL https://github.com/juinwei7/\\\nPixel-Crew/releases/latest/download/\\\ninstall-pixel-crew-macos.sh | /bin/bash</pre></div><div class="start"><span class="tag">WINDOWS</span><h3>Portable package</h3><p>Download the ZIP, extract it, and run it. Includes a SHA-256 checksum and setup guide.</p><pre><span class="c"># After downloading from Releases</span>\nstart-pixel-crew.cmd</pre></div><div class="start"><span class="tag">SOURCE</span><h3>Run from source</h3><p>For development and customization on any platform.</p><pre>git clone https://github.com/\\\njuinwei7/Pixel-Crew.git\ncd Pixel-Crew\nnpm install\nnpm run dev   <span class="c"># localhost:5173</span></pre></div></div><p class="req"><b>REQUIREMENTS</b> ─ Node.js 22.13+ (source mode only)・Claude Code or Codex CLI・macOS / Windows 10 22H2+ / Linux</p>',
+    '#faq .wrap': '<span class="eyebrow">FAQ</span><h2>Frequently asked questions</h2><details><summary>Is it free? Does it use more of my allowance?</summary><p>Pixel Crew is completely free and MIT-licensed. It does not handle billing—you use the allowance from your own CLI subscription or account, exactly as you would in a terminal. The energy meters help you monitor usage.</p></details><details><summary>Which agents are supported?</summary><p>Pixel Crew supports Anthropic\'s <code>claude</code> (Claude Code) and OpenAI\'s <code>codex</code> CLI. They can share one office and hand work to each other. You only need one of them installed.</p></details><details><summary>Where do my code and conversations go?</summary><p>Traffic between an agent and its model provider is handled by the official CLI, just as it is when used directly. Pixel Crew stores its added state—conversation history and NPC settings—in local SQLite, binds only to localhost, and has no telemetry or cloud sync.</p></details><details><summary>Is auto-approval safe?</summary><p>It has three per-NPC levels. Safe mode permits only a read-only allowlist. Full mode still forces manual confirmation for dangerous commands, disk operations, and permission changes. If unsure, leave it off so every command asks first.</p></details><details><summary>Can I run many agents at once?</summary><p>Yes, up to 20 NPCs across different project folders (rooms). Search and filters help find active or blocked workers, and the office canvas supports pan and zoom.</p></details><details><summary>Is Pixel Crew affiliated with Anthropic or OpenAI?</summary><p>No. Pixel Crew is an independent, unofficial project and is not authorized, endorsed, or sponsored by Anthropic or OpenAI. Claude, Claude Code, Codex, and related marks belong to their respective owners.</p></details>',
+    'footer .legal': 'Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization, endorsement, or sponsorship from Anthropic or OpenAI. “Claude,” “Claude Code,” “Codex,” and related trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs installed and authenticated by the user. Use each CLI in accordance with its terms. All screenshots and recordings on this page show the real application.'
   };
-  let english = false;
+  const sceneHtml = [
+    '<span class="eyebrow">SCENE 01 <i>·</i> ASSIGN WORK</span><h2>Assign it, then watch your NPC go to work.</h2><p>Type a task and the NPC walks to the matching workstation—to read files, write code, search the web, or use the terminal. Its nameplate shows elapsed time while a speech bubble streams live output.</p><ul class="scene-points"><li><b>Workstation = tool</b>: where the character stands shows what the agent is using</li><li><b>Completion reactions</b>: nearby teammates celebrate success; failures produce a small storm cloud</li><li>This is an unedited recording of a real task</li></ul>',
+    '<span class="eyebrow">SCENE 02 <i>·</i> APPROVALS</span><h2>See who needs you at a glance.</h2><p>When an agent wants to run a command, its NPC stops, paces with a question mark, and shows approval controls right beside the character. No window switching or log hunting required.</p><ul class="scene-points"><li><b>Three choices</b>: deny, allow all for this task, or allow once</li><li><b>Three auto-approval levels</b>: off, safe read-only allowlist, or full—with dangerous commands still requiring confirmation</li><li>Each NPC has independent settings</li></ul>',
+    '<span class="eyebrow">SCENE 03 <i>·</i> RADIAL MENU</span><h2>Right-click for the whole personnel desk.</h2><p>Right-click any NPC to rename it, define its persona and role, change its pixel appearance, switch rooms, or remove it.</p><ul class="scene-points"><li><b>Persistent personas</b>: give an NPC a durable role through each CLI\'s native mechanism</li><li><b>Pixel workshop</b>: choose a look or upload an animated GIF avatar</li><li><b>Cross-LLM handoff</b>: summarize Claude\'s progress for Codex to continue, or vice versa</li></ul>',
+    '<span class="eyebrow">SCENE 04 <i>·</i> CAMERA</span><h2>Your office, your point of view.</h2><p>Drag empty space to pan. Use the wheel or lower-left slider to zoom in crisp integer steps. Double-click the floor or press <span class="kbd">⟳</span> to reset the view.</p><ul class="scene-points"><li>Zoom in to follow one NPC or out to see the whole team</li><li>Nameplates, bubbles, and approval controls move with the camera</li><li>Tablet-friendly: one-finger pan and slider zoom</li></ul>',
+    '<div><span class="eyebrow">SCENE 05 <i>·</i> TASK LOG</span><h2>Every step, out in the open.</h2><p style="margin: 0; color: var(--dim); font-size: 15px;">The activity view streams an agent\'s explanation and every tool input and output. The finished view renders the final Markdown response with lists, links, sources, tool count, and total duration.</p></div><ul class="scene-points"><li><b>Two views</b>: summary for conclusions, activity for every tool call</li><li><b>Searchable</b>: search this NPC\'s tasks and copy code blocks in one click</li><li><b>Desktop notifications</b>: optional alerts for completion and approvals while you are elsewhere</li></ul>',
+    '<span class="eyebrow">SCENE 06 <i>·</i> HANDOFFS &amp; ENERGY</span><h2>Change brains without dropping the work.</h2><p>Running low on Codex allowance, or is Claude a better fit? Pixel Crew summarizes the current work and hands it to a new session on the other LLM.</p><ul class="scene-points"><li><b>Global energy</b>: live usage for both CLIs, including session, weekly, and model reset times</li><li><b>Check before switching</b>: see the target LLM\'s usage before handing off</li><li><b>Honest warnings</b>: review what cannot transfer, such as tool state and pending approvals, before confirming either direction</li></ul>',
+    '<div><span class="eyebrow">SCENE 07 <i>·</i> PIXEL WORKSHOP</span><h2>Make your teammates look the way you want.</h2><p style="margin: 0; color: var(--dim); font-size: 15px;">Choose one of five official crew designs or upload your own pixel GIF. Animation timing is preserved and the avatar is fitted automatically for walking, working, and celebrating.</p></div><ul class="scene-points"><li><b>Animated GIF avatars</b>: up to 320×320 and 120 frames, played at their original timing</li><li><b>Safe switching</b>: choosing an official design never deletes your custom character</li><li>Pair appearance with a persona so your financial analyst looks the part</li></ul>'
+  ];
+  const text = {
+    '四個並行 session': 'Four parallel sessions', 'NPC 的真實回覆，不是合成圖': 'Real NPC output—not a mockup', '回覆同步寫進任務日誌': 'Responses sync to the task log',
+    'ASSIGN — 一號機 收到任務': 'ASSIGN — NPC 1 RECEIVED A TASK', 'APPROVAL — 等待核准中': 'APPROVAL — WAITING', 'RADIAL — 右鍵選單': 'RADIAL — CONTEXT MENU', 'CAMERA — 縮放與平移': 'CAMERA — PAN & ZOOM', '執行中 — 工具串流': 'RUNNING — TOOL STREAM', '完成 — FINAL RESPONSE': 'COMPLETE — FINAL RESPONSE', 'SHIFT CHANGE — 交接班': 'SHIFT CHANGE — HANDOFF', 'OFFICE POWER — 全域能量': 'OFFICE POWER — GLOBAL USAGE', 'OFFICIAL — 官方隊員': 'OFFICIAL — CREW', 'CUSTOM — 自訂 GIF': 'CUSTOM — GIF AVATAR'
+  };
+  const alt = {
+    'assets/hero.png': 'Pixel Crew with four NPCs at their workstations, a live speech bubble, personnel list, task log, and command input.',
+    'assets/task.gif': 'Recording of an NPC walking to a workstation, streaming output, and completing a real task.',
+    'assets/approval.png': 'An NPC waiting for command approval with deny, allow for task, and allow once controls.',
+    'assets/radial.png': 'The radial menu for renaming an NPC, editing its persona, changing its appearance, switching rooms, or removing it.',
+    'assets/camera.gif': 'Recording of the office camera being panned, zoomed, and reset.',
+    'assets/log-activity.png': 'Task log streaming a WebSearch tool input and output while a task runs.',
+    'assets/log-result.png': 'A completed task with the final Markdown response, tool count, and duration.',
+    'assets/handoff.png': 'A handoff dialog transferring work from Codex to Claude Code with usage information and warnings.',
+    'assets/energy.png': 'The global usage panel showing Claude Code and Codex allowance and reset times.',
+    'assets/workshop-official.png': 'The Pixel Workshop showing five official crew appearances.',
+    'assets/workshop-custom.png': 'The custom avatar tab with an uploaded animated pixel GIF and file limits.'
+  };
+  const originals = new Map();
+  const remember = (selector) => document.querySelectorAll(selector).forEach((el) => { if (!originals.has(el)) originals.set(el, el.innerHTML); });
+  Object.keys(html).forEach(remember);
+  document.querySelectorAll('.scene-copy, .scene-head').forEach((el) => originals.set(el, el.innerHTML));
+  document.querySelectorAll('.note, .win-bar span').forEach((el) => originals.set(el, el.textContent));
+  document.querySelectorAll('img[alt]').forEach((el) => el.dataset.zhAlt = el.alt);
+  const metaDescription = document.querySelector('meta[name="description"]');
+  const ogTitle = document.querySelector('meta[property="og:title"]');
+  const ogDescription = document.querySelector('meta[property="og:description"]');
+  const zhMeta = [metaDescription.content, ogTitle.content, ogDescription.content];
+  let english = localStorage.getItem('pixel-crew-language') === 'en';
   const apply = () => {
     document.documentElement.lang = english ? 'en' : 'zh-Hant';
-    for (const [selector, values] of Object.entries(translations)) {
-      document.querySelectorAll(selector).forEach((el) => { el.innerHTML = values[english ? 1 : 0]; });
-    }
+    for (const [selector, value] of Object.entries(html)) document.querySelectorAll(selector).forEach((el) => { el.innerHTML = english ? value : originals.get(el); });
+    document.querySelectorAll('.scene-copy, .scene-head').forEach((el, index) => { el.innerHTML = english ? sceneHtml[index] : originals.get(el); });
+    document.querySelectorAll('.note, .win-bar span').forEach((el) => { const original = originals.get(el); el.textContent = english && text[original] ? text[original] : original; });
+    document.querySelectorAll('img[alt]').forEach((el) => { el.alt = english ? alt[el.getAttribute('src')] : el.dataset.zhAlt; });
     document.title = english ? 'Pixel Crew — Claude Code and Codex in one pixel office' : 'Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室';
+    metaDescription.content = english ? 'Pixel Crew is a local-first multi-agent cockpit that turns Claude Code and Codex sessions into visible NPCs. No API key required. MIT open source.' : zhMeta[0];
+    ogTitle.content = english ? 'Pixel Crew — AI coding agents in a pixel office' : zhMeta[1];
+    ogDescription.content = english ? 'Multiple Claude Code and Codex sessions become visible NPCs in one office. Local-first, no API key, MIT open source.' : zhMeta[2];
+    document.querySelector('.lang-toggle').dataset.active = english ? 'en' : 'zh';
+    document.querySelector('.lang-toggle').setAttribute('aria-label', english ? '切換至繁體中文' : 'Switch to English');
+    document.querySelector('.lang-toggle').setAttribute('aria-pressed', String(english));
   };
-  document.querySelector('.lang-toggle').addEventListener('click', () => { english = !english; apply(); });
+  document.querySelector('.lang-toggle').addEventListener('click', () => { english = !english; localStorage.setItem('pixel-crew-language', english ? 'en' : 'zh-Hant'); apply(); });
+  apply();
 })();
 </script>
 </body>
