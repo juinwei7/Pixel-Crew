@@ -1,28 +1,39 @@
 # Pixel Crew macOS 安裝教學
 
-本文件適用於 Apple Silicon（M 系列）與 Intel Mac。Pixel Crew 是本機 Node.js
-應用程式，不是 `.app`；啟動後請用瀏覽器開啟本機介面。
+本文件適用於 Apple Silicon（M 系列）與 Intel Mac。一般使用者安裝後會得到
+`Pixel Crew.app`；它會在 menu bar 執行本機服務並自動開啟瀏覽器介面。
 
 ## 系統需求
 
-- macOS
-- Node.js 22.13.0 或更新版本
-- Git
-- Claude Code CLI 或 Codex CLI 至少其中一個
+- macOS 11 或更新版本
 - 一個允許 Agent 操作的本機專案資料夾
 
-先在「終端機」確認環境：
+一般安裝**不需要**預先安裝 Node.js、npm、Git、Homebrew 或 Xcode。Pixel Crew
+會依 Apple Silicon／Intel 自動下載內含 Node runtime 的版本。Claude Code CLI
+或 Codex CLI 也可以在首次啟動畫面再安裝。
+
+## 一行安裝（一般使用者）
+
+打開「終端機」，貼上這一行：
 
 ```bash
-node --version
-npm --version
-git --version
-uname -m
+curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
 ```
 
-如果沒有 Node.js，請從 [Node.js 官方下載頁](https://nodejs.org/en/download)
-安裝目前仍受支援、且版本不低於 22.13.0 的版本。若 `git --version` 觸發
-Command Line Tools 安裝提示，依 macOS 畫面完成安裝後重新開啟終端機。
+installer 會偵測 CPU 架構、下載對應 release、核對 SHA-256，然後安裝到：
+
+```text
+~/Applications/Pixel Crew.app
+```
+
+完成後會自動啟動。之後可直接從 Finder 的個人 `Applications` 資料夾或
+Spotlight 開啟，不必再執行終端機指令。Pixel Crew 會出現在 menu bar；選單可
+重新開啟介面、查看 log 或完整退出服務。
+
+目前 maintainer 沒有 Apple Developer ID，因此這是**未經 Apple notarization
+的 certificate-free build**。installer 透過 GitHub HTTPS 取得檔案並在解壓前
+驗證 release checksum；它不使用 `sudo`，也不會停用 Gatekeeper 或修改系統安全
+設定。
 
 ## 安裝 AI CLI
 
@@ -87,46 +98,22 @@ command -v claude
 
 只需成功找到其中一個 provider 即可使用 Pixel Crew。
 
-## 從 GitHub Release 安裝（一般使用者）
+## 從 GitHub Release 手動安裝
 
-1. 從 [GitHub Releases](https://github.com/juinwei7/Pixel-Crew/releases) 下載
-   `portable.zip` 或 `portable.tar.gz`，並一併下載 `SHA256SUMS.txt`。
-2. 在下載資料夾驗證檔案；依下載格式選一個指令，輸出應顯示該檔案為 `OK`：
-
-```bash
-cd ~/Downloads
-
-# ZIP
-grep 'portable\.zip$' SHA256SUMS.txt | shasum -a 256 -c -
-
-# 或 tar.gz
-grep 'portable\.tar\.gz$' SHA256SUMS.txt | shasum -a 256 -c -
-```
-
-3. 解壓縮後，在終端機進入其中的 `pixel-crew` 資料夾。
-4. 安裝 production dependencies：
+如果不想使用 pipe，可從 [GitHub Releases](https://github.com/juinwei7/Pixel-Crew/releases)
+下載 `install-pixel-crew-macos.sh`，再執行：
 
 ```bash
-cd /path/to/pixel-crew
-npm install --omit=dev --workspace server --include-workspace-root
+bash ~/Downloads/install-pixel-crew-macos.sh
 ```
 
-5. 啟動 Pixel Crew：
-
-```bash
-npm start
-```
-
-6. 保持終端機視窗開啟，另開瀏覽器前往 <http://127.0.0.1:8787>。也可以執行：
-
-```bash
-open http://127.0.0.1:8787
-```
-
-按 `Control+C` 可停止服務。Release 內容不是 macOS `.app`，通常不需要修改
-Gatekeeper 設定，也不建議使用 `xattr -dr` 或停用系統安全功能。
+腳本會自行下載 `pixel-crew-macos-arm64.tar.gz` 或
+`pixel-crew-macos-x64.tar.gz` 及 `SHA256SUMS.txt`，只在驗證成功後才替換 app。
 
 ## 從原始碼安裝（開發者）
+
+只有原始碼開發模式需要 Node.js 22.13.0 以上與 Git。請先從
+[Node.js 官方下載頁](https://nodejs.org/en/download)準備環境，再執行：
 
 ```bash
 git clone https://github.com/juinwei7/Pixel-Crew.git
@@ -161,14 +148,14 @@ TARGET_REPO_PATH=/Users/name/Projects/my-repo
 
 ### Release 安裝
 
-下載新版本並解壓到新資料夾，再重新執行 production dependency 安裝與
-`npm start`。NPC、對話索引、角色與設定預設保存在：
+重新執行一行安裝指令即可升級。installer 會先完整驗證新版，再替換既有 app。
+NPC、對話索引、角色與設定預設保存在：
 
 ```text
 ~/Library/Application Support/Pixel Crew
 ```
 
-因此替換程式資料夾不會刪除既有資料。確認新版正常後，再移除舊的程式資料夾。
+因此升級 app 不會刪除既有資料。
 
 ### 原始碼安裝
 
@@ -183,7 +170,7 @@ npm start
 
 ## 疑難排解
 
-### `node` 版本太舊
+### 原始碼開發時 `node` 版本太舊
 
 ```bash
 node --version
@@ -201,8 +188,9 @@ command -v codex
 echo "$PATH"
 ```
 
-請從同一個能找到 CLI 的終端機執行 `npm start`。若 CLI 位於
-`~/.local/bin`，依上方 PATH 步驟加入 `~/.zshrc` 後重新啟動服務。
+一般 `.app` 啟動器會自動搜尋 `~/.local/bin`、`/opt/homebrew/bin` 與
+`/usr/local/bin`。若仍找不到 CLI，先完全退出 menu bar 的 Pixel Crew，確認
+上述 `command -v` 有結果後再重新開啟。
 
 ### Port 8787 已被占用
 
@@ -212,7 +200,8 @@ echo "$PATH"
 lsof -nP -iTCP:8787 -sTCP:LISTEN
 ```
 
-可在 `server/.env` 改用另一個 loopback port：
+一般 `.app` 固定使用 loopback port 8787；請先退出占用該 port 的舊 Pixel Crew
+或其他程式。原始碼開發模式才可在 `server/.env` 改用另一個 port：
 
 ```dotenv
 PORT=8899
@@ -228,7 +217,7 @@ macOS 可能要求終端機存取 Desktop、Documents 或其他受保護資料�
 
 ### 瀏覽器無法連線
 
-確認執行 `npm start` 的終端機仍在運作，且輸出包含：
+從 menu bar 的 Pixel Crew 選單點擊 `Open Log`。正常啟動時 log 會包含：
 
 ```text
 pixel-crew server listening on http://127.0.0.1:8787
@@ -239,8 +228,14 @@ Pixel Crew 刻意只接受 localhost／loopback 連線，不能把 `HOST` 改成
 
 ## 移除
 
-先停止 Pixel Crew，再刪除程式資料夾。若也要刪除本機 NPC、對話索引、角色與
-設定，可在確認不需要備份後，於 Finder 前往下列資料夾並移到垃圾桶：
+只移除 app 並保留資料：
+
+```bash
+curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash -s -- --uninstall
+```
+
+若也要刪除本機 NPC、對話索引、角色與設定，可在確認不需要備份後，於 Finder
+前往下列資料夾並移到垃圾桶：
 
 ```text
 ~/Library/Application Support/Pixel Crew

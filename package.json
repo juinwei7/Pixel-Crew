@@ -19,7 +19,8 @@
     "start": "npm run start -w server",
     "test": "npm test -w server && npm test -w web",
     "check": "npm test && npm run build && git diff --check",
-    "package": "npm run build && node scripts/package.mjs"
+    "package": "npm run build && node scripts/package.mjs",
+    "package:macos": "node scripts/macos/package-app.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

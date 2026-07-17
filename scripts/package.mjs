@@ -20,6 +20,7 @@ await cp(join(root, "web", "dist"), join(releaseRoot, "web", "dist"), { recursiv
 await cp(join(root, "scripts", "windows"), join(releaseRoot, "scripts", "windows"), { recursive: true });
 await cp(join(root, "start-pixel-crew.cmd"), join(releaseRoot, "start-pixel-crew.cmd"));
 await cp(join(root, "install-pixel-crew.cmd"), join(releaseRoot, "install-pixel-crew.cmd"));
+await cp(join(root, "scripts", "macos", "install-release.sh"), join(releaseRoot, "install-pixel-crew-macos.sh"));
 await cp(join(root, "WINDOWS_SETUP.md"), join(releaseRoot, "WINDOWS_SETUP.md"));
 
 // The release has no source/dev dependencies. Keep the workspace layout so

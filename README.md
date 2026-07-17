@@ -27,6 +27,14 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 ## Quick start
 
+macOS users can install the self-contained app without Node.js or npm:
+
+```bash
+curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
+```
+
+For source development on any platform:
+
 ```bash
 git clone https://github.com/juinwei7/Pixel-Crew.git
 cd Pixel-Crew
@@ -129,8 +137,14 @@ Release ZIP 可直接雙擊安裝與啟動。完整步驟、CLI 安裝、更新�
 
 ### macOS / Linux / 通用開發模式
 
-一般 macOS 使用者請見 [macOS 完整安裝教學](./MACOS_SETUP.md)，包含 Release
-安裝、AI CLI、production 啟動、更新與疑難排解。以下為原始碼開發模式：
+一般 macOS 使用者不需安裝 Node.js 或 npm：
+
+```bash
+curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
+```
+
+完整步驟、更新、移除與 certificate-free build 說明請見
+[macOS 安裝教學](./MACOS_SETUP.md)。以下為 macOS／Linux 原始碼開發模式：
 
 ```bash
 git clone https://github.com/juinwei7/Pixel-Crew.git
