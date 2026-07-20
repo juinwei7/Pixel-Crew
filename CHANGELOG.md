@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-20
+
+### Added
+
+- Added a focus workspace for long-form reading with NPC switching, report outlines, cross-NPC search, pins, Markdown export, and account usage context.
+- Added full-window image and document drag-and-drop, manageable queued messages, and persistent per-session drafts and attachments.
+- Added provider-scoped Codex command discovery that is available before the first conversation and remains available in new sessions.
+- Added persistent NPC ordering across restarts.
+
+### Changed
+
+- Improved task-log readability with calmer colors, clearer typography, responsive layouts, search highlighting, and low-usage warnings.
+
+### Fixed
+
+- Kept composer state isolated while switching NPCs and prevented attachment drops from leaking through modal upload surfaces.
+- Preserved failed-turn readable output in focus mode and guarded asynchronous persistence against stale writes.
+
 ## [1.0.1] - 2026-07-17
 
 ### Added
@@ -28,6 +46,7 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.0
