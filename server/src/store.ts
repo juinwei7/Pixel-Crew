@@ -92,6 +92,15 @@ export class LocalStore {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS provider_slash_command_seed (
+        provider TEXT PRIMARY KEY CHECK (provider IN ('claude', 'codex')),
+        commands TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT OR IGNORE INTO provider_slash_command_seed (provider, commands, updated_at)
+      SELECT 'claude', commands, updated_at FROM slash_command_seed WHERE id = 1;
+
       CREATE TABLE IF NOT EXISTS persona_templates (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -354,15 +363,11 @@ export class LocalStore {
     });
   }
 
-  /**
-   * A global cache of portable Claude built-ins selected from the last init
-   * event. Workspace and user commands are intentionally excluded by the
-   * capability registry so room-specific commands cannot leak across repos.
-   */
-  loadSlashCommandSeed(): string[] {
+  /** Provider-scoped portable command seeds. Workspace commands never belong here. */
+  loadSlashCommandSeed(provider: ProviderId = "claude"): string[] {
     const row = this.db.prepare(
-      "SELECT commands FROM slash_command_seed WHERE id = 1",
-    ).get() as { commands?: string } | undefined;
+      "SELECT commands FROM provider_slash_command_seed WHERE provider = ?",
+    ).get(provider) as { commands?: string } | undefined;
     if (!row?.commands) return [];
     try {
       const parsed = JSON.parse(row.commands);
@@ -372,15 +377,15 @@ export class LocalStore {
     }
   }
 
-  saveSlashCommandSeed(commands: string[]): void {
+  saveSlashCommandSeed(commands: string[], provider: ProviderId = "claude"): void {
     this.safeWrite("save slash command seed", () => {
       this.db.prepare(`
-        INSERT INTO slash_command_seed (id, commands, updated_at)
-        VALUES (1, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO UPDATE SET
+        INSERT INTO provider_slash_command_seed (provider, commands, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(provider) DO UPDATE SET
           commands = excluded.commands,
           updated_at = CURRENT_TIMESTAMP
-      `).run(JSON.stringify(commands));
+      `).run(provider, JSON.stringify(commands));
     });
   }
 

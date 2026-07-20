@@ -213,7 +213,7 @@ function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapab
   if (!registry) {
     registry = new CodexCapabilityRegistry((state) => {
       broadcast({ type: "capabilities_updated", workspacePath: key, provider: "codex", capabilities: state });
-    }, key);
+    }, key, store);
     codexCapabilityRegistries.set(key, registry);
   }
   return registry;

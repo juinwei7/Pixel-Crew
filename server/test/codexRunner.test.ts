@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCodexArgs, CodexSession, codexAppTool, codexChildEnv, codexPersonaConfig, codexTool, codexTurnInput } from "../src/codexRunner.js";
+import { buildCodexArgs, CodexSession, codexAppTool, codexChildEnv, codexPersonaConfig, codexTool, codexTurnInput, parseCodexNativeCommand } from "../src/codexRunner.js";
 import type { RunnerEvent } from "../src/claudeRunner.js";
 
 /**
@@ -24,6 +24,41 @@ function requests(events: RunnerEvent[]) {
 function resolved(events: RunnerEvent[]) {
   return events.filter((event): event is Extract<RunnerEvent, { type: "approval_resolved" }> => event.type === "approval_resolved");
 }
+
+test("parses only the Codex native commands implemented by Pixel Crew", () => {
+  assert.deepEqual(parseCodexNativeCommand("/clear"), { type: "reset" });
+  assert.deepEqual(parseCodexNativeCommand(" /new "), { type: "reset" });
+  assert.deepEqual(parseCodexNativeCommand("/compact"), { type: "compact" });
+  assert.deepEqual(parseCodexNativeCommand("/review focus on auth"), { type: "review", instructions: "focus on auth" });
+  assert.equal(parseCodexNativeCommand("/compact later"), null);
+  assert.equal(parseCodexNativeCommand("/theme"), null);
+});
+
+test("dispatches compact through app-server instead of sending it as a prompt", async () => {
+  const events: RunnerEvent[] = [];
+  const writes: any[] = [];
+  const session = new CodexSession((event) => events.push(event), "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+
+  session.send("/compact");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ method: "thread/compact/start", id: 1, params: { threadId: "thread-1" } }]);
+
+  internals.handleRpcLine(JSON.stringify({ id: 1, result: {} }), internals.generation);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(session.busy, true); // accepted is not the same as compacted
+
+  internals.handleRpcLine(JSON.stringify({ method: "thread/compacted", params: { threadId: "thread-1" } }), internals.generation);
+  assert.equal(events.some((event) => event.type === "turn_end" && event.resultText.includes("已壓縮")), true);
+  assert.equal(session.busy, false);
+});
 
 test("auto-approve resolves a safe command without prompting", () => {
   const events: RunnerEvent[] = [];

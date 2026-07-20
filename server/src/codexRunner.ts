@@ -15,6 +15,22 @@ type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
 type PendingApproval = { rpcId: RpcId; method: string; params: any; request: ApprovalRequest };
 
+export type CodexNativeCommand =
+  | { type: "reset" }
+  | { type: "compact" }
+  | { type: "review"; instructions: string };
+
+export function parseCodexNativeCommand(text: string): CodexNativeCommand | null {
+  const match = text.trim().match(/^\/(clear|new|compact|review)(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  const argument = (match[2] ?? "").trim();
+  if ((name === "clear" || name === "new") && !argument) return { type: "reset" };
+  if (name === "compact" && !argument) return { type: "compact" };
+  if (name === "review") return { type: "review", instructions: argument };
+  return null;
+}
+
 export function codexPersonaConfig(path: string): string {
   // `-c` values use TOML syntax. JSON string quoting is TOML-compatible for
   // ordinary absolute paths and keeps spaces/backslashes inside the value.
@@ -70,6 +86,13 @@ export class CodexSession implements AgentSession {
 
   send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): void {
     if (this.busy) throw new Error("codex worker busy");
+    const nativeCommand = images.length === 0 && documents.length === 0
+      ? parseCodexNativeCommand(text)
+      : null;
+    if (nativeCommand) {
+      this.runNativeCommand(nativeCommand);
+      return;
+    }
     let imagePaths: string[];
     let documentFiles: Array<{ name: string; path: string }>;
     try {
@@ -97,6 +120,56 @@ export class CodexSession implements AgentSession {
         ...(this.model ? { model: this.model } : {}),
       }))
       .catch((error) => this.finishWithError(error.message));
+  }
+
+  private runNativeCommand(command: CodexNativeCommand): void {
+    if (command.type === "reset") {
+      this.stop();
+      this.sessionId = randomUUID();
+      this.completedTurns = 0;
+    }
+    this.busy = true;
+    this.startedAt = Date.now();
+    this.openTools.clear();
+    this.streamedAgentText.clear();
+    this.streamedReasoning.clear();
+    this.finalText = "";
+    void this.ensureThread().then(async (threadId) => {
+      if (command.type === "compact") {
+        await this.request("thread/compact/start", { threadId });
+        // Completion is signalled separately by thread/compacted.
+        return;
+      }
+      if (command.type === "review") {
+        await this.request("review/start", {
+          threadId,
+          delivery: "inline",
+          target: command.instructions
+            ? { type: "custom", instructions: command.instructions }
+            : { type: "uncommittedChanges" },
+        });
+        // review/start produces the ordinary turn/item notifications; the
+        // turn/completed handler owns the final state and persisted output.
+        return;
+      }
+      this.finishNativeCommand("已建立新的 Codex 對話；後續工作不會沿用先前上下文。", false);
+    }).catch((error) => this.finishWithError((error as Error).message));
+  }
+
+  private finishNativeCommand(resultText: string, isError: boolean): void {
+    if (!this.busy) return;
+    this.busy = false;
+    this.currentTurnId = null;
+    this.finalText = resultText;
+    this.onEvent({ type: "text_delta", text: resultText });
+    this.onEvent({
+      type: "turn_end",
+      resultText,
+      costUsd: 0,
+      durationMs: Date.now() - this.startedAt,
+      isError,
+      permissionDenials: [],
+    });
   }
 
   interrupt(): void {
@@ -261,6 +334,9 @@ export class CodexSession implements AgentSession {
     switch (method) {
       case "turn/started":
         this.currentTurnId = String(params.turn?.id ?? "");
+        break;
+      case "thread/compacted":
+        this.finishNativeCommand("Codex 對話內容已壓縮。", false);
         break;
       case "turn/completed": {
         const status = String(params.turn?.status ?? "completed");
