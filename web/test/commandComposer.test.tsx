@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CommandComposer } from "../src/components/CommandComposer";
+import { CommandComposer, dragContainsFiles } from "../src/components/CommandComposer";
 import { emptyWorker } from "../src/workerState";
 
 const capabilities = {
@@ -64,4 +64,11 @@ test("keeps the complete command composer available in focus mode", () => {
   assert.match(html, /aria-label="附加圖片或文件"/);
   assert.match(html, /指令面板/);
   assert.doesNotMatch(html, /<textarea[^>]*disabled=""/);
+});
+
+test("only treats native file payloads as full-surface attachment drags", () => {
+  assert.equal(dragContainsFiles({ types: ["Files"] as unknown as DOMStringList }), true);
+  assert.equal(dragContainsFiles({ types: ["text/plain"] as unknown as DOMStringList }), false);
+  assert.equal(dragContainsFiles({ types: ["text/uri-list", "Files"] as unknown as DOMStringList }), true);
+  assert.equal(dragContainsFiles(null), false);
 });

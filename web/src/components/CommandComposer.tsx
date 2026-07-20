@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CapabilityState, CommandSubmission, MessageDocumentPayload, MessageImagePayload, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
 import { deriveCommandHistory } from "../commandHistory";
@@ -21,6 +22,10 @@ const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "md", "csv", "json", "html", "htm", "xml", "yaml", "yml", "log", "pdf", "docx", "xlsx", "pptx"]);
 const FILE_ACCEPT = "image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
+
+export function dragContainsFiles(dataTransfer: Pick<DataTransfer, "types"> | null | undefined): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
 
 type Props = {
   active?: WorkerState;
@@ -49,11 +54,14 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [dispatchTick, setDispatchTick] = useState(0);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wasBusyRef = useRef(Boolean(active?.busy));
   const dispatchingSessionsRef = useRef(new Set<string>());
+  const fileDragDepthRef = useRef(0);
+  const attachFilesRef = useRef<(files: File[]) => Promise<void>>(async () => {});
   const sessionCacheRef = useRef(new Map<string, ComposerSession>());
   const sessionOwnerRef = useRef(sessionKey);
   const onSubmitRef = useRef(onSubmit);
@@ -323,12 +331,69 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       setError("無法讀取附件");
     }
   }
+  attachFilesRef.current = attachFiles;
+
+  useEffect(() => {
+    const clearDragState = () => {
+      fileDragDepthRef.current = 0;
+      setFileDragActive(false);
+    };
+    const enter = (event: DragEvent) => {
+      if (!dragContainsFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      fileDragDepthRef.current += 1;
+      setFileDragActive(true);
+    };
+    const over = (event: DragEvent) => {
+      if (!dragContainsFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const leave = (event: DragEvent) => {
+      if (!dragContainsFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
+      if (fileDragDepthRef.current === 0) setFileDragActive(false);
+    };
+    const drop = (event: DragEvent) => {
+      if (!dragContainsFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      clearDragState();
+      if (files.length > 0) void attachFilesRef.current(files);
+    };
+    const blur = () => clearDragState();
+
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
 
   const hasContent = Boolean(draft.trim() || images.length || documents.length);
   const hasAttachments = images.length > 0 || documents.length > 0;
 
   return (
-    <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={sessionKey} aria-label={focusMode ? "專注模式指令輸入" : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <>
+      {fileDragActive && typeof document !== "undefined" && createPortal(
+        <div className="file-drop-overlay" role="status" aria-live="polite">
+          <div className="file-drop-overlay__card">
+            <span className="file-drop-overlay__icon" aria-hidden="true">＋</span>
+            <strong>放開即可附加</strong>
+            <small>圖片與文件會加入 {active?.name ?? "目前 NPC"} 的這則訊息</small>
+          </div>
+        </div>,
+        document.body,
+      )}
+      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={sessionKey} aria-label={focusMode ? "專注模式指令輸入" : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       {hasAttachments && <div className="command-composer__attachments" aria-label="待傳送附件">
         {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
           <img src={image.previewUrl} alt={`圖片 ${index + 1}：${image.name}`} />
@@ -436,7 +501,8 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       <button className={`command-composer__submit ${active?.busy && !hasContent ? "command-composer__submit--stop" : ""}`} type="submit" disabled={!active || !authReady || (!active.busy && !hasContent)}>
         {active?.busy ? (hasContent ? "排隊" : "中止") : "執行"}
       </button>
-    </form>
+      </form>
+    </>
   );
 }
 
