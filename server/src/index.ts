@@ -8,8 +8,9 @@ import { join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
-import { CapabilityRegistry } from "./capabilities.js";
-import { CodexCapabilityRegistry } from "./codexCapabilities.js";
+import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
+import { buildCodexMcpAddArgs, CodexCapabilityRegistry } from "./codexCapabilities.js";
+import { McpLoginTracker } from "./mcpLogin.js";
 import { LocalStore, type PersistedWorker } from "./store.js";
 import { ClaudeAuthProvider } from "./providers/claudeAuth.js";
 import { CodexAuthProvider } from "./providers/codexAuth.js";
@@ -105,6 +106,20 @@ const authStates: Record<ProviderId, ProviderAuthState> = {
 };
 const providerInstaller = new ProviderInstaller(async (provider) => {
   await refreshOneAuth(provider);
+});
+const mcpLoginTracker = new McpLoginTracker(async (state) => {
+  broadcast({
+    type: "mcp_login_result",
+    provider: state.provider,
+    workspacePath: state.workspacePath,
+    name: state.name,
+    ok: state.status === "succeeded",
+    status: state.status,
+    message: state.message,
+  });
+  if (state.provider === "codex") await codexCapabilitiesFor(state.workspacePath).refresh();
+  else await claudeCapabilitiesFor(state.workspacePath).refresh();
+  restartIdleWorkers(state.provider, state.workspacePath);
 });
 
 function systemStatus() {
@@ -1488,12 +1503,23 @@ async function refreshAuth(provider?: ProviderId): Promise<ProviderAuthState[]> 
   return Promise.all((Object.keys(authProviders) as ProviderId[]).map(refreshOneAuth));
 }
 
-async function refreshProviderWorkspaces(provider: ProviderId): Promise<void> {
-  await Promise.all(recentWorkspacePaths().map((workspacePath) => (
-    provider === "codex"
-      ? codexCapabilitiesFor(workspacePath).refresh()
-      : claudeCapabilitiesFor(workspacePath).refresh()
-  )));
+// Refreshes only the workspace a mutation just touched. This used to fan
+// out across every known workspace (Claude's `-s user`-scoped servers are
+// visible from all of them), but once refresh() started also health-checking
+// each server via `mcp get`, that fan-out measured 15-70+s combined across
+// several real workspaces — making add/remove/login/logout feel stuck even
+// though the mutation itself had already succeeded. Other, currently
+// inactive workspaces' cached capabilities go stale until they're next
+// refreshed (switching to them, or "重新讀取"), which is an acceptable
+// trade-off for keeping the workspace the user is actually looking at
+// responsive. Callers should fire this in the background
+// (`void refreshAffectedWorkspace(...).catch(() => {})`) rather than await
+// it before responding; the result still reaches clients via the existing
+// "capabilities_updated" WS broadcast.
+function refreshAffectedWorkspace(provider: ProviderId, workspacePath: string): Promise<void> {
+  return provider === "codex"
+    ? codexCapabilitiesFor(workspacePath).refresh()
+    : claudeCapabilitiesFor(workspacePath).refresh();
 }
 
 app.post("/api/mcp", async (req, res) => {
@@ -1506,43 +1532,125 @@ app.post("/api/mcp", async (req, res) => {
     return;
   }
   const name = String(req.body?.name ?? "").trim();
-  const target = String(req.body?.target ?? "").trim();
-  const header = String(req.body?.header ?? "").trim();
   if (!/^[\w.-]+$/.test(name)) {
     res.status(400).json({ error: "名稱只能用英數、-、_、." });
     return;
+  }
+  const scope: "local" | "project" | "user" =
+    req.body?.scope === "project" || req.body?.scope === "user" ? req.body.scope : "local";
+  const mode: "form" | "json" = req.body?.mode === "json" ? "json" : "form";
+
+  if (mode === "json") {
+    if (provider === "codex") {
+      res.status(400).json({ error: "Codex 不支援用 JSON 新增 MCP server" });
+      return;
+    }
+    const json = String(req.body?.json ?? "").trim();
+    if (!json) {
+      res.status(400).json({ error: "缺少 JSON 內容" });
+      return;
+    }
+    try {
+      JSON.parse(json);
+    } catch {
+      res.status(400).json({ error: "JSON 格式不正確" });
+      return;
+    }
+    try {
+      const { stdout } = await execCli(config.claudeBin, buildClaudeMcpAddArgs({ name, scope, mode: "json", json }), {
+        cwd: workspacePath,
+        timeout: 30000,
+      });
+      void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
+      restartIdleWorkers(provider);
+      res.json({ ok: true, message: stdout.trim() });
+    } catch (err: any) {
+      res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
+    }
+    return;
+  }
+
+  const transport: "stdio" | "sse" | "http" =
+    req.body?.transport === "http" || req.body?.transport === "sse" ? req.body.transport : "stdio";
+  const target = String(req.body?.target ?? "").trim();
+  const env: string[] = Array.isArray(req.body?.env) ? req.body.env.map(String) : [];
+  const headers: string[] = Array.isArray(req.body?.headers) ? req.body.headers.map(String) : [];
+  // Advanced, optional OAuth fields — plain strings, never a client secret
+  // (see the comment on ClaudeMcpAddInput for why that one's excluded).
+  const callbackPort = String(req.body?.callbackPort ?? "").trim();
+  const clientId = String(req.body?.clientId ?? "").trim();
+  const oauthClientId = String(req.body?.oauthClientId ?? "").trim();
+  const oauthResource = String(req.body?.oauthResource ?? "").trim();
+
+  if (transport === "stdio") {
+    if (headers.length > 0) {
+      res.status(400).json({ error: "stdio 伺服器不支援 header" });
+      return;
+    }
+    if (!env.every((entry) => /^[\w.]+=.*/.test(entry))) {
+      res.status(400).json({ error: "環境變數格式需為 KEY=VALUE" });
+      return;
+    }
+  } else {
+    if (env.length > 0) {
+      res.status(400).json({ error: "http/sse 伺服器不支援環境變數" });
+      return;
+    }
+    if (!headers.every((entry) => /^[^:\r\n]+:\s*.+/.test(entry))) {
+      res.status(400).json({ error: "Header 格式需為 Name: value" });
+      return;
+    }
   }
   if (!target) {
     res.status(400).json({ error: "缺少 URL 或指令" });
     return;
   }
 
-  const isUrl = /^https?:\/\//.test(target);
-  let localTarget: string[] = [];
-  if (!isUrl) {
+  let localArgv: string[] = [];
+  if (transport === "stdio") {
     try {
-      localTarget = parseCommandLine(target);
+      localArgv = parseCommandLine(target);
     } catch (error) {
       res.status(400).json({ error: (error as Error).message || "MCP 指令格式不正確" });
       return;
     }
+  } else if (!/^https?:\/\//.test(target)) {
+    res.status(400).json({ error: "URL 需以 http:// 或 https:// 開頭" });
+    return;
   }
-  const args = provider === "codex"
-    ? ["mcp", "add", name]
-    : ["mcp", "add", "-s", "user"];
+
+  let args: string[];
   if (provider === "codex") {
-    if (header) {
+    if (headers.length > 0) {
       res.status(400).json({ error: "Codex 遠端 MCP 請使用 OAuth 或 bearer-token-env-var，介面不保存 token" });
       return;
     }
-    if (isUrl) args.push("--url", target);
-    else args.push("--", ...localTarget);
-  } else if (isUrl) {
-    args.push("-t", target.endsWith("/sse") ? "sse" : "http");
-    if (header) args.push("-H", header);
-    args.push(name, target);
+    if (transport === "sse") {
+      res.status(400).json({ error: "Codex 不支援 SSE transport" });
+      return;
+    }
+    args = buildCodexMcpAddArgs({
+      name,
+      transport: transport === "http" ? "http" : "stdio",
+      target: transport === "http" ? target : undefined,
+      localArgv: transport === "stdio" ? localArgv : undefined,
+      env,
+      oauthClientId: transport === "http" ? oauthClientId || undefined : undefined,
+      oauthResource: transport === "http" ? oauthResource || undefined : undefined,
+    });
   } else {
-    args.push(name, "--", ...localTarget);
+    args = buildClaudeMcpAddArgs({
+      name,
+      scope,
+      mode: "form",
+      transport,
+      target: transport !== "stdio" ? target : undefined,
+      localArgv: transport === "stdio" ? localArgv : undefined,
+      env,
+      headers,
+      callbackPort: transport !== "stdio" ? callbackPort || undefined : undefined,
+      clientId: transport !== "stdio" ? clientId || undefined : undefined,
+    });
   }
 
   try {
@@ -1550,7 +1658,7 @@ app.post("/api/mcp", async (req, res) => {
       cwd: workspacePath,
       timeout: 30000,
     });
-    await refreshProviderWorkspaces(provider);
+    void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
     restartIdleWorkers(provider);
     res.json({ ok: true, message: stdout.trim() });
   } catch (err: any) {
@@ -1592,14 +1700,151 @@ app.delete("/api/mcp/:name", async (req, res) => {
     res.status(400).json({ error: "這個 server 不能從這裡移除（可能是 claude.ai 帳號層級的連接器）" });
     return;
   }
+  const scope = req.query.scope === "local" || req.query.scope === "project" || req.query.scope === "user"
+    ? req.query.scope
+    : undefined;
   try {
-    const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "remove", name], {
+    const args = provider === "codex" ? ["mcp", "remove", name] : buildClaudeMcpRemoveArgs(name, scope);
+    const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, args, {
       cwd: workspacePath,
       timeout: 30000,
     });
-    await refreshProviderWorkspaces(provider);
+    void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
     restartIdleWorkers(provider);
     res.json({ ok: true, message: stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
+  }
+});
+
+// `claude mcp login`/`codex mcp login` open the user's system browser and
+// wait for them to authorize — an unbounded, user-paced duration. This does
+// not block the HTTP response; completion is reported later via the
+// "mcp_login_result" WS broadcast (see mcpLoginTracker above).
+app.post("/api/mcp/login", (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  // Unlike remove, login is a safe/reversible auth-only action — and
+  // claude.ai account-level connectors (names with spaces, e.g. "claude.ai
+  // Notion") are exactly the servers most likely to need it, so login is
+  // not restricted to the `^[\w.-]+$` name pattern used for structural
+  // changes.
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "缺少 server 名稱" });
+    return;
+  }
+  const { state, alreadyRunning } = mcpLoginTracker.start(provider, workspacePath, name);
+  res.json({ ok: true, started: true, alreadyRunning, state });
+});
+
+app.post("/api/mcp/login/cancel", (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  const name = String(req.body?.name ?? "").trim();
+  res.json({ ok: mcpLoginTracker.cancel(provider, workspacePath, name) });
+});
+
+// Lets the Modal re-align its "waiting for browser authorization" spinner
+// after a page reload, since that pending state otherwise only lives in the
+// tracker's in-memory Map.
+app.get("/api/mcp/login", (req, res) => {
+  const provider: ProviderId = req.query.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  const name = String(req.query.name ?? "").trim();
+  res.json({ state: mcpLoginTracker.get(provider, workspacePath, name) ?? null });
+});
+
+app.post("/api/mcp/logout", async (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "缺少 server 名稱" });
+    return;
+  }
+  try {
+    const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "logout", name], {
+      cwd: workspacePath,
+      timeout: 30000,
+    });
+    void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
+    restartIdleWorkers(provider);
+    res.json({ ok: true, message: stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
+  }
+});
+
+// `claude mcp reset-project-choices` only clears this project's remembered
+// approve/reject decisions for .mcp.json servers so the next interactive
+// session re-prompts — it cannot itself approve a pending server headlessly
+// (that is an interactive-TUI-only action).
+app.post("/api/mcp/reset-project-choices", async (req, res) => {
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  try {
+    const { stdout } = await execCli(config.claudeBin, ["mcp", "reset-project-choices"], {
+      cwd: workspacePath,
+      timeout: 15000,
+    });
+    await claudeCapabilitiesFor(workspacePath).refresh();
+    res.json({ ok: true, message: stdout.trim() || "已清除本專案核准記憶，下次互動式 session 會重新詢問" });
+  } catch (err: any) {
+    res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
+  }
+});
+
+// `claude mcp add-from-claude-desktop` only works on macOS/WSL (the CLI
+// itself enforces this); the frontend gates the button on `system.platform`
+// as a first-pass check, but this endpoint still lets the CLI's own error
+// surface through if it's called somewhere unsupported.
+app.post("/api/mcp/import-from-claude-desktop", async (req, res) => {
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  const scope: "local" | "project" | "user" =
+    req.body?.scope === "project" || req.body?.scope === "user" ? req.body.scope : "local";
+  try {
+    const { stdout } = await execCli(config.claudeBin, ["mcp", "add-from-claude-desktop", "-s", scope], {
+      cwd: workspacePath,
+      timeout: 30000,
+    });
+    await claudeCapabilitiesFor(workspacePath).refresh();
+    res.json({ ok: true, message: stdout.trim() || "已從 Claude Desktop 匯入 MCP servers" });
   } catch (err: any) {
     res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
   }

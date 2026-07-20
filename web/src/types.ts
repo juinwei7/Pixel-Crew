@@ -1,6 +1,35 @@
 import type { StationKey } from "./stations";
 
 export type ProviderId = "claude" | "codex";
+
+export type McpLoginResult = {
+  provider: ProviderId;
+  workspacePath: string;
+  name: string;
+  ok: boolean;
+  status: "succeeded" | "failed" | "timeout" | "cancelled";
+  message: string | null;
+};
+
+export type McpScope = "local" | "project" | "user" | "account";
+export type McpTransport = "stdio" | "sse" | "http";
+
+export type McpServerState = {
+  name: string;
+  status: string;
+  scope?: McpScope;
+  transport?: McpTransport;
+  command?: string;
+  args?: string[];
+  url?: string;
+  envKeys?: string[];
+  headerNames?: string[];
+  detail?: string;
+  // Codex only — gates the login/logout buttons instead of `status`, since
+  // Codex's status is enabled/disabled (is the server on?), not auth state.
+  authStatus?: string;
+};
+
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
 
 // "off": always prompts. "safe": narrow allowlist (read-only tools + a
@@ -59,7 +88,7 @@ export type RunnerEvent =
       type: "meta";
       model: string;
       slashCommands: string[];
-      mcpServers: Array<{ name: string; status: string }>;
+      mcpServers: McpServerState[];
       toolCount: number;
     }
   | { type: "user_message"; text: string }
@@ -123,7 +152,7 @@ export type CharacterState = {
 export type WorkerMeta = {
   model: string;
   slashCommands: string[];
-  mcpServers: Array<{ name: string; status: string }>;
+  mcpServers: McpServerState[];
   toolCount: number;
 };
 
@@ -136,7 +165,7 @@ export type SubagentState = {
 
 export type CapabilityState = {
   slashCommands: string[];
-  mcpServers: Array<{ name: string; status: string }>;
+  mcpServers: McpServerState[];
   models: Array<{ id: string; label: string; description?: string }>;
   toolCount: number | null;
   loading: boolean;

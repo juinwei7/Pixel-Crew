@@ -16,6 +16,7 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
     modelOptions={[{ id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
     onRoom={() => {}}
+    onOpenMcp={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -40,6 +41,7 @@ test("cached models remain selectable while capabilities refresh in background",
     modelOptions={[{ id: "", label: "預設模型" }, { id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
     onRoom={() => {}}
+    onOpenMcp={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -60,6 +62,7 @@ test("shows the auto-approve toggle for Claude and reflects the worker's current
     modelOptions: [{ id: "sonnet", label: "Sonnet" }],
     workerCount: 1,
     onRoom: () => {},
+    onOpenMcp: () => {},
     onProvider: () => {},
     onModel: () => {},
     onAutoApprove: () => {},
@@ -95,6 +98,7 @@ test("also shows the auto-approve control for Codex", () => {
     modelOptions={[]}
     workerCount={1}
     onRoom={() => {}}
+    onOpenMcp={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -113,6 +117,7 @@ const updateBaseProps = {
   modelOptions: [],
   workerCount: 1,
   onRoom: () => {},
+  onOpenMcp: () => {},
   onProvider: () => {},
   onModel: () => {},
   onAutoApprove: () => {},

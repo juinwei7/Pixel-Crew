@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
 import { APP_VERSION } from "../appVersion";
 import { roomName } from "../workspace";
-import { McpPanel } from "./McpPanel";
 
 type ModelOption = { id: string; label: string; description?: string };
 
@@ -16,6 +15,7 @@ type Props = {
   workerCount: number;
   providerChanging?: boolean;
   onRoom(): void;
+  onOpenMcp(): void;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
   onAutoApprove(mode: AutoApproveMode): void;
@@ -36,6 +36,7 @@ export function TopBar({
   workerCount,
   providerChanging = false,
   onRoom,
+  onOpenMcp,
   onProvider,
   onModel,
   onAutoApprove,
@@ -45,11 +46,9 @@ export function TopBar({
   onNotificationsToggle,
   updateInfo = null,
 }: Props) {
-  const [mcpOpen, setMcpOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const updateRef = useRef<HTMLDivElement>(null);
-  const mcpRef = useRef<HTMLDivElement>(null);
   const healthRef = useRef<HTMLDivElement>(null);
   const provider = active?.provider ?? "claude";
   const authReady = auth.status === "authenticated";
@@ -60,14 +59,12 @@ export function TopBar({
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMcpOpen(false);
         setHealthOpen(false);
         setUpdateOpen(false);
       }
     };
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!mcpRef.current?.contains(target)) setMcpOpen(false);
       if (!healthRef.current?.contains(target)) setHealthOpen(false);
       if (!updateRef.current?.contains(target)) setUpdateOpen(false);
     };
@@ -126,17 +123,15 @@ export function TopBar({
         </select>
       </div>
 
-      <div ref={mcpRef} className="mcp-chip-wrap top-bar__mcp">
+      <div className="top-bar__mcp">
         <button
           type="button"
           className={`top-bar__capability ${capabilities.error ? "top-bar__capability--warn" : ""}`}
-          onClick={() => { setHealthOpen(false); setMcpOpen((open) => !open); }}
-          aria-expanded={mcpOpen}
+          onClick={() => { setHealthOpen(false); onOpenMcp(); }}
           title="MCP 能力與連線狀態"
         >
           MCP <strong>{capabilities.loading && capabilities.mcpServers.length === 0 ? "…" : `${connected}/${capabilities.mcpServers.length}`}</strong>
         </button>
-        {mcpOpen && <McpPanel capabilities={capabilities} provider={provider} workspacePath={activeWorkspace} />}
       </div>
 
       {updateInfo?.updateAvailable && (
@@ -145,7 +140,7 @@ export function TopBar({
             type="button"
             className="top-bar__update"
             aria-expanded={updateOpen}
-            onClick={() => { setMcpOpen(false); setHealthOpen(false); setUpdateOpen((open) => !open); }}
+            onClick={() => { setHealthOpen(false); setUpdateOpen((open) => !open); }}
           >
             ⬆ 有新版 v{updateInfo.latestVersion}
           </button>
@@ -183,7 +178,7 @@ export function TopBar({
         <button
           type="button"
           className="top-bar__health"
-          onClick={() => { setMcpOpen(false); setHealthOpen((open) => !open); }}
+          onClick={() => setHealthOpen((open) => !open)}
           aria-expanded={healthOpen}
           aria-label="查看系統健康狀態"
         >

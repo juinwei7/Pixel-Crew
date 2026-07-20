@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, McpLoginResult, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -54,6 +54,7 @@ type ServerMessage =
   | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
+  | ({ type: "mcp_login_result" } & McpLoginResult)
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState }
   | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
@@ -94,6 +95,7 @@ function defaultAuth(
 export function useWorkers() {
   const [workers, setWorkers] = useState<Record<string, WorkerState>>({});
   const [order, setOrder] = useState<string[]>([]);
+  const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -305,6 +307,10 @@ export function useWorkers() {
               [data.provider]: data.capabilities,
             },
           }));
+          break;
+        }
+        case "mcp_login_result": {
+          setMcpLoginResult((prev) => ({ ...data, seq: (prev?.seq ?? 0) + 1 }));
           break;
         }
         case "workflow_library_updated": {
@@ -627,6 +633,7 @@ export function useWorkers() {
   return {
     workers,
     order,
+    mcpLoginResult,
     activeId,
     setActiveId,
     targetRepoPath,

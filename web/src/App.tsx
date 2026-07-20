@@ -14,6 +14,7 @@ import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
+import { McpModal } from "./components/McpModal";
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerFocusStatus } from "./crew";
 import type { ProviderId } from "./types";
@@ -44,7 +45,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, order, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
@@ -59,6 +60,7 @@ export function App() {
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
   const [providerChanging, setProviderChanging] = useState(false);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
@@ -329,6 +331,7 @@ export function App() {
         workerCount={workerList.length}
         providerChanging={providerChanging}
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
+        onOpenMcp={() => setMcpModalOpen(true)}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={(model) => {
           if (!activeId) return;
@@ -423,7 +426,7 @@ export function App() {
         authReady={activeAuth.status === "authenticated"}
         focusMode={taskFocusMode}
         sessionKey={activeSessionKey}
-        globalDropEnabled={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId}
+        globalDropEnabled={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen}
         paletteOpen={commandPaletteOpen}
         focusRequest={composerFocusRequest}
         onPaletteOpen={setCommandPaletteOpen}
@@ -486,6 +489,8 @@ export function App() {
       {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onClose={() => setHandoffTarget(null)} />}
 
       {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
+
+      {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} notify={notify} onClose={() => setMcpModalOpen(false)} />}
 
       <footer className="app-copyright" aria-label="版權資訊">© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

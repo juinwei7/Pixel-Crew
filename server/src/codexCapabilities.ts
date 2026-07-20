@@ -30,8 +30,56 @@ export function parseCodexMcpList(stdout: string): McpServerState[] {
   if (!Array.isArray(parsed)) return [];
   return parsed.flatMap((item: any) => {
     if (!item || typeof item.name !== "string") return [];
-    return [{ name: item.name, status: item.enabled === false ? "disabled" : "enabled" }];
+    const transport = item.transport ?? {};
+    const server: McpServerState = {
+      name: item.name,
+      status: item.enabled === false ? "disabled" : "enabled",
+    };
+    if (transport.type === "stdio") server.transport = "stdio";
+    else if (typeof transport.url === "string") server.transport = "http";
+    if (typeof transport.command === "string") server.command = transport.command;
+    if (Array.isArray(transport.args)) server.args = transport.args.map(String);
+    if (typeof transport.url === "string") server.url = transport.url;
+    // Only key names are kept — Codex's env values (e.g. bearer tokens) must
+    // never reach the API response or the frontend.
+    if (transport.env && typeof transport.env === "object") server.envKeys = Object.keys(transport.env);
+    if (typeof item.disabled_reason === "string") server.detail = item.disabled_reason;
+    // `auth_status` (e.g. "unsupported" for stdio) is Codex's only signal for
+    // whether OAuth login/logout applies to this server — `enabled` is about
+    // whether the server itself is on/off, not authentication. The exact set
+    // of non-"unsupported" values isn't fully documented, so the frontend
+    // treats anything other than "unsupported" as "login may apply" rather
+    // than hard-coding a specific enum.
+    if (typeof item.auth_status === "string") server.authStatus = item.auth_status;
+    return [server];
   });
+}
+
+export type CodexMcpAddInput = {
+  name: string;
+  transport: "stdio" | "http";
+  target?: string;
+  localArgv?: string[];
+  env?: string[];
+  // Advanced, http-only OAuth options.
+  oauthClientId?: string;
+  oauthResource?: string;
+};
+
+// Pure arg builder mirroring `codex mcp add`'s flags, kept alongside
+// buildClaudeMcpAddArgs so both providers' add logic is unit-testable
+// without spawning the real CLI.
+export function buildCodexMcpAddArgs(input: CodexMcpAddInput): string[] {
+  const args = ["mcp", "add", input.name];
+  if (input.transport === "http") {
+    args.push("--url", input.target ?? "");
+    if (input.oauthClientId) args.push("--oauth-client-id", input.oauthClientId);
+    if (input.oauthResource) args.push("--oauth-resource", input.oauthResource);
+  } else {
+    for (const entry of input.env ?? []) args.push("--env", entry);
+    args.push("--", ...(input.localArgv ?? []));
+  }
+  return args;
 }
 
 export function parseCodexModels(stdout: string): ModelOption[] {
