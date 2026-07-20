@@ -5240,6 +5240,31 @@ body {
   margin-bottom: 28px;
 }
 
+.focus-turn-pending {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 72px;
+  padding: 14px 4px 34px;
+  color: #8998a6;
+  font-size: 13px;
+}
+
+.focus-turn-pending strong {
+  color: #b9c7d2;
+  font-weight: 650;
+}
+
+.focus-turn-pending__dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #78a9be;
+  box-shadow: 0 0 0 5px rgba(120, 169, 190, 0.1);
+  animation: hudPulse 1.6s ease-in-out infinite;
+}
+
 .focus-energy {
   flex: 0 0 auto;
 }

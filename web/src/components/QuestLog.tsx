@@ -289,6 +289,12 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
 
   return (
     <div className="turn-card__items">
+      {focusMode && status === "running" && grouped.length === 0 && (
+        <div className="focus-turn-pending" role="status" aria-live="polite">
+          <span className="focus-turn-pending__dot" aria-hidden="true" />
+          <span><strong>指令已送出</strong>，NPC 正在處理中…</span>
+        </div>
+      )}
       {grouped.map((item) => {
         if (item.kind === "tool_group") {
           return item.items.length === 1
@@ -397,7 +403,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const matchingTurns = needle ? turns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : turns;
   const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const visibleTurns = focusMode
-    ? (readableTurns.length > 0 ? readableTurns : matchingTurns)
+    ? matchingTurns.filter((turn) => turn.status === "running" || readableTurns.includes(turn))
     : matchingTurns;
   const completeReportTurns = turns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const searchOccurrences = needle ? visibleTurns.reduce((count, turn) => count + occurrenceCount(searchableTurnText(turn, focusMode), needle), 0) : 0;

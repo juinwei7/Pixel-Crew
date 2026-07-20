@@ -149,7 +149,7 @@ test("focus mode keeps pending approvals visible even when they belong to an old
   assert.match(html, /最新報告/);
 });
 
-test("focus mode keeps the latest readable report while a newer turn has no text yet", () => {
+test("focus mode keeps the latest readable report and acknowledges a newly sent turn", () => {
   const turns: Turn[] = [
     {
       key: "report",
@@ -167,7 +167,10 @@ test("focus mode keeps the latest readable report while a newer turn has no text
 
   const html = renderToStaticMarkup(<QuestLog turns={turns} focusMode />);
   assert.match(html, /可以繼續閱讀的報告/);
-  assert.doesNotMatch(html, /剛開始的新任務/);
+  assert.match(html, /剛開始的新任務/);
+  assert.match(html, /指令已送出/);
+  assert.match(html, /NPC 正在處理中/);
+  assert.match(html, /role="status"/);
 });
 
 test("focus navigation includes report headings and search exposes result controls", () => {
