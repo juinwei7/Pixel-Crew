@@ -13,6 +13,21 @@ export function workerAttention(worker: WorkerState): WorkerAttention {
   return "idle";
 }
 
+export function workerFocusStatus(worker: WorkerState): "等待核准" | "執行中" | "需注意" | "待命" {
+  const attention = workerAttention(worker);
+  if (attention === "approval") return "等待核准";
+  if (attention === "working") return "執行中";
+  if (attention === "error") return "需注意";
+  return "待命";
+}
+
+export function latestReadableTurnKey(worker: WorkerState): string | null {
+  for (let index = worker.turns.length - 1; index >= 0; index--) {
+    if (worker.turns[index].items.some((item) => item.kind === "assistant_text" || item.kind === "system_error")) return worker.turns[index].key;
+  }
+  return null;
+}
+
 export function filterCrew(workers: WorkerState[], filter: CrewFilter, query: string, currentRoom: string): WorkerState[] {
   const needle = query.trim().toLowerCase();
   return workers.filter((worker) => {

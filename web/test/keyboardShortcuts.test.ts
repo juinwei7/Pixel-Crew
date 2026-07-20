@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { keyboardShortcut } from "../src/hooks/useKeyboardShortcuts";
+import { keyboardShortcut, topDismissibleLayer } from "../src/hooks/useKeyboardShortcuts";
 
 const event = (key: string, options: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }> = {}) => ({
   key,
@@ -21,4 +21,11 @@ test("does not toggle panels from unrelated editable controls", () => {
   assert.equal(keyboardShortcut(event("j", { metaKey: true }), true), null);
   assert.equal(keyboardShortcut(event("a", { ctrlKey: true, shiftKey: true }), true), null);
   assert.equal(keyboardShortcut(event("k", { ctrlKey: true }), true), "command_palette");
+});
+
+test("Escape dismisses nested focus-mode layers from the inside out", () => {
+  assert.equal(topDismissibleLayer(true, true, true), "command_palette");
+  assert.equal(topDismissibleLayer(false, true, true), "task_search");
+  assert.equal(topDismissibleLayer(false, false, true), "focus_mode");
+  assert.equal(topDismissibleLayer(false, false, false), null);
 });

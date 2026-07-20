@@ -99,3 +99,43 @@ export function EnergyHud({ usage, onRefresh }: Props) {
     </div>
   );
 }
+
+export function FocusEnergy({ usage, onRefresh, open, onOpenChange }: Props & { open: boolean; onOpenChange(open: boolean): void }) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const close = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [onOpenChange]);
+
+  async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    setError(await onRefresh());
+    setRefreshing(false);
+  }
+
+  return (
+    <div ref={rootRef} className="focus-energy">
+      <button type="button" className="focus-energy__summary" onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label="查看專心模式工作用量">
+        <ProviderMeter provider="claude" state={usage.claude} />
+        <ProviderMeter provider="codex" state={usage.codex} />
+      </button>
+      <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label="工作用量詳情">
+        <header><div><span>WORK ENERGY</span><strong>用量與重置時間</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "更新中…" : "重新整理"}</button></header>
+        {(["claude", "codex"] as ProviderId[]).map((provider) => {
+          const state = usage[provider];
+          return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? "快取" : state.updatedAt ? "即時" : "尚無資料"}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? "正在讀取工作能量…" : state.error || "Provider 沒有提供用量資料"}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
+        })}
+        {error && <div className="energy-detail__error">{error}</div>}
+        <footer>帳號共用 · 不隨 NPC 切換</footer>
+      </aside>
+    </div>
+  );
+}

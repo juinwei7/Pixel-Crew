@@ -3,6 +3,12 @@ import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } fro
 import type { TaskLogView } from "../uiPreferences";
 import { RichText } from "./RichText";
 
+const focusScrollPositions = new Map<string, number>();
+
+function focusTurnId(key: string): string {
+  return `focus-turn-${encodeURIComponent(key)}`;
+}
+
 function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   try {
@@ -167,7 +173,7 @@ function ThinkingRow({ text }: { text: string }) {
   );
 }
 
-function TurnItems({ items, status, view, onApprove }: { items: TurnItem[]; status: Turn["status"]; view: TaskLogView; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+function TurnItems({ items, status, view, focusMode, onApprove }: { items: TurnItem[]; status: Turn["status"]; view: TaskLogView; focusMode: boolean; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   let finalTextIndex = -1;
   if (status === "done") {
     for (let index = items.length - 1; index >= 0; index--) {
@@ -178,7 +184,14 @@ function TurnItems({ items, status, view, onApprove }: { items: TurnItem[]; stat
     }
   }
   const withoutPending = items.filter((item) => item.kind !== "approval" || item.status !== "pending");
-  const projected = view === "activity" ? withoutPending : withoutPending.filter((item) => {
+  const projected = focusMode ? withoutPending.filter((item) => {
+    if (item.kind === "system_error") return true;
+    if (item.kind !== "assistant_text") return false;
+    const index = items.findIndex((source) => source.key === item.key);
+    return status === "running"
+      ? index === [...items].map((source) => source.kind).lastIndexOf("assistant_text")
+      : index === finalTextIndex;
+  }) : view === "activity" ? withoutPending : withoutPending.filter((item) => {
     if (item.kind === "system_error" || item.kind === "thinking") return true;
     if (item.kind === "tool_call") return true;
     const index = items.findIndex((source) => source.key === item.key);
@@ -233,24 +246,27 @@ function statusChip(status: Turn["status"], waitingForApproval: boolean) {
   return <span className="turn-chip turn-chip--done">完成</span>;
 }
 
-function TurnCard({ turn, isLatest, view, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+function TurnCard({ turn, isLatest, view, focusMode, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
-  const open = expanded ?? (isLatest || turn.status === "running" || turn.status === "error");
+  const open = focusMode || (expanded ?? (isLatest || turn.status === "running" || turn.status === "error"));
   const waitingForApproval = turn.items.some((item) => item.kind === "approval" && item.status === "pending");
 
   return (
-    <div className={`turn-card turn-card--${turn.status}`}>
+    <div id={focusMode ? focusTurnId(turn.key) : undefined} className={`turn-card turn-card--${turn.status}`}>
       <div className="turn-card__head">
-        <button className="turn-card__toggle" type="button" onClick={() => setExpanded(!open)}>
+        {focusMode ? <div className="turn-card__toggle turn-card__toggle--reader">
           <span className="turn-card__cmd">{turn.command}</span>
           {statusChip(turn.status, waitingForApproval)}
-        </button>
+        </div> : <button className="turn-card__toggle" type="button" aria-expanded={open} onClick={() => setExpanded(!open)}>
+          <span className="turn-card__cmd">{turn.command}</span>
+          {statusChip(turn.status, waitingForApproval)}
+        </button>}
         <CopyButton value={turn.command} label="複製指令" />
       </div>
       {open && (
         <>
-          <TurnItems items={turn.items} status={turn.status} view={view} onApprove={onApprove} />
-          {turn.status !== "running" && turn.durationMs !== undefined && (
+          <TurnItems items={turn.items} status={turn.status} view={view} focusMode={focusMode} onApprove={onApprove} />
+          {!focusMode && turn.status !== "running" && turn.durationMs !== undefined && (
             <div className="turn-card__foot">
               {(turn.durationMs / 1000).toFixed(1)}s{turn.costUsd ? ` · $${turn.costUsd.toFixed(4)}` : ""}
             </div>
@@ -261,25 +277,52 @@ function TurnCard({ turn, isLatest, view, onApprove }: { turn: Turn; isLatest: b
   );
 }
 
-export function QuestLog({ turns, view = "summary", searchQuery = "", onApprove }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+function navStatus(turn: Turn): string {
+  if (turn.items.some((item) => item.kind === "approval" && item.status === "pending")) return "等待核准";
+  if (turn.status === "running") return "執行中";
+  if (turn.status === "error") return "失敗";
+  return "完成";
+}
+
+export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   const logRef = useRef<HTMLDivElement>(null);
+  const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
+  const [navigationOpen, setNavigationOpen] = useState(false);
   const lastTurn = turns[turns.length - 1];
   const itemCount = lastTurn?.items.length ?? 0;
 
   useEffect(() => {
     const el = logRef.current;
     if (el && atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [turns, turns.length, itemCount, lastTurn?.status, atBottom]);
+  }, [turns, turns.length, itemCount, lastTurn?.status, atBottom, focusMode]);
+
+  useEffect(() => {
+    const enteredFocusMode = focusMode && !previousFocusMode.current;
+    previousFocusMode.current = focusMode;
+    if (!enteredFocusMode) return;
+    const el = logRef.current;
+    if (!el) return;
+    const savedTop = readerKey ? focusScrollPositions.get(readerKey) : undefined;
+    const top = savedTop ?? el.scrollHeight;
+    el.scrollTo({ top, behavior: "auto" });
+    setAtBottom(el.scrollHeight - top - el.clientHeight < 40);
+  }, [focusMode, readerKey]);
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
   const needle = searchQuery.trim().toLowerCase();
-  const visibleTurns = needle ? turns.filter((turn) => `${turn.command} ${turn.items.map((item) => "text" in item ? item.text : JSON.stringify(item)).join(" ")}`.toLowerCase().includes(needle)) : turns;
+  const matchingTurns = needle ? turns.filter((turn) => `${turn.command} ${turn.items.map((item) => "text" in item ? item.text : JSON.stringify(item)).join(" ")}`.toLowerCase().includes(needle)) : turns;
+  const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
+  const visibleTurns = focusMode
+    ? (readableTurns.length > 0 ? readableTurns : matchingTurns)
+    : matchingTurns;
 
-  return (
+  const log = (
     <div className="quest-log" ref={logRef} onScroll={() => {
       const el = logRef.current;
-      if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      if (!el) return;
+      if (focusMode && readerKey) focusScrollPositions.set(readerKey, el.scrollTop);
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
     }}>
       {pending.length > 0 && <div className="approval-shelf" role="alert" aria-live="assertive"><div className="approval-shelf__label">需要你的核准</div>{pending.map((item) => <ApprovalCard key={item.key} item={item} onApprove={onApprove} />)}</div>}
       {turns.length === 0 && (
@@ -293,13 +336,37 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", onApprove 
         <div className="quest-log__no-results">找不到符合「{searchQuery.trim()}」的任務內容</div>
       )}
       {visibleTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === visibleTurns.length - 1} view={view} onApprove={onApprove} />
+        <TurnCard key={turn.key} turn={turn} isLatest={i === visibleTurns.length - 1} view={view} focusMode={focusMode} onApprove={onApprove} />
       ))}
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;
         el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
         setAtBottom(true);
       }}>↓ 最新內容</button>}
+    </div>
+  );
+
+  if (!focusMode) return log;
+  return (
+    <div className="focus-reader" onKeyDown={(event) => {
+      if (event.key !== "Escape" || !navigationOpen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setNavigationOpen(false);
+    }}>
+      <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>報告導覽 <span>{visibleTurns.length}</span></button>
+      <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label="報告章節導覽">
+        <header><span>REPORT INDEX</span><strong>報告導覽</strong></header>
+        <div className="focus-report-nav__items">
+          {visibleTurns.map((turn, index) => <button type="button" key={turn.key} onClick={() => {
+            document.getElementById(focusTurnId(turn.key))?.scrollIntoView({ behavior: "smooth", block: "start" });
+            setNavigationOpen(false);
+          }}><i>{String(index + 1).padStart(2, "0")}</i><span><strong>{turn.command}</strong><small>{navStatus(turn)}</small></span></button>)}
+          {visibleTurns.length === 0 && <p>目前沒有可導覽的報告</p>}
+        </div>
+      </nav>
+      {log}
+      <div className="focus-reader__usage-space" aria-hidden="true" />
     </div>
   );
 }

@@ -9,6 +9,7 @@ type LibraryEntry = { name: string; description: string; argumentHint?: string }
 type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
 type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
 type QueuedCommand = { text: string; images: ComposerImage[]; documents: ComposerDocument[] };
+type ComposerSession = { draft: string; images: ComposerImage[]; documents: ComposerDocument[]; queued: QueuedCommand[]; error: string | null };
 
 const MAX_IMAGES = 4;
 const MAX_DOCUMENTS = 4;
@@ -27,6 +28,8 @@ type Props = {
   workspacePath: string;
   capabilities: CapabilityState;
   authReady: boolean;
+  focusMode?: boolean;
+  sessionKey?: string;
   paletteOpen: boolean;
   focusRequest?: number;
   onPaletteOpen(open: boolean): void;
@@ -35,7 +38,7 @@ type Props = {
   onManage(): void;
 };
 
-export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, paletteOpen, focusRequest = 0, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
+export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, focusMode = false, sessionKey = "default", paletteOpen, focusRequest = 0, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -45,17 +48,21 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [queued, setQueued] = useState<QueuedCommand[]>([]);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [dispatchTick, setDispatchTick] = useState(0);
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wasBusyRef = useRef(Boolean(active?.busy));
-  const dispatchingQueuedRef = useRef(false);
+  const dispatchingSessionsRef = useRef(new Set<string>());
+  const sessionCacheRef = useRef(new Map<string, ComposerSession>());
+  const sessionOwnerRef = useRef(sessionKey);
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
   // True while an IME (e.g. 注音/拼音) is mid-composition, so Enter confirms a
   // candidate instead of submitting a half-typed message.
   const composingRef = useRef(false);
   const provider = active?.provider ?? "claude";
+  const switchingSession = sessionOwnerRef.current !== sessionKey;
   const history = useMemo(() => deriveCommandHistory(workers, provider, workspacePath), [workers, provider, workspacePath]);
   const query = draft.startsWith("/") || draft.startsWith("$") ? draft.slice(1).toLowerCase() : draft.toLowerCase();
   const items = useMemo<PaletteItem[]>(() => {
@@ -79,6 +86,26 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
       return !query || item.label.toLowerCase().includes(query);
     }).slice(0, 12);
   }, [provider, capabilities.slashCommands, history, query, library]);
+
+  function updateCachedSession(owner: string, update: (session: ComposerSession) => ComposerSession) {
+    const current = sessionCacheRef.current.get(owner) ?? { draft: "", images: [], documents: [], queued: [], error: null };
+    sessionCacheRef.current.set(owner, update(current));
+  }
+
+  useEffect(() => {
+    if (!switchingSession) return;
+    sessionCacheRef.current.set(sessionOwnerRef.current, { draft, images, documents, queued, error });
+    const next = sessionCacheRef.current.get(sessionKey) ?? { draft: "", images: [], documents: [], queued: [], error: null };
+    sessionOwnerRef.current = sessionKey;
+    setDraft(next.draft);
+    setImages(next.images);
+    setDocuments(next.documents);
+    setQueued(next.queued);
+    setError(next.error);
+    setSelected(0);
+    setHistoryIndex(-1);
+    onPaletteOpen(false);
+  }, [sessionKey, switchingSession]);
 
   useEffect(() => {
     if (!paletteOpen) return;
@@ -118,12 +145,23 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   }, [active?.busy, authReady]);
 
   useEffect(() => {
-    if (active?.busy || !authReady || queued.length === 0 || dispatchingQueuedRef.current) return;
+    if (switchingSession || active?.busy || !authReady || queued.length === 0 || dispatchingSessionsRef.current.has(sessionKey)) return;
     const next = queued[0];
-    dispatchingQueuedRef.current = true;
+    const owner = sessionOwnerRef.current;
+    dispatchingSessionsRef.current.add(owner);
     setQueued((commands) => commands.slice(1));
     void onSubmitRef.current({ text: next.text, images: next.images.map(imagePayload), documents: next.documents.map(documentPayload) })
       .then((message) => {
+        if (sessionOwnerRef.current !== owner) {
+          updateCachedSession(owner, (session) => message ? {
+            ...session,
+            error: message,
+            draft: session.draft || next.text,
+            images: session.images.length ? session.images : next.images,
+            documents: session.documents.length ? session.documents : next.documents,
+          } : { ...session, error: null });
+          return;
+        }
         if (message) {
           setError(message);
           setDraft((current) => current || next.text);
@@ -132,13 +170,27 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         }
       })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : "排隊訊息送出失敗");
+        const message = cause instanceof Error ? cause.message : "排隊訊息送出失敗";
+        if (sessionOwnerRef.current !== owner) {
+          updateCachedSession(owner, (session) => ({
+            ...session,
+            error: message,
+            draft: session.draft || next.text,
+            images: session.images.length ? session.images : next.images,
+            documents: session.documents.length ? session.documents : next.documents,
+          }));
+          return;
+        }
+        setError(message);
         setDraft((current) => current || next.text);
         setImages((current) => current.length ? current : next.images);
         setDocuments((current) => current.length ? current : next.documents);
       })
-      .finally(() => { dispatchingQueuedRef.current = false; });
-  }, [active?.busy, authReady, queued]);
+      .finally(() => {
+        dispatchingSessionsRef.current.delete(owner);
+        setDispatchTick((tick) => tick + 1);
+      });
+  }, [active?.busy, authReady, queued, sessionKey, switchingSession, dispatchTick]);
 
   useEffect(() => {
     if (!paletteOpen) return;
@@ -167,11 +219,12 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   }
 
   async function submit() {
-    if (!active) return;
+    if (!active || switchingSession) return;
     if (paletteOpen) return;
     const text = draft.trim();
     const command = { text, images, documents };
-    if (active.busy || dispatchingQueuedRef.current) {
+    const owner = sessionOwnerRef.current;
+    if (active.busy || dispatchingSessionsRef.current.has(owner)) {
       if (!text && images.length === 0 && documents.length === 0) {
         onInterrupt();
         return;
@@ -195,6 +248,16 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     onPaletteOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
     const message = await onSubmit({ text, images: images.map(imagePayload), documents: documents.map(documentPayload) });
+    if (sessionOwnerRef.current !== owner) {
+      updateCachedSession(owner, (session) => message ? {
+        ...session,
+        error: message,
+        draft: session.draft || text,
+        images: session.images.length ? session.images : images,
+        documents: session.documents.length ? session.documents : documents,
+      } : { ...session, error: null });
+      return;
+    }
     setError(message);
     if (message) {
       setDraft((current) => current || text);
@@ -204,6 +267,7 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   }
 
   async function attachFiles(files: File[]) {
+    const owner = sessionOwnerRef.current;
     const imageFiles = files.filter(isImageFile);
     const documentFiles = files.filter((file) => !isImageFile(file));
     if (imageFiles.length > MAX_IMAGES - images.length) {
@@ -243,11 +307,19 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         Promise.all(imageFiles.map(readComposerImage)),
         Promise.all(documentFiles.map(readComposerDocument)),
       ]);
+      if (sessionOwnerRef.current !== owner) {
+        updateCachedSession(owner, (session) => ({ ...session, images: [...session.images, ...addedImages], documents: [...session.documents, ...addedDocuments], error: null }));
+        return;
+      }
       setImages((current) => [...current, ...addedImages]);
       setDocuments((current) => [...current, ...addedDocuments]);
       setError(null);
       requestAnimationFrame(() => inputRef.current?.focus());
     } catch {
+      if (sessionOwnerRef.current !== owner) {
+        updateCachedSession(owner, (session) => ({ ...session, error: "無法讀取附件" }));
+        return;
+      }
       setError("無法讀取附件");
     }
   }
@@ -256,7 +328,7 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const hasAttachments = images.length > 0 || documents.length > 0;
 
   return (
-    <form ref={formRef} className={`command-composer ${hasAttachments ? "command-composer--attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={sessionKey} aria-label={focusMode ? "專注模式指令輸入" : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       {hasAttachments && <div className="command-composer__attachments" aria-label="待傳送附件">
         {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
           <img src={image.previewUrl} alt={`圖片 ${index + 1}：${image.name}`} />

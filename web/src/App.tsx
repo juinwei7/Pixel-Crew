@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useWorkers } from "./hooks/useWorkers";
-import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { topDismissibleLayer, useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useUiPreferences, clampTaskLogWidth } from "./uiPreferences";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
@@ -8,13 +8,14 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
 import { CommandComposer } from "./components/CommandComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
-import { EnergyHud } from "./components/EnergyHud";
+import { EnergyHud, FocusEnergy } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
+import { latestReadableTurnKey, workerFocusStatus } from "./crew";
 import type { ProviderId } from "./types";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
@@ -60,14 +61,21 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
+  const [taskFocusMode, setTaskFocusMode] = useState(false);
+  const [focusUsageOpen, setFocusUsageOpen] = useState(false);
+  const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const focusLayerRef = useRef<HTMLDivElement>(null);
+  const focusExitRef = useRef<HTMLButtonElement>(null);
+  const focusReturnRef = useRef<HTMLElement | null>(null);
 
   const workerList = order.map((id) => workers[id]).filter(Boolean);
   const active = activeId ? workers[activeId] : undefined;
   const activeProvider: ProviderId = active?.provider ?? "claude";
   const activeWorkspace = active?.workspacePath || targetRepoPath;
+  const activeSessionKey = `${activeId ?? "none"}:${activeProvider}:${activeWorkspace}`;
   const workspaceSetupRequired = Boolean(system?.workspaceSetupRequired && workerList.length === 0);
   const activeAuth = auth[activeProvider];
   const activeCapabilities = capabilitiesByWorkspace[activeWorkspace]?.[activeProvider] ?? EMPTY_CAPABILITIES;
@@ -147,26 +155,70 @@ export function App() {
     turn.items.some((item) => item.kind === "approval" && item.status === "pending")
   )), [workerList]);
 
+  const enterTaskFocusMode = useCallback(() => {
+    focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setFocusSeenTurns(Object.fromEntries(workerList.map((worker) => [worker.id, latestReadableTurnKey(worker)])));
+    updatePreferences({ taskLogOpen: true });
+    setTaskFocusMode(true);
+  }, [updatePreferences, workerList]);
+
+  const exitTaskFocusMode = useCallback(() => {
+    setFocusUsageOpen(false);
+    setTaskFocusMode(false);
+  }, []);
+
   const shortcuts = useMemo(() => ({
     onCommandPalette: () => setCommandPaletteOpen(true),
-    onToggleTaskLog: () => updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
+    onToggleTaskLog: () => taskFocusMode
+      ? exitTaskFocusMode()
+      : updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
     onApproval: () => {
       if (!approvalWorker) return;
       setActiveId(approvalWorker.id);
       updatePreferences({ taskLogOpen: true });
     },
     onEscape: () => {
+      const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
+      if (layer === "command_palette") {
+        setCommandPaletteOpen(false);
+        return;
+      }
+      if (layer === "task_search") {
+        setTaskSearchOpen(false);
+        return;
+      }
+      if (layer === "focus_mode") {
+        exitTaskFocusMode();
+        return;
+      }
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, preferences.taskLogOpen, setActiveId, updatePreferences]);
+  }), [approvalWorker, commandPaletteOpen, exitTaskFocusMode, preferences.taskLogOpen, setActiveId, taskFocusMode, taskSearchOpen, updatePreferences]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
     setTaskSearch("");
     setTaskSearchOpen(false);
+    setFocusUsageOpen(false);
     setCommandPaletteOpen(false);
   }, [activeId, activeProvider, activeWorkspace]);
+
+  useEffect(() => {
+    if (!taskFocusMode) return;
+    const previousFocus = focusReturnRef.current;
+    focusExitRef.current?.focus();
+    return () => {
+      if (previousFocus?.isConnected) previousFocus.focus();
+      focusReturnRef.current = null;
+    };
+  }, [taskFocusMode]);
+
+  useEffect(() => {
+    if (!taskFocusMode || !active) return;
+    const latestKey = latestReadableTurnKey(active);
+    setFocusSeenTurns((current) => current[active.id] === latestKey ? current : { ...current, [active.id]: latestKey });
+  }, [active, taskFocusMode]);
 
   useEffect(() => () => resizeCleanupRef.current?.(), []);
 
@@ -188,6 +240,30 @@ export function App() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", cleanup);
     window.addEventListener("pointercancel", cleanup);
+  }
+
+  function trapFocusInReader(event: React.KeyboardEvent<HTMLElement>) {
+    if (!taskFocusMode) return;
+    if (event.key === "Escape" && focusUsageOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setFocusUsageOpen(false);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...(focusLayerRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => element.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   async function changeProvider(provider: ProviderId) {
@@ -218,7 +294,7 @@ export function App() {
   }
 
   return (
-    <div className="game-root" style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
+    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""}`} style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
       <GameCanvas
         workers={workerList}
         activeId={activeId}
@@ -268,7 +344,7 @@ export function App() {
         updateInfo={updateInfo}
       />
 
-      <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />
+      {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />}
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
       {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。</div>}
@@ -277,31 +353,75 @@ export function App() {
         {preferences.taskLogOpen ? "▶" : "◀"}
       </button>
 
-      <aside className={`holo-panel ${preferences.taskLogOpen ? "" : "holo-panel--closed"}`} aria-label="任務日誌">
-        <button type="button" className="holo-panel__resize" aria-label="調整任務日誌寬度" title="拖曳調整；雙擊恢復閱讀版" onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences({ taskLogWidth: 600 })} onKeyDown={(event) => {
+      <div
+        ref={focusLayerRef}
+        className="task-focus-layer"
+        aria-label={taskFocusMode ? "專心閱讀與輸入" : undefined}
+        aria-modal={taskFocusMode || undefined}
+        role={taskFocusMode ? "dialog" : undefined}
+        onKeyDown={trapFocusInReader}
+      >
+      <aside
+        className={`holo-panel ${preferences.taskLogOpen ? "" : "holo-panel--closed"} ${taskFocusMode ? "holo-panel--focus" : ""}`}
+        aria-label={taskFocusMode ? "專心閱讀任務報告" : "任務日誌"}
+      >
+        {!taskFocusMode && <button type="button" className="holo-panel__resize" aria-label="調整任務日誌寬度" title="拖曳調整；雙擊恢復閱讀版" onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences({ taskLogWidth: 600 })} onKeyDown={(event) => {
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
           event.preventDefault();
           updatePreferences({ taskLogWidth: preferences.taskLogWidth + (event.key === "ArrowLeft" ? 24 : -24) });
-        }} />
+        }} />}
         <div className="holo-panel__title">
-          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">WORKSTREAM</span><strong>任務日誌</strong></div>
-          {active && <span className="holo-panel__worker"><i />{active.name}</span>}
+          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{taskFocusMode ? "FOCUS READER" : "WORKSTREAM"}</span><strong>{taskFocusMode ? "專心閱讀" : "任務日誌"}</strong></div>
+          {taskFocusMode ? <label className="focus-worker-switch">
+            <span>NPC</span>
+            <select aria-label="切換專心模式的 NPC 工作介面" value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
+              {!activeId && <option value="" disabled>選擇 NPC</option>}
+              {workerList.map((worker) => {
+                const latestKey = latestReadableTurnKey(worker);
+                const unread = worker.id !== activeId && Boolean(latestKey) && latestKey !== focusSeenTurns[worker.id];
+                return <option key={worker.id} value={worker.id}>{unread ? "● " : ""}{worker.name} · {worker.provider === "claude" ? "Claude" : "Codex"} · {workerFocusStatus(worker)}</option>;
+              })}
+            </select>
+          </label> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
-            <div className="task-log-toolbar__view" aria-label="日誌模式">
+            {!taskFocusMode && <div className="task-log-toolbar__view" aria-label="日誌模式">
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
               <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>活動</button>
-            </div>
+            </div>}
             <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label="搜尋任務日誌" title="搜尋">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
             </button>
-            <select aria-label="日誌寬度" value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
+            {!taskFocusMode && <button type="button" className="task-log-toolbar__focus" onClick={enterTaskFocusMode} aria-label="進入專心閱讀模式" title="專心閱讀"><span aria-hidden="true">▣</span> 專心</button>}
+            {!taskFocusMode && <select aria-label="日誌寬度" value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
               <option value="420">緊湊</option><option value="600">閱讀</option><option value="820">寬版</option>
-            </select>
+            </select>}
+            {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label="退出專心閱讀模式">退出 <kbd>Esc</kbd></button>}
           </div>
         </div>
         {taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder="搜尋目前 NPC 的任務" onChange={(event) => setTaskSearch(event.target.value)} /><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
-        <QuestLog key={`${activeId ?? "none"}:${activeProvider}:${activeWorkspace}`} turns={active?.turns ?? []} view={preferences.taskLogView} searchQuery={taskSearch} onApprove={activeId ? (approvalId, decision) => resolveApproval(activeId, approvalId, decision) : undefined} />
+        <QuestLog key={activeSessionKey} readerKey={activeSessionKey} turns={active?.turns ?? []} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={activeId ? (approvalId, decision) => resolveApproval(activeId, approvalId, decision) : undefined} />
       </aside>
+
+      <CommandComposer
+        active={active}
+        workers={workerList}
+        workspacePath={activeWorkspace}
+        capabilities={activeCapabilities}
+        authReady={activeAuth.status === "authenticated"}
+        focusMode={taskFocusMode}
+        sessionKey={activeSessionKey}
+        paletteOpen={commandPaletteOpen}
+        focusRequest={composerFocusRequest}
+        onPaletteOpen={setCommandPaletteOpen}
+        onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
+        onInterrupt={() => {
+          if (!activeId) return;
+          void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
+        }}
+        onManage={() => { exitTaskFocusMode(); setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
+      />
+      </div>
 
       <WorkerTabs
         workers={workerList}
@@ -319,24 +439,6 @@ export function App() {
         onAvatar={setAvatarWorkerId}
         onPersona={setPersonaWorkerId}
         onRoom={(id) => { setActiveId(id); openWorkspaceForMove(); }}
-      />
-
-      <CommandComposer
-        key={`${activeId ?? "none"}:${activeProvider}:${activeWorkspace}`}
-        active={active}
-        workers={workerList}
-        workspacePath={activeWorkspace}
-        capabilities={activeCapabilities}
-        authReady={activeAuth.status === "authenticated"}
-        paletteOpen={commandPaletteOpen}
-        focusRequest={composerFocusRequest}
-        onPaletteOpen={setCommandPaletteOpen}
-        onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
-        onInterrupt={() => {
-          if (!activeId) return;
-          void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
-        }}
-        onManage={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
       />
 
       {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [], documents: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
