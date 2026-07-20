@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { composerEnterAction, mergePaletteNames } from "../src/commandInteraction";
+import { buildProviderWorkflowEntries, composerEnterAction, mergePaletteNames } from "../src/commandInteraction";
 
 test("merges project commands with built-in slash commands without dropping either", () => {
   // A room whose only disk command is finish-work must still surface built-ins.
@@ -16,6 +16,29 @@ test("merges project commands with built-in slash commands without dropping eith
 test("falls back to the full slash set when a room has no project commands", () => {
   const merged = mergePaletteNames([], ["clear", "compact", "usage"]);
   assert.deepEqual(merged.map((entry) => entry.name), ["clear", "compact", "usage"]);
+});
+
+test("keeps Codex native slash commands separate from repo skills", () => {
+  const entries = buildProviderWorkflowEntries(
+    "codex",
+    [{ name: "sdd", description: "規格驅動開發" }, { name: "review", description: "團隊審查流程" }],
+    ["compact", "review"],
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["$sdd", "$review", "/compact", "/review"]);
+  assert.deepEqual(entries.map((entry) => entry.value), ["$sdd ", "$review ", "/compact ", "/review "]);
+  assert.equal(entries[0].description, "規格驅動開發");
+  assert.equal(entries[2].description, "Codex 原生指令");
+});
+
+test("keeps Claude project and native commands on slash syntax", () => {
+  const entries = buildProviderWorkflowEntries(
+    "claude",
+    [{ name: "ship", description: "發佈" }],
+    ["clear", "ship"],
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.label), ["/ship", "/clear"]);
 });
 
 test("never submits palette text while command choices are loading or empty", () => {
