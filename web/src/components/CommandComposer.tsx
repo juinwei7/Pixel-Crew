@@ -9,8 +9,9 @@ type PaletteItem = { key: string; label: string; description: string; value: str
 type LibraryEntry = { name: string; description: string; argumentHint?: string };
 type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
 type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
-type QueuedCommand = { text: string; images: ComposerImage[]; documents: ComposerDocument[] };
+type QueuedCommand = { id: string; text: string; images: ComposerImage[]; documents: ComposerDocument[] };
 type ComposerSession = { draft: string; images: ComposerImage[]; documents: ComposerDocument[]; queued: QueuedCommand[]; error: string | null };
+type PersistedComposerExtras = Pick<ComposerSession, "images" | "documents" | "queued">;
 
 const MAX_IMAGES = 4;
 const MAX_DOCUMENTS = 4;
@@ -22,9 +23,34 @@ const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "md", "csv", "json", "html", "htm", "xml", "yaml", "yml", "log", "pdf", "docx", "xlsx", "pptx"]);
 const FILE_ACCEPT = "image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
+const DRAFT_STORAGE_KEY = "pixel-crew-composer-drafts-v1";
+const COMPOSER_DB_NAME = "pixel-crew-composer";
+const COMPOSER_DB_STORE = "session-extras";
 
 export function dragContainsFiles(dataTransfer: Pick<DataTransfer, "types"> | null | undefined): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
+export function moveQueuedItem<T>(items: T[], index: number, offset: -1 | 1): T[] {
+  const target = index + offset;
+  if (index < 0 || index >= items.length || target < 0 || target >= items.length) return items;
+  const next = [...items];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+export function reorderQueuedItem<T>(items: T[], from: number, to: number): T[] {
+  if (from < 0 || from >= items.length || to < 0 || to >= items.length || from === to) return items;
+  const next = [...items];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+export function mergeComposerItems<T extends { id: string }>(saved: T[], current: T[]): T[] {
+  const merged = new Map(saved.map((item) => [item.id, item]));
+  for (const item of current) merged.set(item.id, item);
+  return [...merged.values()];
 }
 
 type Props = {
@@ -35,6 +61,7 @@ type Props = {
   authReady: boolean;
   focusMode?: boolean;
   sessionKey?: string;
+  globalDropEnabled?: boolean;
   paletteOpen: boolean;
   focusRequest?: number;
   onPaletteOpen(open: boolean): void;
@@ -43,8 +70,8 @@ type Props = {
   onManage(): void;
 };
 
-export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, focusMode = false, sessionKey = "default", paletteOpen, focusRequest = 0, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
-  const [draft, setDraft] = useState("");
+export function CommandComposer({ active, workers, workspacePath, capabilities, authReady, focusMode = false, sessionKey = "default", globalDropEnabled = true, paletteOpen, focusRequest = 0, onPaletteOpen, onSubmit, onInterrupt, onManage }: Props) {
+  const [draft, setDraft] = useState(() => loadPersistedDraft(sessionKey));
   const [selected, setSelected] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +82,11 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [dispatchTick, setDispatchTick] = useState(0);
   const [fileDragActive, setFileDragActive] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
+  const [restoringExtras, setRestoringExtras] = useState(false);
+  const [extrasSaved, setExtrasSaved] = useState(true);
+  const [persistenceWarning, setPersistenceWarning] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,10 +94,14 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   const dispatchingSessionsRef = useRef(new Set<string>());
   const fileDragDepthRef = useRef(0);
   const attachFilesRef = useRef<(files: File[]) => Promise<void>>(async () => {});
+  const globalDropEnabledRef = useRef(globalDropEnabled);
+  const hydratedExtrasRef = useRef(new Set<string>());
+  const extrasSaveRevisionRef = useRef(0);
   const sessionCacheRef = useRef(new Map<string, ComposerSession>());
   const sessionOwnerRef = useRef(sessionKey);
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
+  globalDropEnabledRef.current = globalDropEnabled;
   // True while an IME (e.g. 注音/拼音) is mid-composition, so Enter confirms a
   // candidate instead of submitting a half-typed message.
   const composingRef = useRef(false);
@@ -102,8 +138,12 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
 
   useEffect(() => {
     if (!switchingSession) return;
-    sessionCacheRef.current.set(sessionOwnerRef.current, { draft, images, documents, queued, error });
-    const next = sessionCacheRef.current.get(sessionKey) ?? { draft: "", images: [], documents: [], queued: [], error: null };
+    const previousOwner = sessionOwnerRef.current;
+    sessionCacheRef.current.set(previousOwner, { draft, images, documents, queued, error });
+    if (hydratedExtrasRef.current.has(previousOwner)) {
+      void saveComposerExtras(previousOwner, { images, documents, queued }).catch(() => setPersistenceWarning("上一個 NPC 的附件與待送訊息無法保存"));
+    }
+    const next = sessionCacheRef.current.get(sessionKey) ?? { draft: loadPersistedDraft(sessionKey), images: [], documents: [], queued: [], error: null };
     sessionOwnerRef.current = sessionKey;
     setDraft(next.draft);
     setImages(next.images);
@@ -112,8 +152,71 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     setError(next.error);
     setSelected(0);
     setHistoryIndex(-1);
+    setQueueOpen(false);
     onPaletteOpen(false);
   }, [sessionKey, switchingSession]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const owner = sessionKey;
+    setRestoringExtras(true);
+    void loadComposerExtras(owner).then((saved) => {
+      if (cancelled || sessionOwnerRef.current !== owner) return;
+      if (saved) {
+        setImages((current) => mergeComposerItems(saved.images, current));
+        setDocuments((current) => mergeComposerItems(saved.documents, current));
+        setQueued((current) => mergeComposerItems(saved.queued, current));
+      }
+      hydratedExtrasRef.current.add(owner);
+      setExtrasSaved(true);
+      setPersistenceWarning(null);
+    }).catch(() => {
+      if (!cancelled) setPersistenceWarning("附件與待送訊息無法從本機儲存空間復原");
+      hydratedExtrasRef.current.add(owner);
+    }).finally(() => {
+      if (!cancelled) setRestoringExtras(false);
+    });
+    return () => { cancelled = true; };
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (switchingSession) return;
+    const owner = sessionOwnerRef.current;
+    if (!hydratedExtrasRef.current.has(owner)) return;
+    const revision = extrasSaveRevisionRef.current + 1;
+    extrasSaveRevisionRef.current = revision;
+    setExtrasSaved(false);
+    const snapshot = { images, documents, queued };
+    const timer = window.setTimeout(() => {
+      void saveComposerExtras(owner, snapshot).then(() => {
+        if (sessionOwnerRef.current === owner && extrasSaveRevisionRef.current === revision) {
+          setExtrasSaved(true);
+          setPersistenceWarning(null);
+        }
+      }).catch(() => {
+        if (sessionOwnerRef.current === owner && extrasSaveRevisionRef.current === revision) setPersistenceWarning("附件與待送訊息無法保存，離開前請先送出");
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [documents, images, queued, switchingSession]);
+
+  useEffect(() => {
+    if (switchingSession) return;
+    const owner = sessionOwnerRef.current;
+    const timer = window.setTimeout(() => persistDraft(owner, draft), 250);
+    return () => window.clearTimeout(timer);
+  }, [draft, switchingSession]);
+
+  useEffect(() => {
+    const hasUnsavedExtras = images.length > 0 || documents.length > 0 || queued.length > 0;
+    if (!hasUnsavedExtras || extrasSaved) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [documents.length, extrasSaved, images.length, queued.length]);
 
   useEffect(() => {
     if (!paletteOpen) return;
@@ -230,7 +333,7 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     if (!active || switchingSession) return;
     if (paletteOpen) return;
     const text = draft.trim();
-    const command = { text, images, documents };
+    const command = { id: newQueueId(), text, images, documents };
     const owner = sessionOwnerRef.current;
     if (active.busy || dispatchingSessionsRef.current.has(owner)) {
       if (!text && images.length === 0 && documents.length === 0) {
@@ -333,34 +436,61 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
   }
   attachFilesRef.current = attachFiles;
 
+  function editQueued(index: number) {
+    const target = queued[index];
+    if (!target) return;
+    const replacement = hasContent ? { id: target.id, text: draft, images, documents } : null;
+    setQueued((commands) => replacement
+      ? commands.map((command, commandIndex) => commandIndex === index ? replacement : command)
+      : commands.filter((_, commandIndex) => commandIndex !== index));
+    setDraft(target.text);
+    setImages(target.images);
+    setDocuments(target.documents);
+    setError(null);
+    setQueueOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function moveQueued(index: number, offset: -1 | 1) {
+    setQueued((commands) => moveQueuedItem(commands, index, offset));
+  }
+
   useEffect(() => {
     const clearDragState = () => {
       fileDragDepthRef.current = 0;
       setFileDragActive(false);
     };
+    const ownedByAnotherDropZone = (event: DragEvent) => event.target instanceof Element && Boolean(event.target.closest("[data-file-drop-owner]"));
     const enter = (event: DragEvent) => {
       if (!dragContainsFiles(event.dataTransfer)) return;
+      if (ownedByAnotherDropZone(event)) {
+        clearDragState();
+        return;
+      }
       event.preventDefault();
       fileDragDepthRef.current += 1;
       setFileDragActive(true);
     };
     const over = (event: DragEvent) => {
       if (!dragContainsFiles(event.dataTransfer)) return;
+      if (ownedByAnotherDropZone(event)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
     };
     const leave = (event: DragEvent) => {
       if (!dragContainsFiles(event.dataTransfer)) return;
+      if (ownedByAnotherDropZone(event)) return;
       event.preventDefault();
       fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
       if (fileDragDepthRef.current === 0) setFileDragActive(false);
     };
     const drop = (event: DragEvent) => {
       if (!dragContainsFiles(event.dataTransfer)) return;
+      if (ownedByAnotherDropZone(event)) return;
       event.preventDefault();
       const files = Array.from(event.dataTransfer?.files ?? []);
       clearDragState();
-      if (files.length > 0) void attachFilesRef.current(files);
+      if (globalDropEnabledRef.current && files.length > 0) void attachFilesRef.current(files);
     };
     const blur = () => clearDragState();
 
@@ -378,6 +508,10 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
     };
   }, []);
 
+  useEffect(() => {
+    if (!globalDropEnabled) setFileDragActive(false);
+  }, [globalDropEnabled]);
+
   const hasContent = Boolean(draft.trim() || images.length || documents.length);
   const hasAttachments = images.length > 0 || documents.length > 0;
 
@@ -387,8 +521,8 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         <div className="file-drop-overlay" role="status" aria-live="polite">
           <div className="file-drop-overlay__card">
             <span className="file-drop-overlay__icon" aria-hidden="true">＋</span>
-            <strong>放開即可附加</strong>
-            <small>圖片與文件會加入 {active?.name ?? "目前 NPC"} 的這則訊息</small>
+            <strong>{globalDropEnabled ? "放開即可附加" : "目前視窗不接收附件"}</strong>
+            <small>{globalDropEnabled ? `圖片與文件會加入 ${active?.name ?? "目前 NPC"} 的這則訊息` : "請先關閉目前的編輯或設定視窗"}</small>
           </div>
         </div>,
         document.body,
@@ -497,7 +631,29 @@ export function CommandComposer({ active, workers, workspacePath, capabilities, 
         }}
       />
       {error && <span className="command-composer__error" role="alert">{error}</span>}
-      {queued.length > 0 && <span className="command-composer__queue" role="status">等待 {queued.length}</span>}
+      {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
+      {queued.length > 0 && <button type="button" className="command-composer__queue" aria-expanded={queueOpen} onClick={() => setQueueOpen((open) => !open)}>等待 {queued.length}</button>}
+      {queueOpen && queued.length > 0 && <div className="command-queue" aria-label="待送訊息佇列">
+        <header><div><span>UP NEXT</span><strong>待送訊息 {restoringExtras ? "· 復原中…" : extrasSaved ? "· 已保存" : "· 保存中…"}</strong></div><button type="button" aria-label="關閉待送訊息" onClick={() => setQueueOpen(false)}>×</button></header>
+        <ol>{queued.map((command, index) => <li key={command.id} className={queueDragIndex === index ? "command-queue__item--dragging" : ""} onDragOver={(event) => { if (queueDragIndex !== null) event.preventDefault(); }} onDrop={(event) => {
+          if (queueDragIndex === null) return;
+          event.preventDefault();
+          setQueued((commands) => reorderQueuedItem(commands, queueDragIndex, index));
+          setQueueDragIndex(null);
+        }}>
+          <span className="command-queue__drag" draggable title="拖曳調整順序" aria-hidden="true" onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setQueueDragIndex(index); }} onDragEnd={() => setQueueDragIndex(null)}>⠿</span>
+          <button type="button" className="command-queue__edit" onClick={() => editQueued(index)} title="載入編輯">
+            <strong>{command.text || "只有附件的訊息"}</strong>
+            <small>{command.images.length > 0 ? `${command.images.length} 張圖片` : ""}{command.images.length > 0 && command.documents.length > 0 ? " · " : ""}{command.documents.length > 0 ? `${command.documents.length} 份文件` : ""}</small>
+          </button>
+          <div className="command-queue__actions">
+            <button type="button" disabled={index === 0} aria-label="往前移" onClick={() => moveQueued(index, -1)}>↑</button>
+            <button type="button" disabled={index === queued.length - 1} aria-label="往後移" onClick={() => moveQueued(index, 1)}>↓</button>
+            <button type="button" aria-label="取消待送訊息" onClick={() => setQueued((commands) => commands.filter((item) => item.id !== command.id))}>×</button>
+          </div>
+        </li>)}</ol>
+        <footer>點選內容可載入編輯；目前草稿會與該項目交換。</footer>
+      </div>}
       <button className={`command-composer__submit ${active?.busy && !hasContent ? "command-composer__submit--stop" : ""}`} type="submit" disabled={!active || !authReady || (!active.busy && !hasContent)}>
         {active?.busy ? (hasContent ? "排隊" : "中止") : "執行"}
       </button>
@@ -512,6 +668,79 @@ function imagePayload(image: ComposerImage): MessageImagePayload {
 
 function documentPayload(document: ComposerDocument): MessageDocumentPayload {
   return { name: document.name, mimeType: document.mimeType, dataBase64: document.dataBase64 };
+}
+
+function newQueueId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function readDraftStore(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadPersistedDraft(sessionKey: string): string {
+  const value = readDraftStore()[sessionKey];
+  return typeof value === "string" ? value : "";
+}
+
+function persistDraft(sessionKey: string, draft: string) {
+  if (typeof window === "undefined") return;
+  const drafts = readDraftStore();
+  if (draft) drafts[sessionKey] = draft;
+  else delete drafts[sessionKey];
+  try {
+    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {
+    // Draft persistence is best-effort when storage is unavailable or full.
+  }
+}
+
+function openComposerDatabase(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(COMPOSER_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(COMPOSER_DB_STORE)) request.result.createObjectStore(COMPOSER_DB_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("composer database unavailable"));
+  });
+}
+
+async function loadComposerExtras(sessionKey: string): Promise<PersistedComposerExtras | null> {
+  const database = await openComposerDatabase();
+  if (!database) return null;
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(COMPOSER_DB_STORE, "readonly");
+    const request = transaction.objectStore(COMPOSER_DB_STORE).get(sessionKey);
+    request.onsuccess = () => {
+      const value = request.result as Partial<PersistedComposerExtras> | undefined;
+      resolve(value && Array.isArray(value.images) && Array.isArray(value.documents) && Array.isArray(value.queued)
+        ? { images: value.images, documents: value.documents, queued: value.queued }
+        : null);
+    };
+    request.onerror = () => reject(request.error ?? new Error("composer restore failed"));
+    transaction.oncomplete = () => database.close();
+    transaction.onabort = () => database.close();
+  });
+}
+
+async function saveComposerExtras(sessionKey: string, extras: PersistedComposerExtras): Promise<void> {
+  const database = await openComposerDatabase();
+  if (!database) return;
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(COMPOSER_DB_STORE, "readwrite");
+    transaction.objectStore(COMPOSER_DB_STORE).put(extras, sessionKey);
+    transaction.oncomplete = () => { database.close(); resolve(); };
+    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error("composer save failed")); };
+    transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error("composer save aborted")); };
+  });
 }
 
 async function readComposerImage(file: File): Promise<ComposerImage> {

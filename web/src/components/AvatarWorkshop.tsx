@@ -9,6 +9,7 @@ import {
 } from "../avatar/normalizeAvatar";
 import { AVATAR_PRESETS, paintPresetPreview, type AvatarPresetId } from "../game/avatarPresets";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/person";
+import { dragContainsFiles } from "./CommandComposer";
 
 type Props = {
   worker: WorkerState;
@@ -39,7 +40,9 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   const [output, setOutput] = useState<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
+  const dragDepthRef = useRef(0);
 
   useEffect(() => () => source?.close(), [source]);
   useEffect(() => () => {
@@ -163,8 +166,40 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
 
   const gifMode = Boolean(gifFile || (!source && worker.avatarId?.toLowerCase().endsWith(".gif")));
 
+  function onDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    if (!dragContainsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+
+  function onDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    if (!dragContainsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+
+  function onDrop(event: React.DragEvent<HTMLDivElement>) {
+    if (!dragContainsFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length !== 1) {
+      setError("角色工坊一次只能接收一張圖片");
+      return;
+    }
+    setMode("custom");
+    void chooseFile(files[0]);
+  }
+
   return (
-    <div className="avatar-workshop" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title">
+    <div className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>放開以設定自訂角色</strong><small>PNG、JPEG、WebP 或 GIF</small></div>}
       <div className="avatar-workshop__card">
         <button type="button" className="avatar-workshop__close" onClick={onClose} aria-label="關閉角色工坊">×</button>
         <header className="avatar-workshop__header">

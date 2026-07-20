@@ -169,3 +169,36 @@ test("focus mode keeps the latest readable report while a newer turn has no text
   assert.match(html, /可以繼續閱讀的報告/);
   assert.doesNotMatch(html, /剛開始的新任務/);
 });
+
+test("focus navigation includes report headings and search exposes result controls", () => {
+  const turns: Turn[] = [{
+    key: "report",
+    command: "整理付款報告",
+    status: "done",
+    items: [{ kind: "assistant_text", key: "final", text: "# 結論\n\n付款流程需要修復。\n\n## 風險\n\n付款可能失敗。" }],
+  }];
+  const html = renderToStaticMarkup(<QuestLog turns={turns} focusMode searchQuery="付款" />);
+  assert.match(html, /focus-report-nav__heading--1/);
+  assert.match(html, /focus-report-nav__heading--2/);
+  assert.match(html, /結論/);
+  assert.match(html, /風險/);
+  assert.match(html, /<strong>3<\/strong> 處 · 1 筆任務/);
+  assert.match(html, /上一筆搜尋結果/);
+  assert.match(html, /下一筆搜尋結果/);
+  assert.match(html, /search-highlight/);
+  assert.match(html, /複製整份/);
+  assert.match(html, /匯出 \.md/);
+  assert.match(html, /釘選這份報告/);
+});
+
+test("focus mode keeps the last readable response from a failed turn", () => {
+  const turn: Turn = {
+    key: "failed-report",
+    command: "產生報告",
+    status: "error",
+    items: [{ kind: "assistant_text", key: "partial", text: "失敗前已整理的可讀內容" }],
+  };
+  const html = renderToStaticMarkup(<QuestLog turns={[turn]} focusMode />);
+  assert.match(html, /失敗前已整理的可讀內容/);
+  assert.match(html, /turn-chip--error/);
+});

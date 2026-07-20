@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CommandComposer, dragContainsFiles } from "../src/components/CommandComposer";
+import { CommandComposer, dragContainsFiles, mergeComposerItems, moveQueuedItem, reorderQueuedItem } from "../src/components/CommandComposer";
 import { emptyWorker } from "../src/workerState";
 
 const capabilities = {
@@ -71,4 +71,24 @@ test("only treats native file payloads as full-surface attachment drags", () => 
   assert.equal(dragContainsFiles({ types: ["text/plain"] as unknown as DOMStringList }), false);
   assert.equal(dragContainsFiles({ types: ["text/uri-list", "Files"] as unknown as DOMStringList }), true);
   assert.equal(dragContainsFiles(null), false);
+});
+
+test("moves queued messages without mutating the existing order", () => {
+  const queue = ["first", "second", "third"];
+  assert.deepEqual(moveQueuedItem(queue, 1, -1), ["second", "first", "third"]);
+  assert.deepEqual(moveQueuedItem(queue, 1, 1), ["first", "third", "second"]);
+  assert.equal(moveQueuedItem(queue, 0, -1), queue);
+  assert.deepEqual(queue, ["first", "second", "third"]);
+  assert.deepEqual(reorderQueuedItem(queue, 0, 2), ["second", "third", "first"]);
+  assert.equal(reorderQueuedItem(queue, 1, 1), queue);
+});
+
+test("restored composer extras merge by id without duplicating current attachments", () => {
+  const saved = [{ id: "saved", value: 1 }, { id: "same", value: 1 }];
+  const current = [{ id: "same", value: 2 }, { id: "current", value: 3 }];
+  assert.deepEqual(mergeComposerItems(saved, current), [
+    { id: "saved", value: 1 },
+    { id: "same", value: 2 },
+    { id: "current", value: 3 },
+  ]);
 });

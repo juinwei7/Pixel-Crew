@@ -36,3 +36,10 @@ test("focus energy keeps both providers and reset context visible", () => {
   assert.match(html, /64%/);
   assert.match(html, /不隨 NPC 切換/);
 });
+
+test("focus energy emphasizes only the active provider and warns below fifteen percent", () => {
+  const html = renderToStaticMarkup(<FocusEnergy usage={{ claude: state("claude", 72), codex: state("codex", 9) }} activeProvider="codex" onRefresh={async () => null} open={false} onOpenChange={() => {}} />);
+  assert.match(html, /focus-energy__summary--low/);
+  assert.match(html, /用量偏低/);
+  assert.match(html, /9%/);
+});

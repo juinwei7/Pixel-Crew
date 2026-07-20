@@ -33,6 +33,7 @@ test("shows GIF playback information without static-image adjustment controls", 
   assert.match(html, /320 × 320/);
   assert.match(html, /120 幀/);
   assert.doesNotMatch(html, /type="range"/);
+  assert.match(html, /data-file-drop-owner="avatar"/);
 });
 
 test("keeps adjustment controls for a static custom avatar", () => {

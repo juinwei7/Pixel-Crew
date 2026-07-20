@@ -1,12 +1,91 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
-import { RichText } from "./RichText";
+import { extractMarkdownHeadings, RichText } from "./RichText";
 
 const focusScrollPositions = new Map<string, number>();
+const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
 
 function focusTurnId(key: string): string {
   return `focus-turn-${encodeURIComponent(key)}`;
+}
+
+function searchTurnId(key: string): string {
+  return `search-turn-${encodeURIComponent(key)}`;
+}
+
+function finalReadableText(turn: Turn): string {
+  const item = [...turn.items].reverse().find((candidate) => candidate.kind === "assistant_text" || candidate.kind === "system_error");
+  return item && "text" in item ? item.text : "";
+}
+
+function reportMarkdown(turns: Turn[]): string {
+  return turns.map((turn) => `# ${turn.command}\n\n${finalReadableText(turn)}`).filter((section) => section.trim()).join("\n\n---\n\n");
+}
+
+function readPinnedReports(readerKey?: string): Set<string> {
+  if (!readerKey || typeof window === "undefined") return new Set();
+  try {
+    const store = JSON.parse(window.localStorage.getItem(PIN_STORAGE_KEY) ?? "{}");
+    return new Set(Array.isArray(store?.[readerKey]) ? store[readerKey] : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistPinnedReports(readerKey: string | undefined, pinned: Set<string>) {
+  if (!readerKey || typeof window === "undefined") return;
+  try {
+    const store = JSON.parse(window.localStorage.getItem(PIN_STORAGE_KEY) ?? "{}");
+    store[readerKey] = [...pinned];
+    window.localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // Pin persistence is best-effort when browser storage is unavailable.
+  }
+}
+
+function ReportActions({ markdown }: { markdown: string }) {
+  const [copied, setCopied] = useState(false);
+  return <div className="focus-report-actions">
+    <button type="button" disabled={!markdown} onClick={() => {
+      void navigator.clipboard?.writeText(markdown).then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      });
+    }}>{copied ? "已複製" : "複製整份"}</button>
+    <button type="button" disabled={!markdown} onClick={() => {
+      const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `pixel-crew-report-${new Date().toISOString().slice(0, 10)}.md`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }}>匯出 .md</button>
+  </div>;
+}
+
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  const needle = query.trim();
+  if (!needle) return text;
+  const parts = text.split(new RegExp(`(${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"));
+  return <>{parts.map((part, index) => part.toLocaleLowerCase() === needle.toLocaleLowerCase() ? <mark className="search-highlight" key={index}>{part}</mark> : part)}</>;
+}
+
+function searchableTurnText(turn: Turn, focusMode: boolean): string {
+  const items = focusMode ? turn.items.filter((item) => item.kind === "assistant_text" || item.kind === "system_error") : turn.items;
+  return `${turn.command} ${items.map((item) => "text" in item ? item.text : JSON.stringify(item)).join(" ")}`;
+}
+
+function occurrenceCount(text: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let cursor = 0;
+  const haystack = text.toLocaleLowerCase();
+  while ((cursor = haystack.indexOf(needle, cursor)) >= 0) {
+    count += 1;
+    cursor += Math.max(needle.length, 1);
+  }
+  return count;
 }
 
 function formatValue(value: unknown): string {
@@ -173,9 +252,9 @@ function ThinkingRow({ text }: { text: string }) {
   );
 }
 
-function TurnItems({ items, status, view, focusMode, onApprove }: { items: TurnItem[]; status: Turn["status"]; view: TaskLogView; focusMode: boolean; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+function TurnItems({ items, status, view, focusMode, turnKey, highlight, onApprove }: { items: TurnItem[]; status: Turn["status"]; view: TaskLogView; focusMode: boolean; turnKey: string; highlight: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   let finalTextIndex = -1;
-  if (status === "done") {
+  if (status !== "running") {
     for (let index = items.length - 1; index >= 0; index--) {
       if (items[index].kind === "assistant_text") {
         finalTextIndex = index;
@@ -231,7 +310,7 @@ function TurnItems({ items, status, view, focusMode, onApprove }: { items: TurnI
         return (
           <div key={item.key} className={`turn-text ${isFinal ? "turn-text--final" : ""}`}>
             {isFinal && <div className="turn-text__label">FINAL RESPONSE <CopyButton value={item.text} label="複製最終回覆" /></div>}
-            <RichText text={item.text} />
+            <RichText text={item.text} headingPrefix={focusMode ? focusTurnId(turnKey) : undefined} highlight={highlight} />
           </div>
         );
       })}
@@ -246,26 +325,27 @@ function statusChip(status: Turn["status"], waitingForApproval: boolean) {
   return <span className="turn-chip turn-chip--done">完成</span>;
 }
 
-function TurnCard({ turn, isLatest, view, focusMode, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const open = focusMode || (expanded ?? (isLatest || turn.status === "running" || turn.status === "error"));
   const waitingForApproval = turn.items.some((item) => item.kind === "approval" && item.status === "pending");
 
   return (
-    <div id={focusMode ? focusTurnId(turn.key) : undefined} className={`turn-card turn-card--${turn.status}`}>
+    <div id={focusMode ? focusTurnId(turn.key) : searchTurnId(turn.key)} className={`turn-card turn-card--${turn.status}`}>
       <div className="turn-card__head">
         {focusMode ? <div className="turn-card__toggle turn-card__toggle--reader">
-          <span className="turn-card__cmd">{turn.command}</span>
+          <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
           {statusChip(turn.status, waitingForApproval)}
         </div> : <button className="turn-card__toggle" type="button" aria-expanded={open} onClick={() => setExpanded(!open)}>
-          <span className="turn-card__cmd">{turn.command}</span>
+          <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
           {statusChip(turn.status, waitingForApproval)}
         </button>}
+        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? "取消釘選這份報告" : "釘選這份報告"} title={pinned ? "取消釘選" : "釘選報告"} onClick={onPin}>{pinned ? "★" : "☆"}</button>}
         <CopyButton value={turn.command} label="複製指令" />
       </div>
       {open && (
         <>
-          <TurnItems items={turn.items} status={turn.status} view={view} focusMode={focusMode} onApprove={onApprove} />
+          <TurnItems items={turn.items} status={turn.status} view={view} focusMode={focusMode} turnKey={turn.key} highlight={highlight} onApprove={onApprove} />
           {!focusMode && turn.status !== "running" && turn.durationMs !== undefined && (
             <div className="turn-card__foot">
               {(turn.durationMs / 1000).toFixed(1)}s{turn.costUsd ? ` · $${turn.costUsd.toFixed(4)}` : ""}
@@ -289,6 +369,9 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [searchResultIndex, setSearchResultIndex] = useState(0);
+  const [pinnedTurns, setPinnedTurns] = useState<Set<string>>(() => readPinnedReports(readerKey));
   const lastTurn = turns[turns.length - 1];
   const itemCount = lastTurn?.items.length ?? 0;
 
@@ -311,11 +394,47 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
   const needle = searchQuery.trim().toLowerCase();
-  const matchingTurns = needle ? turns.filter((turn) => `${turn.command} ${turn.items.map((item) => "text" in item ? item.text : JSON.stringify(item)).join(" ")}`.toLowerCase().includes(needle)) : turns;
+  const matchingTurns = needle ? turns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : turns;
   const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const visibleTurns = focusMode
     ? (readableTurns.length > 0 ? readableTurns : matchingTurns)
     : matchingTurns;
+  const completeReportTurns = turns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
+  const searchOccurrences = needle ? visibleTurns.reduce((count, turn) => count + occurrenceCount(searchableTurnText(turn, focusMode), needle), 0) : 0;
+  const navigationEntries = focusMode ? visibleTurns.flatMap((turn, turnIndex) => {
+    const prefix = focusTurnId(turn.key);
+    const finalItem = [...turn.items].reverse().find((item) => item.kind === "assistant_text");
+    const text = finalItem && "text" in finalItem ? finalItem.text : "";
+    return [
+      { id: prefix, level: 0, label: turn.command, status: navStatus(turn), number: String(turnIndex + 1).padStart(2, "0"), turnKey: turn.key },
+      ...extractMarkdownHeadings(text, prefix).map((heading) => ({ ...heading, status: "", number: "", turnKey: turn.key })),
+    ];
+  }) : [];
+
+  useEffect(() => {
+    setSearchResultIndex(0);
+  }, [needle, readerKey]);
+
+  useEffect(() => {
+    setPinnedTurns(readPinnedReports(readerKey));
+  }, [readerKey]);
+
+  function togglePinned(turnKey: string) {
+    setPinnedTurns((current) => {
+      const next = new Set(current);
+      if (next.has(turnKey)) next.delete(turnKey);
+      else next.add(turnKey);
+      persistPinnedReports(readerKey, next);
+      return next;
+    });
+  }
+
+  function goToSearchResult(index: number) {
+    if (visibleTurns.length === 0) return;
+    const next = (index + visibleTurns.length) % visibleTurns.length;
+    setSearchResultIndex(next);
+    document.getElementById(focusMode ? focusTurnId(visibleTurns[next].key) : searchTurnId(visibleTurns[next].key))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   const log = (
     <div className="quest-log" ref={logRef} onScroll={() => {
@@ -323,7 +442,19 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       if (!el) return;
       if (focusMode && readerKey) focusScrollPositions.set(readerKey, el.scrollTop);
       setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      if (focusMode && navigationEntries.length > 0) {
+        const threshold = el.getBoundingClientRect().top + 110;
+        const current = navigationEntries.reduce<string | null>((found, entry) => {
+          const target = document.getElementById(entry.id);
+          return target && target.getBoundingClientRect().top <= threshold ? entry.id : found;
+        }, navigationEntries[0].id);
+        setActiveSection(current);
+      }
     }}>
+      {needle && <div className="quest-log__search-results" role="status">
+        <span><strong>{searchOccurrences}</strong> 處 · {visibleTurns.length} 筆任務</span>
+        <div><button type="button" disabled={visibleTurns.length === 0} aria-label="上一筆搜尋結果" onClick={() => goToSearchResult(searchResultIndex - 1)}>↑</button><small>{visibleTurns.length > 0 ? `${searchResultIndex + 1}/${visibleTurns.length}` : "0/0"}</small><button type="button" disabled={visibleTurns.length === 0} aria-label="下一筆搜尋結果" onClick={() => goToSearchResult(searchResultIndex + 1)}>↓</button></div>
+      </div>}
       {pending.length > 0 && <div className="approval-shelf" role="alert" aria-live="assertive"><div className="approval-shelf__label">需要你的核准</div>{pending.map((item) => <ApprovalCard key={item.key} item={item} onApprove={onApprove} />)}</div>}
       {turns.length === 0 && (
         <div className="quest-log__empty">
@@ -336,7 +467,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         <div className="quest-log__no-results">找不到符合「{searchQuery.trim()}」的任務內容</div>
       )}
       {visibleTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === visibleTurns.length - 1} view={view} focusMode={focusMode} onApprove={onApprove} />
+        <TurnCard key={turn.key} turn={turn} isLatest={i === visibleTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={() => togglePinned(turn.key)} onApprove={onApprove} />
       ))}
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;
@@ -356,12 +487,13 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
     }}>
       <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>報告導覽 <span>{visibleTurns.length}</span></button>
       <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label="報告章節導覽">
-        <header><span>REPORT INDEX</span><strong>報告導覽</strong></header>
+        <header><span>REPORT INDEX</span><strong>報告導覽</strong><ReportActions markdown={reportMarkdown(completeReportTurns)} /></header>
         <div className="focus-report-nav__items">
-          {visibleTurns.map((turn, index) => <button type="button" key={turn.key} onClick={() => {
-            document.getElementById(focusTurnId(turn.key))?.scrollIntoView({ behavior: "smooth", block: "start" });
+          {navigationEntries.map((entry) => <button type="button" key={entry.id} className={`${entry.level > 0 ? `focus-report-nav__heading focus-report-nav__heading--${entry.level}` : ""} ${activeSection === entry.id ? "active" : ""}`} aria-current={activeSection === entry.id ? "location" : undefined} onClick={() => {
+            document.getElementById(entry.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            setActiveSection(entry.id);
             setNavigationOpen(false);
-          }}><i>{String(index + 1).padStart(2, "0")}</i><span><strong>{turn.command}</strong><small>{navStatus(turn)}</small></span></button>)}
+          }}><i>{entry.level === 0 && pinnedTurns.has(entry.turnKey) ? "★" : entry.number || "·"}</i><span><strong>{entry.label}</strong>{entry.status && <small>{entry.status}</small>}</span></button>)}
           {visibleTurns.length === 0 && <p>目前沒有可導覽的報告</p>}
         </div>
       </nav>

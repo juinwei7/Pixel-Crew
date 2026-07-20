@@ -61,6 +61,7 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
+  const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
   const [taskFocusMode, setTaskFocusMode] = useState(false);
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
@@ -84,6 +85,14 @@ export function App() {
     activeCapabilities.models,
     active?.model,
   );
+  const taskLogTurns = useMemo(() => {
+    if (taskSearchScope === "current" || !taskSearch.trim()) return active?.turns ?? [];
+    return workerList.flatMap((worker) => worker.turns.map((turn) => ({
+      ...turn,
+      key: `${worker.id}:${turn.key}`,
+      command: `${worker.name} · ${turn.command}`,
+    })));
+  }, [active?.turns, taskSearch, taskSearchScope, workerList]);
 
   const dismissToast = useCallback((id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
@@ -383,7 +392,7 @@ export function App() {
               })}
             </select>
           </label> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
             {!taskFocusMode && <div className="task-log-toolbar__view" aria-label="日誌模式">
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
@@ -399,8 +408,11 @@ export function App() {
             {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label="退出專心閱讀模式">退出 <kbd>Esc</kbd></button>}
           </div>
         </div>
-        {taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder="搜尋目前 NPC 的任務" onChange={(event) => setTaskSearch(event.target.value)} /><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
-        <QuestLog key={activeSessionKey} readerKey={activeSessionKey} turns={active?.turns ?? []} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={activeId ? (approvalId, decision) => resolveApproval(activeId, approvalId, decision) : undefined} />
+        {taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? "搜尋目前 NPC 的任務" : "搜尋全部 NPC 的任務"} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label="搜尋範圍"><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>目前</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>全部</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
+        <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={(approvalId, decision) => {
+          const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
+          return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve("找不到需要核准的 NPC");
+        }} />
       </aside>
 
       <CommandComposer
@@ -411,6 +423,7 @@ export function App() {
         authReady={activeAuth.status === "authenticated"}
         focusMode={taskFocusMode}
         sessionKey={activeSessionKey}
+        globalDropEnabled={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId}
         paletteOpen={commandPaletteOpen}
         focusRequest={composerFocusRequest}
         onPaletteOpen={setCommandPaletteOpen}

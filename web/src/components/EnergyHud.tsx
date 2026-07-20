@@ -100,10 +100,11 @@ export function EnergyHud({ usage, onRefresh }: Props) {
   );
 }
 
-export function FocusEnergy({ usage, onRefresh, open, onOpenChange }: Props & { open: boolean; onOpenChange(open: boolean): void }) {
+export function FocusEnergy({ usage, onRefresh, open, onOpenChange, activeProvider = "claude" }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const activeRemaining = headline(usage[activeProvider]);
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -123,9 +124,9 @@ export function FocusEnergy({ usage, onRefresh, open, onOpenChange }: Props & { 
 
   return (
     <div ref={rootRef} className="focus-energy">
-      <button type="button" className="focus-energy__summary" onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label="查看專心模式工作用量">
-        <ProviderMeter provider="claude" state={usage.claude} />
-        <ProviderMeter provider="codex" state={usage.codex} />
+      <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label="查看專心模式工作用量">
+        <ProviderMeter provider={activeProvider} state={usage[activeProvider]} />
+        <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? "用量偏低" : "全部"}</span>
       </button>
       <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label="工作用量詳情">
         <header><div><span>WORK ENERGY</span><strong>用量與重置時間</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "更新中…" : "重新整理"}</button></header>
