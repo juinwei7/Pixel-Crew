@@ -1,8 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
   <url>
     <loc>https://pixelcrew.weibuilds.com/</loc>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
+    <lastmod>2026-07-20</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/"/>
+    <image:image>
+      <image:loc>https://pixelcrew.weibuilds.com/assets/hero.webp</image:loc>
+      <image:caption>Pixel Crew multi-agent office for Claude Code and Codex</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/en/</loc>
+    <lastmod>2026-07-20</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/"/>
+    <image:image>
+      <image:loc>https://pixelcrew.weibuilds.com/assets/hero.webp</image:loc>
+      <image:caption>Pixel Crew multi-agent office for Claude Code and Codex</image:caption>
+    </image:image>
   </url>
 </urlset>

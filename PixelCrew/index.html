@@ -6,8 +6,17 @@
 <title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
 <meta name="description" content="Pixel Crew 是一個 local-first 的多 agent 工作台：把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC。不需要 API key，直接編排你已登入的官方 CLI。MIT 開源。">
 <meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#070a14">
 <link rel="canonical" href="https://pixelcrew.weibuilds.com/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/">
 <meta property="og:title" content="Pixel Crew — 像素辦公室裡的 AI Coding Agents">
@@ -15,8 +24,8 @@
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
 <meta property="og:locale:alternate" content="en_US">
-<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.png">
-<meta property="og:image:secure_url" content="https://pixelcrew.weibuilds.com/assets/hero.png">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta property="og:image:secure_url" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1721">
 <meta property="og:image:height" content="960">
@@ -24,7 +33,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Pixel Crew — 像素辦公室裡的 AI Coding Agents">
 <meta name="twitter:description" content="把多個 Claude Code 與 Codex session 變成看得見的像素 NPC。Local-first、無 API key、MIT 開源。">
-<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.png">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta name="twitter:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
 <script type="application/ld+json">
 {
@@ -35,7 +44,39 @@
       "@id": "https://pixelcrew.weibuilds.com/#website",
       "url": "https://pixelcrew.weibuilds.com/",
       "name": "Pixel Crew",
-      "inLanguage": ["zh-Hant", "en"]
+      "inLanguage": ["zh-Hant", "en"],
+      "publisher": { "@id": "https://pixelcrew.weibuilds.com/#organization" }
+    },
+    {
+      "@type": "Organization",
+      "@id": "https://pixelcrew.weibuilds.com/#organization",
+      "name": "Pixel Crew",
+      "url": "https://pixelcrew.weibuilds.com/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://pixelcrew.weibuilds.com/apple-touch-icon.png",
+        "width": 512,
+        "height": 512
+      },
+      "sameAs": ["https://github.com/juinwei7/Pixel-Crew"]
+    },
+    {
+      "@type": "WebPage",
+      "@id": "https://pixelcrew.weibuilds.com/#webpage",
+      "url": "https://pixelcrew.weibuilds.com/",
+      "name": "Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室",
+      "description": "把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC。Local-first、不需要 API key、MIT 開源。",
+      "inLanguage": "zh-Hant",
+      "datePublished": "2026-07-17",
+      "dateModified": "2026-07-20",
+      "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
+      "about": { "@id": "https://pixelcrew.weibuilds.com/#software" },
+      "primaryImageOfPage": {
+        "@type": "ImageObject",
+        "url": "https://pixelcrew.weibuilds.com/assets/hero.webp",
+        "width": 1721,
+        "height": 960
+      }
     },
     {
       "@type": "SoftwareApplication",
@@ -45,10 +86,13 @@
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
       "softwareVersion": "1.0.2",
       "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2",
+      "datePublished": "2026-07-17",
+      "dateModified": "2026-07-20",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
+      "softwareRequirements": "macOS, Windows 10 22H2 or later, or Linux; Claude Code or Codex CLI",
       "description": "Local-first multi-agent cockpit for Claude Code and Codex.",
-      "image": "https://pixelcrew.weibuilds.com/assets/hero.png",
+      "image": "https://pixelcrew.weibuilds.com/assets/hero.webp",
       "license": "https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE",
       "isAccessibleForFree": true,
       "offers": {
@@ -56,6 +100,9 @@
         "price": "0",
         "priceCurrency": "USD"
       },
+      "author": { "@id": "https://pixelcrew.weibuilds.com/#organization" },
+      "publisher": { "@id": "https://pixelcrew.weibuilds.com/#organization" },
+      "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
       "sameAs": "https://github.com/juinwei7/Pixel-Crew"
     }
   ]
@@ -95,7 +142,7 @@
   a { color: var(--cyan); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
   a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
-  img { max-width: 100%; height: auto; display: block; }
+  img, picture { max-width: 100%; height: auto; display: block; }
   code { font-family: var(--mono); }
 
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
@@ -121,7 +168,7 @@
   .lang-toggle span { min-width: 32px; padding: 5px 7px; border-radius: 5px; text-align: center; transition: color .16s ease, background .16s ease, box-shadow .16s ease; }
   .lang-toggle[data-active="zh"] .lang-zh,
   .lang-toggle[data-active="en"] .lang-en { background: rgba(77, 227, 255, .14); color: #b9f4ff; box-shadow: 0 0 12px rgba(77, 227, 255, .12); }
-  .lang-toggle:hover { border-color: rgba(77, 227, 255, .58); }
+  .lang-toggle:hover { border-color: rgba(77, 227, 255, .58); text-decoration: none; }
 
   /* ============ HERO ============ */
   .hero { position: relative; padding: 52px 0 0; }
@@ -361,9 +408,9 @@
       <a href="#start">快速開始</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
-      <button class="lang-toggle" type="button" aria-label="Switch to English" data-active="zh">
+      <a class="lang-toggle" href="/en/" hreflang="en" lang="en" aria-label="English version" data-active="zh">
         <span class="lang-zh" lang="zh-Hant">中文</span><span class="lang-en" lang="en">EN</span>
-      </button>
+      </a>
     </div>
   </nav>
 </div>
@@ -394,7 +441,7 @@
       <span class="note" style="left: 76.5%; top: 15%; --drop: 46px;">回覆同步寫進任務日誌</span>
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>PIXEL CREW — ROOM AAAA</span><b>LIVE CAPTURE</b></div>
-        <img src="assets/hero.png" width="1721" height="960" alt="Pixel Crew 完整畫面：像素辦公室中四位 NPC 各自在工位，五號機被選取並冒出「早安！今天想一起做點什麼？」的對話泡泡，右側任務日誌同步顯示同一句回覆，左側是人員列表，下方是指令輸入列">
+        <img src="assets/hero.webp" width="1721" height="960" fetchpriority="high" alt="Pixel Crew 完整畫面：像素辦公室中四位 NPC 各自在工位，五號機被選取並冒出「早安！今天想一起做點什麼？」的對話泡泡，右側任務日誌同步顯示同一句回覆，左側是人員列表，下方是指令輸入列">
       </figure>
       <p class="hero-caption">▲ 實際畫面直出——五號機說了早安，右邊的任務日誌記下同一句話。</p>
     </div>
@@ -416,7 +463,7 @@
     <div class="scene-media">
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>ASSIGN — 一號機 收到任務</span><b>REC</b></div>
-        <img src="assets/task.gif" width="1330" height="880" loading="lazy" alt="錄影：派任務給 NPC 後，它從座位走到讀檔案工位開始工作，頭上顯示執行秒數與輸出氣泡，完成時鄰座同事歡呼">
+        <img src="assets/task.webp" width="1330" height="880" loading="lazy" decoding="async" alt="錄影：派任務給 NPC 後，它從座位走到讀檔案工位開始工作，頭上顯示執行秒數與輸出氣泡，完成時鄰座同事歡呼">
       </figure>
     </div>
     <div class="scene-copy">
@@ -439,7 +486,7 @@
       <div class="media-stack">
         <figure class="win" style="margin: 0;">
           <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>APPROVAL — 等待核准中</span><b>LIVE</b></div>
-          <img src="assets/approval.png" width="920" height="760" loading="lazy" alt="特寫：一號機頭上浮著「允許執行這個指令？」的核准列，提供拒絕、本次皆允許、允許三個按鈕，名牌顯示已等待 9 秒">
+          <img src="assets/approval.webp" width="920" height="760" loading="lazy" decoding="async" alt="特寫：一號機頭上浮著「允許執行這個指令？」的核准列，提供拒絕、本次皆允許、允許三個按鈕，名牌顯示已等待 9 秒">
         </figure>
       </div>
     </div>
@@ -462,7 +509,7 @@
     <div class="scene-media">
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>RADIAL — 右鍵選單</span><b>LIVE</b></div>
-        <img src="assets/radial.png" width="974" height="719" loading="lazy" alt="對一號機按右鍵，五顆圓形圖示按鈕沿弧線展開——重新命名、個性職務、像素造型、切換房間、移除人員；貓正好走過左邊的地板">
+        <img src="assets/radial.webp" width="974" height="719" loading="lazy" decoding="async" alt="對一號機按右鍵，五顆圓形圖示按鈕沿弧線展開——重新命名、個性職務、像素造型、切換房間、移除人員；貓正好走過左邊的地板">
       </figure>
     </div>
     <div class="scene-copy">
@@ -483,7 +530,7 @@
     <div class="scene-media">
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>CAMERA — 縮放與平移</span><b>REC</b></div>
-        <img src="assets/camera.gif" width="1330" height="880" loading="lazy" alt="錄影：使用左下角拉桿放大辦公室、拖曳平移視角，再一鍵恢復預設構圖">
+        <img src="assets/camera.webp" width="1330" height="880" loading="lazy" decoding="async" alt="錄影：使用左下角拉桿放大辦公室、拖曳平移視角，再一鍵恢復預設構圖">
       </figure>
     </div>
     <div class="scene-copy">
@@ -520,11 +567,11 @@
     <div class="media-stack media-stack--pair">
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>執行中 — 工具串流</span><b>LIVE</b></div>
-        <img src="assets/log-activity.png" width="401" height="679" loading="lazy" alt="任務日誌執行中：五號機說明查詢計畫，下方即時串流 WebSearch 工具的 INPUT 與 OUTPUT JSON 內容">
+        <img src="assets/log-activity.webp" width="401" height="679" loading="lazy" decoding="async" alt="任務日誌執行中：五號機說明查詢計畫，下方即時串流 WebSearch 工具的 INPUT 與 OUTPUT JSON 內容">
       </figure>
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>完成 — FINAL RESPONSE</span><b>LIVE</b></div>
-        <img src="assets/log-result.png" width="401" height="580" loading="lazy" alt="任務完成：FINAL RESPONSE 以 Markdown 渲染清單與連結，標示工具活動 3 項與 36.1 秒耗時">
+        <img src="assets/log-result.webp" width="401" height="580" loading="lazy" decoding="async" alt="任務完成：FINAL RESPONSE 以 Markdown 渲染清單與連結，標示工具活動 3 項與 36.1 秒耗時">
       </figure>
     </div>
   </div>
@@ -534,11 +581,11 @@
       <div class="media-stack media-stack--pair">
         <figure class="win" style="margin: 0;">
           <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>SHIFT CHANGE — 交接班</span><b>LIVE</b></div>
-          <img src="assets/handoff.png" width="703" height="693" loading="lazy" alt="交接班對話框：五號機從 Codex 交接給 Claude Code，顯示目標 LLM 的工作能量條，並列出跨 LLM 交接的注意事項與確認核取方塊">
+          <img src="assets/handoff.webp" width="703" height="693" loading="lazy" decoding="async" alt="交接班對話框：五號機從 Codex 交接給 Claude Code，顯示目標 LLM 的工作能量條，並列出跨 LLM 交接的注意事項與確認核取方塊">
         </figure>
         <figure class="win" style="margin: 0;">
           <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFICE POWER — 全域能量</span><b>LIVE</b></div>
-          <img src="assets/energy.png" width="450" height="472" loading="lazy" alt="全域工作能量面板：Claude Code 顯示本次時段、本週與模型層級的用量條與重置時間，Codex 顯示七天用量">
+          <img src="assets/energy.webp" width="450" height="472" loading="lazy" decoding="async" alt="全域工作能量面板：Claude Code 顯示本次時段、本週與模型層級的用量條與重置時間，Codex 顯示七天用量">
         </figure>
       </div>
     </div>
@@ -576,11 +623,11 @@
     <div class="media-stack media-stack--pair">
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFICIAL — 官方隊員</span><b>LIVE</b></div>
-        <img src="assets/workshop-official.png" width="796" height="628" loading="lazy" alt="像素工作坊官方分頁：五位官方隊員造型可選——經典隊員、霓虹工程師、訊號分析師、火花設計師、夜班維運">
+        <img src="assets/workshop-official.webp" width="796" height="628" loading="lazy" decoding="async" alt="像素工作坊官方分頁：五位官方隊員造型可選——經典隊員、霓虹工程師、訊號分析師、火花設計師、夜班維運">
       </figure>
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>CUSTOM — 自訂 GIF</span><b>LIVE</b></div>
-        <img src="assets/workshop-custom.png" width="803" height="709" loading="lazy" alt="像素工作坊自訂分頁：上傳一張貓耳女孩的像素 GIF 作為頭像，右側列出尺寸、檔案與影格限制">
+        <img src="assets/workshop-custom.webp" width="803" height="709" loading="lazy" decoding="async" alt="像素工作坊自訂分頁：上傳一張貓耳女孩的像素 GIF 作為頭像，右側列出尺寸、檔案與影格限制">
       </figure>
     </div>
   </div>
@@ -790,17 +837,17 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
     'ASSIGN — 一號機 收到任務': 'ASSIGN — NPC 1 RECEIVED A TASK', 'APPROVAL — 等待核准中': 'APPROVAL — WAITING', 'RADIAL — 右鍵選單': 'RADIAL — CONTEXT MENU', 'CAMERA — 縮放與平移': 'CAMERA — PAN & ZOOM', '執行中 — 工具串流': 'RUNNING — TOOL STREAM', '完成 — FINAL RESPONSE': 'COMPLETE — FINAL RESPONSE', 'SHIFT CHANGE — 交接班': 'SHIFT CHANGE — HANDOFF', 'OFFICE POWER — 全域能量': 'OFFICE POWER — GLOBAL USAGE', 'OFFICIAL — 官方隊員': 'OFFICIAL — CREW', 'CUSTOM — 自訂 GIF': 'CUSTOM — GIF AVATAR'
   };
   const alt = {
-    'assets/hero.png': 'Pixel Crew with four NPCs at their workstations, a live speech bubble, personnel list, task log, and command input.',
-    'assets/task.gif': 'Recording of an NPC walking to a workstation, streaming output, and completing a real task.',
-    'assets/approval.png': 'An NPC waiting for command approval with deny, allow for task, and allow once controls.',
-    'assets/radial.png': 'The radial menu for renaming an NPC, editing its persona, changing its appearance, switching rooms, or removing it.',
-    'assets/camera.gif': 'Recording of the office camera being panned, zoomed, and reset.',
-    'assets/log-activity.png': 'Task log streaming a WebSearch tool input and output while a task runs.',
-    'assets/log-result.png': 'A completed task with the final Markdown response, tool count, and duration.',
-    'assets/handoff.png': 'A handoff dialog transferring work from Codex to Claude Code with usage information and warnings.',
-    'assets/energy.png': 'The global usage panel showing Claude Code and Codex allowance and reset times.',
-    'assets/workshop-official.png': 'The Pixel Workshop showing five official crew appearances.',
-    'assets/workshop-custom.png': 'The custom avatar tab with an uploaded animated pixel GIF and file limits.'
+    'assets/hero.webp': 'Pixel Crew with four NPCs at their workstations, a live speech bubble, personnel list, task log, and command input.',
+    'assets/task.webp': 'Recording of an NPC walking to a workstation, streaming output, and completing a real task.',
+    'assets/approval.webp': 'An NPC waiting for command approval with deny, allow for task, and allow once controls.',
+    'assets/radial.webp': 'The radial menu for renaming an NPC, editing its persona, changing its appearance, switching rooms, or removing it.',
+    'assets/camera.webp': 'Recording of the office camera being panned, zoomed, and reset.',
+    'assets/log-activity.webp': 'Task log streaming a WebSearch tool input and output while a task runs.',
+    'assets/log-result.webp': 'A completed task with the final Markdown response, tool count, and duration.',
+    'assets/handoff.webp': 'A handoff dialog transferring work from Codex to Claude Code with usage information and warnings.',
+    'assets/energy.webp': 'The global usage panel showing Claude Code and Codex allowance and reset times.',
+    'assets/workshop-official.webp': 'The Pixel Workshop showing five official crew appearances.',
+    'assets/workshop-custom.webp': 'The custom avatar tab with an uploaded animated pixel GIF and file limits.'
   };
   const originals = new Map();
   const remember = (selector) => document.querySelectorAll(selector).forEach((el) => { if (!originals.has(el)) originals.set(el, el.innerHTML); });
@@ -812,7 +859,7 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
   const ogTitle = document.querySelector('meta[property="og:title"]');
   const ogDescription = document.querySelector('meta[property="og:description"]');
   const zhMeta = [metaDescription.content, ogTitle.content, ogDescription.content];
-  let english = localStorage.getItem('pixel-crew-language') === 'en';
+  const english = false;
   const apply = () => {
     document.documentElement.lang = english ? 'en' : 'zh-Hant';
     for (const [selector, value] of Object.entries(html)) document.querySelectorAll(selector).forEach((el) => { el.innerHTML = english ? value : originals.get(el); });
@@ -825,9 +872,8 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
     ogDescription.content = english ? 'Multiple Claude Code and Codex sessions become visible NPCs in one office. Local-first, no API key, MIT open source.' : zhMeta[2];
     document.querySelector('.lang-toggle').dataset.active = english ? 'en' : 'zh';
     document.querySelector('.lang-toggle').setAttribute('aria-label', english ? '切換至繁體中文' : 'Switch to English');
-    document.querySelector('.lang-toggle').setAttribute('aria-pressed', String(english));
+    document.querySelector('.lang-toggle').setAttribute('aria-current', english ? 'page' : 'false');
   };
-  document.querySelector('.lang-toggle').addEventListener('click', () => { english = !english; localStorage.setItem('pixel-crew-language', english ? 'en' : 'zh-Hant'); apply(); });
   apply();
 })();
 </script>
