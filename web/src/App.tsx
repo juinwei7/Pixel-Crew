@@ -45,7 +45,7 @@ export function App() {
   const {
     workers, order, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
-    switchWorkspace, closeWorker, renameWorker, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
+    switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
     send, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -312,6 +312,7 @@ export function App() {
         onFilter={(crewFilter) => updatePreferences({ crewFilter })}
         onCollapsed={(crewRailCollapsed) => updatePreferences({ crewRailCollapsed })}
         onSelect={setActiveId}
+        onReorder={(ids) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); }}
         onCreate={() => openWorkspaceForCreate(activeProvider)}
         onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
         onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}

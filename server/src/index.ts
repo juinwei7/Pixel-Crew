@@ -849,6 +849,28 @@ app.post("/api/workers", (req, res) => {
   }
 });
 
+// Must be registered before /api/workers/:id or Express treats "order" as an id.
+app.patch("/api/workers/order", (req, res) => {
+  const order = req.body?.order;
+  const valid = Array.isArray(order)
+    && order.length === workers.size
+    && new Set(order).size === order.length
+    && order.every((id) => typeof id === "string" && workers.has(id));
+  if (!valid) {
+    res.status(409).json({ error: "人員清單已變動，請重試" });
+    return;
+  }
+  if (!store.saveWorkerOrder(order as string[])) {
+    res.status(500).json({ error: "無法儲存人員順序" });
+    return;
+  }
+  const reordered = (order as string[]).map((id) => [id, workers.get(id)!] as const);
+  workers.clear();
+  for (const [id, worker] of reordered) workers.set(id, worker);
+  broadcast({ type: "workers_reordered", order });
+  res.json({ order });
+});
+
 app.patch("/api/workers/:id", (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {

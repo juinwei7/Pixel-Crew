@@ -51,6 +51,7 @@ type ServerMessage =
   | { type: "worker_added"; worker: WorkerSummary }
   | { type: "worker_removed"; workerId: string }
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
+  | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
@@ -253,6 +254,10 @@ export function useWorkers() {
           });
           break;
         }
+        case "workers_reordered": {
+          setOrder(data.order);
+          break;
+        }
         case "worker_updated": {
           setWorkers((prev) => {
             const w = prev[data.worker.id];
@@ -423,6 +428,24 @@ export function useWorkers() {
       await apiRequest(`/api/workers/${id}`, { method: "DELETE" });
       return null;
     } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const reorderWorkers = useCallback(async (newOrder: string[]): Promise<string | null> => {
+    setOrder(newOrder);
+    try {
+      await apiRequest("/api/workers/order", { method: "PATCH", body: { order: newOrder } });
+      return null;
+    } catch (error) {
+      // Re-sync from the server instead of restoring the pre-drag snapshot:
+      // worker_added/worker_removed broadcasts may have landed in between.
+      try {
+        const data = await apiRequest<{ workers: Array<{ id: string }> }>("/api/workers");
+        setOrder(data.workers.map((worker) => worker.id));
+      } catch {
+        // The WS snapshot on reconnect restores the authoritative order.
+      }
       return (error as Error).message;
     }
   }, []);
@@ -624,6 +647,7 @@ export function useWorkers() {
     switchWorkspace,
     closeWorker,
     renameWorker,
+    reorderWorkers,
     saveAvatar,
     resetAvatar,
     selectAvatarPreset,

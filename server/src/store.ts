@@ -60,6 +60,7 @@ export class LocalStore {
         workspace_path TEXT,
         claude_session_id TEXT NOT NULL,
         completed_turns INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
@@ -198,13 +199,25 @@ export class LocalStore {
       // Existing databases already migrated to graded auto-approve modes.
     }
     this.db.exec("UPDATE workers SET auto_approve_mode = CASE WHEN auto_approve = 1 THEN 'safe' ELSE 'off' END WHERE auto_approve_mode IS NULL");
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN sort_order INTEGER");
+    } catch {
+      // Existing databases already migrated to user-ordered workers.
+    }
+    this.db.exec(`
+      UPDATE workers SET sort_order = (
+        SELECT COUNT(*) FROM workers w2
+        WHERE w2.created_at < workers.created_at
+          OR (w2.created_at = workers.created_at AND w2.rowid < workers.rowid)
+      ) WHERE sort_order IS NULL
+    `);
     this.restrictDatabasePermissions();
   }
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
       SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode
-      FROM workers ORDER BY created_at, rowid
+      FROM workers ORDER BY sort_order, created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
       SELECT payload FROM runner_events
@@ -242,8 +255,8 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -273,6 +286,22 @@ export class LocalStore {
         serializePersona(worker.persona),
         worker.autoApproveMode,
       );
+    });
+  }
+
+  saveWorkerOrder(ids: string[]): boolean {
+    return this.safeWrite("save worker order", () => {
+      const update = this.db.prepare(
+        "UPDATE workers SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      );
+      this.db.exec("BEGIN");
+      try {
+        ids.forEach((id, index) => update.run(index, id));
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
     });
   }
 

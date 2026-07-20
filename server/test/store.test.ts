@@ -218,6 +218,95 @@ test("stores, updates, and deletes reusable persona templates", () => {
   }
 });
 
+function minimalWorker(id: string, name: string) {
+  return {
+    id,
+    name,
+    model: null,
+    colorIndex: 0,
+    avatarId: null,
+    avatarKind: "preset" as const,
+    avatarPresetId: "classic",
+    provider: "claude" as const,
+    workspacePath: "/repo",
+    sessionId: `session-${id}`,
+    completedTurns: 0,
+    persona: null,
+    autoApproveMode: "off" as const,
+  };
+}
+
+test("backfills sort_order from creation order on databases without it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-order-legacy-"));
+  try {
+    const path = join(dir, "test.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model TEXT,
+        color_index INTEGER NOT NULL,
+        avatar_id TEXT,
+        avatar_kind TEXT NOT NULL DEFAULT 'preset',
+        avatar_preset_id TEXT NOT NULL DEFAULT 'classic',
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
+        claude_session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        auto_approve_mode TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    const insert = legacy.prepare("INSERT INTO workers (id, name, color_index, claude_session_id, created_at) VALUES (?, ?, 0, ?, ?)");
+    insert.run("late", "後來的", "session-late", "2026-07-02 00:00:00");
+    insert.run("early", "先來的", "session-early", "2026-07-01 00:00:00");
+    legacy.close();
+
+    const store = new LocalStore(path);
+    try {
+      assert.deepEqual(store.loadWorkers(10).map((worker) => worker.id), ["early", "late"]);
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saveWorkerOrder persists a custom order across reopen and appends new workers last", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-order-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+    for (const [id, name] of [["w1", "一號"], ["w2", "二號"], ["w3", "三號"]] as const) {
+      store.saveWorker(minimalWorker(id, name));
+    }
+    assert.deepEqual(store.loadWorkers(10).map((worker) => worker.id), ["w1", "w2", "w3"]);
+
+    assert.equal(store.saveWorkerOrder(["w3", "w1", "w2"]), true);
+    assert.deepEqual(store.loadWorkers(10).map((worker) => worker.id), ["w3", "w1", "w2"]);
+
+    // Re-saving an existing worker (e.g. rename) must not disturb its slot.
+    store.saveWorker({ ...minimalWorker("w3", "三號改名"), completedTurns: 1 });
+    assert.deepEqual(store.loadWorkers(10).map((worker) => worker.id), ["w3", "w1", "w2"]);
+
+    // A brand-new worker lands at the end of the custom order.
+    store.saveWorker(minimalWorker("w4", "四號"));
+    assert.deepEqual(store.loadWorkers(10).map((worker) => worker.id), ["w3", "w1", "w2", "w4"]);
+
+    const reopened = new LocalStore(path);
+    stores.push(reopened);
+    assert.deepEqual(reopened.loadWorkers(10).map((worker) => worker.id), ["w3", "w1", "w2", "w4"]);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("meta counter accumulates and survives a reopen", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-counter-"));
   const stores: LocalStore[] = [];

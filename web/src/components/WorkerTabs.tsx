@@ -4,6 +4,7 @@ import type { CrewFilter } from "../uiPreferences";
 import { SHIRT_COLORS } from "../game/person";
 import { roomName } from "../workspace";
 import { filterCrew, workerAttention, type WorkerAttention } from "../crew";
+import { computeDropIndex, moveId, reorderShift } from "../crewReorder";
 
 type Props = {
   workers: WorkerState[];
@@ -14,6 +15,7 @@ type Props = {
   onFilter(filter: CrewFilter): void;
   onCollapsed(collapsed: boolean): void;
   onSelect(id: string): void;
+  onReorder(order: string[]): void;
   onCreate(): void;
   onClose(id: string): void;
   onRename(id: string, name: string): Promise<string | null>;
@@ -45,7 +47,11 @@ function statusCopy(status: WorkerAttention): string {
   return { approval: "等待核准", error: "執行失敗", working: "執行中", done: "已完成", idle: "待命" }[status];
 }
 
-export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onCreate, onClose, onRename, onAvatar, onPersona, onRoom }: Props) {
+// Distinguishes an intentional drag from a click (mouse/pen) or a scroll (touch).
+const DRAG_THRESHOLD_PX = 6;
+const TOUCH_DRAG_DELAY_MS = 350;
+
+export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onReorder, onCreate, onClose, onRename, onAvatar, onPersona, onRoom }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -56,13 +62,23 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ id: string; overIndex: number; rowH: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  const [drag, setDrag] = useState<{ id: string; overIndex: number; rowH: number } | null>(null);
   const matched = useMemo(() => filterCrew(workers, filter, query, currentRoom), [workers, filter, query, currentRoom]);
   const active = workers.find((worker) => worker.id === activeId);
   const pinned = active && !matched.some((worker) => worker.id === active.id) ? active : null;
+  // With a filter or search active the visible list is not the full order, so
+  // an insertion position would be ambiguous — reordering is disabled there.
+  // (In that case `matched === workers` and `pinned` is always null.)
+  const canReorder = filter === "all" && query.trim() === "";
 
   useEffect(() => {
     const closeMenus = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      dragCleanupRef.current?.();
       setMenuId(null);
       setConfirmRemoveId(null);
       setFiltersOpen(false);
@@ -71,6 +87,140 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
     window.addEventListener("keydown", closeMenus);
     return () => window.removeEventListener("keydown", closeMenus);
   }, [editingId]);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  function updateDrag(next: { id: string; overIndex: number; rowH: number } | null) {
+    dragRef.current = next;
+    setDrag(next);
+  }
+
+  function beginRowDrag(event: React.PointerEvent<HTMLButtonElement>, id: string) {
+    if (event.button !== 0 && event.pointerType === "mouse") return;
+    dragCleanupRef.current?.();
+    const rowEl = (event.currentTarget as HTMLElement).closest<HTMLElement>(".crew-row");
+    if (!rowEl) return;
+    const pointerId = event.pointerId;
+    const pointerType = event.pointerType;
+    const startY = event.clientY;
+    const rowRect = rowEl.getBoundingClientRect();
+    const grabOffset = startY - rowRect.top;
+    // Rows shift with CSS transforms while dragging, so live rects would lie.
+    // Midpoints are measured once at drag start and corrected for scrolling.
+    let baseMids: number[] = [];
+    let startScroll = 0;
+    let rowH = 0;
+    let ghost: HTMLElement | null = null;
+    let timer: number | null = null;
+    const rowElements = () =>
+      Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-worker-id]") ?? []);
+    const midYs = () => {
+      const scrolled = (listRef.current?.scrollTop ?? startScroll) - startScroll;
+      return baseMids.map((mid) => mid - scrolled);
+    };
+    const setOver = (y: number) => {
+      const overIndex = computeDropIndex(midYs(), y);
+      if (dragRef.current?.id !== id || dragRef.current.overIndex !== overIndex) {
+        updateDrag({ id, overIndex, rowH });
+      }
+    };
+    const moveGhost = (y: number) => {
+      if (ghost) ghost.style.top = `${y - grabOffset}px`;
+    };
+    const startDrag = (y: number) => {
+      suppressClickRef.current = true;
+      if (pointerType === "touch") navigator.vibrate?.(10);
+      baseMids = rowElements().map((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      });
+      startScroll = listRef.current?.scrollTop ?? 0;
+      rowH = rowRect.height + 4; // + the row's margin-bottom
+      ghost = rowEl.cloneNode(true) as HTMLElement;
+      ghost.removeAttribute("data-worker-id");
+      ghost.classList.remove("crew-row--dragging");
+      ghost.classList.add("crew-row--ghost");
+      ghost.style.top = `${rowRect.top}px`;
+      ghost.style.left = `${rowRect.left}px`;
+      ghost.style.width = `${rowRect.width}px`;
+      ghost.style.height = `${rowRect.height}px`;
+      document.body.appendChild(ghost);
+      moveGhost(y);
+      setOver(y);
+    };
+    const blockScroll = (touchEvent: TouchEvent) => {
+      if (dragRef.current) touchEvent.preventDefault();
+    };
+    const cleanup = () => {
+      if (timer !== null) clearTimeout(timer);
+      ghost?.remove();
+      ghost = null;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("touchmove", blockScroll);
+      dragCleanupRef.current = null;
+      if (dragRef.current) {
+        updateDrag(null);
+        // The click event fires right after pointerup; lift the suppression
+        // afterwards so the next ordinary click still selects.
+        window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      }
+    };
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (!dragRef.current) {
+        if (Math.abs(moveEvent.clientY - startY) <= DRAG_THRESHOLD_PX) return;
+        if (pointerType === "touch") {
+          // Moved before the long-press fired: treat it as a scroll.
+          cleanup();
+          return;
+        }
+        startDrag(moveEvent.clientY);
+      }
+      const list = listRef.current;
+      if (list) {
+        const rect = list.getBoundingClientRect();
+        if (moveEvent.clientY < rect.top + 24) list.scrollBy(0, -8);
+        else if (moveEvent.clientY > rect.bottom - 24) list.scrollBy(0, 8);
+      }
+      moveGhost(moveEvent.clientY);
+      setOver(moveEvent.clientY);
+    };
+    const up = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) return;
+      const current = dragRef.current;
+      const ids = rowElements().map((el) => el.dataset.workerId ?? "");
+      cleanup();
+      if (!current) return;
+      const next = moveId(ids, current.id, current.overIndex);
+      if (next !== ids) onReorder(next);
+    };
+    const cancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== pointerId) return;
+      cleanup();
+    };
+    if (pointerType === "touch") {
+      timer = window.setTimeout(() => {
+        timer = null;
+        startDrag(startY);
+      }, TOUCH_DRAG_DELAY_MS);
+    }
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("touchmove", blockScroll, { passive: false });
+  }
+
+  function moveRowByKeyboard(event: React.KeyboardEvent<HTMLButtonElement>, id: string) {
+    if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+    event.preventDefault();
+    const ids = workers.map((worker) => worker.id);
+    const from = ids.indexOf(id);
+    const next = moveId(ids, id, event.key === "ArrowUp" ? from - 1 : from + 2);
+    if (next !== ids) onReorder(next);
+  }
 
   useEffect(() => {
     const closeOutside = (event: PointerEvent) => {
@@ -94,10 +244,15 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
     setMenuId(null);
   }
 
-  function row(worker: WorkerState, isPinned = false) {
+  const dragFrom = drag ? workers.findIndex((worker) => worker.id === drag.id) : -1;
+
+  function row(worker: WorkerState, isPinned = false, index = -1) {
     const status = workerAttention(worker);
     const menuOpen = menuId === worker.id;
     const editing = editingId === worker.id;
+    const draggable = canReorder && !isPinned && !editing;
+    const dragging = drag?.id === worker.id;
+    const shift = drag && !isPinned && index >= 0 ? reorderShift(index, dragFrom, drag.overIndex, drag.rowH) : 0;
     const selectContents = <>
       <span className="crew-row__avatar" style={{ background: shirtColor(worker.colorIndex) }}>{worker.avatarKind === "custom" ? "◆" : ""}</span>
       {!collapsed && <>
@@ -115,8 +270,8 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
       <span className={`crew-row__status crew-row__status--${status}`} aria-label={statusCopy(status)} title={statusCopy(status)}>{status === "approval" ? "!" : status === "error" ? "×" : status === "working" ? "…" : status === "done" ? "✓" : "·"}</span>
     </>;
     return (
-      <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} className={`crew-row crew-row--${status} ${worker.id === activeId ? "crew-row--active" : ""}`} title={`${worker.name} · ${roomName(worker.workspacePath)} · ${statusCopy(status)}`}>
-        {editing ? <div className="crew-row__select crew-row__select--editing">{selectContents}</div> : <button type="button" className="crew-row__select" aria-current={worker.id === activeId ? "true" : undefined} onClick={() => { onSelect(worker.id); setMenuId(null); }}>{selectContents}</button>}
+      <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} data-worker-id={draggable ? worker.id : undefined} style={shift !== 0 ? { transform: `translateY(${shift}px)` } : undefined} className={`crew-row crew-row--${status} ${worker.id === activeId ? "crew-row--active" : ""}${draggable ? " crew-row--draggable" : ""}${dragging ? " crew-row--dragging" : ""}`} title={`${worker.name} · ${roomName(worker.workspacePath)} · ${statusCopy(status)}`}>
+        {editing ? <div className="crew-row__select crew-row__select--editing">{selectContents}</div> : <button type="button" className="crew-row__select" aria-current={worker.id === activeId ? "true" : undefined} aria-keyshortcuts={draggable ? "Alt+ArrowUp Alt+ArrowDown" : undefined} onPointerDown={draggable ? (event) => beginRowDrag(event, worker.id) : undefined} onKeyDown={draggable ? (event) => moveRowByKeyboard(event, worker.id) : undefined} onClick={() => { if (suppressClickRef.current) { suppressClickRef.current = false; return; } onSelect(worker.id); setMenuId(null); }}>{selectContents}</button>}
         {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={`${worker.name} 更多操作`} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); const opening = !menuOpen; if (opening) { const btn = event.currentTarget.getBoundingClientRect(); const railBottom = railRef.current?.getBoundingClientRect().bottom ?? window.innerHeight; setMenuDropUp(railBottom - btn.bottom < MENU_ESTIMATED_HEIGHT); } setMenuId(opening ? worker.id : null); setConfirmRemoveId(null); }}>•••</button>}
         {menuOpen && !collapsed && (
           <div className={`crew-row__menu ${menuDropUp ? "crew-row__menu--up" : ""}`} onClick={(event) => event.stopPropagation()}>
@@ -144,9 +299,9 @@ export function WorkerTabs({ workers, activeId, currentRoom, filter, collapsed, 
       </div>
       {!collapsed && searchOpen && <input className="crew-rail__search" value={query} autoFocus placeholder="搜尋名字或房間" aria-label="搜尋人員" onChange={(event) => setQuery(event.target.value)} />}
       {!collapsed && filtersOpen && <div className="crew-filters">{FILTERS.map((option) => <button key={option.id} type="button" className={filter === option.id ? "crew-filters__active" : ""} onClick={() => onFilter(option.id)}>{option.label}</button>)}</div>}
-      <div className="crew-rail__list">
+      <div ref={listRef} className={`crew-rail__list${drag ? " crew-rail__list--reordering" : ""}`}>
         {pinned && <div className="crew-rail__pinned"><span>目前選取</span>{row(pinned, true)}</div>}
-        {matched.map((worker) => row(worker))}
+        {matched.map((worker, index) => row(worker, false, index))}
         {matched.length === 0 && !pinned && !collapsed && <div className="crew-rail__empty">沒有符合的人員</div>}
       </div>
     </aside>
