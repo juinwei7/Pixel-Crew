@@ -44,6 +44,7 @@
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
       "softwareVersion": "1.0.2",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
       "description": "Local-first multi-agent cockpit for Claude Code and Codex.",
@@ -106,7 +107,7 @@
   .nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
   .nav-logo { display: flex; align-items: center; gap: 11px; color: #fff; font: 800 15px var(--mono); letter-spacing: 0.26em; }
   .nav-logo i { width: 8px; height: 8px; background: var(--green); box-shadow: 0 0 10px var(--green); }
-  .nav-links { display: flex; gap: 24px; font: 700 11px var(--mono); letter-spacing: 0.12em; }
+  .nav-links { display: flex; flex-wrap: wrap; gap: 24px; font: 700 11px var(--mono); letter-spacing: 0.12em; }
   .nav-links a { color: var(--dim); }
   .nav-links a:hover { color: var(--cyan); text-decoration: none; }
   .lang-toggle {
@@ -265,6 +266,38 @@
   .sec-item b { display: block; margin-bottom: 5px; font-size: 15px; }
   .sec-item p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.75; }
 
+  /* ============ 版本更新 ============ */
+  .release-notes { scroll-margin-top: 20px; }
+  .release-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
+  .release-head .lead { max-width: 40em; margin: 0; color: var(--dim); }
+  .release-head .btn { flex: none; }
+  .release-list { display: grid; gap: 14px; }
+  .release-card {
+    position: relative; overflow: hidden;
+    padding: 28px 30px;
+    border: 1px solid var(--line-soft);
+    background: linear-gradient(135deg, rgba(13, 22, 38, .92), rgba(9, 15, 28, .72));
+  }
+  .release-card--latest { border-color: rgba(77, 227, 255, .3); }
+  .release-card--latest::before {
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+    background: linear-gradient(var(--cyan), var(--green)); box-shadow: 0 0 20px rgba(77, 227, 255, .42);
+  }
+  .release-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+  .release-version { color: #fff; font: 800 19px var(--mono); letter-spacing: .08em; }
+  .release-date { color: var(--faint); font: 11px var(--mono); letter-spacing: .1em; }
+  .release-current { padding: 3px 9px; border: 1px solid rgba(55, 214, 163, .35); color: #8ce9c6; font: 700 9px var(--mono); letter-spacing: .15em; }
+  .release-card h3 { margin: 16px 0 4px; font-size: 20px; }
+  .release-card > p { margin: 0; color: var(--dim); font-size: 14.5px; }
+  .release-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+  .release-item { padding: 16px 18px; border: 1px solid var(--line-soft); background: rgba(4, 8, 17, .42); }
+  .release-item b { display: block; margin-bottom: 4px; color: var(--text); font-size: 14px; }
+  .release-item p { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.7; }
+  .release-link { display: inline-flex; margin-top: 20px; font: 700 11px var(--mono); letter-spacing: .08em; }
+  .release-archive { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .release-archive .release-card { padding-block: 22px; }
+  .release-archive .release-card h3 { margin-top: 10px; font-size: 16px; }
+
   /* ============ 快速開始 ============ */
   .section { padding: 88px 0 0; }
   .section > .wrap > p.lead { max-width: 40em; margin: 0 0 34px; color: var(--dim); }
@@ -299,6 +332,7 @@
     .scene-row:nth-child(even) .scene-copy { order: 0; }
     .section { padding-top: 68px; }
     .security { margin-top: 72px; padding: 54px 0; }
+    .release-head { align-items: flex-start; flex-direction: column; }
     .note { display: none; }
   }
   @media (max-width: 640px) {
@@ -311,7 +345,8 @@
     .hero h1 { font-size: clamp(29px, 9vw, 38px); }
     .hero p.sub { font-size: 15px; }
     .hero-cta .btn { width: 100%; justify-content: center; }
-    .media-stack--pair, .starts { grid-template-columns: minmax(0, 1fr); }
+    .media-stack--pair, .starts, .release-grid, .release-archive { grid-template-columns: minmax(0, 1fr); }
+    .release-card { padding: 22px 20px; }
   }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
@@ -322,6 +357,7 @@
   <nav class="nav">
     <span class="nav-logo"><i></i>PIXEL CREW</span>
     <div class="nav-links">
+      <a href="#updates">版本更新</a>
       <a href="#start">快速開始</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
@@ -581,6 +617,54 @@
   </div>
 </section>
 
+<!-- ============================== 版本更新 ============================== -->
+<section class="section release-notes" id="updates">
+  <div class="wrap">
+    <div class="release-head">
+      <div>
+        <span class="eyebrow">RELEASE NOTES</span>
+        <h2>每次更新，帶來了什麼。</h2>
+        <p class="lead">從更專心地閱讀 AI 產出，到更順手地交付檔案；這裡記錄 Pixel Crew 每個正式版本的改變。</p>
+      </div>
+      <a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">查看所有 Releases ↗</a>
+    </div>
+
+    <div class="release-list">
+      <article class="release-card release-card--latest">
+        <div class="release-meta">
+          <span class="release-version">v1.0.2</span>
+          <time class="release-date" datetime="2026-07-20">2026.07.20</time>
+          <span class="release-current">LATEST</span>
+        </div>
+        <h3>閱讀、輸入與多 NPC 工作流全面升級</h3>
+        <p>讓長篇報告更好讀、附件更好交付，並把切換 NPC 時容易中斷的工作狀態完整保存。</p>
+        <div class="release-grid">
+          <div class="release-item"><b>專心閱讀模式</b><p>保留完整最終回覆，支援 NPC 切換、報告大綱、跨 NPC 搜尋、釘選、Markdown 匯出與用量顯示。</p></div>
+          <div class="release-item"><b>全畫面拖曳上傳</b><p>圖片與文件可直接拖進整個視窗，搭配附件草稿、訊息佇列與排序控制。</p></div>
+          <div class="release-item"><b>工作狀態不再遺失</b><p>每個 session 的輸入草稿、附件與佇列獨立保存，切換 NPC 或重開後仍能接續。</p></div>
+          <div class="release-item"><b>Codex 新 session 即刻可用</b><p>原生指令會預先探索並依 provider 保存，尚未開始對話也能看到，新的 session 同樣有效。</p></div>
+          <div class="release-item"><b>更穩定的任務結果</b><p>失敗回合仍保留可讀產出，非同步儲存避免舊資料覆寫，並修正 modal 拖曳穿透。</p></div>
+          <div class="release-item"><b>介面細節與排序</b><p>改善任務日誌字體、色彩、搜尋標示、低用量警告與響應式排版；NPC 順序也會跨重啟保存。</p></div>
+        </div>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2">完整 v1.0.2 發布內容 ↗</a>
+      </article>
+
+      <div class="release-archive">
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Windows 自包含版本</h3>
+          <p>新增 Windows x64 免安裝 ZIP，內建經過驗證的 Node.js runtime 與 production dependencies，並提供固定的 latest-release 下載連結。</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Pixel Crew 首次公開發布</h3>
+          <p>多 Agent 像素辦公室、Claude／Codex 原生整合、核准流程、persona、跨 LLM 交接、用量監控、任務日誌與像素工作坊正式登場。</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============================== 快速開始 ============================== -->
 <section class="section" id="start">
   <div class="wrap">
@@ -677,6 +761,7 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
 <script>
 (() => {
   const html = {
+    'nav a[href="#updates"]': 'RELEASES',
     'nav a[href="#start"]': 'GET STARTED',
     '.hero h1': 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.',
     '.hero p.sub': 'Pixel Crew is a multi-agent cockpit that runs on your computer. Each CLI session becomes an NPC: assign work, watch it walk to a workstation, follow its output and reasoning in real time, and approve commands directly on the canvas.',
@@ -686,6 +771,7 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
     '.hero-caption': '▲ Captured from the real app—the NPC says good morning and the task log records the same response.',
     '.stats': '<div role="listitem"><b>2</b><span>OFFICIAL CLI INTEGRATIONS</span></div><div role="listitem"><b>20</b><span>CONCURRENT NPCS</span></div><div role="listitem"><b>0</b><span>API KEYS TO PASTE</span></div><div role="listitem"><b>100%</b><span>DATA STAYS LOCAL</span></div><div role="listitem"><b>MIT</b><span>LICENSE</span></div>',
     '.security .wrap': '<span class="eyebrow">SECURITY MODEL</span><p class="headline">Your API key is safe—<em>because there is no API key.</em></p><p>Pixel Crew is not another service asking for your keys. It orchestrates and visualizes the official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage, and billing stay in those tools.</p><div class="sec-grid"><div class="sec-item"><b>Localhost only</b><p>The server listens on 127.0.0.1 and is never exposed publicly; the browser connects through a local WebSocket.</p></div><div class="sec-item"><b>Native CLI authentication</b><p>Sign-in is managed by <code>claude</code> and <code>codex</code>. Pixel Crew invokes them without storing credentials.</p></div><div class="sec-item"><b>Data stays local</b><p>Conversation history, NPC settings, and avatars stay in local SQLite and folders. There is no cloud upload or telemetry.</p></div><div class="sec-item"><b>Dangerous-command guardrails</b><p>Even with full auto-approval, destructive operations such as <code>rm -rf</code> and disk commands still require confirmation. Release artifacts are also audited for local-data leaks.</p></div></div>',
+    '#updates .wrap': '<div class="release-head"><div><span class="eyebrow">RELEASE NOTES</span><h2>What changed in each release.</h2><p class="lead">From focused reading for long AI reports to frictionless file delivery, this is the history of every production Pixel Crew release.</p></div><a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">View all releases ↗</a></div><div class="release-list"><article class="release-card release-card--latest"><div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time><span class="release-current">LATEST</span></div><h3>A major upgrade to reading, input, and multi-NPC workflows</h3><p>Long reports are easier to read, files are easier to deliver, and working state now survives every NPC switch.</p><div class="release-grid"><div class="release-item"><b>Focus reading workspace</b><p>Read every final response with NPC switching, report outlines, cross-NPC search, pins, Markdown export, and usage context.</p></div><div class="release-item"><b>Full-window drag and drop</b><p>Drop images and documents anywhere, then manage attachment drafts and reorder queued messages.</p></div><div class="release-item"><b>Working state that persists</b><p>Drafts, attachments, and queues stay isolated per session and survive NPC switches and restarts.</p></div><div class="release-item"><b>Codex commands from turn zero</b><p>Native commands are discovered early and cached per provider, so new sessions can use them before the first conversation.</p></div><div class="release-item"><b>More resilient results</b><p>Failed turns keep readable output, async persistence rejects stale writes, and modal surfaces no longer leak file drops.</p></div><div class="release-item"><b>Interface polish and ordering</b><p>Task-log typography, colors, highlights, responsive layout, low-usage warnings, and persistent NPC ordering are all improved.</p></div></div><a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2">Full v1.0.2 release notes ↗</a></article><div class="release-archive"><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Self-contained Windows release</h3><p>Added a portable Windows x64 ZIP with a verified Node.js runtime and production dependencies, plus a stable latest-release download URL.</p></article><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Pixel Crew first public release</h3><p>The multi-agent pixel office launched with native Claude and Codex integration, approvals, personas, cross-LLM handoffs, usage monitoring, task logs, and the Pixel Workshop.</p></article></div></div>',
     '#start .wrap': '<span class="eyebrow">GET STARTED</span><h2>Three ways to get started.</h2><p class="lead">Just two prerequisites: Node.js 22.13+ for source mode, and at least one signed-in Claude Code or Codex CLI.</p><div class="starts"><div class="start"><span class="tag">MACOS</span><h3>One-command install</h3><p>A self-contained app with its own runtime. No Node.js or npm required.</p><pre>curl -fsSL https://github.com/juinwei7/\\\nPixel-Crew/releases/latest/download/\\\ninstall-pixel-crew-macos.sh | /bin/bash</pre></div><div class="start"><span class="tag">WINDOWS</span><h3>Portable package</h3><p>Download the ZIP, extract it, and run it. Includes a SHA-256 checksum and setup guide.</p><pre><span class="c"># After downloading from Releases</span>\nstart-pixel-crew.cmd</pre></div><div class="start"><span class="tag">SOURCE</span><h3>Run from source</h3><p>For development and customization on any platform.</p><pre>git clone https://github.com/\\\njuinwei7/Pixel-Crew.git\ncd Pixel-Crew\nnpm install\nnpm run dev   <span class="c"># localhost:5173</span></pre></div></div><p class="req"><b>REQUIREMENTS</b> ─ Node.js 22.13+ (source mode only)・Claude Code or Codex CLI・macOS / Windows 10 22H2+ / Linux</p>',
     '#faq .wrap': '<span class="eyebrow">FAQ</span><h2>Frequently asked questions</h2><details><summary>Is it free? Does it use more of my allowance?</summary><p>Pixel Crew is completely free and MIT-licensed. It does not handle billing—you use the allowance from your own CLI subscription or account, exactly as you would in a terminal. The energy meters help you monitor usage.</p></details><details><summary>Which agents are supported?</summary><p>Pixel Crew supports Anthropic\'s <code>claude</code> (Claude Code) and OpenAI\'s <code>codex</code> CLI. They can share one office and hand work to each other. You only need one of them installed.</p></details><details><summary>Where do my code and conversations go?</summary><p>Traffic between an agent and its model provider is handled by the official CLI, just as it is when used directly. Pixel Crew stores its added state—conversation history and NPC settings—in local SQLite, binds only to localhost, and has no telemetry or cloud sync.</p></details><details><summary>Is auto-approval safe?</summary><p>It has three per-NPC levels. Safe mode permits only a read-only allowlist. Full mode still forces manual confirmation for dangerous commands, disk operations, and permission changes. If unsure, leave it off so every command asks first.</p></details><details><summary>Can I run many agents at once?</summary><p>Yes, up to 20 NPCs across different project folders (rooms). Search and filters help find active or blocked workers, and the office canvas supports pan and zoom.</p></details><details><summary>Is Pixel Crew affiliated with Anthropic or OpenAI?</summary><p>No. Pixel Crew is an independent, unofficial project and is not authorized, endorsed, or sponsored by Anthropic or OpenAI. Claude, Claude Code, Codex, and related marks belong to their respective owners.</p></details>',
     'footer .legal': 'Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization, endorsement, or sponsorship from Anthropic or OpenAI. “Claude,” “Claude Code,” “Codex,” and related trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs installed and authenticated by the user. Use each CLI in accordance with its terms. All screenshots and recordings on this page show the real application.'
