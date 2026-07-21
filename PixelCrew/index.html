@@ -68,7 +68,7 @@
       "description": "把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC。Local-first、不需要 API key、MIT 開源。",
       "inLanguage": "zh-Hant",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-20",
+      "dateModified": "2026-07-21",
       "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
       "about": { "@id": "https://pixelcrew.weibuilds.com/#software" },
       "primaryImageOfPage": {
@@ -84,10 +84,10 @@
       "name": "Pixel Crew",
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
-      "softwareVersion": "1.0.2",
-      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2",
+      "softwareVersion": "1.0.3",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.3",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-20",
+      "dateModified": "2026-07-21",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
       "softwareRequirements": "macOS, Windows 10 22H2 or later, or Linux; Claude Code or Codex CLI",
@@ -425,7 +425,7 @@
       派任務、看它走到工位開工、即時讀它的輸出與思考、在畫布上直接核准它想執行的指令。
     </p>
     <div class="hero-cta">
-      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v1.0.2</a>
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v1.0.3</a>
       <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub 原始碼</a>
     </div>
     <div class="hero-badges">
@@ -679,24 +679,29 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
-          <span class="release-version">v1.0.2</span>
-          <time class="release-date" datetime="2026-07-20">2026.07.20</time>
+          <span class="release-version">v1.0.3</span>
+          <time class="release-date" datetime="2026-07-21">2026.07.21</time>
           <span class="release-current">LATEST</span>
         </div>
-        <h3>閱讀、輸入與多 NPC 工作流全面升級</h3>
-        <p>讓長篇報告更好讀、附件更好交付，並把切換 NPC 時容易中斷的工作狀態完整保存。</p>
+        <h3>把管理、備份與專心工作流帶進同一個駕駛艙</h3>
+        <p>從 MCP 連線、資料備份到專心模式管理，1.0.3 讓日常維護更完整，也讓長時間工作更安全可靠。</p>
         <div class="release-grid">
-          <div class="release-item"><b>專心閱讀模式</b><p>保留完整最終回覆，支援 NPC 切換、報告大綱、跨 NPC 搜尋、釘選、Markdown 匯出與用量顯示。</p></div>
-          <div class="release-item"><b>全畫面拖曳上傳</b><p>圖片與文件可直接拖進整個視窗，搭配附件草稿、訊息佇列與排序控制。</p></div>
-          <div class="release-item"><b>工作狀態不再遺失</b><p>每個 session 的輸入草稿、附件與佇列獨立保存，切換 NPC 或重開後仍能接續。</p></div>
-          <div class="release-item"><b>Codex 新 session 即刻可用</b><p>原生指令會預先探索並依 provider 保存，尚未開始對話也能看到，新的 session 同樣有效。</p></div>
-          <div class="release-item"><b>更穩定的任務結果</b><p>失敗回合仍保留可讀產出，非同步儲存避免舊資料覆寫，並修正 modal 拖曳穿透。</p></div>
-          <div class="release-item"><b>介面細節與排序</b><p>改善任務日誌字體、色彩、搜尋標示、低用量警告與響應式排版；NPC 順序也會跨重啟保存。</p></div>
+          <div class="release-item"><b>完整 MCP 管理</b><p>在介面內新增、移除、登入與登出 MCP server，查看 scope、transport、連線細節與 Codex 工具清單。</p></div>
+          <div class="release-item"><b>本機備份與還原</b><p>安全匯出工人、對話、設定與自訂角色；匯入前完整驗證，還原失敗時自動回滾。</p></div>
+          <div class="release-item"><b>專心模式也能完整管理</b><p>直接切換模型與 provider、改名、設定 persona 與角色、搬房間或安全移除 NPC。</p></div>
+          <div class="release-item"><b>成本與用量更透明</b><p>累計顯示 Claude 美元花費，並與 Claude／Codex 的工作能量和配額資訊放在一起。</p></div>
+          <div class="release-item"><b>鍵盤與長任務體驗</b><p>Dialog 加入焦點循環、焦點還原與一致的 Escape 行為；超長任務紀錄改為分段載入。</p></div>
+          <div class="release-item"><b>安全與可靠性補強</b><p>限制備份解壓路徑與容量、強制 loopback host，並改善危險指令、Codex 登入與 restore shutdown。</p></div>
         </div>
-        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2">完整 v1.0.2 發布內容 ↗</a>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.3">完整 v1.0.3 發布內容 ↗</a>
       </article>
 
       <div class="release-archive">
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time></div>
+          <h3>閱讀、輸入與多 NPC 工作流全面升級</h3>
+          <p>加入專心閱讀、全畫面附件拖曳、session 狀態保存、Codex 指令預載與持久 NPC 排序。</p>
+        </article>
         <article class="release-card">
           <div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
           <h3>Windows 自包含版本</h3>
@@ -812,13 +817,13 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
     'nav a[href="#start"]': 'GET STARTED',
     '.hero h1': 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.',
     '.hero p.sub': 'Pixel Crew is a multi-agent cockpit that runs on your computer. Each CLI session becomes an NPC: assign work, watch it walk to a workstation, follow its output and reasoning in real time, and approve commands directly on the canvas.',
-    '.hero-cta .btn--primary': '⬇ Download v1.0.2',
+    '.hero-cta .btn--primary': '⬇ Download v1.0.3',
     '.hero-cta .btn:not(.btn--primary)': 'GitHub source',
     '.hero-badges': '<span>MIT open source</span><span>Local-first・No API key</span><span>macOS／Windows／Linux</span><span>Native official CLI integration</span>',
     '.hero-caption': '▲ Captured from the real app—the NPC says good morning and the task log records the same response.',
     '.stats': '<div role="listitem"><b>2</b><span>OFFICIAL CLI INTEGRATIONS</span></div><div role="listitem"><b>20</b><span>CONCURRENT NPCS</span></div><div role="listitem"><b>0</b><span>API KEYS TO PASTE</span></div><div role="listitem"><b>100%</b><span>DATA STAYS LOCAL</span></div><div role="listitem"><b>MIT</b><span>LICENSE</span></div>',
     '.security .wrap': '<span class="eyebrow">SECURITY MODEL</span><p class="headline">Your API key is safe—<em>because there is no API key.</em></p><p>Pixel Crew is not another service asking for your keys. It orchestrates and visualizes the official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage, and billing stay in those tools.</p><div class="sec-grid"><div class="sec-item"><b>Localhost only</b><p>The server listens on 127.0.0.1 and is never exposed publicly; the browser connects through a local WebSocket.</p></div><div class="sec-item"><b>Native CLI authentication</b><p>Sign-in is managed by <code>claude</code> and <code>codex</code>. Pixel Crew invokes them without storing credentials.</p></div><div class="sec-item"><b>Data stays local</b><p>Conversation history, NPC settings, and avatars stay in local SQLite and folders. There is no cloud upload or telemetry.</p></div><div class="sec-item"><b>Dangerous-command guardrails</b><p>Even with full auto-approval, destructive operations such as <code>rm -rf</code> and disk commands still require confirmation. Release artifacts are also audited for local-data leaks.</p></div></div>',
-    '#updates .wrap': '<div class="release-head"><div><span class="eyebrow">RELEASE NOTES</span><h2>What changed in each release.</h2><p class="lead">From focused reading for long AI reports to frictionless file delivery, this is the history of every production Pixel Crew release.</p></div><a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">View all releases ↗</a></div><div class="release-list"><article class="release-card release-card--latest"><div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time><span class="release-current">LATEST</span></div><h3>A major upgrade to reading, input, and multi-NPC workflows</h3><p>Long reports are easier to read, files are easier to deliver, and working state now survives every NPC switch.</p><div class="release-grid"><div class="release-item"><b>Focus reading workspace</b><p>Read every final response with NPC switching, report outlines, cross-NPC search, pins, Markdown export, and usage context.</p></div><div class="release-item"><b>Full-window drag and drop</b><p>Drop images and documents anywhere, then manage attachment drafts and reorder queued messages.</p></div><div class="release-item"><b>Working state that persists</b><p>Drafts, attachments, and queues stay isolated per session and survive NPC switches and restarts.</p></div><div class="release-item"><b>Codex commands from turn zero</b><p>Native commands are discovered early and cached per provider, so new sessions can use them before the first conversation.</p></div><div class="release-item"><b>More resilient results</b><p>Failed turns keep readable output, async persistence rejects stale writes, and modal surfaces no longer leak file drops.</p></div><div class="release-item"><b>Interface polish and ordering</b><p>Task-log typography, colors, highlights, responsive layout, low-usage warnings, and persistent NPC ordering are all improved.</p></div></div><a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.2">Full v1.0.2 release notes ↗</a></article><div class="release-archive"><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Self-contained Windows release</h3><p>Added a portable Windows x64 ZIP with a verified Node.js runtime and production dependencies, plus a stable latest-release download URL.</p></article><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Pixel Crew first public release</h3><p>The multi-agent pixel office launched with native Claude and Codex integration, approvals, personas, cross-LLM handoffs, usage monitoring, task logs, and the Pixel Workshop.</p></article></div></div>',
+    '#updates .wrap': '<div class="release-head"><div><span class="eyebrow">RELEASE NOTES</span><h2>What changed in each release.</h2><p class="lead">From focused reading for long AI reports to frictionless file delivery, this is the history of every production Pixel Crew release.</p></div><a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">View all releases ↗</a></div><div class="release-list"><article class="release-card release-card--latest"><div class="release-meta"><span class="release-version">v1.0.3</span><time class="release-date" datetime="2026-07-21">2026.07.21</time><span class="release-current">LATEST</span></div><h3>Management, backup, and focus workflows in one cockpit</h3><p>Version 1.0.3 makes daily maintenance more complete and long-running work safer, from MCP connections and local backups to full focus-mode controls.</p><div class="release-grid"><div class="release-item"><b>Complete MCP management</b><p>Add, remove, sign in, and sign out MCP servers while inspecting scope, transport, connection details, and Codex tool catalogs.</p></div><div class="release-item"><b>Local backup and restore</b><p>Safely export workers, conversations, settings, and avatars; imports are validated and failed restores roll back automatically.</p></div><div class="release-item"><b>Full focus-mode controls</b><p>Switch models and providers, rename NPCs, edit personas and avatars, move rooms, or remove crew without leaving focus mode.</p></div><div class="release-item"><b>Transparent cost and usage</b><p>Track cumulative Claude dollar cost alongside Claude and Codex quota and work-energy information.</p></div><div class="release-item"><b>Keyboard and long-session UX</b><p>Dialogs now trap and restore focus with consistent Escape behavior, while long task histories load in manageable chunks.</p></div><div class="release-item"><b>Security and reliability</b><p>Archive limits, loopback enforcement, stronger dangerous-command checks, Codex auth fixes, and reliable restore shutdown harden local operation.</p></div></div><a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.3">Full v1.0.3 release notes ↗</a></article><div class="release-archive"><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time></div><h3>Reading, input, and multi-NPC workflow upgrade</h3><p>Added focus reading, full-window file drop, persistent session state, early Codex commands, and persistent NPC ordering.</p></article><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Self-contained Windows release</h3><p>Added a portable Windows x64 ZIP with a verified Node.js runtime and production dependencies, plus a stable latest-release download URL.</p></article><article class="release-card"><div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div><h3>Pixel Crew first public release</h3><p>The multi-agent pixel office launched with native Claude and Codex integration, approvals, personas, cross-LLM handoffs, usage monitoring, task logs, and the Pixel Workshop.</p></article></div></div>',
     '#start .wrap': '<span class="eyebrow">GET STARTED</span><h2>Three ways to get started.</h2><p class="lead">Just two prerequisites: Node.js 22.13+ for source mode, and at least one signed-in Claude Code or Codex CLI.</p><div class="starts"><div class="start"><span class="tag">MACOS</span><h3>One-command install</h3><p>A self-contained app with its own runtime. No Node.js or npm required.</p><pre>curl -fsSL https://github.com/juinwei7/\\\nPixel-Crew/releases/latest/download/\\\ninstall-pixel-crew-macos.sh | /bin/bash</pre></div><div class="start"><span class="tag">WINDOWS</span><h3>Portable package</h3><p>Download the ZIP, extract it, and run it. Includes a SHA-256 checksum and setup guide.</p><pre><span class="c"># After downloading from Releases</span>\nstart-pixel-crew.cmd</pre></div><div class="start"><span class="tag">SOURCE</span><h3>Run from source</h3><p>For development and customization on any platform.</p><pre>git clone https://github.com/\\\njuinwei7/Pixel-Crew.git\ncd Pixel-Crew\nnpm install\nnpm run dev   <span class="c"># localhost:5173</span></pre></div></div><p class="req"><b>REQUIREMENTS</b> ─ Node.js 22.13+ (source mode only)・Claude Code or Codex CLI・macOS / Windows 10 22H2+ / Linux</p>',
     '#faq .wrap': '<span class="eyebrow">FAQ</span><h2>Frequently asked questions</h2><details><summary>Is it free? Does it use more of my allowance?</summary><p>Pixel Crew is completely free and MIT-licensed. It does not handle billing—you use the allowance from your own CLI subscription or account, exactly as you would in a terminal. The energy meters help you monitor usage.</p></details><details><summary>Which agents are supported?</summary><p>Pixel Crew supports Anthropic\'s <code>claude</code> (Claude Code) and OpenAI\'s <code>codex</code> CLI. They can share one office and hand work to each other. You only need one of them installed.</p></details><details><summary>Where do my code and conversations go?</summary><p>Traffic between an agent and its model provider is handled by the official CLI, just as it is when used directly. Pixel Crew stores its added state—conversation history and NPC settings—in local SQLite, binds only to localhost, and has no telemetry or cloud sync.</p></details><details><summary>Is auto-approval safe?</summary><p>It has three per-NPC levels. Safe mode permits only a read-only allowlist. Full mode still forces manual confirmation for dangerous commands, disk operations, and permission changes. If unsure, leave it off so every command asks first.</p></details><details><summary>Can I run many agents at once?</summary><p>Yes, up to 20 NPCs across different project folders (rooms). Search and filters help find active or blocked workers, and the office canvas supports pan and zoom.</p></details><details><summary>Is Pixel Crew affiliated with Anthropic or OpenAI?</summary><p>No. Pixel Crew is an independent, unofficial project and is not authorized, endorsed, or sponsored by Anthropic or OpenAI. Claude, Claude Code, Codex, and related marks belong to their respective owners.</p></details>',
     'footer .legal': 'Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization, endorsement, or sponsorship from Anthropic or OpenAI. “Claude,” “Claude Code,” “Codex,” and related trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs installed and authenticated by the user. Use each CLI in accordance with its terms. All screenshots and recordings on this page show the real application.'

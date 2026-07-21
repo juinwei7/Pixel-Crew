@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-07-21
+
+### Added
+
+- Added a full MCP management modal with scoped add/remove, OAuth login/logout, connection details, and Codex MCP tool catalogs.
+- Added validated local backup export and restore for workers, conversation history, settings, and custom avatars, including automatic pre-restore snapshots and rollback.
+- Added cumulative Claude cost tracking alongside provider usage and quota information.
+- Added complete NPC and workspace controls inside focus mode, including rename, provider/model settings, persona, avatar, room, and guarded removal.
+
+### Changed
+
+- Persisted focus mode across reloads, added keyboard focus traps and Escape handling to dialogs, and limited long task logs to recent chunks with on-demand history loading.
+- Improved dangerous-command detection, Codex authentication checks, workflow refresh behavior, and MCP capability discovery.
+
+### Fixed
+
+- Prevented unsafe or oversized backup archives from escaping staging or exhausting local storage, and made restore shutdown reliable after client disconnects.
+- Kept required first-launch workspace setup non-dismissible and aligned NPC removal confirmation across every UI entry point.
+
 ## [1.0.2] - 2026-07-20
 
 ### Added
@@ -46,7 +65,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.0
