@@ -269,15 +269,18 @@ test("rollback restores both the original DB and avatars after a mid-swap failur
 
     // Craft a staged replacement whose db swap will succeed but whose
     // avatars swap fails — the target avatarDir path is occupied by a
-    // regular file, so moving a directory onto it throws partway through.
+    // non-empty directory, so moving a directory onto it throws on every
+    // supported platform.
     const stagingDir = join(root, "staging");
     mkdirSync(join(stagingDir, "db"), { recursive: true });
     writeFileSync(join(stagingDir, "db", "cockpit.sqlite"), "NEW_DB_CONTENT");
     mkdirSync(join(stagingDir, "avatars"), { recursive: true });
     writeFileSync(join(stagingDir, "avatars", "new.txt"), "NEW_AVATAR_CONTENT");
-    // Block the avatars swap by pre-creating a regular file at the
-    // destination avatarDir path (a directory can't rename onto a file).
-    writeFileSync(avatarDir, "blocking-file-not-a-directory");
+    // A directory rename onto a regular file behaves differently on Windows.
+    // A non-empty destination directory is a deterministic cross-platform
+    // collision and still exercises the same mid-swap rollback path.
+    mkdirSync(avatarDir);
+    writeFileSync(join(avatarDir, "blocking.txt"), "block replacement");
 
     assert.throws(() => swapInRestoredData({ dbPath, avatarDir }, stagingDir));
     restoreFromSnapshot({ dbPath, avatarDir }, snapshotDir);

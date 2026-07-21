@@ -15,6 +15,10 @@ function fakeChild() {
   return child;
 }
 
+function fakeTerminate(child: any) {
+  child.kill();
+}
+
 test("start() marks the login running and reports a duplicate start as already running", () => {
   const spawned: string[] = [];
   const tracker = new McpLoginTracker(() => {}, (bin) => { spawned.push(bin); return fakeChild(); });
@@ -61,6 +65,8 @@ test("cancel() kills the in-flight login, reports cancelled, and ignores a late 
   const tracker = new McpLoginTracker(
     (state) => { finishedCount++; lastState = state; },
     () => { child = fakeChild(); return child; },
+    4 * 60_000,
+    fakeTerminate,
   );
 
   tracker.start("claude", "/repo", "notion");
@@ -87,6 +93,7 @@ test("the safety-net timeout kills a stuck login and reports timeout", async () 
     (state) => { finishedState = state; },
     () => { child = fakeChild(); return child; },
     10,
+    fakeTerminate,
   );
 
   tracker.start("claude", "/repo", "notion");

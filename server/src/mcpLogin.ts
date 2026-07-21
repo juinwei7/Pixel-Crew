@@ -21,6 +21,7 @@ function boundedTail(value: string, limit = 4_000): string {
 }
 
 type Spawner = (command: string, args: string[], options: { cwd: string }) => ChildProcessWithoutNullStreams;
+type Terminator = (child: ChildProcessWithoutNullStreams) => void | Promise<void>;
 
 // `claude mcp login <name>` / `codex mcp login <name>` open the user's system
 // browser and wait for them to click "authorize" — an unbounded, user-paced
@@ -38,6 +39,7 @@ export class McpLoginTracker {
     private readonly onFinished: (state: McpLoginState) => void | Promise<void>,
     private readonly spawner: Spawner = spawnCli,
     private readonly safetyTimeoutMs = 4 * 60_000,
+    private readonly terminator: Terminator = terminateProcessTree,
   ) {}
 
   private key(provider: ProviderId, workspacePath: string, name: string): string {
@@ -73,7 +75,7 @@ export class McpLoginTracker {
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
 
     const timer = setTimeout(() => {
-      void terminateProcessTree(child);
+      void this.terminator(child);
       this.finish(k, "timeout", "登入逾時（4 分鐘內未完成瀏覽器授權），已自動取消");
     }, this.safetyTimeoutMs);
     timer.unref?.();
@@ -96,7 +98,7 @@ export class McpLoginTracker {
     const k = this.key(provider, workspacePath, name);
     const child = this.children.get(k);
     if (!child || this.states.get(k)?.status !== "running") return false;
-    void terminateProcessTree(child);
+    void this.terminator(child);
     this.finish(k, "cancelled", "使用者取消登入");
     return true;
   }
