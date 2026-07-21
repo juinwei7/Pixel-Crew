@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { roomName } from "../workspace";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type Props = {
   required?: boolean;
@@ -18,8 +19,17 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   const [error, setError] = useState<string | null>(null);
   const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
   const creating = required || mode === "create";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
 
   useEffect(() => setPath(currentPath), [currentPath]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !required && !pending) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, pending, required]);
 
   async function choose(nextPath: string) {
     const trimmed = nextPath.trim();
@@ -54,7 +64,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   }
 
   return (
-    <div className="workspace-picker" role="dialog" aria-modal="true" aria-labelledby="workspace-title">
+    <div ref={dialogRef} className="workspace-picker" role="dialog" aria-modal="true" aria-labelledby="workspace-title">
       <form
         className="workspace-picker__card"
         onSubmit={(event) => {
@@ -155,7 +165,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
 
         {error && <div className="workspace-picker__error">{error}</div>}
         <div className="workspace-picker__actions">
-          <button type="button" onClick={onClose} disabled={pending}>取消</button>
+          {!required && <button type="button" onClick={onClose} disabled={pending}>取消</button>}
           <button type="submit" className="workspace-picker__confirm" disabled={pending || !path.trim()}>
             {pending ? "請稍候…" : creating ? "在此建立工位" : resetsConversation ? "搬遷並重設對話" : "搬到此位置"}
           </button>

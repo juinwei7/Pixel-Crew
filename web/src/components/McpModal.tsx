@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CapabilityState, McpLoginResult, McpScope, McpServerState, ProviderId } from "../types";
 import { apiRequest } from "../api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
@@ -87,6 +88,8 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
   const [clientId, setClientId] = useState("");
   const [oauthClientId, setOauthClientId] = useState("");
   const [oauthResource, setOauthResource] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -273,7 +276,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
   const canSubmitAdd = Boolean(name.trim()) && (addMode === "json" ? Boolean(json.trim()) : Boolean(target.trim()));
 
   return (
-    <div className="mcp-modal" role="dialog" aria-modal="true" aria-labelledby="mcp-modal-title">
+    <div ref={dialogRef} className="mcp-modal" role="dialog" aria-modal="true" aria-labelledby="mcp-modal-title">
       <div className="mcp-modal__card">
         <button type="button" className="mcp-modal__close" onClick={onClose} aria-label="關閉 MCP 管理">×</button>
         <header className="mcp-modal__header">
@@ -480,9 +483,9 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                   <div className="mcp-modal__rows-title">環境變數（選填）</div>
                   {envRows.map((row, index) => (
                     <div key={index} className="mcp-modal__row-inputs">
-                      <input placeholder="KEY" value={row.key} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, key: e.target.value } : r)))} />
-                      <input placeholder="value" value={row.value} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
-                      <button type="button" onClick={() => setEnvRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
+                      <input aria-label={`環境變數 ${index + 1} 名稱`} placeholder="KEY" value={row.key} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, key: e.target.value } : r)))} />
+                      <input aria-label={`環境變數 ${index + 1} 值`} placeholder="value" value={row.value} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
+                      <button type="button" aria-label={`移除環境變數 ${index + 1}`} onClick={() => setEnvRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
                     </div>
                   ))}
                   <button type="button" className="mcp-modal__row-add" onClick={() => setEnvRows((rows) => [...rows, { key: "", value: "" }])}>+ 新增環境變數</button>
@@ -492,9 +495,9 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                   <div className="mcp-modal__rows-title">Header（選填）</div>
                   {headerRows.map((row, index) => (
                     <div key={index} className="mcp-modal__row-inputs">
-                      <input placeholder="Name" value={row.name} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} />
-                      <input placeholder="value" value={row.value} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
-                      <button type="button" onClick={() => setHeaderRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
+                      <input aria-label={`Header ${index + 1} 名稱`} placeholder="Name" value={row.name} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} />
+                      <input aria-label={`Header ${index + 1} 值`} placeholder="value" value={row.value} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
+                      <button type="button" aria-label={`移除 Header ${index + 1}`} onClick={() => setHeaderRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
                     </div>
                   ))}
                   <button type="button" className="mcp-modal__row-add" onClick={() => setHeaderRows((rows) => [...rows, { name: "", value: "" }])}>+ 新增 Header</button>

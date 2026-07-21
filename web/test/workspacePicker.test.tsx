@@ -20,6 +20,7 @@ test("first launch requires a dedicated workspace and cannot be dismissed", () =
   assert.match(html, /使用 Pixel Crew 專用工作區/);
   assert.match(html, /\/Users\/wei\/Pixel Crew Workspace/);
   assert.doesNotMatch(html, /aria-label="關閉"/);
+  assert.doesNotMatch(html, />取消</);
 });
 
 test("normal room switching remains dismissible", () => {

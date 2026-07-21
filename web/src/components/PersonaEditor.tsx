@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Persona, PersonaTemplate, WorkerState } from "../types";
 import { apiRequest } from "../api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 const MAX_ROLE = 80;
 const MAX_INSTRUCTIONS = 4000;
@@ -20,6 +21,8 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [templateSaving, setTemplateSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -90,7 +93,7 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
   }
 
   return (
-    <div className="persona-editor" role="dialog" aria-modal="true" aria-labelledby="persona-editor-title">
+    <div ref={dialogRef} className="persona-editor" role="dialog" aria-modal="true" aria-labelledby="persona-editor-title">
       <div className="persona-editor__card">
         <button type="button" className="persona-editor__close" onClick={onClose} aria-label="關閉個性設定">×</button>
         <header className="persona-editor__header">

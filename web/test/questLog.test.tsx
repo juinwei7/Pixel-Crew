@@ -205,3 +205,30 @@ test("focus mode keeps the last readable response from a failed turn", () => {
   assert.match(html, /失敗前已整理的可讀內容/);
   assert.match(html, /turn-chip--error/);
 });
+
+function manyTurns(count: number): Turn[] {
+  return Array.from({ length: count }, (_, index) => ({
+    key: `turn-${index}`,
+    command: `任務編號-${index}`,
+    status: "done" as const,
+    items: [{ kind: "assistant_text" as const, key: `text-${index}`, text: `結果 ${index}` }],
+  }));
+}
+
+test("caps rendering to the most recent chunk once a conversation grows past it, with a load-earlier affordance", () => {
+  const turns = manyTurns(210);
+  const html = renderToStaticMarkup(<QuestLog turns={turns} />);
+  // Oldest turn (beyond the 200-turn window) is not rendered...
+  assert.doesNotMatch(html, /任務編號-0</);
+  // ...but the newest is, and the "load earlier" button reports the exact hidden count.
+  assert.match(html, /任務編號-209/);
+  assert.match(html, /顯示更早的任務（還有 10 筆）/);
+});
+
+test("an active search bypasses the render cap so an old match still shows and can be counted", () => {
+  const turns = manyTurns(210);
+  turns[0] = { ...turns[0], items: [{ kind: "assistant_text", key: "text-0", text: "很久以前的付款問題" }] };
+  const html = renderToStaticMarkup(<QuestLog turns={turns} searchQuery="付款" />);
+  assert.match(html, /任務編號-0</);
+  assert.doesNotMatch(html, /顯示更早的任務/);
+});

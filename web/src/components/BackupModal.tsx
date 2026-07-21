@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiAssetUrl, apiRequest, apiUpload } from "../api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type ValidateResult = {
   importToken: string;
@@ -25,6 +26,8 @@ export function BackupModal({ notify, onClose }: Props) {
   const [confirmText, setConfirmText] = useState("");
   const [commitOutcome, setCommitOutcome] = useState<{ ok: boolean; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
 
   // A restore commit is a real, in-flight server-side operation once fired —
   // closing the dialog can't cancel it (no AbortController on that request,
@@ -104,7 +107,7 @@ export function BackupModal({ notify, onClose }: Props) {
   }
 
   return (
-    <div className="backup-modal" role="dialog" aria-modal="true" aria-labelledby="backup-modal-title">
+    <div ref={dialogRef} className="backup-modal" role="dialog" aria-modal="true" aria-labelledby="backup-modal-title">
       <div className="backup-modal__card">
         <button type="button" className="backup-modal__close" onClick={handleClose} disabled={committing} aria-label="關閉備份與還原">×</button>
         <header className="backup-modal__header">

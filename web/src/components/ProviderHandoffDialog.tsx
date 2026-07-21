@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PreparedHandoff, ProviderId, WorkerState } from "../types";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type Props = {
   worker: WorkerState;
@@ -29,12 +30,22 @@ export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, 
   const [acknowledged, setAcknowledged] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
   const candidate = worker.handoff?.toProvider === toProvider ? worker.handoff : null;
   const progress = candidate && (
     !["completed", "failed"].includes(candidate.stage) || candidate.id !== initialTerminalHandoffId.current
   ) ? candidate : null;
   const fromProvider = progress?.fromProvider ?? worker.provider;
   const active = progress && !["completed", "failed"].includes(progress.stage);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !active) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, onClose]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +73,7 @@ export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, 
   const stageIndex = progress ? STAGES.findIndex((stage) => stage.id === progress.stage) : -1;
 
   return (
-    <div className="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
+    <div ref={dialogRef} className="handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title">
       <div className="handoff-dialog__card">
         <button type="button" className="handoff-dialog__close" onClick={onClose} disabled={Boolean(active)} aria-label="關閉交接視窗">×</button>
         <header className="handoff-dialog__header">

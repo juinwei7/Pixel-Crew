@@ -10,6 +10,7 @@ import {
 import { AVATAR_PRESETS, paintPresetPreview, type AvatarPresetId } from "../game/avatarPresets";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/person";
 import { dragContainsFiles } from "./CommandComposer";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type Props = {
   worker: WorkerState;
@@ -43,6 +44,8 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   const [dragActive, setDragActive] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
   const dragDepthRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
 
   useEffect(() => () => source?.close(), [source]);
   useEffect(() => () => {
@@ -204,7 +207,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   }
 
   return (
-    <div className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
+    <div ref={dialogRef} className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
       {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>放開以設定自訂角色</strong><small>PNG、JPEG、WebP 或 GIF</small></div>}
       <div className="avatar-workshop__card">
         <button type="button" className="avatar-workshop__close" onClick={onClose} disabled={saving} aria-label="關閉角色工坊">×</button>

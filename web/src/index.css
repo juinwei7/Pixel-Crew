@@ -736,7 +736,7 @@ body {
 .workspace-picker {
   position: absolute;
   inset: 0;
-  z-index: 50;
+  z-index: 25000;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -3329,7 +3329,7 @@ body {
 .command-center {
   position: absolute;
   inset: 0;
-  z-index: 60;
+  z-index: 25000;
   display: grid;
   place-items: center;
   padding: 32px;
@@ -4571,6 +4571,8 @@ body {
 .copy-button { min-width: 28px; min-height: 28px; padding: 0 5px; border: 0; border-radius: 5px; background: transparent; color: #59708d; cursor: pointer; }
 .copy-button:hover { background: rgba(77,227,255,.07); color: var(--cyan); }
 .quest-log__no-results { margin: 28px 14px; padding: 18px; border: 1px dashed rgba(77,227,255,.18); border-radius: 10px; color: #7489a5; text-align: center; font-size: 12px; }
+.quest-log__load-earlier { align-self: center; margin: 4px 0 10px; padding: 6px 14px; border: 1px solid rgba(77,227,255,.2); border-radius: 999px; background: rgba(7,15,28,.7); color: #7489a5; cursor: pointer; font: 9px var(--mono); }
+.quest-log__load-earlier:hover { border-color: rgba(77,227,255,.4); color: var(--cyan); }
 .rich-code { position: relative; margin: .75em 0; }
 .rich-code > button { position: absolute; top: 7px; right: 7px; z-index: 1; min-width: 48px; min-height: 28px; padding: 0 8px; border: 1px solid rgba(77,227,255,.18); border-radius: 6px; background: rgba(6,13,26,.88); color: #8aa3bf; font: 9px var(--mono); cursor: pointer; opacity: .75; }
 .rich-code:hover > button, .rich-code > button:focus-visible { color: var(--cyan); opacity: 1; }
@@ -4605,6 +4607,131 @@ body {
   border-radius: 4px;
   color: #8794a2;
   font: 8px var(--mono);
+}
+
+.focus-controls { position: relative; flex: 0 0 auto; }
+
+.focus-controls__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 9px;
+  border: 1px solid rgba(143, 184, 232, 0.13);
+  color: #91a4bc;
+}
+
+.focus-controls__trigger:hover,
+.focus-controls__trigger[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.055);
+  color: #eef1f4;
+}
+
+.focus-controls__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(300px, calc(100vw - 32px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid rgba(201, 210, 220, 0.14);
+  border-radius: 12px;
+  background: #141922;
+  box-shadow: 0 24px 55px rgba(0, 0, 0, 0.45);
+  color: #9aa6b2;
+  text-align: left;
+}
+
+.focus-controls__panel section + section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(218, 224, 232, 0.075);
+}
+
+.focus-controls__panel h4 {
+  margin: 0 0 9px;
+  color: #c4ccd4;
+  font: 650 10px var(--mono);
+  letter-spacing: 0.08em;
+}
+
+.focus-controls__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font: 9px var(--mono);
+  color: #8794a1;
+}
+
+.focus-controls__row select {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(201, 210, 220, 0.14);
+  border-radius: 6px;
+  background: #171c24;
+  color: #c4ccd4;
+  font: 9px var(--mono);
+}
+
+.focus-controls__auto-approve--off { color: #8794a1; }
+.focus-controls__auto-approve--safe { color: #7fd1a0; }
+.focus-controls__auto-approve--full { color: #e0a276; }
+
+.focus-controls__rename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.focus-controls__rename input {
+  min-height: 30px;
+  width: 110px;
+  padding: 0 8px;
+  border: 1px solid rgba(201, 210, 220, 0.14);
+  border-radius: 6px;
+  background: #171c24;
+  color: #d5dbe1;
+  font: 9px var(--mono);
+}
+
+.focus-controls__rename--error {
+  border-color: rgba(217, 135, 150, 0.5);
+}
+
+.focus-controls__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.focus-controls__actions button,
+.focus-controls__row button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid rgba(201, 210, 220, 0.14);
+  border-radius: 6px;
+  background: transparent;
+  color: #c4ccd4;
+  font: 9px var(--mono);
+  cursor: pointer;
+}
+
+.focus-controls__actions button:hover,
+.focus-controls__row button:hover {
+  border-color: rgba(77, 227, 255, 0.32);
+  color: var(--cyan);
+}
+
+.focus-controls__notify { margin-bottom: 0; }
+
+.focus-controls__empty {
+  margin: 0;
+  color: #6f7e8b;
+  font: 9px var(--mono);
 }
 
 .holo-panel.holo-panel--focus {

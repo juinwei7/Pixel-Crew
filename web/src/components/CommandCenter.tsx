@@ -6,6 +6,7 @@ import { apiRequest } from "../api";
 import { parseWorkflowDocument, workflowText } from "../workflowDocument";
 import { CodexSkillCenter } from "./CodexSkillCenter";
 import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 const NEW_COMMAND = `---
 description: 說明這個指令適合在什麼情況使用
@@ -59,6 +60,8 @@ export function CommandCenter({
   const [reloadNonce, setReloadNonce] = useState(0);
   const forceReload = useRef(false);
   const loadScope = useRef("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef);
   const [runTargetId, setRunTargetId] = useState(activeWorkerId ?? "");
   const [runInput, setRunInput] = useState("");
   const [running, setRunning] = useState(false);
@@ -155,6 +158,14 @@ export function CommandCenter({
     onClose();
   }
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [codexDirty, dirty, onClose, providerView]);
+
   async function save() {
     setSaving(true);
     setNotice(null);
@@ -224,7 +235,7 @@ export function CommandCenter({
     : targets.find((target) => target.id === activeWorkerId)?.id ?? targets[0]?.id ?? "";
 
   return (
-    <div className="command-center" role="dialog" aria-modal="true" aria-label="指令中心">
+    <div ref={dialogRef} className="command-center" role="dialog" aria-modal="true" aria-label="指令中心">
       <div className="command-center__shell">
         <header className="command-center__header">
           <div>

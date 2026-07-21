@@ -6,6 +6,16 @@ import { parseMcpToolName as toolMeta } from "../mcpToolName";
 
 const focusScrollPositions = new Map<string, number>();
 const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
+// A worker running for a long time can accumulate hundreds of turns, each
+// fully rendered (markdown, tool call bodies, etc.) with no windowing —
+// unbounded growth becomes real render/scroll jank. True virtualization
+// would unmount off-screen turns, but scroll-to-turn (search results, report
+// navigation) and pinning here all resolve turns via `document.getElementById`,
+// which breaks the moment a turn isn't mounted. Instead: only ever render the
+// most recent chunk by default, with a "load earlier" affordance — cheap,
+// keeps every existing DOM-id-based feature working, and is a no-op for the
+// vast majority of conversations that never reach the cap.
+const RENDER_CHUNK = 200;
 
 function focusTurnId(key: string): string {
   return `focus-turn-${encodeURIComponent(key)}`;
@@ -371,6 +381,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [pinnedTurns, setPinnedTurns] = useState<Set<string>>(() => readPinnedReports(readerKey));
+  const [renderLimit, setRenderLimit] = useState(RENDER_CHUNK);
   const lastTurn = turns[turns.length - 1];
   const itemCount = lastTurn?.items.length ?? 0;
 
@@ -398,9 +409,14 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const visibleTurns = focusMode
     ? matchingTurns.filter((turn) => turn.status === "running" || readableTurns.includes(turn))
     : matchingTurns;
+  // The render cap only applies while browsing normally — an active search
+  // is a deliberate, infrequent action and must still be able to find (and
+  // scroll to) a match anywhere in history, not just the recent window.
+  const hiddenOlderCount = needle ? 0 : Math.max(0, visibleTurns.length - renderLimit);
+  const renderedTurns = hiddenOlderCount > 0 ? visibleTurns.slice(hiddenOlderCount) : visibleTurns;
   const completeReportTurns = turns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const searchOccurrences = needle ? visibleTurns.reduce((count, turn) => count + occurrenceCount(searchableTurnText(turn, focusMode), needle), 0) : 0;
-  const navigationEntries = focusMode ? visibleTurns.flatMap((turn, turnIndex) => {
+  const navigationEntries = focusMode ? renderedTurns.flatMap((turn, turnIndex) => {
     const prefix = focusTurnId(turn.key);
     const finalItem = [...turn.items].reverse().find((item) => item.kind === "assistant_text");
     const text = finalItem && "text" in finalItem ? finalItem.text : "";
@@ -416,6 +432,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   useEffect(() => {
     setPinnedTurns(readPinnedReports(readerKey));
+    setRenderLimit(RENDER_CHUNK);
   }, [readerKey]);
 
   function togglePinned(turnKey: string) {
@@ -465,8 +482,13 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       {turns.length > 0 && visibleTurns.length === 0 && (
         <div className="quest-log__no-results">找不到符合「{searchQuery.trim()}」的任務內容</div>
       )}
-      {visibleTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === visibleTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={() => togglePinned(turn.key)} onApprove={onApprove} />
+      {hiddenOlderCount > 0 && (
+        <button type="button" className="quest-log__load-earlier" onClick={() => setRenderLimit((limit) => limit + RENDER_CHUNK)}>
+          顯示更早的任務（還有 {hiddenOlderCount} 筆）
+        </button>
+      )}
+      {renderedTurns.map((turn, i) => (
+        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={() => togglePinned(turn.key)} onApprove={onApprove} />
       ))}
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;
@@ -484,7 +506,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       event.stopPropagation();
       setNavigationOpen(false);
     }}>
-      <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>報告導覽 <span>{visibleTurns.length}</span></button>
+      <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>報告導覽 <span>{renderedTurns.length}</span></button>
       <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label="報告章節導覽">
         <header><span>REPORT INDEX</span><strong>報告導覽</strong><ReportActions markdown={reportMarkdown(completeReportTurns)} /></header>
         <div className="focus-report-nav__items">

@@ -16,10 +16,11 @@ import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { McpModal } from "./components/McpModal";
 import { BackupModal } from "./components/BackupModal";
+import { FocusControls } from "./components/FocusControls";
 import { parseMcpToolName } from "./mcpToolName";
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerFocusStatus } from "./crew";
-import type { ProviderId } from "./types";
+import type { AutoApproveMode, ProviderId } from "./types";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
@@ -67,7 +68,7 @@ export function App() {
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
-  const [taskFocusMode, setTaskFocusMode] = useState(false);
+  const taskFocusMode = preferences.taskFocusMode;
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -187,14 +188,13 @@ export function App() {
   const enterTaskFocusMode = useCallback(() => {
     focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setFocusSeenTurns(Object.fromEntries(workerList.map((worker) => [worker.id, latestReadableTurnKey(worker)])));
-    updatePreferences({ taskLogOpen: true });
-    setTaskFocusMode(true);
+    updatePreferences({ taskLogOpen: true, taskFocusMode: true });
   }, [updatePreferences, workerList]);
 
   const exitTaskFocusMode = useCallback(() => {
     setFocusUsageOpen(false);
-    setTaskFocusMode(false);
-  }, []);
+    updatePreferences({ taskFocusMode: false });
+  }, [updatePreferences]);
 
   const shortcuts = useMemo(() => ({
     onCommandPalette: () => setCommandPaletteOpen(true),
@@ -207,6 +207,12 @@ export function App() {
       updatePreferences({ taskLogOpen: true });
     },
     onEscape: () => {
+      // These overlays already have their own Escape-to-close handling and can be
+      // reached from inside focus mode; without this guard, closing one of them
+      // would also silently exit focus mode via the layer check below.
+      const overlayModalOpen = workspaceOpen || commandCenterOpen || mcpModalOpen || backupModalOpen
+        || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
+      if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
       if (layer === "command_palette") {
         setCommandPaletteOpen(false);
@@ -223,7 +229,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, commandPaletteOpen, exitTaskFocusMode, preferences.taskLogOpen, setActiveId, taskFocusMode, taskSearchOpen, updatePreferences]);
+  }), [approvalWorker, avatarWorkerId, backupModalOpen, commandCenterOpen, commandPaletteOpen, exitTaskFocusMode, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, setActiveId, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -322,6 +328,30 @@ export function App() {
     setHandoffTarget(provider);
   }
 
+  async function handleRename(id: string, name: string) {
+    const error = await renameWorker(id, name);
+    if (!error) notify("人員名稱已更新");
+    return error;
+  }
+
+  function handleModelChange(model: string) {
+    if (!activeId) return;
+    void setModel(activeId, model).then((error) => {
+      if (error) notify(error, "error");
+      else notify("模型設定已更新");
+    });
+  }
+
+  function handleAutoApproveChange(mode: AutoApproveMode) {
+    if (!activeId) return;
+    void setAutoApproveMode(activeId, mode).then((error) => {
+      if (error) { notify(error, "error"); return; }
+      if (mode === "off") notify("自動核准已關閉");
+      else if (mode === "safe") notify("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問");
+      else notify("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問");
+    });
+  }
+
   return (
     <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""}`} style={{ "--log-panel-width": `${preferences.taskLogWidth}px` } as CSSProperties}>
       <GameCanvas
@@ -331,7 +361,7 @@ export function App() {
         onSelect={activateNpc}
         onOpenLog={activateNpc}
         onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }}
-        onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
+        onRename={handleRename}
         onAvatarWorkshop={setAvatarWorkerId}
         onPersonaEditor={setPersonaWorkerId}
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
@@ -352,22 +382,8 @@ export function App() {
         onOpenMcp={() => setMcpModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
         onProvider={(provider) => void changeProvider(provider)}
-        onModel={(model) => {
-          if (!activeId) return;
-          void setModel(activeId, model).then((error) => {
-            if (error) notify(error, "error");
-            else notify("模型設定已更新");
-          });
-        }}
-        onAutoApprove={(mode) => {
-          if (!activeId) return;
-          void setAutoApproveMode(activeId, mode).then((error) => {
-            if (error) { notify(error, "error"); return; }
-            if (mode === "off") notify("自動核准已關閉");
-            else if (mode === "safe") notify("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問");
-            else notify("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問");
-          });
-        }}
+        onModel={handleModelChange}
+        onAutoApprove={handleAutoApproveChange}
         onRefreshAuth={() => void refreshAuth(activeProvider)}
         onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
         notificationsEnabled={preferences.notificationsEnabled}
@@ -427,6 +443,25 @@ export function App() {
             {!taskFocusMode && <select aria-label="日誌寬度" value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
               <option value="420">緊湊</option><option value="600">閱讀</option><option value="820">寬版</option>
             </select>}
+            {taskFocusMode && <FocusControls
+              active={active}
+              modelOptions={modelOptions}
+              authReady={activeAuth.status === "authenticated"}
+              providerChanging={providerChanging}
+              notificationsEnabled={preferences.notificationsEnabled}
+              onModel={handleModelChange}
+              onAutoApprove={handleAutoApproveChange}
+              onProvider={(provider) => void changeProvider(provider)}
+              onRename={handleRename}
+              onPersona={() => active && setPersonaWorkerId(active.id)}
+              onAvatar={() => active && setAvatarWorkerId(active.id)}
+              onRoom={openWorkspaceForMove}
+              onCreateNpc={() => openWorkspaceForCreate(activeProvider)}
+              onOpenMcp={() => setMcpModalOpen(true)}
+              onOpenBackup={() => setBackupModalOpen(true)}
+              onNotificationsToggle={toggleNotifications}
+              onOpenCommandCenter={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
+            />}
             {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label="退出專心閱讀模式">退出 <kbd>Esc</kbd></button>}
           </div>
         </div>
@@ -454,7 +489,7 @@ export function App() {
           if (!activeId) return;
           void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
         }}
-        onManage={() => { exitTaskFocusMode(); setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
+        onManage={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
       />
       </div>
 
@@ -470,7 +505,7 @@ export function App() {
         onReorder={(ids) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); }}
         onCreate={() => openWorkspaceForCreate(activeProvider)}
         onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
-        onRename={async (id, name) => { const error = await renameWorker(id, name); if (!error) notify("人員名稱已更新"); return error; }}
+        onRename={handleRename}
         onAvatar={setAvatarWorkerId}
         onPersona={setPersonaWorkerId}
         onRoom={(id) => { setActiveId(id); openWorkspaceForMove(); }}

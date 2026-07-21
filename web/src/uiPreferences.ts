@@ -12,6 +12,7 @@ export type UiPreferencesV2 = {
   crewFilter: CrewFilter;
   reducedDetail: boolean;
   notificationsEnabled: boolean;
+  taskFocusMode: boolean;
 };
 
 export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
@@ -25,6 +26,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   crewFilter: "all",
   reducedDetail: false,
   notificationsEnabled: false,
+  taskFocusMode: false,
 };
 
 const VIEWS = new Set<TaskLogView>(["summary", "activity"]);
@@ -56,6 +58,9 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
     notificationsEnabled: typeof raw.notificationsEnabled === "boolean"
       ? raw.notificationsEnabled
       : DEFAULT_UI_PREFERENCES.notificationsEnabled,
+    taskFocusMode: typeof raw.taskFocusMode === "boolean"
+      ? raw.taskFocusMode
+      : DEFAULT_UI_PREFERENCES.taskFocusMode,
   };
 }
 
