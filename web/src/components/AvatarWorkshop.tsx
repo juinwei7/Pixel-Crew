@@ -50,6 +50,12 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   }, [gifPreviewUrl]);
 
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !saving) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
+
+  useEffect(() => {
     if (!source) {
       setOutput(null);
       return;
@@ -201,7 +207,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
     <div className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
       {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>放開以設定自訂角色</strong><small>PNG、JPEG、WebP 或 GIF</small></div>}
       <div className="avatar-workshop__card">
-        <button type="button" className="avatar-workshop__close" onClick={onClose} aria-label="關閉角色工坊">×</button>
+        <button type="button" className="avatar-workshop__close" onClick={onClose} disabled={saving} aria-label="關閉角色工坊">×</button>
         <header className="avatar-workshop__header">
           <span className="avatar-workshop__eyebrow">AVATAR WORKSHOP · {AVATAR_WIDTH}×{AVATAR_HEIGHT}</span>
           <h2 id="avatar-workshop-title">替 {worker.name} 換一個樣子</h2>

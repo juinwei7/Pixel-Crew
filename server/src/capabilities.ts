@@ -8,6 +8,8 @@ import { execCli } from "./platform/processes.js";
 export type McpScope = "local" | "project" | "user" | "account";
 export type McpTransport = "stdio" | "sse" | "http";
 
+export type McpToolInfo = { name: string; description?: string };
+
 export type McpServerState = {
   name: string;
   status: string;
@@ -25,6 +27,17 @@ export type McpServerState = {
   // Codex only — see the comment in codexCapabilities.ts's parseCodexMcpList
   // for why the frontend gates login/logout on this rather than `status`.
   authStatus?: string;
+  // Full tool catalog, when the provider's CLI can supply one. Currently
+  // Codex-only, via the experimental mcpServerStatus/list app-server method.
+  tools?: McpToolInfo[];
+  // "available": `tools` is a complete, live catalog (Codex, once fetched).
+  // "unsupported": no API exists to list tools proactively — Claude, always.
+  // "error": Codex's call failed/unavailable this time (older CLI, method
+  // renamed/removed, no active worker yet). undefined: not checked yet.
+  toolsStatus?: "available" | "unsupported" | "error";
+  // Codex's own internal codex_apps server — real and connected, but not
+  // user-configured/removable the way `codex mcp add`'d servers are.
+  builtin?: boolean;
 };
 export type ModelOption = { id: string; label: string; description?: string };
 
@@ -33,6 +46,11 @@ export type CapabilityState = {
   mcpServers: McpServerState[];
   models: ModelOption[];
   toolCount: number | null;
+  // Built-in tools available in the most recent Claude session at init time
+  // (Bash, Read, Edit, …). NOT an MCP server's tool list — see the RunnerEvent
+  // "meta" comment in claudeRunner.ts. null = never observed yet, distinct
+  // from an empty array (observed and genuinely empty).
+  builtinTools: string[] | null;
   loading: boolean;
   source: "empty" | "cache" | "live";
   updatedAt: string | null;
@@ -44,6 +62,7 @@ const EMPTY_STATE: CapabilityState = {
   mcpServers: [],
   models: [],
   toolCount: null,
+  builtinTools: null,
   loading: true,
   source: "empty",
   updatedAt: null,
@@ -314,7 +333,7 @@ export class CapabilityRegistry {
     const cached = store.loadCapabilities(workspacePath);
     const seededCommands = uniqueSorted([...(cached?.slashCommands ?? []), ...this.runtimeCommands]);
     this.state = cached
-      ? { ...cached, slashCommands: seededCommands, models: mergeModels(DEFAULT_CLAUDE_MODELS, cached.models ?? []), loading: true, source: "cache", error: null }
+      ? { ...cached, slashCommands: seededCommands, models: mergeModels(DEFAULT_CLAUDE_MODELS, cached.models ?? []), builtinTools: cached.builtinTools ?? null, loading: true, source: "cache", error: null }
       : { ...EMPTY_STATE, slashCommands: seededCommands, models: [...DEFAULT_CLAUDE_MODELS] };
     this.rebuildAllowRules();
   }
@@ -438,6 +457,7 @@ export class CapabilityRegistry {
     slashCommands: string[];
     mcpServers: McpServerState[];
     toolCount: number;
+    builtinTools: string[];
   }): void {
     const discoveredCommands = uniqueSorted(meta.slashCommands);
     // Resumed/background Claude sessions sometimes emit an init/meta frame
@@ -453,6 +473,12 @@ export class CapabilityRegistry {
     // {name, status}, so a full overwrite would erase the scope/transport
     // detail that refresh()'s `mcp get` calls already gathered.
     for (const server of meta.mcpServers) byName.set(server.name, { ...byName.get(server.name), ...server });
+    // Same "don't erase on an empty resumed-frame" guard as slash commands:
+    // an empty builtinTools array here just means this particular frame
+    // didn't carry it, not that the session lost its built-in tools.
+    const builtinTools = meta.builtinTools.length > 0
+      ? uniqueSorted(meta.builtinTools)
+      : (this.state.builtinTools ?? []);
     this.publish({
       ...this.state,
       models: mergeModels(
@@ -463,6 +489,7 @@ export class CapabilityRegistry {
       slashCommands: uniqueSorted([...this.diskCommands, ...this.runtimeCommands]),
       mcpServers: [...byName.values()],
       toolCount: meta.toolCount,
+      builtinTools,
       loading: false,
       source: "live",
       updatedAt: new Date().toISOString(),

@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import type { AgentAuthProvider, ProviderAuthState } from "./types.js";
 import { execCli } from "../platform/processes.js";
+import { resolveCodexAuthStatus } from "./codexAuthStatus.js";
 
 function shellCommand(value: string): string {
   if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
@@ -25,15 +26,14 @@ export class CodexAuthProvider implements AgentAuthProvider {
 
   private async runCheck(): Promise<ProviderAuthState> {
     const checkedAt = new Date().toISOString();
+    let error: NodeJS.ErrnoException | null = null;
     try {
       await execCli(config.codexBin, ["login", "status"], { timeout: 10_000 });
-      return this.state("authenticated", checkedAt);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return this.state("cli_missing", checkedAt, "找不到 Codex CLI");
-      }
-      return this.state("unauthenticated", checkedAt);
+    } catch (caught) {
+      error = caught as NodeJS.ErrnoException;
     }
+    const result = resolveCodexAuthStatus(error);
+    return this.state(result.status, checkedAt, result.error);
   }
 
   private state(

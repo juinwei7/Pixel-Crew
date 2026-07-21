@@ -10,3 +10,4 @@ server/data/
 !.env.example
 docs/
 release/
+CLAUDE.md

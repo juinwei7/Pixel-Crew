@@ -15,6 +15,8 @@ import { AvatarWorkshop } from "./components/AvatarWorkshop";
 import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { McpModal } from "./components/McpModal";
+import { BackupModal } from "./components/BackupModal";
+import { parseMcpToolName } from "./mcpToolName";
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerFocusStatus } from "./crew";
 import type { ProviderId } from "./types";
@@ -39,7 +41,7 @@ function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: ty
 }
 
 const EMPTY_CAPABILITIES = {
-  slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: true,
+  slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: true,
   source: "empty" as const, updatedAt: null, error: null,
 };
 
@@ -61,6 +63,7 @@ export function App() {
   const [providerChanging, setProviderChanging] = useState(false);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
@@ -87,6 +90,21 @@ export function App() {
     activeCapabilities.models,
     active?.model,
   );
+  const usedMcpTools = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const worker of workerList) {
+      if (worker.workspacePath !== activeWorkspace || worker.provider !== activeProvider) continue;
+      for (const turn of worker.turns) {
+        for (const item of turn.items) {
+          if (item.kind !== "tool_call") continue;
+          const { label, mcpServer } = parseMcpToolName(item.name);
+          if (!mcpServer) continue;
+          (map[mcpServer] ??= new Set()).add(label);
+        }
+      }
+    }
+    return Object.fromEntries(Object.entries(map).map(([key, value]) => [key, [...value]]));
+  }, [workerList, activeWorkspace, activeProvider]);
   const taskLogTurns = useMemo(() => {
     if (taskSearchScope === "current" || !taskSearch.trim()) return active?.turns ?? [];
     return workerList.flatMap((worker) => worker.turns.map((turn) => ({
@@ -332,6 +350,7 @@ export function App() {
         providerChanging={providerChanging}
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
         onOpenMcp={() => setMcpModalOpen(true)}
+        onOpenBackup={() => setBackupModalOpen(true)}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={(model) => {
           if (!activeId) return;
@@ -356,7 +375,7 @@ export function App() {
         updateInfo={updateInfo}
       />
 
-      {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} />}
+      {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
       {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。</div>}
@@ -395,7 +414,7 @@ export function App() {
               })}
             </select>
           </label> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
             {!taskFocusMode && <div className="task-log-toolbar__view" aria-label="日誌模式">
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
@@ -490,7 +509,8 @@ export function App() {
 
       {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 
-      {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} notify={notify} onClose={() => setMcpModalOpen(false)} />}
+      {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} usedMcpTools={usedMcpTools} notify={notify} onClose={() => setMcpModalOpen(false)} />}
+      {backupModalOpen && <BackupModal notify={notify} onClose={() => setBackupModalOpen(false)} />}
 
       <footer className="app-copyright" aria-label="版權資訊">© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

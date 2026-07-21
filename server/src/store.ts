@@ -588,6 +588,20 @@ export class LocalStore {
     }
   }
 
+  // Public wrapper so callers outside LocalStore (backup export/restore)
+  // can force the ~150ms debounce queue to disk before treating `this.path`
+  // as authoritative, without having to close the store to do it.
+  flush(): void {
+    this.flushEvents();
+  }
+
+  // Truncates the WAL back into the main DB file so a plain filesystem copy
+  // of `this.path` alone (no -wal/-shm needed) is a complete, consistent
+  // snapshot for backup export.
+  checkpoint(): void {
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  }
+
   close(): void {
     this.flushEvents();
     this.db.close();

@@ -33,16 +33,57 @@ test("an empty resumed-session meta frame does not erase discovered slash comman
       slashCommands: ["review", "verify"],
       mcpServers: [],
       toolCount: 2,
+      builtinTools: [],
     });
     registry.mergeWorkerMeta({
       slashCommands: [],
       mcpServers: [],
       toolCount: 2,
+      builtinTools: [],
     });
 
     assert.equal(updates.at(-1)?.includes("review"), true);
     assert.equal(updates.at(-1)?.includes("verify"), true);
     assert.equal(updates.at(-1)?.includes("mcp"), true);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a fresh registry's builtinTools is null before any mergeWorkerMeta call", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    const registry = new CapabilityRegistry(store, () => undefined, "/fresh-repo");
+    assert.equal(registry.getState().builtinTools, null);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an empty resumed-session meta frame does not erase discovered builtin tools", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    const registry = new CapabilityRegistry(store, () => undefined, "/repo");
+    registry.mergeWorkerMeta({ slashCommands: [], mcpServers: [], toolCount: 2, builtinTools: ["Bash", "Read"] });
+    registry.mergeWorkerMeta({ slashCommands: [], mcpServers: [], toolCount: 2, builtinTools: [] });
+    assert.deepEqual(registry.getState().builtinTools, ["Bash", "Read"]);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("mergeWorkerMeta sorts and dedupes builtin tools", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-capabilities-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    const registry = new CapabilityRegistry(store, () => undefined, "/repo");
+    registry.mergeWorkerMeta({ slashCommands: [], mcpServers: [], toolCount: 2, builtinTools: ["Read", "Bash", "Read"] });
+    assert.deepEqual(registry.getState().builtinTools, ["Bash", "Read"]);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
@@ -81,6 +122,7 @@ test("serves cached Claude models immediately and merges later runtime discovery
       mcpServers: [],
       models: [{ id: "cached-model", label: "Cached Model" }],
       toolCount: null,
+      builtinTools: null,
       loading: false,
       source: "live",
       updatedAt: "2026-07-15T00:00:00.000Z",
@@ -92,7 +134,7 @@ test("serves cached Claude models immediately and merges later runtime discovery
     assert.equal(registry.getState().models.some((model) => model.id === "cached-model"), true);
     assert.equal(registry.getState().models.some((model) => model.id === "sonnet"), true);
 
-    registry.mergeWorkerMeta({ model: "runtime-model", slashCommands: [], mcpServers: [], toolCount: 1 });
+    registry.mergeWorkerMeta({ model: "runtime-model", slashCommands: [], mcpServers: [], toolCount: 1, builtinTools: [] });
     assert.equal(registry.getState().models.some((model) => model.id === "runtime-model"), true);
 
     const reopened = new CapabilityRegistry(store, () => undefined, "/repo");
@@ -109,12 +151,12 @@ test("collapses the CLI's full model id back to its alias instead of adding a du
   try {
     const registry = new CapabilityRegistry(store, () => undefined, "/repo");
 
-    registry.mergeWorkerMeta({ model: "claude-sonnet-5", slashCommands: [], mcpServers: [], toolCount: 1 });
+    registry.mergeWorkerMeta({ model: "claude-sonnet-5", slashCommands: [], mcpServers: [], toolCount: 1, builtinTools: [] });
     const models = registry.getState().models;
     assert.equal(models.filter((model) => model.id === "sonnet").length, 1);
     assert.equal(models.some((model) => model.id === "claude-sonnet-5"), false);
 
-    registry.mergeWorkerMeta({ model: "claude-fable-5", slashCommands: [], mcpServers: [], toolCount: 1 });
+    registry.mergeWorkerMeta({ model: "claude-fable-5", slashCommands: [], mcpServers: [], toolCount: 1, builtinTools: [] });
     assert.equal(registry.getState().models.some((model) => model.id === "fable"), true);
   } finally {
     store.close();
@@ -132,6 +174,7 @@ test("collapses full model ids already persisted in the cache when loading", () 
       mcpServers: [],
       models: [{ id: "claude-fable-5", label: "claude-fable-5" }, { id: "claude-sonnet-5", label: "claude-sonnet-5" }],
       toolCount: null,
+      builtinTools: null,
       loading: false,
       source: "live",
       updatedAt: "2026-07-15T00:00:00.000Z",
@@ -154,7 +197,7 @@ test("seeds native slash commands globally without leaking project commands", ()
 
     // A worker in one room discovers the built-in command set.
     const roomA = new CapabilityRegistry(store, () => undefined, "/repo-a");
-    roomA.mergeWorkerMeta({ slashCommands: ["clear", "compact", "usage", "repo-a-only"], mcpServers: [], toolCount: 3 });
+    roomA.mergeWorkerMeta({ slashCommands: ["clear", "compact", "usage", "repo-a-only"], mcpServers: [], toolCount: 3, builtinTools: [] });
     assert.deepEqual(store.loadSlashCommandSeed(), ["clear", "compact", "usage"]);
 
     // A brand-new room (never messaged) still shows those native commands.
@@ -266,12 +309,14 @@ test("mergeWorkerMeta shallow-merges so an init frame's {name,status} does not e
       slashCommands: [],
       mcpServers: [{ name: "my-hub", status: "connected", scope: "user", transport: "stdio" }],
       toolCount: 1,
+      builtinTools: [],
     });
     // A later init frame only ever reports {name, status}.
     registry.mergeWorkerMeta({
       slashCommands: [],
       mcpServers: [{ name: "my-hub", status: "connected" }],
       toolCount: 1,
+      builtinTools: [],
     });
     const server = registry.getState().mcpServers.find((s) => s.name === "my-hub");
     assert.equal(server?.scope, "user");

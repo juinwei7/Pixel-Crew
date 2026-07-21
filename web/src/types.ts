@@ -14,6 +14,8 @@ export type McpLoginResult = {
 export type McpScope = "local" | "project" | "user" | "account";
 export type McpTransport = "stdio" | "sse" | "http";
 
+export type McpToolInfo = { name: string; description?: string };
+
 export type McpServerState = {
   name: string;
   status: string;
@@ -28,6 +30,15 @@ export type McpServerState = {
   // Codex only — gates the login/logout buttons instead of `status`, since
   // Codex's status is enabled/disabled (is the server on?), not auth state.
   authStatus?: string;
+  // Full tool catalog, when the provider's CLI can supply one. Currently
+  // Codex-only, via the experimental mcpServerStatus/list app-server method.
+  tools?: McpToolInfo[];
+  // "available": `tools` is a complete, live catalog (Codex, once fetched).
+  // "unsupported"/"error": no list available — Claude is always unsupported.
+  toolsStatus?: "available" | "unsupported" | "error";
+  // Codex's own internal codex_apps server — real and connected, but not
+  // user-configured/removable the way `codex mcp add`'d servers are.
+  builtin?: boolean;
 };
 
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
@@ -90,6 +101,7 @@ export type RunnerEvent =
       slashCommands: string[];
       mcpServers: McpServerState[];
       toolCount: number;
+      builtinTools: string[];
     }
   | { type: "user_message"; text: string }
   | { type: "error"; message: string };
@@ -154,6 +166,7 @@ export type WorkerMeta = {
   slashCommands: string[];
   mcpServers: McpServerState[];
   toolCount: number;
+  builtinTools: string[];
 };
 
 export type SubagentState = {
@@ -168,6 +181,7 @@ export type CapabilityState = {
   mcpServers: McpServerState[];
   models: Array<{ id: string; label: string; description?: string }>;
   toolCount: number | null;
+  builtinTools: string[] | null;
   loading: boolean;
   source: "empty" | "cache" | "live";
   updatedAt: string | null;

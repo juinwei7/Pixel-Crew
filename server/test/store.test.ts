@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -85,6 +85,7 @@ test("persists workers, bounded events, and capability cache", () => {
       mcpServers: [{ name: "issue-tracker", status: "connected" }],
       models: [],
       toolCount: 4,
+      builtinTools: ["Bash", "Read"],
       loading: false,
       source: "live",
       updatedAt: "2026-07-15T00:00:00.000Z",
@@ -325,6 +326,45 @@ test("meta counter accumulates and survives a reopen", () => {
     const reopened = new LocalStore(path);
     stores.push(reopened);
     assert.equal(reopened.getCounter("completed_turns"), 7);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("flush() forces the debounced event queue to disk and checkpoint() truncates the WAL", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-checkpoint-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+    store.saveWorker({
+      id: "w1", name: "一號機", model: null, colorIndex: 0, avatarId: null,
+      avatarKind: "preset", avatarPresetId: "classic", provider: "claude",
+      workspacePath: "/repo", sessionId: "s1", completedTurns: 0,
+      persona: null, autoApproveMode: "off",
+    });
+    // text_delta is not in appendEvent's immediate-flush set, so without an
+    // explicit flush() this would sit in the 150ms debounce queue.
+    store.appendEvent("w1", { type: "text_delta", text: "hello" }, 2000);
+    store.flush();
+    store.checkpoint();
+
+    // A second, independent read-only connection proves the data actually
+    // reached the main DB file rather than still sitting in memory or WAL.
+    const verify = new DatabaseSync(path, { readOnly: true });
+    try {
+      const row = verify.prepare("SELECT COUNT(*) AS count FROM runner_events WHERE worker_id = ?").get("w1") as { count: number };
+      assert.equal(row.count, 1);
+    } finally {
+      verify.close();
+    }
+
+    // TRUNCATE empties the WAL itself; the -shm index file is a fixed-size
+    // memory-mapped bookkeeping file SQLite keeps around regardless, so it
+    // is not expected to shrink to zero.
+    if (existsSync(`${path}-wal`)) assert.equal(statSync(`${path}-wal`).size, 0);
   } finally {
     for (const store of stores.reverse()) store.close();
     rmSync(dir, { recursive: true, force: true });

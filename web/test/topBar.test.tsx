@@ -10,13 +10,14 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   const html = renderToStaticMarkup(<TopBar
     active={worker}
     activeWorkspace="/repo/my-room"
-    capabilities={{ slashCommands: [], mcpServers: [{ name: "local", status: "connected" }], models: [], toolCount: 4, loading: false, source: "live", updatedAt: null, error: null }}
+    capabilities={{ slashCommands: [], mcpServers: [{ name: "local", status: "connected" }], models: [], toolCount: 4, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
     auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null }}
     wsReady
     modelOptions={[{ id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
     onRoom={() => {}}
     onOpenMcp={() => {}}
+    onOpenBackup={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -35,13 +36,14 @@ test("cached models remain selectable while capabilities refresh in background",
   const html = renderToStaticMarkup(<TopBar
     active={worker}
     activeWorkspace="/repo/my-room"
-    capabilities={{ slashCommands: [], mcpServers: [], models: [{ id: "sonnet", label: "Sonnet" }], toolCount: null, loading: true, source: "cache", updatedAt: null, error: null }}
+    capabilities={{ slashCommands: [], mcpServers: [], models: [{ id: "sonnet", label: "Sonnet" }], toolCount: null, builtinTools: null, loading: true, source: "cache", updatedAt: null, error: null }}
     auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null }}
     wsReady
     modelOptions={[{ id: "", label: "預設模型" }, { id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
     onRoom={() => {}}
     onOpenMcp={() => {}}
+    onOpenBackup={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -56,13 +58,14 @@ test("cached models remain selectable while capabilities refresh in background",
 test("shows the auto-approve toggle for Claude and reflects the worker's current setting", () => {
   const commonProps = {
     activeWorkspace: "/repo/my-room",
-    capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: false, source: "live" as const, updatedAt: null, error: null },
+    capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live" as const, updatedAt: null, error: null },
     auth: { provider: "claude" as const, displayName: "Claude Code", status: "authenticated" as const, loginCommand: "claude", checkedAt: null, error: null },
     wsReady: true,
     modelOptions: [{ id: "sonnet", label: "Sonnet" }],
     workerCount: 1,
     onRoom: () => {},
     onOpenMcp: () => {},
+    onOpenBackup: () => {},
     onProvider: () => {},
     onModel: () => {},
     onAutoApprove: () => {},
@@ -92,13 +95,14 @@ test("also shows the auto-approve control for Codex", () => {
   const html = renderToStaticMarkup(<TopBar
     active={off}
     activeWorkspace="/repo/my-room"
-    capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: false, source: "live", updatedAt: null, error: null }}
+    capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
     auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null }}
     wsReady
     modelOptions={[]}
     workerCount={1}
     onRoom={() => {}}
     onOpenMcp={() => {}}
+    onOpenBackup={() => {}}
     onProvider={() => {}}
     onModel={() => {}}
     onAutoApprove={() => {}}
@@ -111,13 +115,14 @@ test("also shows the auto-approve control for Codex", () => {
 
 const updateBaseProps = {
   activeWorkspace: "/repo/my-room",
-  capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, loading: false, source: "live", updatedAt: null, error: null },
+  capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null },
   auth: { provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null },
   wsReady: true,
   modelOptions: [],
   workerCount: 1,
   onRoom: () => {},
   onOpenMcp: () => {},
+  onOpenBackup: () => {},
   onProvider: () => {},
   onModel: () => {},
   onAutoApprove: () => {},

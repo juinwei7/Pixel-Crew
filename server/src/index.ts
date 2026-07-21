@@ -2,12 +2,13 @@ import express from "express";
 import cors, { type CorsOptions } from "cors";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { release as osRelease } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { release as osRelease, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
+import { costMicrosForTurnEnd } from "./costTracking.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
 import { buildCodexMcpAddArgs, CodexCapabilityRegistry } from "./codexCapabilities.js";
 import { McpLoginTracker } from "./mcpLogin.js";
@@ -23,6 +24,19 @@ import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skill
 import { isAllowedLocalRequest, isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
+import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
+import { stageExportDirectory } from "./backupExport.js";
+import {
+  BackupValidationError,
+  extractAndValidateBackup,
+  readAndClearRestoreMarker,
+  restoreFromSnapshot,
+  snapshotCurrentData,
+  swapInRestoredData,
+  writeRestoreMarker,
+} from "./backupImport.js";
+import multer from "multer";
+import * as tar from "tar";
 import { ProviderUsageRegistry } from "./providerUsage.js";
 import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
@@ -70,13 +84,24 @@ app.use((_req, res, next) => {
 // one third when transported as base64. Keep the HTTP ceiling just above the
 // validated attachment budget; individual parsers still enforce tighter caps.
 app.use(express.json({ limit: "44mb" }));
+// A backup restore in progress means the DB is being swapped out from under
+// this process — every write API except the backup routes themselves must
+// be rejected until the process exits and relaunches against the new data.
+// GETs stay served (harmless; lets the frontend keep polling system status).
+app.use((req, res, next) => {
+  if (maintenanceMode && req.method !== "GET" && !req.path.startsWith("/api/backup/")) {
+    res.status(503).json({ error: "還原正在進行中" });
+    return;
+  }
+  next();
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({
   server,
   path: "/ws",
   verifyClient(info, done) {
-    done(isAllowedLocalRequest(info.req.headers.host, info.origin));
+    done(!maintenanceMode && isAllowedLocalRequest(info.req.headers.host, info.origin));
   },
 });
 
@@ -85,6 +110,19 @@ const MAX_WORKERS = 20;
 const AVATAR_PRESET_IDS = new Set(["classic", "cyber", "signal", "spark", "ops"]);
 const store = new LocalStore(config.dbPath);
 const avatarStore = new AvatarStore(config.avatarDir);
+
+// Set only while a backup restore's commit is in flight — every write API
+// (except the backup routes themselves) is rejected until the process exits.
+// Never reset back to false: the process always exits at the end of a
+// commit attempt (see POST /api/backup/import/commit), success or failure.
+let maintenanceMode = false;
+const pendingImports = new Map<string, { stagingDir: string; createdAt: number }>();
+function discardPendingImport(token: string): void {
+  const pending = pendingImports.get(token);
+  if (!pending) return;
+  pendingImports.delete(token);
+  rmSync(pending.stagingDir, { recursive: true, force: true });
+}
 const usageRegistry = new ProviderUsageRegistry(
   store,
   (usage) => {
@@ -122,6 +160,12 @@ const mcpLoginTracker = new McpLoginTracker(async (state) => {
   restartIdleWorkers(state.provider, state.workspacePath);
 });
 
+// Read (and cleared) exactly once at startup — a restore's outcome is only
+// relevant to the very first status the frontend sees after relaunching, and
+// re-checking on every call would make an already-cleared marker ambiguous
+// with "no restore ever happened."
+const lastRestoreResult = readAndClearRestoreMarker(config.dataDirectory);
+
 function systemStatus() {
   const release = osRelease();
   const windowsBuild = process.platform === "win32" ? Number(release.split(".")[2] ?? 0) : null;
@@ -134,6 +178,7 @@ function systemStatus() {
     folderPicker: process.platform === "darwin" || process.platform === "win32",
     workspaceSetupRequired: workers.size === 0 && !config.targetRepoConfigured,
     codexWindowsBestEffort: process.platform === "win32" && Number.isFinite(windowsBuild) && (windowsBuild ?? 0) < 22_000,
+    lastRestoreResult,
   };
 }
 
@@ -289,9 +334,16 @@ function record(worker: Worker, event: RunnerEvent): void {
   }
   if (event.type === "turn_end" || event.type === "error") persistWorker(worker);
   if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
-  if (event.type === "turn_end" && !event.isError) {
-    const completedTurns = store.incrementCounter("completed_turns");
-    broadcast({ type: "stats_updated", stats: { completedTurns } });
+  if (event.type === "turn_end") {
+    const completedTurns = event.isError
+      ? store.getCounter("completed_turns")
+      : store.incrementCounter("completed_turns");
+    const costMicros = costMicrosForTurnEnd(worker.runner.provider, event);
+    const totalCostUsd =
+      (costMicros > 0
+        ? store.incrementCounter("total_cost_usd_micros", costMicros)
+        : store.getCounter("total_cost_usd_micros")) / 1_000_000;
+    broadcast({ type: "stats_updated", stats: { completedTurns, totalCostUsd } });
   }
   broadcast({ type: "event", workerId: worker.id, event });
 }
@@ -636,7 +688,10 @@ wss.on("connection", (socket) => {
       type: "snapshot",
       targetRepoPath: config.targetRepoPath,
       system: systemStatus(),
-      stats: { completedTurns: store.getCounter("completed_turns") },
+      stats: {
+        completedTurns: store.getCounter("completed_turns"),
+        totalCostUsd: store.getCounter("total_cost_usd_micros") / 1_000_000,
+      },
       updateInfo: updateChecker.getInfo(),
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
@@ -737,6 +792,11 @@ app.put("/api/commands", async (req, res) => {
     void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
       console.error("failed to refresh Claude capabilities after saving a command", error);
     });
+    // CommandCenter's own list view refetches on `workflowRevisions` changes,
+    // which otherwise only update on WorkflowLibraryWatcher's ~1.5s poll —
+    // rescan now so the tab that just saved (and any other open tab) reflect
+    // it immediately instead of waiting out the interval.
+    void workflowWatcher.scanNow();
     res.json({ command });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法儲存專案指令" });
@@ -751,6 +811,7 @@ app.delete("/api/commands", async (req, res) => {
     void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
       console.error("failed to refresh Claude capabilities after deleting a command", error);
     });
+    void workflowWatcher.scanNow();
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法刪除專案指令" });
@@ -776,6 +837,12 @@ app.put("/api/skills", async (req, res) => {
       req.body?.originalName ? String(req.body.originalName) : undefined,
     );
     restartIdleWorkers("codex", workspacePath);
+    // Codex skills aren't part of CodexCapabilityRegistry (they're `$`
+    // triggered, not part of the fixed slash-command set) — the only signal
+    // any tab's CodexSkillCenter has for "the list changed" is
+    // WorkflowLibraryWatcher's revision counter, so rescan now instead of
+    // waiting out its ~1.5s poll.
+    void workflowWatcher.scanNow();
     res.json({ skill });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法儲存 Codex Skill" });
@@ -787,6 +854,7 @@ app.delete("/api/skills", async (req, res) => {
     const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
     await deleteProjectSkill(workspacePath, String(req.body?.name ?? ""));
     restartIdleWorkers("codex", workspacePath);
+    void workflowWatcher.scanNow();
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法刪除 Codex Skill" });
@@ -966,6 +1034,147 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
     console.warn("Save avatar failed:", (error as Error).message);
     res.status(500).json({ error: "無法儲存角色圖片" });
   }
+});
+
+app.get("/api/backup/export", async (_req, res) => {
+  const stagingDir = join(config.dataDirectory, `.export-${randomUUID()}`);
+  try {
+    // Force the ~150ms debounce queue to disk and the WAL back into the
+    // main file, so a plain copy of dbPath alone is a complete snapshot.
+    store.flush();
+    store.checkpoint();
+    stageExportDirectory({ dbPath: config.dbPath, avatarDir: config.avatarDir }, stagingDir);
+    const filename = `pixel-crew-backup-${new Date().toISOString().slice(0, 10)}.tar.gz`;
+    res.set({
+      "Content-Type": "application/gzip",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "X-Content-Type-Options": "nosniff",
+    });
+    const stream = tar.create({ gzip: true, cwd: stagingDir, portable: true } as any, ["manifest.json", "db", "avatars"]);
+    stream.on("error", (err: unknown) => {
+      console.warn("Backup export stream failed:", (err as Error).message);
+      res.destroy(err as Error);
+    });
+    res.on("close", () => rmSync(stagingDir, { recursive: true, force: true }));
+    (stream as unknown as NodeJS.ReadableStream).pipe(res);
+  } catch (error) {
+    rmSync(stagingDir, { recursive: true, force: true });
+    console.warn("Backup export failed:", (error as Error).message);
+    if (!res.headersSent) res.status(500).json({ error: "無法建立備份檔案" });
+    else res.destroy();
+  }
+});
+
+const uploadBackup = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      try {
+        const dir = join(config.dataDirectory, `.import-upload-${randomUUID()}`);
+        ensurePrivateDirectorySync(dir);
+        cb(null, dir);
+      } catch (error) {
+        cb(error as Error, "");
+      }
+    },
+    filename: (_req, _file, cb) => cb(null, "upload.tar.gz"),
+  }),
+  limits: { fileSize: 500 * 1024 * 1024 },
+});
+
+app.post("/api/backup/import/validate", uploadBackup.single("backup"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "缺少備份檔案" });
+    return;
+  }
+  const uploadDir = dirname(req.file.path);
+  const stagingDir = join(config.dataDirectory, `.import-staged-${randomUUID()}`);
+  try {
+    const result = await extractAndValidateBackup(req.file.path, stagingDir);
+    const token = randomUUID();
+    pendingImports.set(token, { stagingDir, createdAt: Date.now() });
+    // Auto-discard an abandoned validation (uploaded but never confirmed)
+    // so its staging directory doesn't linger indefinitely.
+    setTimeout(() => discardPendingImport(token), 10 * 60_000).unref();
+    res.json({ importToken: token, ...result });
+  } catch (error) {
+    rmSync(stagingDir, { recursive: true, force: true });
+    const message = error instanceof BackupValidationError ? error.message : "備份檔案驗證失敗";
+    res.status(400).json({ error: message });
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true });
+  }
+});
+
+app.delete("/api/backup/import/:token", (req, res) => {
+  discardPendingImport(req.params.token);
+  res.status(204).end();
+});
+
+app.post("/api/backup/import/commit", async (req, res) => {
+  const importToken = req.body?.importToken;
+  const confirmPhrase = req.body?.confirmPhrase;
+  const pending = typeof importToken === "string" ? pendingImports.get(importToken) : undefined;
+  if (!pending) {
+    res.status(410).json({ error: "備份檢查已過期，請重新上傳" });
+    return;
+  }
+  if (confirmPhrase !== "RESTORE") {
+    res.status(400).json({ error: "確認文字不正確" });
+    return;
+  }
+  if (maintenanceMode) {
+    res.status(409).json({ error: "已有還原正在進行" });
+    return;
+  }
+
+  maintenanceMode = true;
+  for (const worker of workers.values()) worker.runner.stop();
+  for (const client of wss.clients) client.terminate();
+
+  const paths = { dbPath: config.dbPath, avatarDir: config.avatarDir };
+  const snapshotDir = join(config.dataDirectory, `pre-restore-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  let exitCode = 0;
+  let responseBody: { ok: boolean; message: string; preRestoreSnapshot?: string };
+  try {
+    // Checkpoint-then-close is the real point of no return: once the live
+    // DB handle is gone, this process cannot safely keep serving anything
+    // that depends on `store`, whether the swap that follows succeeds or
+    // has to roll back — both outcomes past this point end in process exit.
+    store.flush();
+    store.checkpoint();
+    store.close();
+    try {
+      snapshotCurrentData(paths, snapshotDir);
+      try {
+        swapInRestoredData(paths, pending.stagingDir);
+        writeRestoreMarker(config.dataDirectory, { success: true, at: new Date().toISOString(), snapshotDir });
+        responseBody = { ok: true, message: "還原完成，請重新啟動 Pixel Crew", preRestoreSnapshot: snapshotDir };
+      } catch (swapError) {
+        restoreFromSnapshot(paths, snapshotDir);
+        writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (swapError as Error).message, snapshotDir });
+        exitCode = 1;
+        responseBody = { ok: false, message: "還原失敗，已還原成原本的資料，請重新啟動 Pixel Crew 後再試一次" };
+      }
+    } catch (error) {
+      writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (error as Error).message, snapshotDir: null });
+      exitCode = 1;
+      responseBody = { ok: false, message: "還原失敗，請重新啟動 Pixel Crew 後再試一次" };
+    }
+  } finally {
+    discardPendingImport(importToken);
+  }
+  let exitScheduled = false;
+  const scheduleExit = () => {
+    if (exitScheduled) return;
+    exitScheduled = true;
+    setImmediate(() => process.exit(exitCode));
+  };
+  // `finish` is the normal response-completed path; `close` covers a client
+  // disconnect after the live store has already been closed/swapped. Either
+  // way this process must relaunch before it can safely serve more requests.
+  res.once("finish", scheduleExit);
+  res.once("close", scheduleExit);
+  res.status(exitCode === 0 ? 200 : 500).json(responseBody);
 });
 
 app.put("/api/workers/:id/avatar-preset", (req, res) => {
@@ -1686,6 +1895,37 @@ app.post("/api/mcp/refresh", async (req, res) => {
   });
 });
 
+// Claude has no CLI-level way to list a connected MCP server's tools (see
+// the RunnerEvent "meta" comment in claudeRunner.ts), so this is Codex-only
+// in practice — the frontend never calls it for a Claude workspace, but this
+// still answers defensively rather than 404ing on a Claude request.
+app.post("/api/mcp/tools", async (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    return;
+  }
+  if (provider !== "codex") {
+    res.json({ ok: true, capabilities: claudeCapabilitiesFor(workspacePath).getState() });
+    return;
+  }
+  const registry = codexCapabilitiesFor(workspacePath);
+  const worker = [...workers.values()].find(
+    (candidate) => candidate.runner.provider === "codex" && candidate.runner.workspacePath === workspacePath,
+  );
+  if (!worker) {
+    res.json({ ok: true, capabilities: registry.getState(), unavailable: true, reason: "no_active_worker" });
+    return;
+  }
+  const result = await (worker.runner as CodexSession).listMcpServerTools();
+  if (result.ok) registry.mergeMcpTools(result.servers);
+  else registry.markMcpToolsUnavailable();
+  res.json({ ok: true, capabilities: registry.getState() });
+});
+
 app.delete("/api/mcp/:name", async (req, res) => {
   const provider: ProviderId = req.query.provider === "codex" ? "codex" : "claude";
   let workspacePath: string;
@@ -1932,6 +2172,23 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     void shutdown(signal).then(() => { process.exitCode = 0; });
   });
 }
+
+// Node terminates the process on both of these by default, with no
+// diagnostic trail beyond whatever generic message it prints — every NPC
+// would just disconnect at once with no indication why. Log the actual
+// cause, then shut down as gracefully as the crashed state allows (stop
+// worker subprocesses, close the DB) before exiting non-zero. Continuing to
+// run after either of these is explicitly unsafe (the process may be in an
+// inconsistent state), so this is a diagnostic improvement, not an attempt
+// to recover and keep serving.
+process.on("uncaughtException", (error) => {
+  console.error("[fatal] uncaught exception:", error);
+  void shutdown("uncaughtException").finally(() => process.exit(1));
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandled rejection:", reason);
+  void shutdown("unhandledRejection").finally(() => process.exit(1));
+});
 
 server.listen(config.port, config.host, () => {
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);

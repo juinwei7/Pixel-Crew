@@ -24,7 +24,7 @@ type ServerMessage =
       type: "snapshot";
       targetRepoPath: string;
       system?: SystemStatus;
-      stats?: { completedTurns: number };
+      stats?: { completedTurns: number; totalCostUsd: number };
       updateInfo?: UpdateInfo;
       workspacePaths: string[];
       auth: ProviderAuthState[];
@@ -58,7 +58,7 @@ type ServerMessage =
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState }
   | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
-  | { type: "stats_updated"; stats: { completedTurns: number } }
+  | { type: "stats_updated"; stats: { completedTurns: number; totalCostUsd: number } }
   | { type: "update_info"; updateInfo: UpdateInfo };
 
 type WorkerSummary = {
@@ -99,7 +99,10 @@ export function useWorkers() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
-  const [stats, setStats] = useState<{ completedTurns: number }>({ completedTurns: 0 });
+  const [stats, setStats] = useState<{ completedTurns: number; totalCostUsd: number }>({
+    completedTurns: 0,
+    totalCostUsd: 0,
+  });
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
@@ -108,6 +111,7 @@ export function useWorkers() {
     mcpServers: [],
     models: [],
     toolCount: null,
+    builtinTools: null,
     loading: true,
     source: "empty",
     updatedAt: null,

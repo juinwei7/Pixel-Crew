@@ -240,8 +240,10 @@ export async function createScene(
   const onPointerUp = (event: PointerEvent) => {
     if (dragId === event.pointerId) dragId = null;
   };
+  // Continuous, not stepped to integers — smooth zoom in/out at any size,
+  // only clamped at the min/max bounds.
   function zoomAnchored(next: number, cx: number, cy: number): void {
-    const clamped = Math.max(2, Math.min(fitScale + 4, Math.round(next)));
+    const clamped = Math.max(2, Math.min(fitScale + 4, next));
     if (clamped === scale) return;
     const wx = (cx - world.position.x) / scale;
     const wy = (cy - world.position.y) / scale;
@@ -251,10 +253,18 @@ export async function createScene(
     applyView();
   }
 
+  // Multiplicative (not additive) so the same physical scroll gesture feels
+  // consistent whether zoomed way in or out, and scales smoothly with
+  // however much deltaY a given event reports — no discrete per-event jump,
+  // no accumulation/threshold games. A notched mouse wheel's larger deltaY
+  // naturally produces a bigger single step; a trackpad's stream of tiny
+  // deltaY events naturally produces a smooth, continuous zoom.
+  const WHEEL_ZOOM_SENSITIVITY = 0.0018;
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
     const rect = app.canvas.getBoundingClientRect();
-    zoomAnchored(scale + (event.deltaY < 0 ? 1 : -1), event.clientX - rect.left, event.clientY - rect.top);
+    const factor = Math.exp(-event.deltaY * WHEEL_ZOOM_SENSITIVITY);
+    zoomAnchored(scale * factor, event.clientX - rect.left, event.clientY - rect.top);
   };
   function resetView(): void {
     userScale = null;

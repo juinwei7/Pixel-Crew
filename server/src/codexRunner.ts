@@ -10,6 +10,7 @@ import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
+import { parseCodexMcpServerStatus, type CodexMcpServerToolsEntry } from "./codexCapabilities.js";
 
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
@@ -232,6 +233,28 @@ export class CodexSession implements AgentSession {
     return { sessionId: this.sessionId, completedTurns: this.completedTurns };
   }
 
+  // Queries the (undocumented, experimental) mcpServerStatus/list app-server
+  // method for a full tool catalog of every connected MCP server. Any
+  // failure — an older Codex CLI, no live connection yet, or the method
+  // being renamed/removed in a future version — degrades to "unsupported"
+  // rather than throwing, since this is not a documented, stable surface.
+  async listMcpServerTools(): Promise<
+    | { ok: true; servers: CodexMcpServerToolsEntry[] }
+    | { ok: false; reason: "not_ready" | "unsupported"; message: string }
+  > {
+    try {
+      await this.ensureThread();
+    } catch (error) {
+      return { ok: false, reason: "not_ready", message: (error as Error).message };
+    }
+    try {
+      const result = await this.request("mcpServerStatus/list", { detail: "full" });
+      return { ok: true, servers: parseCodexMcpServerStatus(result) };
+    } catch (error) {
+      return { ok: false, reason: "unsupported", message: (error as Error).message };
+    }
+  }
+
   private async ensureThread(): Promise<string> {
     if (this.ready) return this.ready;
     this.ready = this.startAppServer();
@@ -274,6 +297,10 @@ export class CodexSession implements AgentSession {
 
     await this.request("initialize", {
       clientInfo: { name: "pixel_crew", title: "Pixel Crew", version: "0.1.0" },
+      // Undocumented flag required to unlock mcpServerStatus/list (see
+      // listMcpServerTools below) — an experimental app-server method, not
+      // exposed by `codex app-server --help` or any official doc.
+      capabilities: { experimentalApi: true },
     });
     this.notify("initialized", {});
 

@@ -16,6 +16,7 @@ type Props = {
   providerChanging?: boolean;
   onRoom(): void;
   onOpenMcp(): void;
+  onOpenBackup(): void;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
   onAutoApprove(mode: AutoApproveMode): void;
@@ -37,6 +38,7 @@ export function TopBar({
   providerChanging = false,
   onRoom,
   onOpenMcp,
+  onOpenBackup,
   onProvider,
   onModel,
   onAutoApprove,
@@ -115,7 +117,7 @@ export function TopBar({
           disabled={!active}
           onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
           aria-label="自動核准模式"
-          title="安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了 rm -rf、sudo 等高風險指令，其他都直接放行"
+          title="安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了 rm -rf、sudo 等高風險 shell 指令，其他 shell 指令與所有已連接 MCP server 的工具都會直接放行，不再詢問"
         >
           <option value="off">自動核准：關閉</option>
           <option value="safe">安全自動核准</option>
@@ -192,6 +194,7 @@ export function TopBar({
             <div><i className={`health-dot health-dot--${wsReady ? "ok" : "error"}`} /><span>Local server</span><strong>{wsReady ? "已連線" : "重新連線中"}</strong></div>
             {!authReady && <button type="button" onClick={onRefreshAuth}>重新檢查</button>}
             <button type="button" className="health-popover__secondary" onClick={() => { onResetUi(); setHealthOpen(false); }}>重設介面配置</button>
+            <button type="button" className="health-popover__secondary" onClick={() => { onOpenBackup(); setHealthOpen(false); }}>備份與還原</button>
             <small className="health-popover__version">
               Pixel Crew v{updateInfo?.currentVersion ?? APP_VERSION}
               {updateInfo?.updateAvailable ? `（最新 v${updateInfo.latestVersion}）` : ""}

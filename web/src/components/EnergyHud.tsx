@@ -4,6 +4,7 @@ import type { ProviderId, ProviderUsageState, UsageWindow } from "../types";
 type Props = {
   usage: Record<ProviderId, ProviderUsageState>;
   onRefresh(): Promise<string | null>;
+  totalCostUsd: number;
 };
 
 function headline(state: ProviderUsageState): number | null {
@@ -50,7 +51,7 @@ function WindowRow({ window }: { window: UsageWindow }) {
   );
 }
 
-export function EnergyHud({ usage, onRefresh }: Props) {
+export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +85,9 @@ export function EnergyHud({ usage, onRefresh }: Props) {
         <span className="energy-hud__title"><i />WORK ENERGY</span>
         <ProviderMeter provider="claude" state={usage.claude} />
         <ProviderMeter provider="codex" state={usage.codex} />
+        <span className="energy-hud__cost" title="Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）">
+          US$ {totalCostUsd.toFixed(2)}
+        </span>
       </button>
       {open && (
         <div className="energy-detail">
@@ -93,14 +97,14 @@ export function EnergyHud({ usage, onRefresh }: Props) {
             return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? "快取" : state.updatedAt ? "即時" : "尚無資料"}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? "正在讀取工作能量…" : state.error || "Provider 沒有提供用量資料"}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
           })}
           {error && <div className="energy-detail__error">{error}</div>}
-          <footer>帳號共用 · 不隨房間或 NPC 切換</footer>
+          <footer>帳號共用 · 不隨房間或 NPC 切換 · Claude 累計花費 US$ {totalCostUsd.toFixed(2)} · Codex 以配額百分比計費，無美元金額</footer>
         </div>
       )}
     </div>
   );
 }
 
-export function FocusEnergy({ usage, onRefresh, open, onOpenChange, activeProvider = "claude" }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId }) {
+export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude" }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -110,8 +114,13 @@ export function FocusEnergy({ usage, onRefresh, open, onOpenChange, activeProvid
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
     };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onOpenChange(false); };
     window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
   }, [onOpenChange]);
 
   async function refresh() {
@@ -127,6 +136,9 @@ export function FocusEnergy({ usage, onRefresh, open, onOpenChange, activeProvid
       <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label="查看專心模式工作用量">
         <ProviderMeter provider={activeProvider} state={usage[activeProvider]} />
         <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? "用量偏低" : "全部"}</span>
+        <span className="energy-hud__cost" title="Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）">
+          US$ {totalCostUsd.toFixed(2)}
+        </span>
       </button>
       <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label="工作用量詳情">
         <header><div><span>WORK ENERGY</span><strong>用量與重置時間</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "更新中…" : "重新整理"}</button></header>
@@ -135,7 +147,7 @@ export function FocusEnergy({ usage, onRefresh, open, onOpenChange, activeProvid
           return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? "快取" : state.updatedAt ? "即時" : "尚無資料"}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? "正在讀取工作能量…" : state.error || "Provider 沒有提供用量資料"}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
         })}
         {error && <div className="energy-detail__error">{error}</div>}
-        <footer>帳號共用 · 不隨 NPC 切換</footer>
+        <footer>帳號共用 · 不隨 NPC 切換 · Claude 累計花費 US$ {totalCostUsd.toFixed(2)} · Codex 以配額百分比計費，無美元金額</footer>
       </aside>
     </div>
   );

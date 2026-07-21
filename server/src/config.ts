@@ -11,8 +11,15 @@ const dbPath =
   process.env.DB_PATH?.trim() ||
   join(dataDirectory, "cockpit.sqlite");
 const avatarDir = process.env.AVATAR_DIR?.trim() || join(dirname(dbPath), "avatars");
+// Extracted so this security-critical check is directly unit-testable —
+// config.ts itself runs its checks as a side effect of being imported, which
+// can't be exercised per-case in a normal test without spawning a subprocess.
+export function isLoopbackHost(host: string): boolean {
+  return ["127.0.0.1", "localhost", "::1"].includes(host);
+}
+
 const configuredHost = process.env.HOST?.trim() || "127.0.0.1";
-if (!["127.0.0.1", "localhost", "::1"].includes(configuredHost)) {
+if (!isLoopbackHost(configuredHost)) {
   throw new Error("Pixel Crew has no remote authentication; HOST must remain a loopback address");
 }
 const configuredTarget = process.env.TARGET_REPO_PATH?.trim();

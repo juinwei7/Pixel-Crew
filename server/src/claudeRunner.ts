@@ -33,6 +33,10 @@ export type RunnerEvent =
       slashCommands: string[];
       mcpServers: Array<{ name: string; status: string }>;
       toolCount: number;
+      // Built-in tools (Bash, Read, Edit, …) available at session init time —
+      // NOT an MCP server's tool list. The init frame fires before slow MCP
+      // servers finish connecting, so it typically excludes their tools.
+      builtinTools: string[];
     }
   | { type: "user_message"; text: string }
   | { type: "error"; message: string };
@@ -422,6 +426,9 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {
               }))
             : [],
           toolCount: Array.isArray(parsed.tools) ? parsed.tools.length : 0,
+          builtinTools: Array.isArray(parsed.tools)
+            ? parsed.tools.filter((tool: unknown): tool is string => typeof tool === "string")
+            : [],
         });
       }
       break;

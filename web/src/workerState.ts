@@ -372,6 +372,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         slashCommands: event.slashCommands,
         mcpServers: event.mcpServers,
         toolCount: event.toolCount,
+        builtinTools: event.builtinTools,
       };
       break;
     }

@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import type { CapabilityState, McpServerState, ModelOption } from "./capabilities.js";
+import type { CapabilityState, McpServerState, McpToolInfo, ModelOption } from "./capabilities.js";
 import { execCli } from "./platform/processes.js";
 import type { LocalStore } from "./store.js";
 
@@ -52,6 +52,39 @@ export function parseCodexMcpList(stdout: string): McpServerState[] {
     // than hard-coding a specific enum.
     if (typeof item.auth_status === "string") server.authStatus = item.auth_status;
     return [server];
+  });
+}
+
+// Codex's own internal MCP server (not something the user configured via
+// `codex mcp add`) — it appears in mcpServerStatus/list but never in
+// `codex mcp list`. Shown, labeled distinctly, rather than filtered out: it
+// IS a real connected server with real tools.
+const CODEX_BUILTIN_MCP_SERVERS = new Set(["codex_apps"]);
+
+export type CodexMcpServerToolsEntry = { name: string; tools: McpToolInfo[]; builtin?: boolean };
+
+// Parses the (undocumented, experimental) mcpServerStatus/list app-server
+// response. Defensive about the exact envelope shape since this method isn't
+// covered by any official schema/doc — accepts a bare array or either of the
+// wrapper keys observed/plausible in testing.
+export function parseCodexMcpServerStatus(result: unknown): CodexMcpServerToolsEntry[] {
+  const list = Array.isArray(result)
+    ? result
+    : Array.isArray((result as any)?.servers)
+      ? (result as any).servers
+      : Array.isArray((result as any)?.mcpServers)
+        ? (result as any).mcpServers
+        : [];
+  return list.flatMap((entry: any) => {
+    if (!entry || typeof entry.name !== "string") return [];
+    const toolsMap = entry.tools && typeof entry.tools === "object" ? entry.tools : {};
+    const tools: McpToolInfo[] = Object.entries(toolsMap).map(([toolName, tool]: [string, any]) => ({
+      name: typeof tool?.name === "string" ? tool.name : toolName,
+      description: typeof tool?.description === "string" ? tool.description : undefined,
+    }));
+    const item: CodexMcpServerToolsEntry = { name: entry.name, tools };
+    if (CODEX_BUILTIN_MCP_SERVERS.has(entry.name)) item.builtin = true;
+    return [item];
   });
 }
 
@@ -112,6 +145,8 @@ export class CodexCapabilityRegistry {
       mcpServers: [],
       models: FALLBACK_MODELS,
       toolCount: null,
+      // Not a Claude concept for Codex — always null, never observed.
+      builtinTools: null,
       loading: true,
       source: "empty",
       updatedAt: null,
@@ -172,6 +207,36 @@ export class CodexCapabilityRegistry {
       source: "live",
       updatedAt: new Date().toISOString(),
       error: errors.length > 0 ? errors.join("; ") : null,
+    });
+  }
+
+  // Merges a full tool catalog (from CodexSession.listMcpServerTools) into
+  // the existing `mcp list`-derived server states. Deliberately only touches
+  // tools/toolsStatus/builtin — never overwrites status/authStatus/transport,
+  // which the `codex mcp list` parsing above already populated precisely.
+  mergeMcpTools(servers: CodexMcpServerToolsEntry[]): void {
+    const byName = new Map(this.state.mcpServers.map((server) => [server.name, server]));
+    for (const incoming of servers) {
+      const existing = byName.get(incoming.name);
+      byName.set(incoming.name, {
+        ...(existing ?? { name: incoming.name, status: "enabled" }),
+        tools: incoming.tools,
+        toolsStatus: "available",
+        ...(incoming.builtin ? { builtin: true } : {}),
+      });
+    }
+    this.publish({ ...this.state, mcpServers: [...byName.values()] });
+  }
+
+  // Graceful-degradation path when mcpServerStatus/list itself failed (older
+  // Codex CLI, no active worker, the experimental method renamed/removed).
+  // Leaves servers that already have a catalog untouched.
+  markMcpToolsUnavailable(): void {
+    this.publish({
+      ...this.state,
+      mcpServers: this.state.mcpServers.map((server) =>
+        server.toolsStatus === "available" ? server : { ...server, toolsStatus: "error" },
+      ),
     });
   }
 

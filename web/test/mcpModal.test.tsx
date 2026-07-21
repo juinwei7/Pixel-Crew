@@ -11,6 +11,7 @@ function capabilities(mcpServers: McpServerState[], overrides: Partial<Capabilit
     mcpServers,
     models: [],
     toolCount: null,
+    builtinTools: null,
     loading: false,
     source: "live",
     updatedAt: null,
@@ -19,7 +20,13 @@ function capabilities(mcpServers: McpServerState[], overrides: Partial<Capabilit
   };
 }
 
-function renderModal(mcpServers: McpServerState[], provider: ProviderId = "claude", overrides: Partial<CapabilityState> = {}, platform?: string) {
+function renderModal(
+  mcpServers: McpServerState[],
+  provider: ProviderId = "claude",
+  overrides: Partial<CapabilityState> = {},
+  platform?: string,
+  usedMcpTools?: Record<string, string[]>,
+) {
   return renderToStaticMarkup(
     <McpModal
       capabilities={capabilities(mcpServers, overrides)}
@@ -27,6 +34,7 @@ function renderModal(mcpServers: McpServerState[], provider: ProviderId = "claud
       workspacePath="/repo"
       mcpLoginResult={null}
       platform={platform}
+      usedMcpTools={usedMcpTools}
       notify={() => {}}
       onClose={() => {}}
     />,
@@ -103,7 +111,7 @@ test("gates Codex login/logout on authStatus, not the enabled/disabled status", 
     { name: "remote-auth", status: "enabled", transport: "http", authStatus: "authenticated" },
   ], "codex");
 
-  const rowHtml = (name: string) => html.slice(html.indexOf(`>${name}<`), html.indexOf(`>${name}<`) + 400);
+  const rowHtml = (name: string) => html.slice(html.indexOf(`>${name}<`), html.indexOf(`>${name}<`) + 900);
   assert.doesNotMatch(rowHtml("docs"), /登入|登出/);
   assert.match(rowHtml("remote-unauth"), /登入/);
   assert.doesNotMatch(rowHtml("remote-unauth"), /登出/);
@@ -143,4 +151,47 @@ test("hides the advanced OAuth options toggle by default (stdio is the initial t
 
   const codexHtml = renderModal([], "codex");
   assert.doesNotMatch(codexHtml, /進階選項（OAuth）/);
+});
+
+test("Codex server with an available tool catalog shows the count and hides the list by default", () => {
+  const html = renderModal([
+    { name: "my-hub", status: "enabled", toolsStatus: "available", tools: [{ name: "core_list", description: "List cores" }] },
+  ], "codex");
+  assert.match(html, /查看工具（1）/);
+  // Collapsed by default — renderToStaticMarkup can't simulate the click.
+  assert.doesNotMatch(html, /core_list/);
+  assert.doesNotMatch(html, /工具清單目前無法讀取/);
+});
+
+test("Codex server without an available catalog shows the persistent unavailable note", () => {
+  const errored = renderModal([{ name: "my-hub", status: "enabled", toolsStatus: "error" }], "codex");
+  assert.match(errored, /工具清單目前無法讀取/);
+
+  const neverChecked = renderModal([{ name: "my-hub", status: "enabled" }], "codex");
+  assert.match(neverChecked, /工具清單目前無法讀取/);
+});
+
+test("Claude servers always show the used-tools-only fallback note, regardless of status", () => {
+  const html = renderModal([{ name: "my-hub", status: "connected" }], "claude");
+  assert.match(html, /僅顯示已使用過的工具/);
+  assert.doesNotMatch(html, /工具清單目前無法讀取/);
+});
+
+test("a builtin Codex server shows its badge and never offers remove/login/logout", () => {
+  const html = renderModal([
+    { name: "codex_apps", status: "enabled", authStatus: "unauthenticated", builtin: true },
+  ], "codex");
+  const row = html.slice(html.indexOf(">codex_apps<"), html.indexOf(">codex_apps<") + 900);
+  assert.match(row, /Codex 內建/);
+  assert.doesNotMatch(row, /移除|登入|登出/);
+});
+
+test("accepts usedMcpTools for a Claude server without crashing (content is behind the collapsed toggle)", () => {
+  assert.doesNotThrow(() => renderModal(
+    [{ name: "my-hub", status: "connected" }],
+    "claude",
+    {},
+    undefined,
+    { "my-hub": ["core_list", "hutask_get"] },
+  ));
 });

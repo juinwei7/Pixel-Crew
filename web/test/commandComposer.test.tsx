@@ -10,6 +10,7 @@ const capabilities = {
   mcpServers: [],
   models: [],
   toolCount: null,
+  builtinTools: null,
   loading: false,
   source: "live" as const,
   updatedAt: null,

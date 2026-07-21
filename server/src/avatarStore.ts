@@ -5,7 +5,7 @@ import { inflateSync } from "node:zlib";
 import { ensurePrivateDirectory, protectFile } from "./platform/fileProtection.js";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const AVATAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|gif)$/i;
+export const AVATAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|gif)$/i;
 const MAX_AVATAR_BYTES = 32 * 1024;
 const MAX_GIF_BYTES = 2 * 1024 * 1024;
 const MAX_GIF_DIMENSION = 320;
@@ -76,7 +76,7 @@ export class AvatarStore {
   }
 }
 
-function validateGif(data: Buffer): void {
+export function validateGif(data: Buffer): void {
   if (data.length < 14 || !["GIF87a", "GIF89a"].includes(data.toString("ascii", 0, 6))) {
     throw new AvatarValidationError("角色動畫必須是有效的 GIF");
   }
@@ -140,7 +140,7 @@ function skipGifSubBlocks(data: Buffer, start: number): number {
   throw new AvatarValidationError("GIF data sub-block 缺少結尾");
 }
 
-function validatePng(data: Buffer): void {
+export function validatePng(data: Buffer): void {
   if (data.length < 33 || !data.subarray(0, 8).equals(PNG_SIGNATURE)) {
     throw new AvatarValidationError("角色圖片必須是 PNG");
   }

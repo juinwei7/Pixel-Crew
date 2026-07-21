@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
 import { extractMarkdownHeadings, RichText } from "./RichText";
+import { parseMcpToolName as toolMeta } from "../mcpToolName";
 
 const focusScrollPositions = new Map<string, number>();
 const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
@@ -95,14 +96,6 @@ function formatValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function toolMeta(name: string): { label: string; mcpServer: string | null } {
-  if (name.startsWith("mcp__")) {
-    const parts = name.split("__");
-    return { label: parts.slice(2).join("__") || name, mcpServer: parts[1] ?? null };
-  }
-  return { label: name, mcpServer: null };
 }
 
 function CopyButton({ value, label = "複製" }: { value: string; label?: string }) {

@@ -18,6 +18,25 @@ export class ApiRequestError extends Error {
   }
 }
 
+// Multipart upload — apiRequest always JSON-encodes its body, which isn't
+// suitable for a backup archive (base64 inflation + the JSON size cap).
+export async function apiUpload<T>(path: string, formData: FormData, opts: { timeoutMs?: number } = {}): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120000);
+  try {
+    const response = await fetch(`${SERVER_URL}${path}`, { method: "POST", body: formData, signal: controller.signal });
+    const data = await response.json().catch(() => ({})) as T & { error?: string };
+    if (!response.ok) throw new ApiRequestError(data.error ?? `請求失敗（${response.status}）`, response.status);
+    return data;
+  } catch (error) {
+    if (error instanceof ApiRequestError) throw error;
+    if ((error as Error).name === "AbortError") throw new ApiRequestError("伺服器回應逾時，請確認 Pixel Crew Server 是否仍在執行");
+    throw new ApiRequestError("上傳失敗，請確認 Pixel Crew Server 是否仍在執行");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const controller = new AbortController();
   const { timeoutMs = 15000, body: bodyValue, ...requestInit } = options;

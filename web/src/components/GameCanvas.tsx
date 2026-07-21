@@ -32,6 +32,14 @@ type VisualWorker = {
   workspacePath: string;
 };
 
+// Zoom is now continuous (not stepped to integers), so the readout needs a
+// decimal — but whole numbers (the common auto-fit case) should still read
+// as "4x" rather than "4.0x".
+function formatZoom(scale: number): string {
+  const rounded = Math.round(scale * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}x`;
+}
+
 function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
   const last = worker.turns[worker.turns.length - 1];
   return last?.items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending") ?? null;
@@ -320,14 +328,14 @@ export function GameCanvas({
             type="button"
             aria-label="縮小"
             disabled={view.scale <= view.minScale}
-            onClick={() => sceneRef.current?.setZoom(view.scale - 1)}
+            onClick={() => sceneRef.current?.setZoom(view.scale - 0.5)}
           >−</button>
           <input
             type="range"
             aria-label="縮放倍率"
             min={view.minScale}
             max={view.maxScale}
-            step={1}
+            step={0.05}
             value={view.scale}
             onChange={(event) => sceneRef.current?.setZoom(Number(event.target.value))}
           />
@@ -335,9 +343,9 @@ export function GameCanvas({
             type="button"
             aria-label="放大"
             disabled={view.scale >= view.maxScale}
-            onClick={() => sceneRef.current?.setZoom(view.scale + 1)}
+            onClick={() => sceneRef.current?.setZoom(view.scale + 0.5)}
           >＋</button>
-          <span className="canvas-zoom__value">{view.scale}x</span>
+          <span className="canvas-zoom__value">{formatZoom(view.scale)}</span>
           <button
             type="button"
             className="canvas-zoom__reset"

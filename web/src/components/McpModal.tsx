@@ -55,11 +55,14 @@ type Props = {
   workspacePath: string;
   mcpLoginResult: (McpLoginResult & { seq: number }) | null;
   platform?: string;
+  // Claude has no API to list a connected MCP server's tools — server name
+  // → tool names actually called so far, as the only fallback content.
+  usedMcpTools?: Record<string, string[]>;
   notify(message: string, tone?: "ok" | "error" | "info"): void;
   onClose(): void;
 };
 
-export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult, platform, notify, onClose }: Props) {
+export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult, platform, usedMcpTools, notify, onClose }: Props) {
   const servers = capabilities.mcpServers;
   const activeServerCount = servers.filter((s) => s.status === "connected" || s.status === "enabled").length;
 
@@ -69,6 +72,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [pendingLogins, setPendingLogins] = useState<Record<string, boolean>>({});
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
 
   const [addMode, setAddMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
@@ -97,6 +101,14 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
     if (transport === "sse") setTransport("http");
     if (addMode === "json") setAddMode("form");
   }, [provider, transport, addMode]);
+
+  useEffect(() => {
+    // Codex only — Claude has no CLI-level way to list a server's tools, so
+    // there's nothing to fetch. The response arrives via the existing
+    // capabilities_updated WS broadcast, not this call's own return value.
+    if (provider !== "codex") return;
+    void apiRequest("/api/mcp/tools", { method: "POST", body: { provider, workspacePath }, timeoutMs: 20000 }).catch(() => {});
+  }, [provider, workspacePath]);
 
   useEffect(() => {
     if (!mcpLoginResult) return;
@@ -299,7 +311,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
           {servers.map((server) => {
             const detail = detailLine(server);
             const loggingIn = Boolean(pendingLogins[server.name]);
-            const editable = isEditable(server.name);
+            const editable = isEditable(server.name) && !server.builtin;
             const connected = server.status === "connected" || server.status === "enabled";
             const toolsFetchFailed = server.status === "connected_tools_failed";
             const authenticated = connected || toolsFetchFailed;
@@ -312,10 +324,12 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
             // than the literal "authenticated" as "not yet" is the safer
             // default (worst case: an extra, harmless login button; the CLI's
             // own error message is the fallback if it's already logged in).
-            const codexAuthApplicable = provider === "codex" && typeof server.authStatus === "string" && server.authStatus !== "unsupported";
+            const codexAuthApplicable = provider === "codex" && !server.builtin && typeof server.authStatus === "string" && server.authStatus !== "unsupported";
             const codexAuthenticated = codexAuthApplicable && server.authStatus === "authenticated";
-            const showLogin = server.status === "needs_auth" || (codexAuthApplicable && !codexAuthenticated);
-            const showLogout = (authenticated && server.transport !== "stdio" && provider !== "codex") || (codexAuthApplicable && codexAuthenticated);
+            const showLogin = (server.status === "needs_auth" && !server.builtin) || (codexAuthApplicable && !codexAuthenticated);
+            const showLogout = (authenticated && server.transport !== "stdio" && provider !== "codex" && !server.builtin) || (codexAuthApplicable && codexAuthenticated);
+            const expanded = Boolean(expandedTools[server.name]);
+            const usedTools = usedMcpTools?.[server.name] ?? [];
             return (
               <div key={server.name} className="mcp-modal__row">
                 <span className={`mcp-modal__dot ${connected ? "mcp-modal__dot--on" : toolsFetchFailed ? "mcp-modal__dot--warn" : ""}`} />
@@ -324,6 +338,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                     <span className="mcp-modal__name">{server.name}</span>
                     {server.scope && <span className={`mcp-modal__badge mcp-modal__badge--${server.scope}`}>{SCOPE_LABEL[server.scope]}</span>}
                     {server.transport && <span className="mcp-modal__badge mcp-modal__badge--transport">{server.transport}</span>}
+                    {server.builtin && <span className="mcp-modal__badge mcp-modal__badge--builtin">Codex 內建</span>}
                   </div>
                   <div className="mcp-modal__status-line">
                     <span className="mcp-modal__status">{statusLabel(server.status)}</span>
@@ -331,6 +346,53 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                     {toolsFetchFailed && <span className="mcp-modal__note">可嘗試「重新讀取」或查看細節</span>}
                   </div>
                   {detail && <div className="mcp-modal__detail">{detail}</div>}
+                  <div className="mcp-modal__tools">
+                    <button
+                      type="button"
+                      className="mcp-modal__tools-toggle"
+                      onClick={() => setExpandedTools((current) => ({ ...current, [server.name]: !current[server.name] }))}
+                    >
+                      {expanded ? "隱藏工具" : "查看工具"}
+                      {provider === "codex" && server.tools ? `（${server.tools.length}）` : ""}
+                    </button>
+                    {provider === "claude" && <span className="mcp-modal__note">僅顯示已使用過的工具</span>}
+                    {provider === "codex" && server.toolsStatus !== "available" && (
+                      <span className="mcp-modal__note">工具清單目前無法讀取</span>
+                    )}
+                    {expanded && (
+                      <div className="mcp-modal__tools-list">
+                        {provider === "codex" && server.toolsStatus === "available" && (
+                          server.tools && server.tools.length > 0 ? (
+                            server.tools.map((tool) => (
+                              <div key={tool.name} className="mcp-modal__tools-name">
+                                {tool.name}
+                                {tool.description && <span className="mcp-modal__tools-desc"> — {tool.description}</span>}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="mcp-modal__tools-empty">此伺服器目前沒有提供任何工具</div>
+                          )
+                        )}
+                        {provider === "codex" && server.toolsStatus !== "available" && (
+                          <div className="mcp-modal__tools-fallback">
+                            目前無法取得完整工具清單（可能是實驗性 API 已變動，或尚無運作中的 Codex 工人）。
+                          </div>
+                        )}
+                        {provider === "claude" && (
+                          usedTools.length > 0 ? (
+                            <>
+                              <div className="mcp-modal__tools-fallback">此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具。</div>
+                              {usedTools.map((toolName) => (
+                                <div key={toolName} className="mcp-modal__tools-name">{toolName}</div>
+                              ))}
+                            </>
+                          ) : (
+                            <div className="mcp-modal__tools-empty">此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具；尚未使用過這個伺服器的任何工具。</div>
+                          )
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="mcp-modal__actions">
                   {/* Login/logout are safe, reversible auth-only actions — unlike
