@@ -258,6 +258,38 @@
   .stats b { display: block; color: var(--cyan); font: 700 21px var(--mono); }
   .stats span { color: var(--faint); font: 11px var(--mono); letter-spacing: 0.14em; }
 
+  /* ============ v1.0.3 新功能 ============ */
+  .launch { padding: 88px 0 0; scroll-margin-top: 20px; }
+  .launch-shell {
+    position: relative; overflow: hidden; padding: 36px;
+    border: 1px solid rgba(255, 209, 102, .24);
+    background:
+      linear-gradient(rgba(77, 227, 255, .025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(77, 227, 255, .025) 1px, transparent 1px),
+      linear-gradient(145deg, rgba(18, 29, 49, .96), rgba(8, 14, 26, .9));
+    background-size: 32px 32px, 32px 32px, auto;
+    box-shadow: 0 26px 70px rgba(0, 0, 0, .28);
+  }
+  .launch-shell::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--gold), var(--cyan), var(--green)); }
+  .launch-head { display: grid; grid-template-columns: minmax(0, 8fr) minmax(220px, 3fr); gap: 34px; align-items: end; }
+  .launch-head h2 { max-width: 20em; margin-bottom: 10px; font-size: clamp(26px, 4vw, 39px); }
+  .launch-head p { max-width: 44em; margin: 0; color: var(--dim); }
+  .launch-meta { justify-self: end; padding-left: 22px; border-left: 1px solid rgba(255, 209, 102, .28); }
+  .launch-version { display: block; color: var(--gold); font: 800 28px var(--mono); letter-spacing: .08em; }
+  .launch-date { display: block; margin: 2px 0 12px; color: var(--faint); font: 11px var(--mono); letter-spacing: .12em; }
+  .launch-meta a { font: 700 11px var(--mono); letter-spacing: .06em; }
+  .upgrade-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; margin-top: 30px; }
+  .upgrade-card { grid-column: span 4; min-height: 174px; padding: 20px; border: 1px solid var(--line-soft); background: rgba(4, 8, 17, .62); }
+  .upgrade-card:nth-child(1), .upgrade-card:nth-child(4) { grid-column: span 6; }
+  .upgrade-card .index { display: block; margin-bottom: 18px; color: var(--cyan); font: 700 10px var(--mono); letter-spacing: .18em; }
+  .upgrade-card b { display: block; margin-bottom: 6px; color: #f3f8ff; font-size: 15px; }
+  .upgrade-card p { margin: 0; color: var(--dim); font-size: 13.5px; line-height: 1.75; }
+  .proof-strip { display: grid; grid-template-columns: 1fr 1fr 1.35fr; gap: 12px; margin-top: 12px; }
+  .proof { margin: 0; overflow: hidden; border: 1px solid var(--line-soft); background: rgba(4, 8, 17, .72); }
+  .proof-media { aspect-ratio: 4 / 3; overflow: hidden; background: #070d19; }
+  .proof-media img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .proof figcaption { padding: 12px 14px; color: var(--dim); font: 10px/1.6 var(--mono); letter-spacing: .06em; }
+
   /* ============ 展示窗（左右交錯） ============ */
   .scenes { padding-top: 24px; }
   .scene-row {
@@ -381,6 +413,11 @@
     .security { margin-top: 72px; padding: 54px 0; }
     .release-head { align-items: flex-start; flex-direction: column; }
     .note { display: none; }
+    .launch-head { grid-template-columns: 1fr; }
+    .launch-meta { justify-self: start; }
+    .upgrade-card, .upgrade-card:nth-child(1), .upgrade-card:nth-child(4) { grid-column: span 6; }
+    .proof-strip { grid-template-columns: 1fr; }
+    .proof-media { aspect-ratio: 16 / 9; }
   }
   @media (max-width: 640px) {
     .wrap { padding-inline: 18px; }
@@ -394,6 +431,10 @@
     .hero-cta .btn { width: 100%; justify-content: center; }
     .media-stack--pair, .starts, .release-grid, .release-archive { grid-template-columns: minmax(0, 1fr); }
     .release-card { padding: 22px 20px; }
+    .launch { padding-top: 64px; }
+    .launch-shell { padding: 26px 20px; }
+    .launch-meta { padding: 16px 0 0; border: 0; border-top: 1px solid rgba(255, 209, 102, .28); }
+    .upgrade-card, .upgrade-card:nth-child(1), .upgrade-card:nth-child(4) { grid-column: 1 / -1; min-height: 0; }
   }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 </style>
@@ -404,6 +445,8 @@
   <nav class="nav">
     <span class="nav-logo"><i></i>PIXEL CREW</span>
     <div class="nav-links">
+      <a href="#whats-new">v1.0.3 新功能</a>
+      <a href="#features">產品導覽</a>
       <a href="#updates">版本更新</a>
       <a href="#start">快速開始</a>
       <a href="#faq">FAQ</a>
@@ -456,8 +499,41 @@
   </div>
 </header>
 
+<!-- ============================== v1.0.3 新功能 ============================== -->
+<section class="launch wrap" id="whats-new">
+  <div class="launch-shell">
+    <div class="launch-head">
+      <div>
+        <span class="eyebrow">WHAT'S NEW <i>·</i> DAILY OPERATIONS</span>
+        <h2>1.0.3 把管理、備份與專心工作，收進同一個駕駛艙。</h2>
+        <p>這次不只多幾顆按鈕，而是補齊長期使用一套多 agent 工作台需要的日常維運：連線、備份、成本、焦點與安全都能在 Pixel Crew 裡完成。</p>
+      </div>
+      <div class="launch-meta">
+        <span class="launch-version">v1.0.3</span>
+        <time class="launch-date" datetime="2026-07-21">2026.07.21</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.3">完整發布內容 ↗</a>
+      </div>
+    </div>
+
+    <div class="upgrade-grid">
+      <article class="upgrade-card"><span class="index">01 / CONNECTIONS</span><b>完整 MCP 管理</b><p>直接新增、移除、登入與登出 MCP server，並檢視 scope、transport、連線資訊與 Codex 工具清單。</p></article>
+      <article class="upgrade-card"><span class="index">02 / RECOVERY</span><b>本機備份與還原</b><p>匯出工人、對話、設定與自訂角色；匯入前完整驗證，失敗時自動回滾。</p></article>
+      <article class="upgrade-card"><span class="index">03 / FOCUS</span><b>專心模式完整管理</b><p>不用離開閱讀畫面，就能切模型、改名、設定 persona、換房間或安全移除 NPC。</p></article>
+      <article class="upgrade-card"><span class="index">04 / VISIBILITY</span><b>成本與配額放在同一個視野</b><p>Claude 累計美元花費，搭配 Claude／Codex 工作能量與重置時間，接任務前先看資源還剩多少。</p></article>
+      <article class="upgrade-card"><span class="index">05 / LONG RUNS</span><b>鍵盤與長任務體驗</b><p>Dialog 支援焦點循環、焦點還原與一致的 Escape；超長任務紀錄改為分段載入。</p></article>
+      <article class="upgrade-card"><span class="index">06 / GUARDRAILS</span><b>更可靠的本機邊界</b><p>限制備份路徑與容量、強制 loopback host，並補強危險指令、登入與還原關機流程。</p></article>
+    </div>
+
+    <div class="proof-strip" aria-label="Pixel Crew 實際介面">
+      <figure class="proof"><div class="proof-media"><img src="assets/energy.webp" width="900" height="945" loading="lazy" decoding="async" alt="Pixel Crew 工作能量面板，顯示 Claude Code 與 Codex 的用量和重置時間"></div><figcaption>USAGE — 接任務前先看兩邊還有多少工作能量</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="assets/log-result.webp" width="802" height="1160" loading="lazy" decoding="async" alt="Pixel Crew 任務完成畫面，顯示 Markdown 回覆、工具活動數與總耗時"></div><figcaption>FOCUS — 長回覆、活動數與耗時集中閱讀</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="assets/workshop-custom.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="Pixel Crew 像素工作坊自訂上傳分頁，預覽藍色動態像素角色並列出 GIF 尺寸與影格限制"></div><figcaption>WORKSHOP — 更新後的 GIF 預覽與限制資訊更清楚</figcaption></figure>
+    </div>
+  </div>
+</section>
+
 <!-- ============================== 展示窗 ============================== -->
-<main class="scenes wrap">
+<main class="scenes wrap" id="features">
 
   <div class="scene-row">
     <div class="scene-media">
@@ -627,7 +703,7 @@
       </figure>
       <figure class="win" style="margin: 0;">
         <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>CUSTOM — 自訂 GIF</span><b>LIVE</b></div>
-        <img src="assets/workshop-custom.webp" width="803" height="709" loading="lazy" decoding="async" alt="像素工作坊自訂分頁：上傳一張貓耳女孩的像素 GIF 作為頭像，右側列出尺寸、檔案與影格限制">
+        <img src="assets/workshop-custom.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="像素工作坊自訂上傳分頁：預覽藍色動態像素角色，右側列出 GIF 尺寸、檔案、影格與解碼限制">
       </figure>
     </div>
   </div>
@@ -685,14 +761,6 @@
         </div>
         <h3>把管理、備份與專心工作流帶進同一個駕駛艙</h3>
         <p>從 MCP 連線、資料備份到專心模式管理，1.0.3 讓日常維護更完整，也讓長時間工作更安全可靠。</p>
-        <div class="release-grid">
-          <div class="release-item"><b>完整 MCP 管理</b><p>在介面內新增、移除、登入與登出 MCP server，查看 scope、transport、連線細節與 Codex 工具清單。</p></div>
-          <div class="release-item"><b>本機備份與還原</b><p>安全匯出工人、對話、設定與自訂角色；匯入前完整驗證，還原失敗時自動回滾。</p></div>
-          <div class="release-item"><b>專心模式也能完整管理</b><p>直接切換模型與 provider、改名、設定 persona 與角色、搬房間或安全移除 NPC。</p></div>
-          <div class="release-item"><b>成本與用量更透明</b><p>累計顯示 Claude 美元花費，並與 Claude／Codex 的工作能量和配額資訊放在一起。</p></div>
-          <div class="release-item"><b>鍵盤與長任務體驗</b><p>Dialog 加入焦點循環、焦點還原與一致的 Escape 行為；超長任務紀錄改為分段載入。</p></div>
-          <div class="release-item"><b>安全與可靠性補強</b><p>限制備份解壓路徑與容量、強制 loopback host，並改善危險指令、Codex 登入與 restore shutdown。</p></div>
-        </div>
         <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.0.3">完整 v1.0.3 發布內容 ↗</a>
       </article>
 
@@ -813,6 +881,8 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
 <script>
 (() => {
   const html = {
+    'nav a[href="#whats-new"]': 'WHAT\'S NEW',
+    'nav a[href="#features"]': 'FEATURE TOUR',
     'nav a[href="#updates"]': 'RELEASES',
     'nav a[href="#start"]': 'GET STARTED',
     '.hero h1': 'Turn Claude Code and Codex into <em>visible teammates</em> in one pixel office.',
@@ -852,7 +922,7 @@ npm run dev   <span class="c"># localhost:5173</span></pre>
     'assets/handoff.webp': 'A handoff dialog transferring work from Codex to Claude Code with usage information and warnings.',
     'assets/energy.webp': 'The global usage panel showing Claude Code and Codex allowance and reset times.',
     'assets/workshop-official.webp': 'The Pixel Workshop showing five official crew appearances.',
-    'assets/workshop-custom.webp': 'The custom avatar tab with an uploaded animated pixel GIF and file limits.'
+    'assets/workshop-custom.webp': 'The custom avatar tab previewing a blue animated pixel character with GIF size, frame, and decode limits.'
   };
   const originals = new Map();
   const remember = (selector) => document.querySelectorAll(selector).forEach((el) => { if (!originals.has(el)) originals.set(el, el.innerHTML); });
