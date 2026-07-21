@@ -4728,6 +4728,13 @@ body {
 
 .focus-controls__notify { margin-bottom: 0; }
 
+.focus-controls__danger { color: #e78ba0; border-color: rgba(231, 139, 160, 0.24); }
+.focus-controls__danger:hover { border-color: rgba(231, 139, 160, 0.5); color: #ff9aae; }
+
+.focus-controls__confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
+.focus-controls__confirm span { grid-column: 1 / -1; padding: 5px; color: #ff9aae; font: 9px var(--mono); }
+.focus-controls__confirm button { min-height: 30px; padding: 6px; border: 1px solid rgba(143, 184, 232, 0.14); border-radius: 5px; background: transparent; color: #9eb0c7; cursor: pointer; font: 9px var(--mono); }
+
 .focus-controls__empty {
   margin: 0;
   color: #6f7e8b;

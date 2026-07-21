@@ -6,6 +6,7 @@ import { FocusControls } from "../src/components/FocusControls";
 import { emptyWorker } from "../src/workerState";
 
 const baseProps = {
+  workerCount: 2,
   modelOptions: [{ id: "sonnet", label: "Sonnet" }],
   authReady: true,
   notificationsEnabled: false,
@@ -16,6 +17,7 @@ const baseProps = {
   onPersona: () => {},
   onAvatar: () => {},
   onRoom: () => {},
+  onRemove: () => {},
   onCreateNpc: () => {},
   onOpenMcp: () => {},
   onOpenBackup: () => {},

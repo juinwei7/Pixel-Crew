@@ -334,6 +334,10 @@ export function App() {
     return error;
   }
 
+  function handleRemoveWorker(id: string) {
+    void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info"));
+  }
+
   function handleModelChange(model: string) {
     if (!activeId) return;
     void setModel(activeId, model).then((error) => {
@@ -365,7 +369,7 @@ export function App() {
         onAvatarWorkshop={setAvatarWorkerId}
         onPersonaEditor={setPersonaWorkerId}
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
-        onRemove={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
+        onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
       />
 
@@ -445,6 +449,7 @@ export function App() {
             </select>}
             {taskFocusMode && <FocusControls
               active={active}
+              workerCount={workerList.length}
               modelOptions={modelOptions}
               authReady={activeAuth.status === "authenticated"}
               providerChanging={providerChanging}
@@ -456,6 +461,7 @@ export function App() {
               onPersona={() => active && setPersonaWorkerId(active.id)}
               onAvatar={() => active && setAvatarWorkerId(active.id)}
               onRoom={openWorkspaceForMove}
+              onRemove={handleRemoveWorker}
               onCreateNpc={() => openWorkspaceForCreate(activeProvider)}
               onOpenMcp={() => setMcpModalOpen(true)}
               onOpenBackup={() => setBackupModalOpen(true)}
@@ -504,7 +510,7 @@ export function App() {
         onSelect={setActiveId}
         onReorder={(ids) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); }}
         onCreate={() => openWorkspaceForCreate(activeProvider)}
-        onClose={(id) => { void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info")); }}
+        onClose={handleRemoveWorker}
         onRename={handleRename}
         onAvatar={setAvatarWorkerId}
         onPersona={setPersonaWorkerId}
