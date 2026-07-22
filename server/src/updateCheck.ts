@@ -14,6 +14,13 @@ const RELEASES_LATEST_URL = "https://api.github.com/repos/juinwei7/Pixel-Crew/re
 const RELEASES_PAGE_URL = "https://github.com/juinwei7/Pixel-Crew/releases/latest";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+/** scripts/package.mjs rewrites the shipped package.json's name to the scoped
+ *  npm-publish name, so the packaged release layout never has "pixel-crew". */
+const ROOT_MANIFEST_NAMES = new Set(["pixel-crew", "@juinwei7/pixel-crew"]);
+export function isRootManifestName(name: string | undefined): boolean {
+  return name !== undefined && ROOT_MANIFEST_NAMES.has(name);
+}
+
 /** The root package.json is the single source of truth for the version.
  *  `../../package.json` resolves there both in dev (server/src) and in the
  *  packaged release layout (server/dist). */
@@ -22,7 +29,7 @@ export function readCurrentVersion(): string {
   for (const candidate of [join(here, "..", "..", "package.json"), join(here, "..", "..", "..", "package.json")]) {
     try {
       const manifest = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
-      if (manifest.name === "pixel-crew" && typeof manifest.version === "string") return manifest.version;
+      if (isRootManifestName(manifest.name) && typeof manifest.version === "string") return manifest.version;
     } catch {
       // keep walking
     }

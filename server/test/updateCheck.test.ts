@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isNewerVersion, parseSemver, readCurrentVersion, UpdateChecker } from "../src/updateCheck.js";
+import { isNewerVersion, isRootManifestName, parseSemver, readCurrentVersion, UpdateChecker } from "../src/updateCheck.js";
 
 test("parses release tags with or without the v prefix, rejects everything else", () => {
   assert.deepEqual(parseSemver("v1.2.3"), [1, 2, 3]);
@@ -25,6 +25,16 @@ test("reads the workspace root version as the single source of truth", () => {
   const version = readCurrentVersion();
   assert.notEqual(version, "0.0.0");
   assert.ok(parseSemver(version), `expected semver, got ${version}`);
+});
+
+test("accepts both the dev repo name and scripts/package.mjs's scoped release name", () => {
+  // Regression: scripts/package.mjs rewrites the shipped package.json's name
+  // to "@juinwei7/pixel-crew" for npm publishing, which used to make every
+  // packaged release fall back to reporting version "0.0.0".
+  assert.equal(isRootManifestName("pixel-crew"), true);
+  assert.equal(isRootManifestName("@juinwei7/pixel-crew"), true);
+  assert.equal(isRootManifestName("some-other-package"), false);
+  assert.equal(isRootManifestName(undefined), false);
 });
 
 test("update info reports no update until a newer release is known", () => {

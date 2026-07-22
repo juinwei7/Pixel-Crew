@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-22
+
+### Added
+
+- Added department management: create a department by providing a purpose, headcount, and provider, and have AI draft complementary NPC roles and personas before you pick a lead.
+- Added read-only Quick Consult and Quick Review collaboration modes, each a fixed two-step handoff (expert advises or reviews, then the lead executes and finalizes) with no file writes from the consulted or reviewing NPC.
+- Added Department Mission: a 2-to-5-step task chain that always starts with an execute step, requires a different NPC for each review step, and automatically retries a failed review up to two correction rounds before surfacing it for a decision.
+- Added a `needs_attention` state that only interrupts for plan approval, an inconclusive review, an exhausted correction budget, a failed step, or a member becoming unavailable; every other handoff between department steps happens automatically.
+- Added hard guardrails so no department workflow can auto-commit, push, merge, tag, or release, or touch CLI authentication; normal per-command approval prompts remain in effect throughout.
+
+### Changed
+
+- Rebuilt the marketing site (`PixelCrew/`) around the department and collaboration feature set, extracted its inline styles into a shared `assets/style.css`, and rewrote the English page to mirror the Chinese page's structure instead of maintaining a separately hand-authored layout.
+
 ## [1.0.3] - 2026-07-21
 
 ### Added
