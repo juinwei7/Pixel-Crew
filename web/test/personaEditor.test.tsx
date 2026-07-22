@@ -12,6 +12,7 @@ test("renders the persona editor with prefilled fields, template access, and sav
   assert.match(html, /小助手 的個性與職務/);
   assert.match(html, /前端 QA/);
   assert.match(html, /套用範本/);
+  assert.match(html, /AI 重新產生人設/);
   assert.match(html, /存為範本/);
   assert.match(html, /清除人設/); // clear button shows because the worker already has a persona
 });
@@ -20,5 +21,6 @@ test("hides the clear button when the worker has no persona yet", () => {
   const worker = emptyWorker("w2", "六號機", null, false, 1, "codex", "/repo");
   const html = renderToStaticMarkup(<PersonaEditor worker={worker} onSave={async () => null} onClose={() => {}} />);
   assert.doesNotMatch(html, /清除人設/);
+  assert.match(html, /AI 幫我產生人設/);
   assert.match(html, /存為範本/);
 });

@@ -147,6 +147,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       next.turns.push({
         key: nextKey(),
         command: event.text,
+        departmentFollowUpMissionId: event.departmentFollowUpMissionId,
         status: "running",
         items: [],
       });

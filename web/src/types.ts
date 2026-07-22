@@ -103,7 +103,7 @@ export type RunnerEvent =
       toolCount: number;
       builtinTools: string[];
     }
-  | { type: "user_message"; text: string }
+  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string }
   | { type: "error"; message: string };
 
 export type ToolCallItem = {
@@ -136,6 +136,7 @@ export type TurnItem = ToolCallItem | TextItem | ApprovalItem;
 export type Turn = {
   key: string;
   command: string;
+  departmentFollowUpMissionId?: string;
   status: "running" | "done" | "error";
   items: TurnItem[];
   costUsd?: number;
@@ -248,9 +249,113 @@ export type PreparedHandoff = {
   warnings: string[];
 };
 
+export type CollaborationMode = "consult" | "review";
+export type CollaborationStatus = "queued" | "running" | "returning" | "completed" | "failed" | "cancelled";
+export type CollaborationFinding = {
+  severity: "blocking" | "warning" | "suggestion";
+  title: string;
+  detail: string;
+  file?: string;
+  line?: number;
+  evidence?: string;
+};
+export type CollaborationResult = {
+  verdict: "pass" | "changes_requested" | "advice" | "inconclusive";
+  summary: string;
+  findings: CollaborationFinding[];
+  risks: string[];
+  openQuestions: string[];
+  recommendedNextAction: string;
+  structured: boolean;
+};
+export type CollaborationTask = {
+  id: string;
+  sourceWorkerId: string;
+  targetWorkerId: string;
+  workspacePath: string;
+  mode: CollaborationMode;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: CollaborationStatus;
+  result: CollaborationResult | null;
+  continuationResult: string | null;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  adoptedAt: string | null;
+  handledAt: string | null;
+};
+export type PreparedCollaboration = {
+  collaborationToken: string;
+  mode: CollaborationMode;
+  objective: string;
+  acceptanceCriteria: string[];
+  usage: ProviderUsageState;
+  warnings: string[];
+};
+
+export type DepartmentMissionStatus = "planning" | "executing" | "reviewing" | "needs_attention" | "completed" | "failed" | "cancelled";
+export type DepartmentMissionStep = {
+  id: string;
+  title: string;
+  objective: string;
+  kind: "execute" | "review" | "consult" | "synthesize";
+  assigneeWorkerId: string;
+  acceptanceCriteria: string[];
+  status: "pending" | "running" | "completed" | "failed";
+  attempt: number;
+  result: string | null;
+  reviewResult: CollaborationResult | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  formatRepairCount?: number;
+};
+export type DepartmentMission = {
+  id: string;
+  departmentId?: string | null;
+  workspacePath: string;
+  bossWorkerId: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  status: DepartmentMissionStatus;
+  planSummary: string | null;
+  steps: DepartmentMissionStep[];
+  currentStepIndex: number | null;
+  correctionCount: number;
+  maxCorrections: number;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  attentionReason?: "plan_approval" | "review_inconclusive" | "correction_limit" | "step_failed" | "member_unavailable" | null;
+  planApprovedAt?: string | null;
+  ownerGuidance?: string | null;
+  formatRepairCount?: number;
+};
+export type PreparedMission = {
+  missionToken: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  maxCorrections: number;
+  members: Array<{ id: string; name: string; provider: ProviderId; workspacePath: string }>;
+  warnings: string[];
+};
+
 export type Persona = {
   role: string;
   instructions: string;
+};
+
+export type Department = {
+  id: string;
+  name: string;
+  purpose: string;
+  workspacePath: string;
+  leadWorkerId: string;
+  memberWorkerIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type PersonaTemplate = Persona & {
@@ -269,6 +374,7 @@ export type WorkerState = {
   avatarPresetId: string;
   provider: ProviderId;
   workspacePath: string;
+  departmentId?: string | null;
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;

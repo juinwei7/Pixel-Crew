@@ -92,6 +92,7 @@ export function TopBar({
       <div className="top-bar__agent" aria-label="Agent 設定">
         <span className="top-bar__group-label">AGENT</span>
         <select
+          className="top-bar__provider-select"
           value={provider}
           disabled={Boolean(active?.busy) || providerChanging}
           onChange={(event) => onProvider(event.target.value as ProviderId)}
@@ -101,6 +102,7 @@ export function TopBar({
           <option value="codex">Codex</option>
         </select>
         <select
+          className="top-bar__model-select"
           value={active?.model ?? ""}
           disabled={!active || active.busy || !authReady || modelOptions.length === 0}
           onChange={(event) => onModel(event.target.value)}
@@ -135,6 +137,27 @@ export function TopBar({
           MCP <strong>{capabilities.loading && capabilities.mcpServers.length === 0 ? "…" : `${connected}/${capabilities.mcpServers.length}`}</strong>
         </button>
       </div>
+
+      <details className="top-bar__more">
+        <summary aria-label="更多 Agent 設定">•••</summary>
+        <div className="top-bar__more-menu">
+          <label>
+            <span>自動核准</span>
+            <select
+              value={active?.autoApproveMode ?? "off"}
+              disabled={!active}
+              onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
+              aria-label="更多選單中的自動核准模式"
+            >
+              <option value="off">關閉</option>
+              <option value="safe">安全</option>
+              <option value="full">完全</option>
+            </select>
+          </label>
+          <button type="button" onClick={onOpenMcp}>MCP 能力 <strong>{connected}/{capabilities.mcpServers.length}</strong></button>
+          {updateInfo?.updateAvailable && <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">更新至 v{updateInfo.latestVersion}</a>}
+        </div>
+      </details>
 
       {updateInfo?.updateAvailable && (
         <div ref={updateRef} className="top-bar__update-wrap">

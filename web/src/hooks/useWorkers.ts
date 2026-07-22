@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, AutoApproveMode, CapabilityState, CommandSubmission, HandoffProgress, McpLoginResult, Persona, PreparedHandoff, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { ApprovalDecision, AutoApproveMode, CapabilityState, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -30,6 +30,9 @@ type ServerMessage =
       auth: ProviderAuthState[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
       capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
+      collaborations?: CollaborationTask[];
+      missions?: DepartmentMission[];
+      departments?: Department[];
       workers: Array<{
         id: string;
         name: string;
@@ -41,6 +44,7 @@ type ServerMessage =
         avatarPresetId: string;
         provider: ProviderId;
         workspacePath: string;
+        departmentId?: string | null;
         persona: Persona | null;
         autoApproveMode: AutoApproveMode;
         handoff: HandoffProgress | null;
@@ -53,6 +57,10 @@ type ServerMessage =
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
   | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
+  | { type: "collaboration_created" | "collaboration_updated"; collaboration: CollaborationTask }
+  | { type: "mission_created" | "mission_updated"; mission: DepartmentMission }
+  | { type: "department_created" | "department_updated"; department: Department }
+  | { type: "department_removed"; departmentId: string }
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
   | ({ type: "mcp_login_result" } & McpLoginResult)
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
@@ -72,6 +80,7 @@ type WorkerSummary = {
   avatarPresetId: string;
   provider: ProviderId;
   workspacePath: string;
+  departmentId?: string | null;
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
@@ -94,6 +103,9 @@ function defaultAuth(
 
 export function useWorkers() {
   const [workers, setWorkers] = useState<Record<string, WorkerState>>({});
+  const [collaborations, setCollaborations] = useState<Record<string, CollaborationTask>>({});
+  const [missions, setMissions] = useState<Record<string, DepartmentMission>>({});
+  const [departments, setDepartments] = useState<Record<string, Department>>({});
   const [order, setOrder] = useState<string[]>([]);
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -172,6 +184,9 @@ export function useWorkers() {
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
           setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
+          setCollaborations(Object.fromEntries((data.collaborations ?? []).map((task) => [task.id, task])));
+          setMissions(Object.fromEntries((data.missions ?? []).map((mission) => [mission.id, mission])));
+          setDepartments(Object.fromEntries((data.departments ?? []).map((department) => [department.id, department])));
           const record: Record<string, WorkerState> = {};
           const ids: string[] = [];
           for (const w of data.workers) {
@@ -202,6 +217,7 @@ export function useWorkers() {
               });
             }
             state.busy = w.busy;
+            state.departmentId = w.departmentId ?? null;
             record[w.id] = state;
             ids.push(w.id);
           }
@@ -221,7 +237,7 @@ export function useWorkers() {
         case "worker_added": {
           setWorkers((prev) => ({
             ...prev,
-            [data.worker.id]: emptyWorker(
+            [data.worker.id]: { ...emptyWorker(
               data.worker.id,
               data.worker.name,
               data.worker.model,
@@ -235,7 +251,7 @@ export function useWorkers() {
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
               data.worker.autoApproveMode,
-            ),
+            ), departmentId: data.worker.departmentId ?? null },
           }));
           setWorkspacePaths((current) =>
             current.includes(data.worker.workspacePath)
@@ -268,7 +284,7 @@ export function useWorkers() {
           setWorkers((prev) => {
             const w = prev[data.worker.id];
             if (!w) return prev;
-            const updated = !data.reset && w.provider === data.worker.provider
+            const updatedBase = !data.reset && w.provider === data.worker.provider
               ? { ...w, ...data.worker }
               : emptyWorker(
                   data.worker.id,
@@ -285,6 +301,7 @@ export function useWorkers() {
                   data.worker.handoff ?? null,
                   data.worker.autoApproveMode,
                 );
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>
@@ -299,6 +316,29 @@ export function useWorkers() {
             const w = prev[data.workerId];
             if (!w || w.busy === data.busy) return prev;
             return { ...prev, [data.workerId]: { ...w, busy: data.busy } };
+          });
+          break;
+        }
+        case "collaboration_created":
+        case "collaboration_updated": {
+          setCollaborations((current) => ({ ...current, [data.collaboration.id]: data.collaboration }));
+          break;
+        }
+        case "mission_created":
+        case "mission_updated": {
+          setMissions((current) => ({ ...current, [data.mission.id]: data.mission }));
+          break;
+        }
+        case "department_created":
+        case "department_updated": {
+          setDepartments((current) => ({ ...current, [data.department.id]: data.department }));
+          break;
+        }
+        case "department_removed": {
+          setDepartments((current) => {
+            const next = { ...current };
+            delete next[data.departmentId];
+            return next;
           });
           break;
         }
@@ -416,6 +456,98 @@ export function useWorkers() {
     }
   }, []);
 
+  const prepareCollaboration = useCallback(async (input: {
+    sourceWorkerId: string;
+    targetWorkerId: string;
+    mode: CollaborationMode;
+    objective: string;
+    acceptanceCriteria: string[];
+  }): Promise<{ data?: PreparedCollaboration; error?: string }> => {
+    try {
+      const data = await apiRequest<PreparedCollaboration>(`/api/workers/${input.sourceWorkerId}/collaborations/prepare`, {
+        method: "POST",
+        body: input,
+        timeoutMs: 35_000,
+      });
+      return { data };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const startCollaboration = useCallback(async (sourceWorkerId: string, collaborationToken: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${sourceWorkerId}/collaborations`, {
+        method: "POST",
+        body: { collaborationToken, warningAcknowledged: true },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const collaborationAction = useCallback(async (id: string, action: "cancel" | "adopt" | "handled"): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/collaborations/${id}/${action}`, { method: "POST" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const prepareMission = useCallback(async (input: {
+    bossWorkerId: string;
+    objective: string;
+    acceptanceCriteria: string[];
+  }): Promise<{ data?: PreparedMission; error?: string }> => {
+    try {
+      const data = await apiRequest<PreparedMission>(`/api/workers/${input.bossWorkerId}/missions/prepare`, {
+        method: "POST",
+        body: input,
+        timeoutMs: 35_000,
+      });
+      return { data };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const startMission = useCallback(async (bossWorkerId: string, missionToken: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${bossWorkerId}/missions`, {
+        method: "POST",
+        body: { missionToken, warningAcknowledged: true },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const missionAction = useCallback(async (id: string, action: "cancel" | "retry-review" | "approve-plan"): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/missions/${id}/${action}`, { method: "POST" });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const resolveMission = useCallback(async (
+    id: string,
+    action: "retry" | "retry_execute" | "reassign" | "accept_risk" | "guide",
+    guidance?: string,
+    workerId?: string,
+  ): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/missions/${id}/resolve`, { method: "POST", body: { action, guidance, workerId } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const switchWorkspace = useCallback(async (
     id: string,
     workspacePath: string,
@@ -511,6 +643,19 @@ export function useWorkers() {
         method: "POST",
         body: { message: command.text, images: command.images, documents: command.documents },
         timeoutMs: 30000,
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const askMission = useCallback(async (missionId: string, question: string): Promise<string | null> => {
+    try {
+      await apiRequest<{ ok: boolean; workerId: string }>(`/api/missions/${missionId}/follow-up`, {
+        method: "POST",
+        body: { question },
+        timeoutMs: 30_000,
       });
       return null;
     } catch (error) {
@@ -636,6 +781,9 @@ export function useWorkers() {
 
   return {
     workers,
+    collaborations,
+    missions,
+    departments,
     order,
     mcpLoginResult,
     activeId,
@@ -655,6 +803,17 @@ export function useWorkers() {
     pickWorkspace,
     prepareHandoff,
     startHandoff,
+    prepareCollaboration,
+    startCollaboration,
+    cancelCollaboration: (id: string) => collaborationAction(id, "cancel"),
+    adoptCollaboration: (id: string) => collaborationAction(id, "adopt"),
+    handleCollaboration: (id: string) => collaborationAction(id, "handled"),
+    prepareMission,
+    startMission,
+    cancelMission: (id: string) => missionAction(id, "cancel"),
+    retryMissionReview: (id: string) => missionAction(id, "retry-review"),
+    approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),
+    resolveMission,
     switchWorkspace,
     closeWorker,
     renameWorker,
@@ -664,6 +823,7 @@ export function useWorkers() {
     selectAvatarPreset,
     activateCustomAvatar,
     send,
+    askMission,
     setModel,
     setPersona,
     setAutoApproveMode,

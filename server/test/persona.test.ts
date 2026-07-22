@@ -8,6 +8,8 @@ import {
   normalizePersona,
   normalizePersonaTemplate,
   parsePersona,
+  parsePersonaSuggestion,
+  personaSuggestionPrompt,
   serializePersona,
 } from "../src/persona.js";
 
@@ -52,4 +54,26 @@ test("normalizePersonaTemplate requires content, defaults name to role, and pres
 
   const capped = normalizePersonaTemplate({ name: "x".repeat(200), instructions: "y" });
   assert.equal(capped?.name.length, MAX_PERSONA_TEMPLATE_NAME);
+});
+
+test("persona suggestion prompt includes department context and forbids tools", () => {
+  const prompt = personaSuggestionPrompt({
+    workerName: "三號機",
+    workspacePath: "/projects/shop",
+    members: [{ name: "一號機", role: "前端工程師" }, { name: "三號機", role: null }],
+  });
+  assert.match(prompt, /三號機/);
+  assert.match(prompt, /前端工程師/);
+  assert.match(prompt, /不要呼叫工具/);
+  assert.match(prompt, /<persona_suggestion>/);
+});
+
+test("parsePersonaSuggestion accepts only marked, valid, non-empty JSON", () => {
+  assert.deepEqual(
+    parsePersonaSuggestion('說明\n<persona_suggestion>{"role":"QA 工程師","instructions":"驗證 UI 與回歸測試"}</persona_suggestion>'),
+    { role: "QA 工程師", instructions: "驗證 UI 與回歸測試" },
+  );
+  assert.equal(parsePersonaSuggestion('{"role":"QA"}'), null);
+  assert.equal(parsePersonaSuggestion("<persona_suggestion>{oops}</persona_suggestion>"), null);
+  assert.equal(parsePersonaSuggestion('<persona_suggestion>{"role":"","instructions":""}</persona_suggestion>'), null);
 });

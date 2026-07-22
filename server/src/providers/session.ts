@@ -13,13 +13,16 @@ export type MessageDocument = {
   dataBase64: string;
 };
 
+export type ExecutionProfile = "normal" | "read_only_collaboration";
+export type SendOptions = { executionProfile?: ExecutionProfile };
+
 export interface AgentSession {
   readonly provider: ProviderId;
   readonly workspacePath: string;
   busy: boolean;
   name: string;
   warmup(): void;
-  send(text: string, images?: MessageImage[], documents?: MessageDocument[]): void;
+  send(text: string, images?: MessageImage[], documents?: MessageDocument[], options?: SendOptions): void;
   interrupt(): void;
   stop(): void;
   resolveApproval(id: string, decision: ApprovalDecision): boolean;

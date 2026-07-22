@@ -112,7 +112,7 @@ export type FurnitureDef = {
   key: StationKey;
   label: string;
   map: string[];
-  /** Center x, bottom y in 320x180 art coordinates. */
+  /** Center x, bottom y in the expanded 440x288 art coordinates. */
   x: number;
   bottom: number;
   /** Where the person stands to use it. */
@@ -124,17 +124,17 @@ export type FurnitureDef = {
 };
 
 export const FURNITURE_DEFS: FurnitureDef[] = [
-  { key: "board", label: "任務板", map: BOARD, x: 32, bottom: 42, standX: 32, standY: 65, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
-  { key: "books", label: "讀檔案", map: SHELF, x: 73, bottom: 60, standX: 73, standY: 74, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
-  { key: "code", label: "寫程式", map: CODE_DESK, x: 116, bottom: 60, standX: 116, standY: 74, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
-  { key: "web", label: "上網查", map: GLOBE, x: 160, bottom: 60, standX: 160, standY: 74, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
-  { key: "terminal", label: "終端機", map: RACK, x: 205, bottom: 60, standX: 205, standY: 75, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
-  { key: "check", label: "驗證", map: KIOSK, x: 246, bottom: 60, standX: 246, standY: 75, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
-  { key: "desk", label: "其他工具", map: CRATE, x: 286, bottom: 58, standX: 286, standY: 73, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
+  { key: "board", label: "任務板", map: BOARD, x: 32, bottom: 48, standX: 32, standY: 72, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
+  { key: "books", label: "讀檔案", map: SHELF, x: 84, bottom: 68, standX: 84, standY: 82, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
+  { key: "code", label: "寫程式", map: CODE_DESK, x: 136, bottom: 68, standX: 136, standY: 82, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
+  { key: "web", label: "上網查", map: GLOBE, x: 190, bottom: 68, standX: 190, standY: 82, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
+  { key: "terminal", label: "終端機", map: RACK, x: 244, bottom: 68, standX: 244, standY: 83, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
+  { key: "check", label: "驗證", map: KIOSK, x: 298, bottom: 68, standX: 298, standY: 83, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
+  { key: "desk", label: "其他工具", map: CRATE, x: 352, bottom: 66, standX: 352, standY: 81, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
   // Invisible rendezvous point around the meeting table drawn by OfficeDecor.
-  { key: "meeting", label: "", map: ["."], x: 45, bottom: 128, standX: 45, standY: 145, leds: [] },
+  { key: "meeting", label: "", map: ["."], x: 30, bottom: 94, standX: 30, standY: 107, leds: [] },
   // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.
-  { key: "home", label: "", map: ["."], x: 160, bottom: 160, standX: 160, standY: 174, leds: [] },
+  { key: "home", label: "", map: ["."], x: 200, bottom: 220, standX: 200, standY: 232, leds: [] },
 ];
 
 class FurnitureSprite {

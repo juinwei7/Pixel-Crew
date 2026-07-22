@@ -10,16 +10,17 @@ type Props = {
   onRoom(id: string): void;
   onRemove(id: string): void;
   onClose(): void;
+  direction?: "left" | "right";
 };
 
 // 66px keeps a clear gap between neighbouring 34px circles across the 140°
 // fan (chord ≈ 40px). The CSS multiplies offsets by --npc-zoom so the ring
 // grows with the camera and never sits on top of a zoomed-in sprite.
 const RADIUS = 66;
-/** Fan the buttons across the lower arc (160° → 20°, screen coords, y down)
- *  so they never collide with the nameplate / speech bubble above the NPC. */
-function arcOffset(index: number, count: number): { x: number; y: number } {
-  const start = 160;
+/** Fan the buttons to one side of the NPC. GameCanvas selects the outward side
+ *  and flips it near an edge, reducing collisions with the adjacent seat. */
+function arcOffset(index: number, count: number, direction: "left" | "right"): { x: number; y: number } {
+  const start = direction === "left" ? 250 : 70;
   const span = 140;
   const angle = ((start - (count > 1 ? (index * span) / (count - 1) : span / 2)) * Math.PI) / 180;
   return { x: Math.cos(angle) * RADIUS, y: Math.sin(angle) * RADIUS };
@@ -43,7 +44,7 @@ const ICONS: Record<string, ReactNode> = {
   ),
 };
 
-export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona, onRoom, onRemove, onClose }: Props) {
+export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona, onRoom, onRemove, onClose, direction = "right" }: Props) {
   const [mode, setMode] = useState<"ring" | "rename" | "confirm-remove">("ring");
   const [draft, setDraft] = useState(worker.name);
   const [error, setError] = useState<string | null>(null);
@@ -85,9 +86,9 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
   ];
 
   return (
-    <div className={`npc-radial${open ? " npc-radial--open" : ""}`} onClick={(event) => event.stopPropagation()}>
+    <div className={`npc-radial npc-radial--${direction}${open ? " npc-radial--open" : ""}`} onClick={(event) => event.stopPropagation()}>
       {mode === "ring" && items.map((item, index) => {
-        const { x, y } = arcOffset(index, items.length);
+        const { x, y } = arcOffset(index, items.length, direction);
         return (
           <button
             key={item.key}

@@ -21,6 +21,8 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [templateSaving, setTemplateSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef);
 
@@ -83,6 +85,27 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
     }
   }
 
+  async function generateWithAi() {
+    if (aiGenerating || saving) return;
+    setAiGenerating(true);
+    setAiNotice(null);
+    setError(null);
+    try {
+      const data = await apiRequest<{ persona: Persona }>(`/api/workers/${encodeURIComponent(worker.id)}/persona/suggest`, {
+        method: "POST",
+        timeoutMs: 70_000,
+      });
+      setRole(data.persona.role);
+      setInstructions(data.persona.instructions);
+      setSavedNotice(null);
+      setAiNotice("AI 草稿已填入，確認或修改後再儲存");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAiGenerating(false);
+    }
+  }
+
   async function deleteTemplate(id: string) {
     try {
       const data = await apiRequest<{ templates: PersonaTemplate[] }>(`/api/persona-templates/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -101,6 +124,14 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
           <h2 id="persona-editor-title">{worker.name} 的個性與職務</h2>
           <p>設定後會在每次啟動時自動套用，即使 /clear 或重啟也保留，不用每次重講。</p>
         </header>
+
+        <div className="persona-editor__ai">
+          <button type="button" disabled={aiGenerating || saving} onClick={() => void generateWithAi()}>
+            <span aria-hidden="true">✦</span>
+            {aiGenerating ? "AI 正在規劃部門職務…" : next ? "AI 重新產生人設" : "AI 幫我產生人設"}
+          </button>
+          <small>{aiNotice ?? "會參考工作位置與同部門既有職務，自動補上不重複的角色與工作方式。"}</small>
+        </div>
 
         <div className="persona-editor__templates">
           <button type="button" className="persona-editor__templates-toggle" onClick={() => setTemplatesOpen((open) => !open)} aria-expanded={templatesOpen}>
@@ -130,7 +161,7 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
             maxLength={MAX_ROLE}
             autoFocus
             placeholder="例如：前端 QA 工程師"
-            onChange={(event) => { setRole(event.target.value); setError(null); setSavedNotice(null); }}
+            onChange={(event) => { setRole(event.target.value); setError(null); setSavedNotice(null); setAiNotice(null); }}
           />
         </label>
 
@@ -142,7 +173,7 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
             rows={7}
             spellCheck={false}
             placeholder={"描述這個 NPC 的專長、工作方式、語氣等。例如：\n你專門測試 UI，回報 bug 時附重現步驟，一律用繁體中文，講話簡潔。"}
-            onChange={(event) => { setInstructions(event.target.value); setError(null); setSavedNotice(null); }}
+            onChange={(event) => { setInstructions(event.target.value); setError(null); setSavedNotice(null); setAiNotice(null); }}
           />
         </label>
 
@@ -150,16 +181,16 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
 
         <footer className="persona-editor__footer">
           {worker.persona && (
-            <button type="button" className="persona-editor__clear" disabled={saving} onClick={() => void commit(null)}>
+            <button type="button" className="persona-editor__clear" disabled={saving || aiGenerating} onClick={() => void commit(null)}>
               清除人設
             </button>
           )}
-          <button type="button" className="persona-editor__template-save" disabled={saving || templateSaving || !next || !!savedNotice} onClick={() => void saveAsTemplate()}>
+          <button type="button" className="persona-editor__template-save" disabled={saving || aiGenerating || templateSaving || !next || !!savedNotice} onClick={() => void saveAsTemplate()}>
             {templateSaving ? "儲存中…" : savedNotice ?? "存為範本"}
           </button>
           <span className="persona-editor__spacer" />
           <button type="button" className="persona-editor__cancel" disabled={saving} onClick={onClose}>取消</button>
-          <button type="button" className="persona-editor__save" disabled={saving || !dirty} onClick={() => void commit(next)}>
+          <button type="button" className="persona-editor__save" disabled={saving || aiGenerating || !dirty} onClick={() => void commit(next)}>
             {saving ? "儲存中…" : "儲存"}
           </button>
         </footer>

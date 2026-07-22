@@ -19,6 +19,7 @@ type Props = {
   onRoom(): void;
   onRemove(id: string): void;
   onCreateNpc(): void;
+  onCreateDepartment?(): void;
   onOpenMcp(): void;
   onOpenBackup(): void;
   onNotificationsToggle(): void;
@@ -41,6 +42,7 @@ export function FocusControls({
   onRoom,
   onRemove,
   onCreateNpc,
+  onCreateDepartment,
   onOpenMcp,
   onOpenBackup,
   onNotificationsToggle,
@@ -208,6 +210,7 @@ export function FocusControls({
             <h4>團隊</h4>
             <div className="focus-controls__actions">
               <button type="button" onClick={() => { onCreateNpc(); setOpen(false); }}>＋ 新增 NPC</button>
+              {onCreateDepartment && <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>＋ 建立部門</button>}
               <button type="button" onClick={() => { onOpenMcp(); setOpen(false); }}>MCP 伺服器</button>
               <button type="button" onClick={() => { onOpenBackup(); setOpen(false); }}>備份與還原</button>
               <button type="button" onClick={() => { onOpenCommandCenter(); setOpen(false); }}>指令庫</button>

@@ -5,7 +5,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
-import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
+import type { AgentSession, ExecutionProfile, MessageDocument, MessageImage, SendOptions } from "./providers/session.js";
 import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
@@ -15,6 +15,10 @@ import { parseCodexMcpServerStatus, type CodexMcpServerToolsEntry } from "./code
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
 type PendingApproval = { rpcId: RpcId; method: string; params: any; request: ApprovalRequest };
+
+export function codexSandbox(profile: ExecutionProfile, normalSandbox: string): string {
+  return profile === "read_only_collaboration" ? "read-only" : normalSandbox;
+}
 
 export type CodexNativeCommand =
   | { type: "reset" }
@@ -57,6 +61,7 @@ export class CodexSession implements AgentSession {
   private finalText = "";
   private stagedInputImages = new Set<string>();
   private stagedInputDocuments = new Set<string>();
+  private executionProfile: ExecutionProfile = "normal";
   busy = false;
   name = "";
 
@@ -85,8 +90,9 @@ export class CodexSession implements AgentSession {
     void this.ensureThread().catch((error) => console.warn("Codex app-server warmup failed:", error.message));
   }
 
-  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): void {
+  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
     if (this.busy) throw new Error("codex worker busy");
+    this.executionProfile = options.executionProfile ?? "normal";
     const nativeCommand = images.length === 0 && documents.length === 0
       ? parseCodexNativeCommand(text)
       : null;
@@ -117,7 +123,7 @@ export class CodexSession implements AgentSession {
         cwd: this.workspacePath,
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        sandbox: config.codexSandbox,
+        sandbox: codexSandbox(this.executionProfile, config.codexSandbox),
         ...(this.model ? { model: this.model } : {}),
       }))
       .catch((error) => this.finishWithError(error.message));
@@ -473,6 +479,25 @@ export class CodexSession implements AgentSession {
       return;
     }
     const category = method.includes("commandExecution") ? "command" : method.includes("fileChange") ? "file_change" : "permissions";
+    if (this.executionProfile === "read_only_collaboration") {
+      const id = randomUUID();
+      const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
+      this.onEvent({ type: "approval_requested", request: {
+        id,
+        activityId: params.itemId ? String(params.itemId) : null,
+        category,
+        title: category === "command" ? "唯讀協作已拒絕指令" : category === "file_change" ? "唯讀協作已拒絕檔案變更" : "唯讀協作已拒絕提高權限",
+        input: boundedValue(category === "command" ? { command: params.command ?? "", actions: params.commandActions ?? [] } : params),
+        command,
+        cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
+        reason: "唯讀 NPC 協作不允許需要額外權限的操作",
+        decisions: [],
+      } });
+      if (method === "item/permissions/requestApproval") this.sendRpcError(message.id, -32000, "Read-only collaboration declined permissions");
+      else this.sendRpcResult(message.id, { decision: "decline" });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return;
+    }
     const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
     // Under "safe" mode, file changes and permission escalations are never in
     // autoApprovalPolicy's allowlist, so only commandExecution can auto

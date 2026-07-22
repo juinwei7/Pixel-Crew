@@ -18,6 +18,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
+- **AI-routed department work** — use one “Hand to department” action; the Boss chooses a focused read-only Consult/Review or a full 2–5 step Mission, assigns same-workspace specialists, and keeps handoffs moving until completion or a real approval is needed.
 - **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
 - **Folders as rooms** — bind each worker to a local folder; the agent runs there.
 - **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
@@ -72,6 +73,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **資料夾即房間**：每位 Worker 綁定一個本機工作資料夾，並可從 macOS/Windows 系統選擇器、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
 - **Provider 切換**：尚未對話時直接更換目前 NPC 類型；已有對話時透過摘要交接原地切換，但不混用兩邊不相容的原生 session 歷史。
 - **跨 LLM 交接**：空白 NPC 可直接原地更換 provider；已有對話時，會先整理目標、進度、決策與風險，再建立另一個 provider 的新 session 接手。交接摘要不是完整原生記憶，切換前會明確提醒並檢查目標 provider 的剩餘用量。
+- **AI 部門工作與辦公室**：同一工作位置的 NPC 會共用部門地墊、招牌與連續桌板。使用者只需選擇「交給部門」並描述目標；Boss 會自己選擇快速唯讀 Consult／Review，或拆成 2～5 步完整 Mission。結果與步驟自動交接，退件最多修正兩輪，只有權限、認證或無法確認時才停下來；不會自行 commit、push、merge、tag 或 release。
 - **即時串流**：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
 - **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
@@ -174,10 +176,11 @@ npm run dev
 3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。
 4. Claude Worker 可輸入 `/` 查看目前房間、使用者層級與內建原生指令；Codex Worker 可輸入 `/` 使用 Pixel Crew 支援的原生對話控制，或輸入 `$` 查看目前房間的 repo skills。模型、權限、MCP 等 TUI 專屬控制則使用 Pixel Crew 頂部的對應介面。
 5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
-6. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
-7. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
-8. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
-9. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
+6. 從 NPC 的「•••」選單選擇**交給部門**：該 NPC 會成為 Boss；你只需填寫目標與驗收條件，Boss 會判斷使用快速 Consult／Review 或完整 Mission，再自動規劃、依序交接與有限次修正。同一部門至少需要兩位閒置且已登入的 NPC。
+7. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
+8. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
+9. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
+10. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
 
 右上角會分別顯示伺服器與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
 

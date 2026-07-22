@@ -1,8 +1,10 @@
 import { Container, Graphics } from "pixi.js";
 
-export const ART_W = 320;
-export const ART_H = 180;
-export const WALL_H = 46;
+// A multiple of 32 (the wall-panel seam spacing) and 16 (the floor-tile
+// spacing) so the rightmost panel/tile isn't a truncated partial segment.
+export const ART_W = 448;
+export const ART_H = 288;
+export const WALL_H = 52;
 
 const WALL = 0x18213a;
 const WALL_DARK = 0x131b30;
@@ -31,21 +33,23 @@ export class Room {
     }
     g.rect(0, WALL_H - 3, ART_W, 3).fill(BASEBOARD);
 
-    // Window with night sky (kept left of the quest-log panel overlay)
-    g.rect(178, 5, 62, 30).fill(WINDOW_FRAME);
-    g.rect(180, 7, 58, 26).fill(WINDOW_SKY);
-    g.rect(208, 7, 2, 26).fill(WINDOW_FRAME);
+    // Wider skyline window makes the expanded room read as a larger floor.
+    // Height (not just width) needs to keep pace with the taller wall, or the
+    // pane reads as a flat letterbox strip instead of a proper window.
+    g.rect(246, 4, 92, 42).fill(WINDOW_FRAME);
+    g.rect(248, 6, 88, 38).fill(WINDOW_SKY);
+    g.rect(290, 6, 2, 38).fill(WINDOW_FRAME);
 
     // Wall decorations: poster + clock
-    g.rect(104, 10, 14, 20).fill(0x1d1533);
-    g.rect(105, 11, 12, 18).fill(0x241a44);
-    g.rect(107, 14, 8, 5).fill(0x7c5cff);
-    g.rect(107, 21, 8, 2).fill(0xff4dd8);
-    g.rect(109, 25, 4, 2).fill(0x4de3ff);
-    g.rect(58, 12, 9, 9).fill(0x2a3a60);
-    g.rect(59, 13, 7, 7).fill(0x0e1526);
-    g.rect(62, 14, 1, 3).fill(0xbfd9ff);
-    g.rect(62, 16, 3, 1).fill(0x4de3ff);
+    g.rect(128, 10, 14, 20).fill(0x1d1533);
+    g.rect(129, 11, 12, 18).fill(0x241a44);
+    g.rect(131, 14, 8, 5).fill(0x7c5cff);
+    g.rect(131, 21, 8, 2).fill(0xff4dd8);
+    g.rect(133, 25, 4, 2).fill(0x4de3ff);
+    g.rect(74, 12, 9, 9).fill(0x2a3a60);
+    g.rect(75, 13, 7, 7).fill(0x0e1526);
+    g.rect(78, 14, 1, 3).fill(0xbfd9ff);
+    g.rect(78, 16, 3, 1).fill(0x4de3ff);
 
     // Floor tiles
     for (let y = WALL_H; y < ART_H; y += 16) {
@@ -57,20 +61,17 @@ export class Room {
     for (let y = WALL_H; y < ART_H; y += 16) g.rect(0, y, ART_W, 1).fill(TILE_LINE);
     for (let x = 0; x < ART_W; x += 16) g.rect(x, WALL_H, 1, ART_H - WALL_H).fill(TILE_LINE);
 
-    // Office zoning: shared equipment strip, central desk carpet and clear aisle.
-    g.rect(8, 82, 304, 1).fill({ color: 0x263552, alpha: 0.8 });
-    g.rect(82, 91, 156, 79).fill({ color: 0x111d32, alpha: 0.5 });
-    g.rect(84, 93, 152, 75).stroke({ width: 1, color: 0x243654, alpha: 0.24 });
-    g.rect(154, 84, 12, 92).fill({ color: 0x182641, alpha: 0.38 });
-    for (let y = 89; y < 174; y += 12) {
-      g.rect(159, y, 2, 1).fill({ color: 0x344766, alpha: 0.32 });
-    }
-    g.rect(17, 96, 57, 50).fill({ color: 0x141f36, alpha: 0.65 });
-    g.rect(246, 96, 66, 50).fill({ color: 0x141f36, alpha: 0.65 });
+    // Shared tools remain at the top; the larger lower floor is reserved for
+    // department mats rendered by PersonalDeskLayer. Row guides are gone —
+    // the department mats themselves now delineate the rows.
+    g.rect(8, 88, ART_W - 16, 1).fill({ color: 0x263552, alpha: 0.8 });
+    g.roundRect(10, 94, ART_W - 20, ART_H - 98, 5)
+      .fill({ color: 0x0b1425, alpha: 0.2 })
+      .stroke({ width: 1, color: 0x243654, alpha: 0.18 });
 
     this.starSeeds = Array.from({ length: 14 }, () => ({
-      x: 181 + Math.random() * 56,
-      y: 8 + Math.random() * 23,
+      x: 249 + Math.random() * 86,
+      y: 8 + Math.random() * 32,
       phase: Math.random() * Math.PI * 2,
     }));
 

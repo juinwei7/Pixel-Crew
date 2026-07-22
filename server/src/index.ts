@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
@@ -38,7 +38,15 @@ import {
 import multer from "multer";
 import * as tar from "tar";
 import { ProviderUsageRegistry } from "./providerUsage.js";
-import { composePersonaPrompt, normalizePersona, normalizePersonaTemplate, type Persona, type PersonaTemplate } from "./persona.js";
+import {
+  composePersonaPrompt,
+  normalizePersona,
+  normalizePersonaTemplate,
+  parsePersonaSuggestion,
+  personaSuggestionPrompt,
+  type Persona,
+  type PersonaTemplate,
+} from "./persona.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
 import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
@@ -58,6 +66,42 @@ import { execCli, resolveExecutable } from "./platform/processes.js";
 import { pickDirectory } from "./platform/directoryPicker.js";
 import { parseCommandLine } from "./platform/commandLine.js";
 import { ProviderInstaller } from "./providerInstaller.js";
+import {
+  adoptedCollaborationMessage,
+  collaborationAcceptsTerminalEvent,
+  collaborationActiveWorkerId,
+  collaborationConversation,
+  collaborationPrompt,
+  collaborationText,
+  normalizeAcceptanceCriteria,
+  normalizeCollaborationMode,
+  parseCollaborationResult,
+  type CollaborationTask,
+} from "./collaboration.js";
+import {
+  applyMissionActivityEvent,
+  createMissionActivity,
+  isAgentTool,
+  isAsyncAgentLaunch,
+  missionActiveWorkerId,
+  missionLocksWorkspace,
+  missionFormatRepairPrompt,
+  missionFollowUpPrompt,
+  missionPlanningPrompt,
+  missionStepPrompt,
+  parseMissionPlan,
+  precedingExecuteIndex,
+  type DepartmentMission,
+  type DepartmentMissionStep,
+  type MissionActivity,
+} from "./mission.js";
+import {
+  departmentPlanPrompt,
+  normalizeDepartmentPurpose,
+  parseDepartmentPlan,
+  type DepartmentPlan,
+} from "./departmentPlan.js";
+import { normalizeDepartmentName, type Department } from "./department.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -107,6 +151,7 @@ const wss = new WebSocketServer({
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
+const MAX_ACTIVE_COLLABORATIONS = 5;
 const AVATAR_PRESET_IDS = new Set(["classic", "cyber", "signal", "spark", "ops"]);
 const store = new LocalStore(config.dbPath);
 const avatarStore = new AvatarStore(config.avatarDir);
@@ -198,32 +243,89 @@ type Worker = {
   // modes takes effect immediately without restarting the session.
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
+  departmentId: string | null;
 };
 
 const workers = new Map<string, Worker>();
+const departments = new Map<string, Department>(store.listDepartments().map((department) => [department.id, department]));
+const activeCollaborations = new Map<string, CollaborationTask>();
+const collaborationActivities = new Map<string, MissionActivity>();
+const activeMissions = new Map<string, DepartmentMission>(
+  store.listReservedDepartmentMissions().map((mission) => [mission.id, mission]),
+);
+const missionActivities = new Map<string, MissionActivity>();
 let workerCounter = 0;
 
 function workerSummary(w: Worker) {
   const handoffBusy = handoffInProgress(w);
+  const collaborationIds = [...activeCollaborations.values()]
+    .filter((task) => task.sourceWorkerId === w.id || task.targetWorkerId === w.id)
+    .map((task) => task.id);
+  const missionIds = [...activeMissions.values()]
+    .filter((mission) => missionLocksWorkspace(mission) && missionMatchesScope(mission, w.runner.workspacePath, w.departmentId))
+    .map((mission) => mission.id);
+  const missionBusy = [...activeMissions.values()].some((mission) => missionActiveWorkerId(mission) === w.id);
   return {
     id: w.id,
     name: w.runner.name,
     model: w.runner.getModel() ?? null,
-    busy: w.runner.busy || handoffBusy,
+    busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy,
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
     avatarKind: w.avatarKind,
     avatarPresetId: w.avatarPresetId,
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
+    departmentId: w.departmentId,
     persona: w.persona,
     autoApproveMode: w.autoApproveMode,
     handoff: w.handoff,
+    collaborationIds,
+    missionIds,
   };
 }
 
 function handoffInProgress(worker: Worker): boolean {
   return Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
+}
+
+function collaborationInProgress(workerId: string): boolean {
+  return [...activeCollaborations.values()].some(
+    (task) => task.sourceWorkerId === workerId || task.targetWorkerId === workerId,
+  );
+}
+
+function missionMatchesScope(mission: DepartmentMission, workspacePath: string, departmentId?: string | null): boolean {
+  if (mission.departmentId != null && departmentId != null) return mission.departmentId === departmentId;
+  return sameWorkspacePath(mission.workspacePath, workspacePath);
+}
+
+function workspaceMission(workspacePath: string, departmentId?: string | null): DepartmentMission | null {
+  return [...activeMissions.values()].find((mission) =>
+    missionLocksWorkspace(mission) && missionMatchesScope(mission, workspacePath, departmentId),
+  ) ?? null;
+}
+
+function missionInProgress(workerId: string): boolean {
+  const worker = workers.get(workerId);
+  return Boolean(worker && workspaceMission(worker.runner.workspacePath, worker.departmentId));
+}
+
+function broadcastMission(mission: DepartmentMission, created = false): void {
+  broadcast({ type: created ? "mission_created" : "mission_updated", mission });
+  for (const worker of workers.values()) {
+    if (sameWorkspacePath(worker.runner.workspacePath, mission.workspacePath)) {
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+    }
+  }
+}
+
+function broadcastCollaboration(task: CollaborationTask, created = false): void {
+  broadcast({ type: created ? "collaboration_created" : "collaboration_updated", collaboration: task });
+  const source = workers.get(task.sourceWorkerId);
+  const target = workers.get(task.targetWorkerId);
+  if (source) broadcast({ type: "worker_updated", worker: workerSummary(source) });
+  if (target) broadcast({ type: "worker_updated", worker: workerSummary(target) });
 }
 
 function broadcast(payload: unknown): void {
@@ -280,8 +382,12 @@ function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapab
 }
 
 function persistWorker(worker: Worker): boolean {
+  return store.saveWorker(workerPersistenceRecord(worker));
+}
+
+function workerPersistenceRecord(worker: Worker): Omit<PersistedWorker, "events"> {
   const session = worker.runner.getPersistenceState();
-  return store.saveWorker({
+  return {
     id: worker.id,
     name: worker.runner.name,
     model: worker.runner.getModel() ?? null,
@@ -293,8 +399,31 @@ function persistWorker(worker: Worker): boolean {
     workspacePath: worker.runner.workspacePath,
     persona: worker.persona,
     autoApproveMode: worker.autoApproveMode,
+    departmentId: worker.departmentId,
     ...session,
-  });
+  };
+}
+
+function repairDepartmentAfterMemberLeaves(departmentId: string | null, workerId: string): void {
+  if (!departmentId) return;
+  const department = departments.get(departmentId);
+  if (!department) return;
+  const remaining = [...workers.values()].filter((worker) => worker.departmentId === departmentId && worker.id !== workerId);
+  if (remaining.length === 0) {
+    departments.delete(departmentId);
+    store.deleteDepartment(departmentId);
+    broadcast({ type: "department_removed", departmentId });
+    return;
+  }
+  const updated: Department = {
+    ...department,
+    leadWorkerId: department.leadWorkerId === workerId ? remaining[0].id : department.leadWorkerId,
+    memberWorkerIds: remaining.map((worker) => worker.id),
+    updatedAt: new Date().toISOString(),
+  };
+  departments.set(departmentId, updated);
+  store.saveDepartment(updated);
+  broadcast({ type: "department_updated", department: updated });
 }
 
 async function deleteAvatarIfUnused(avatarId: string): Promise<void> {
@@ -304,6 +433,385 @@ async function deleteAvatarIfUnused(avatarId: string): Promise<void> {
   } catch (error) {
     console.warn("Delete unused avatar failed:", (error as Error).message);
   }
+}
+
+function finishCollaboration(worker: Worker, event: RunnerEvent): void {
+  if (event.type !== "turn_end" && event.type !== "error") return;
+  const task = [...activeCollaborations.values()].find((candidate) =>
+    collaborationAcceptsTerminalEvent(candidate, worker.id),
+  );
+  if (!task) return;
+  const now = new Date().toISOString();
+  const fail = (message: unknown) => {
+    task.status = "failed";
+    task.error = collaborationText(message, 2_000) || "協作執行失敗";
+    task.completedAt = now;
+    activeCollaborations.delete(task.id);
+    collaborationActivities.delete(task.id);
+    store.saveCollaborationTask(task);
+    broadcastCollaboration(task);
+  };
+
+  if (task.status === "returning") {
+    if (event.type === "error" || event.isError) {
+      task.continuationResult = collaborationText(event.type === "error" ? event.message : event.resultText, 40_000) || null;
+      fail(event.type === "error" ? event.message : event.resultText || "來源 NPC 接續工作失敗");
+      return;
+    }
+    task.continuationResult = collaborationText(event.resultText, 40_000) || null;
+    task.status = "completed";
+    task.error = null;
+    task.completedAt = now;
+    activeCollaborations.delete(task.id);
+    collaborationActivities.delete(task.id);
+    store.saveCollaborationTask(task);
+    broadcastCollaboration(task);
+    return;
+  }
+
+  if (event.type === "error" || event.isError) {
+    fail(event.type === "error" ? event.message : event.resultText || "目標 NPC 協作失敗");
+    return;
+  }
+
+  const result = parseCollaborationResult(event.resultText || "");
+  if (!result) {
+    fail("目標 NPC 沒有回傳協作結果");
+    return;
+  }
+  task.result = result;
+  const source = workers.get(task.sourceWorkerId);
+  const target = workers.get(task.targetWorkerId);
+  if (!source || !target) {
+    fail("來源或目標 NPC 已不存在，無法自動交回結果");
+    return;
+  }
+  if (!sameWorkspacePath(source.runner.workspacePath, task.workspacePath) || !sameWorkspacePath(target.runner.workspacePath, task.workspacePath)) {
+    fail("NPC 工作位置已改變，無法自動交回結果");
+    return;
+  }
+  if (source.runner.busy || handoffInProgress(source)) {
+    fail("來源 NPC 狀態已改變，無法自動接續工作");
+    return;
+  }
+  if (!providerReady(source.runner.provider)) {
+    fail(`${providerLabel(source.runner.provider)} 尚未登入，無法自動接續工作`);
+    return;
+  }
+  task.status = "returning";
+  task.adoptedAt = now;
+  task.error = null;
+  store.saveCollaborationTask(task);
+  broadcastCollaboration(task);
+  const message = adoptedCollaborationMessage(task, target.runner.name);
+  record(source, { type: "user_message", text: message });
+  try {
+    source.runner.send(message);
+    broadcast({ type: "worker_status", workerId: source.id, busy: true });
+  } catch (error) {
+    record(source, { type: "error", message: (error as Error).message || "無法自動交回協作結果" });
+    // record(error) owns the failure transition while the task is returning.
+  }
+}
+
+function missionMembers(mission: DepartmentMission): Worker[] {
+  return [...workers.values()].filter((worker) => mission.departmentId
+    ? worker.departmentId === mission.departmentId
+    : sameWorkspacePath(worker.runner.workspacePath, mission.workspacePath));
+}
+
+function failMission(mission: DepartmentMission, message: unknown): void {
+  const now = new Date().toISOString();
+  const activeIndex = mission.currentStepIndex;
+  const step = activeIndex == null ? null : mission.steps[activeIndex];
+  if (step?.status === "running") {
+    step.status = "failed";
+    step.completedAt = now;
+  }
+  mission.status = "failed";
+  mission.error = collaborationText(message, 2_000) || "Department Mission 執行失敗";
+  mission.completedAt = now;
+  activeMissions.delete(mission.id);
+  missionActivities.delete(mission.id);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+}
+
+function pauseMission(
+  mission: DepartmentMission,
+  message: unknown,
+  reason: NonNullable<DepartmentMission["attentionReason"]> = "step_failed",
+): void {
+  const activeIndex = mission.currentStepIndex;
+  const step = activeIndex == null ? null : mission.steps[activeIndex];
+  if (step?.status === "running") {
+    step.status = "failed";
+    step.completedAt = new Date().toISOString();
+  }
+  mission.status = "needs_attention";
+  mission.attentionReason = reason;
+  mission.error = collaborationText(message, 2_000) || "Department Mission 需要你決定後續";
+  missionActivities.delete(mission.id);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+}
+
+function dispatchMissionStep(
+  mission: DepartmentMission,
+  stepIndex: number,
+  priorReview: ReturnType<typeof parseCollaborationResult> = null,
+): void {
+  const step = mission.steps[stepIndex];
+  const assignee = step ? workers.get(step.assigneeWorkerId) : null;
+  if (!step || !assignee) {
+    pauseMission(mission, "Mission 指派的 NPC 已不存在，請重新指派", "member_unavailable");
+    return;
+  }
+  if (!sameWorkspacePath(assignee.runner.workspacePath, mission.workspacePath)) {
+    pauseMission(mission, "Mission 指派的 NPC 已離開原部門，請重新指派", "member_unavailable");
+    return;
+  }
+  if (assignee.runner.busy || handoffInProgress(assignee) || collaborationInProgress(assignee.id)) {
+    pauseMission(mission, `${assignee.runner.name} 正在執行其他工作，請稍後重試或重新指派`, "member_unavailable");
+    return;
+  }
+  if (!providerReady(assignee.runner.provider)) {
+    pauseMission(mission, `${providerLabel(assignee.runner.provider)} 尚未登入，請登入後重試或重新指派`, "member_unavailable");
+    return;
+  }
+  const now = new Date().toISOString();
+  mission.currentStepIndex = stepIndex;
+  mission.status = step.kind === "execute" ? "executing" : "reviewing";
+  mission.attentionReason = null;
+  mission.error = null;
+  step.status = "running";
+  step.attempt += 1;
+  step.startedAt = now;
+  step.completedAt = null;
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+  const message = missionStepPrompt({
+    mission,
+    step,
+    assigneeName: assignee.runner.name,
+    priorReview,
+  });
+  record(assignee, { type: "user_message", text: `部門工作 · ${step.title}（${stepIndex + 1}/${mission.steps.length}）` });
+  try {
+    assignee.runner.send(
+      message,
+      [],
+      [],
+      step.kind !== "execute" ? { executionProfile: "read_only_collaboration" } : undefined,
+    );
+    broadcast({ type: "worker_status", workerId: assignee.id, busy: true });
+  } catch (error) {
+    record(assignee, { type: "error", message: (error as Error).message || "無法啟動 Mission 步驟" });
+  }
+}
+
+function completeMissionStep(mission: DepartmentMission, stepIndex: number, priorReview: ReturnType<typeof parseCollaborationResult> = null): void {
+  const nextIndex = stepIndex + 1;
+  if (nextIndex < mission.steps.length) {
+    dispatchMissionStep(mission, nextIndex, priorReview);
+    return;
+  }
+  mission.status = "completed";
+  mission.currentStepIndex = null;
+  mission.error = null;
+  mission.completedAt = new Date().toISOString();
+  activeMissions.delete(mission.id);
+  missionActivities.delete(mission.id);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+}
+
+function finishMission(worker: Worker, event: RunnerEvent): void {
+  if (event.type !== "turn_end" && event.type !== "error") return;
+  const mission = [...activeMissions.values()].find((candidate) => missionActiveWorkerId(candidate) === worker.id);
+  if (!mission) return;
+  if (event.type === "error" || event.isError) {
+    pauseMission(mission, event.type === "error" ? event.message : event.resultText || "Mission 步驟失敗");
+    return;
+  }
+  const output = collaborationText(event.resultText, 40_000);
+  if (mission.status === "planning") {
+    const members = missionMembers(mission);
+    const parsed = parseMissionPlan(output, new Set(members.map((member) => member.id)), mission.bossWorkerId);
+    if (!parsed.plan) {
+      if ((mission.formatRepairCount ?? 0) < 1) {
+        mission.formatRepairCount = 1;
+        mission.error = "計畫格式不完整，正在要求主管只修復輸出格式";
+        store.saveDepartmentMission(mission);
+        broadcastMission(mission);
+        const repair = missionFormatRepairPrompt("plan", output);
+        record(worker, { type: "user_message", text: "部門工作 · 修復計畫輸出格式" });
+        try {
+          worker.runner.send(repair, [], [], { executionProfile: "read_only_collaboration" });
+          broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+        } catch (error) {
+          record(worker, { type: "error", message: (error as Error).message || "無法修復 Mission 計畫格式" });
+        }
+        return;
+      }
+      mission.status = "needs_attention";
+      mission.attentionReason = "step_failed";
+      mission.error = parsed.error || "Mission 計畫格式仍然無效，請重試規劃或取消";
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      return;
+    }
+    mission.planSummary = parsed.plan.summary;
+    mission.steps = parsed.plan.steps.map((step) => ({
+      ...step,
+      id: randomUUID(),
+      status: "pending" as const,
+      attempt: 0,
+      result: null,
+      reviewResult: null,
+      startedAt: null,
+      completedAt: null,
+      formatRepairCount: 0,
+    }));
+    if (mission.steps[0]?.kind === "execute") {
+      mission.steps.push({
+        id: randomUUID(),
+        title: "部門主管彙整結果",
+        objective: "整合所有執行與 Review 結果，向老闆提交只包含結論、驗收狀態、風險與待決事項的最終報告",
+        kind: "synthesize",
+        assigneeWorkerId: mission.bossWorkerId,
+        acceptanceCriteria: mission.acceptanceCriteria,
+        status: "pending",
+        attempt: 0,
+        result: null,
+        reviewResult: null,
+        startedAt: null,
+        completedAt: null,
+        formatRepairCount: 0,
+      });
+    }
+    mission.currentStepIndex = 0;
+    mission.status = "needs_attention";
+    mission.attentionReason = "plan_approval";
+    mission.error = null;
+    store.saveDepartmentMission(mission);
+    broadcastMission(mission);
+    return;
+  }
+  const stepIndex = mission.currentStepIndex;
+  if (stepIndex == null) {
+    failMission(mission, "Mission 找不到目前步驟");
+    return;
+  }
+  const step = mission.steps[stepIndex];
+  if (!step || step.assigneeWorkerId !== worker.id || step.status !== "running") return;
+  const now = new Date().toISOString();
+  step.result = output || null;
+  step.completedAt = now;
+  if (step.kind === "review" || step.kind === "consult") {
+    const review = parseCollaborationResult(output);
+    if (!review || !review.structured) {
+      if ((step.formatRepairCount ?? 0) < 1) {
+        step.formatRepairCount = 1;
+        step.result = output || null;
+        mission.error = "專家結果格式不完整，正在要求只修復輸出格式";
+        store.saveDepartmentMission(mission);
+        broadcastMission(mission);
+        const repair = missionFormatRepairPrompt(step.kind, output);
+        record(worker, { type: "user_message", text: `部門工作 · 修復 ${step.kind === "consult" ? "Consult" : "Review"} 輸出格式` });
+        try {
+          worker.runner.send(repair, [], [], { executionProfile: "read_only_collaboration" });
+          broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+        } catch (error) {
+          record(worker, { type: "error", message: (error as Error).message || "無法修復專家結果格式" });
+        }
+        return;
+      }
+      step.status = "failed";
+      mission.status = "needs_attention";
+      mission.attentionReason = "step_failed";
+      mission.error = "專家 NPC 兩次都沒有回傳結構化 Consult／Review 結果";
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      return;
+    }
+    step.reviewResult = review;
+    step.status = "completed";
+    if (step.kind === "consult") {
+      completeMissionStep(mission, stepIndex, review);
+      return;
+    }
+    const quickReview = stepIndex === 0 && mission.steps[1]?.kind === "execute";
+    if (quickReview) {
+      if (review.verdict === "pass" || review.verdict === "changes_requested") {
+        completeMissionStep(mission, stepIndex, review);
+      } else {
+        mission.status = "needs_attention";
+        mission.attentionReason = "review_inconclusive";
+        mission.error = "快速 Review 無法確認結果，需要你補充資訊或重新檢查";
+        store.saveDepartmentMission(mission);
+        broadcastMission(mission);
+      }
+      return;
+    }
+    if (review.verdict === "changes_requested") {
+      if (mission.correctionCount >= mission.maxCorrections) {
+        mission.status = "needs_attention";
+        mission.attentionReason = "correction_limit";
+        mission.error = `Review 已退回 ${mission.correctionCount + 1} 次，需要你決定後續`;
+        store.saveDepartmentMission(mission);
+        broadcastMission(mission);
+        return;
+      }
+      const executeIndex = precedingExecuteIndex(mission, stepIndex);
+      if (executeIndex == null) {
+        failMission(mission, "Review 找不到可退回修正的 Execute 步驟");
+        return;
+      }
+      mission.correctionCount += 1;
+      step.status = "pending";
+      step.completedAt = null;
+      const executeStep = mission.steps[executeIndex];
+      executeStep.status = "pending";
+      executeStep.completedAt = null;
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      dispatchMissionStep(mission, executeIndex, review);
+      return;
+    }
+    if (review.verdict !== "pass") {
+      mission.status = "needs_attention";
+      mission.attentionReason = "review_inconclusive";
+      mission.error = "Review 無法確認通過，需要你補充資訊或重新檢查";
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      return;
+    }
+    completeMissionStep(mission, stepIndex);
+    return;
+  }
+  step.status = "completed";
+  completeMissionStep(mission, stepIndex);
+}
+
+function missionEventIsTerminal(worker: Worker, event: RunnerEvent): boolean {
+  const mission = [...activeMissions.values()].find((candidate) => missionActiveWorkerId(candidate) === worker.id);
+  if (!mission) return false;
+  const current = missionActivities.get(mission.id) ?? createMissionActivity();
+  const result = applyMissionActivityEvent(current, event);
+  if (result.shouldFinish) missionActivities.delete(mission.id);
+  else missionActivities.set(mission.id, result.activity);
+  return result.shouldFinish;
+}
+
+function collaborationEventIsTerminal(worker: Worker, event: RunnerEvent): boolean {
+  const task = [...activeCollaborations.values()].find((candidate) => collaborationAcceptsTerminalEvent(candidate, worker.id));
+  if (!task) return false;
+  const current = collaborationActivities.get(task.id) ?? createMissionActivity();
+  const result = applyMissionActivityEvent(current, event);
+  if (result.shouldFinish) collaborationActivities.delete(task.id);
+  else collaborationActivities.set(task.id, result.activity);
+  return result.shouldFinish;
 }
 
 function record(worker: Worker, event: RunnerEvent): void {
@@ -345,7 +853,11 @@ function record(worker: Worker, event: RunnerEvent): void {
         : store.getCounter("total_cost_usd_micros")) / 1_000_000;
     broadcast({ type: "stats_updated", stats: { completedTurns, totalCostUsd } });
   }
+  const missionTerminal = missionEventIsTerminal(worker, event);
+  const collaborationTerminal = collaborationEventIsTerminal(worker, event);
   broadcast({ type: "event", workerId: worker.id, event });
+  if ((event.type === "turn_end" || event.type === "error") && collaborationTerminal) finishCollaboration(worker, event);
+  if ((event.type === "turn_end" || event.type === "error") && missionTerminal) finishMission(worker, event);
 }
 
 function createWorker(
@@ -354,6 +866,9 @@ function createWorker(
   provider: ProviderId = "claude",
   workspacePath = config.targetRepoPath,
   persisted?: PersistedWorker,
+  initialPersona: Persona | null = null,
+  departmentId: string | null = null,
+  options: { warmup?: boolean; persist?: boolean; broadcast?: boolean } = {},
 ): Worker {
   const workerProvider = persisted?.provider ?? provider;
   const workerWorkspace = registryKey(persisted?.workspacePath || workspacePath || config.targetRepoPath);
@@ -366,9 +881,10 @@ function createWorker(
     avatarId: persisted?.avatarId ?? null,
     avatarKind: persisted?.avatarKind ?? (persisted?.avatarId ? "custom" : "preset"),
     avatarPresetId: AVATAR_PRESET_IDS.has(persisted?.avatarPresetId ?? "") ? persisted!.avatarPresetId : "classic",
-    persona: persisted?.persona ?? null,
+    persona: persisted?.persona ?? initialPersona,
     autoApproveMode: persisted?.autoApproveMode ?? "off",
     handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
+    departmentId: persisted?.departmentId ?? departmentId,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -382,12 +898,37 @@ function createWorker(
   const selectedModel = persisted?.model ?? model;
   if (selectedModel && validModel(workerProvider, selectedModel)) runner.setModel(selectedModel);
   workers.set(id, worker);
-  if (providerReady(workerProvider)) runner.warmup();
-  persistWorker(worker);
+  if (options.warmup === true && providerReady(workerProvider)) runner.warmup();
+  if (options.persist !== false) {
+    if (!persisted && !worker.departmentId) {
+      const departmentId = randomUUID();
+      const now = new Date().toISOString();
+      worker.departmentId = departmentId;
+      const department: Department = {
+        id: departmentId,
+        name: `${basename(workerWorkspace) || "個人"}部門`,
+        purpose: "個人工作部門",
+        workspacePath: workerWorkspace,
+        leadWorkerId: worker.id,
+        memberWorkerIds: [worker.id],
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (store.saveDepartmentWithWorkers(department, [workerPersistenceRecord(worker)])) {
+        departments.set(department.id, department);
+        broadcast({ type: "department_created", department });
+      } else {
+        worker.departmentId = null;
+        persistWorker(worker);
+      }
+    } else {
+      persistWorker(worker);
+    }
+  }
   if (persisted && hasUnfinishedTurn(worker.history)) {
     record(worker, { type: "error", message: "伺服器已重啟，上一個未完成的回合已中止" });
   }
-  if (!persisted) broadcast({ type: "worker_added", worker: workerSummary(worker) });
+  if (!persisted && options.broadcast !== false) broadcast({ type: "worker_added", worker: workerSummary(worker) });
   return worker;
 }
 
@@ -475,9 +1016,15 @@ function handoffActivityBlock(events: RunnerEvent[]): string | null {
   for (const event of events) {
     if (event.type === "approval_requested") pendingApprovals.add(event.request.id);
     if (event.type === "approval_resolved") pendingApprovals.delete(event.id);
-    if (event.type === "tool_call_start" && /(^|__)agent$/i.test(event.name)) openAgents.add(event.id);
-    if (event.type === "tool_call_result") openAgents.delete(event.id);
-    if (event.type === "turn_end" || event.type === "error") {
+    if (event.type === "tool_call_start" && isAgentTool(event.name)) openAgents.add(event.id);
+    if (event.type === "tool_call_result") {
+      if (event.isError || !isAsyncAgentLaunch(event.output)) openAgents.delete(event.id);
+    }
+    if (event.type === "turn_end") {
+      pendingApprovals.clear();
+      openAgents.clear();
+    }
+    if (event.type === "error") {
       pendingApprovals.clear();
       openAgents.clear();
     }
@@ -697,6 +1244,9 @@ wss.on("connection", (socket) => {
       auth: Object.values(authStates),
       providerUsage: usageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
+      collaborations: store.listRecentCollaborationTasks(),
+      missions: store.listDepartmentMissions(),
+      departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
         events: w.history,
@@ -707,6 +1257,10 @@ wss.on("connection", (socket) => {
 
 app.get("/api/workers", (_req, res) => {
   res.json({ workers: [...workers.values()].map(workerSummary) });
+});
+
+app.get("/api/departments", (_req, res) => {
+  res.json({ departments: store.listDepartments() });
 });
 
 app.get("/api/workspaces", (_req, res) => {
@@ -918,11 +1472,19 @@ app.post("/api/workers", (req, res) => {
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
   try {
     const workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
+    if (workspaceMission(workspacePath)) {
+      res.status(409).json({ error: "這個部門正在執行 Department Mission，暫時不能加入新 NPC" });
+      return;
+    }
     const worker = createWorker(
       req.body?.name,
       String(req.body?.model ?? ""),
       provider,
       workspacePath,
+      undefined,
+      null,
+      null,
+      { warmup: true },
     );
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
@@ -930,6 +1492,164 @@ app.post("/api/workers", (req, res) => {
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
   }
+});
+
+type PreparedDepartment = {
+  provider: ProviderId;
+  workspacePath: string;
+  purpose: string;
+  plan: DepartmentPlan;
+  workerCount: number;
+  expiresAt: number;
+};
+const preparedDepartments = new Map<string, PreparedDepartment>();
+
+app.post("/api/departments/plan", async (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  const purpose = normalizeDepartmentPurpose(req.body?.purpose);
+  const count = Number(req.body?.count);
+  if (!purpose) {
+    res.status(400).json({ error: "請輸入部門用途，例如：產品開發、QA 或資安稽核" });
+    return;
+  }
+  if (!Number.isInteger(count) || count < 1 || count > MAX_WORKERS - workers.size) {
+    res.status(400).json({ error: `NPC 數量需為 1 到 ${Math.max(0, MAX_WORKERS - workers.size)} 位` });
+    return;
+  }
+  if (!providerReady(provider)) {
+    res.status(503).json({ error: `${providerLabel(provider)} 尚未登入，登入後才能規劃部門`, auth: authStates[provider] });
+    return;
+  }
+  try {
+    const workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
+    if (workspaceMission(workspacePath)) {
+      res.status(409).json({ error: "這個工作位置正在執行部門工作，暫時不能建立新部門" });
+      return;
+    }
+    const existingMembers = [...workers.values()]
+      .filter((member) => sameWorkspacePath(member.runner.workspacePath, workspacePath))
+      .map((member) => ({ name: member.runner.name, role: member.persona?.role || null }));
+    const prompt = departmentPlanPrompt({ purpose, count, workspacePath, existingMembers });
+    let result;
+    try {
+      result = await runDetachedTurn(provider, workspacePath, null, undefined, null, prompt, 75_000);
+    } catch {
+      // One bounded retry stays on the owner-selected Provider and its default
+      // model. Never cross Providers implicitly: that changes cost and policy.
+      result = await runDetachedTurn(provider, workspacePath, null, undefined, null, prompt, 75_000);
+    }
+    const plan = parseDepartmentPlan(result.text, count);
+    const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
+    if (!plan || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) {
+      res.status(502).json({ error: "AI 回傳的部門名單不完整或名稱重複，請重新規劃" });
+      return;
+    }
+    for (const [token, prepared] of preparedDepartments) {
+      if (prepared.expiresAt < Date.now()) preparedDepartments.delete(token);
+    }
+    const planToken = randomUUID();
+    preparedDepartments.set(planToken, {
+      provider,
+      workspacePath,
+      purpose,
+      plan,
+      workerCount: workers.size,
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    res.json({ planToken, provider, workspacePath, purpose, plan });
+  } catch (error) {
+    res.status(502).json({ error: (error as Error).message || "AI 暫時無法規劃部門" });
+  }
+});
+
+app.post("/api/departments", (req, res) => {
+  const token = String(req.body?.planToken ?? "");
+  const prepared = preparedDepartments.get(token);
+  if (!prepared || prepared.expiresAt < Date.now()) {
+    preparedDepartments.delete(token);
+    res.status(409).json({ error: "部門規劃已過期，請重新產生" });
+    return;
+  }
+  if (workers.size !== prepared.workerCount || workers.size + prepared.plan.members.length > MAX_WORKERS) {
+    res.status(409).json({ error: "NPC 名單已變動，請重新規劃部門" });
+    return;
+  }
+  if (workspaceMission(prepared.workspacePath)) {
+    res.status(409).json({ error: "這個工作位置正在執行部門工作" });
+    return;
+  }
+  const requestedMembers: unknown[] = Array.isArray(req.body?.members) ? req.body.members as unknown[] : prepared.plan.members;
+  if (requestedMembers.length !== prepared.plan.members.length) {
+    res.status(400).json({ error: "編輯後的 NPC 數量必須與 AI 規劃一致" });
+    return;
+  }
+  const normalizedMembers = requestedMembers.map((candidate: unknown) => {
+    const value = candidate && typeof candidate === "object" ? candidate as Record<string, unknown> : {};
+    return {
+      name: collaborationText(value.name, 80),
+      persona: normalizePersona({ role: value.role, instructions: value.instructions }),
+      provider: prepared.provider,
+      model: undefined,
+    };
+  });
+  const names = normalizedMembers.map((member) => member.name.toLocaleLowerCase());
+  const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
+  if (normalizedMembers.some((member) => !member.name || !member.persona)
+    || new Set(names).size !== names.length || names.some((name) => existingNames.has(name))) {
+    res.status(400).json({ error: "請確認每位 NPC 都有不重複的姓名、職位與個性" });
+    return;
+  }
+  const unavailableProvider = normalizedMembers.find((member) => !providerReady(member.provider))?.provider;
+  if (unavailableProvider) {
+    res.status(503).json({ error: `${providerLabel(unavailableProvider)} 尚未登入` });
+    return;
+  }
+  const leadIndex = Number(req.body?.leadIndex ?? 0);
+  if (!Number.isInteger(leadIndex) || leadIndex < 0 || leadIndex >= normalizedMembers.length) {
+    res.status(400).json({ error: "請指定一位部門主管" });
+    return;
+  }
+  const departmentId = randomUUID();
+  const now = new Date().toISOString();
+  const created = normalizedMembers.map((member) => createWorker(
+    member.name,
+    member.model,
+    member.provider,
+    prepared.workspacePath,
+    undefined,
+    member.persona,
+    departmentId,
+    { warmup: false, persist: false, broadcast: false },
+  ));
+  const department: Department = {
+    id: departmentId,
+    name: normalizeDepartmentName(req.body?.name) || `${prepared.purpose.slice(0, 20)}部門`,
+    purpose: prepared.purpose,
+    workspacePath: prepared.workspacePath,
+    leadWorkerId: created[leadIndex].id,
+    memberWorkerIds: created.map((worker) => worker.id),
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
+    for (const worker of created) {
+      worker.runner.stop();
+      workers.delete(worker.id);
+    }
+    res.status(500).json({ error: "部門建立失敗，沒有新增任何 NPC" });
+    return;
+  }
+  departments.set(department.id, department);
+  preparedDepartments.delete(token);
+  broadcast({ type: "department_created", department });
+  for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
+  if (prepared.provider === "claude") void claudeCapabilitiesFor(prepared.workspacePath).refresh();
+  else void codexCapabilitiesFor(prepared.workspacePath).refresh();
+  res.json({
+    purpose: prepared.purpose,
+    department,
+    workers: created.map(workerSummary),
+  });
 });
 
 // Must be registered before /api/workers/:id or Express treats "order" as an id.
@@ -960,8 +1680,8 @@ app.patch("/api/workers/:id", (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (handoffInProgress(worker)) {
-    res.status(409).json({ error: "NPC 正在進行 LLM 交接，暫時不能改名" });
+  if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
+    res.status(409).json({ error: "NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能改名" });
     return;
   }
   const name = String(req.body?.name ?? "").trim();
@@ -1264,6 +1984,687 @@ app.patch("/api/workers/:id/provider", (req, res) => {
   res.status(409).json({ error: "切換 LLM 必須先檢查工作能量並確認交接風險，請使用交接流程" });
 });
 
+type PreparedMission = {
+  bossWorkerId: string;
+  workspacePath: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  memberStates: Array<{ id: string; sessionId: string; historyLength: number }>;
+  expiresAt: number;
+};
+const preparedMissions = new Map<string, PreparedMission>();
+
+function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error?: string } {
+  if (workspaceMission(boss.runner.workspacePath, boss.departmentId)) return { error: "這個部門已有進行中或待決定的 Mission" };
+  const members = [...workers.values()].filter((worker) => boss.departmentId
+    ? worker.departmentId === boss.departmentId
+    : sameWorkspacePath(worker.runner.workspacePath, boss.runner.workspacePath));
+  if (members.length < 1) return { error: "部門目前沒有可執行工作的 NPC" };
+  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return { error: `${boss.runner.name} 正在工作、交接或協作中` };
+  if (handoffActivityBlock(boss.history)) return { error: `${boss.runner.name} 尚有待處理的權限或背景 Agent` };
+  if (!providerReady(boss.runner.provider)) return { error: `${providerLabel(boss.runner.provider)} 尚未登入` };
+  return { members };
+}
+
+app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
+  const boss = workers.get(req.params.bossId);
+  if (!boss) {
+    res.status(404).json({ error: "找不到部門主管 NPC" });
+    return;
+  }
+  const objective = collaborationText(req.body?.objective, 4_000);
+  const acceptanceCriteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
+  if (!objective || acceptanceCriteria.length === 0) {
+    res.status(400).json({ error: !objective ? "請填寫 Department Mission 目標" : "請至少填寫一項 Mission 驗收條件" });
+    return;
+  }
+  const eligibility = missionDepartmentEligibility(boss);
+  if (!eligibility.members) {
+    res.status(409).json({ error: eligibility.error });
+    return;
+  }
+  for (const provider of new Set([boss.runner.provider])) {
+    const usage = await usageRegistry.refresh(provider, true);
+    const usageError = usageBlockReason(provider, usage, null);
+    if (usageError) {
+      res.status(409).json({ error: `${providerLabel(provider)} 無法開始 Mission：${usageError}`, usage });
+      return;
+    }
+  }
+  for (const [token, prepared] of preparedMissions) {
+    if (prepared.expiresAt < Date.now()) preparedMissions.delete(token);
+  }
+  const missionToken = randomUUID();
+  preparedMissions.set(missionToken, {
+    bossWorkerId: boss.id,
+    workspacePath: boss.runner.workspacePath,
+    objective,
+    acceptanceCriteria,
+    memberStates: eligibility.members.map((member) => ({
+      id: member.id,
+      sessionId: member.runner.getPersistenceState().sessionId,
+      historyLength: member.history.length,
+    })),
+    expiresAt: Date.now() + 120_000,
+  });
+  res.json({
+    missionToken,
+    boss: workerSummary(boss),
+    members: eligibility.members.map(workerSummary),
+    objective,
+    acceptanceCriteria,
+    maxCorrections: 2,
+    warnings: [
+      "部門主管會先以唯讀模式判斷使用快速 Consult／Review，或規劃完整 Mission；部門一次只執行一個步驟。",
+      "Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。",
+      "Review 最多自動退回修正兩輪，超過後會停下來請你決定。",
+      "Mission 不會自動 commit、push、merge、tag、publish 或 release。",
+    ],
+  });
+});
+
+app.post("/api/workers/:bossId/missions", async (req, res) => {
+  const boss = workers.get(req.params.bossId);
+  const token = String(req.body?.missionToken ?? "");
+  const prepared = preparedMissions.get(token);
+  preparedMissions.delete(token);
+  if (!boss || !prepared || prepared.bossWorkerId !== boss.id || prepared.expiresAt < Date.now()) {
+    res.status(409).json({ error: "Mission 確認已過期，請重新檢查" });
+    return;
+  }
+  if (req.body?.warningAcknowledged !== true) {
+    res.status(400).json({ error: "必須先確認 Mission 權限與 Git 邊界" });
+    return;
+  }
+  const eligibility = missionDepartmentEligibility(boss);
+  if (!eligibility.members || !sameWorkspacePath(boss.runner.workspacePath, prepared.workspacePath)) {
+    res.status(409).json({ error: eligibility.error || "部門主管已離開原部門" });
+    return;
+  }
+  const stateChanged = prepared.memberStates.some((snapshot) => {
+    const member = workers.get(snapshot.id);
+    return !member || member.runner.getPersistenceState().sessionId !== snapshot.sessionId || member.history.length !== snapshot.historyLength;
+  });
+  if (stateChanged) {
+    res.status(409).json({ error: "檢查後部門 NPC 狀態已改變，請重新確認" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const mission: DepartmentMission = {
+    id: randomUUID(),
+    departmentId: boss.departmentId,
+    workspacePath: boss.runner.workspacePath,
+    bossWorkerId: boss.id,
+    objective: prepared.objective,
+    acceptanceCriteria: prepared.acceptanceCriteria,
+    status: "planning",
+    planSummary: null,
+    steps: [],
+    currentStepIndex: null,
+    correctionCount: 0,
+    maxCorrections: 2,
+    error: null,
+    createdAt: now,
+    startedAt: now,
+    completedAt: null,
+    attentionReason: null,
+    planApprovedAt: null,
+    ownerGuidance: null,
+    formatRepairCount: 0,
+  };
+  activeMissions.set(mission.id, mission);
+  if (!store.saveDepartmentMission(mission)) {
+    activeMissions.delete(mission.id);
+    res.status(500).json({ error: "無法保存 Department Mission" });
+    return;
+  }
+  broadcastMission(mission, true);
+  const prompt = missionPlanningPrompt({
+    missionId: mission.id,
+    bossWorkerId: mission.bossWorkerId,
+    objective: mission.objective,
+    acceptanceCriteria: mission.acceptanceCriteria,
+    workspacePath: mission.workspacePath,
+    members: eligibility.members.map((member) => ({
+      id: member.id,
+      name: member.runner.name,
+      role: member.persona?.role || null,
+      provider: member.runner.provider,
+    })),
+  });
+  record(boss, { type: "user_message", text: `交給部門 · AI 規劃：${mission.objective}` });
+  try {
+    boss.runner.send(prompt, [], [], { executionProfile: "read_only_collaboration" });
+  } catch (error) {
+    record(boss, { type: "error", message: (error as Error).message || "無法啟動 Mission 規劃" });
+    res.status(500).json({ error: (error as Error).message || "無法啟動 Mission 規劃", mission });
+    return;
+  }
+  broadcast({ type: "worker_status", workerId: boss.id, busy: true });
+  res.status(202).json({ mission });
+});
+
+app.get("/api/missions", (req, res) => {
+  const requested = String(req.query.workspacePath ?? "").trim();
+  let workspacePath: string | undefined;
+  if (requested) {
+    try { workspacePath = normalizeManagedWorkspacePath(requested); }
+    catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+  }
+  res.json({ missions: store.listDepartmentMissions(workspacePath) });
+});
+
+app.get("/api/missions/:id", (req, res) => {
+  const mission = store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  res.json({ mission });
+});
+
+app.post("/api/missions/:id/follow-up", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (missionLocksWorkspace(mission)) {
+    res.status(409).json({ error: "Mission 尚未結束，請先在目前步驟或決策卡繼續處理" });
+    return;
+  }
+  const question = collaborationText(req.body?.question, 4_000);
+  if (!question) { res.status(400).json({ error: "請輸入要追問部門的內容" }); return; }
+  const department = mission.departmentId ? departments.get(mission.departmentId) : undefined;
+  const lead = workers.get(department?.leadWorkerId ?? mission.bossWorkerId);
+  if (!lead || (mission.departmentId && lead.departmentId !== mission.departmentId)) {
+    res.status(409).json({ error: "部門主管已不存在或已離開部門" });
+    return;
+  }
+  const running = workspaceMission(mission.workspacePath, mission.departmentId);
+  if (running && running.id !== mission.id) {
+    res.status(409).json({ error: "部門正在執行新的 Mission，完成後才能追問舊報告" });
+    return;
+  }
+  if (lead.runner.busy || handoffInProgress(lead) || collaborationInProgress(lead.id) || missionInProgress(lead.id)) {
+    res.status(409).json({ error: "部門主管正在處理其他工作，請完成後再追問" });
+    return;
+  }
+  if (handoffActivityBlock(lead.history)) {
+    res.status(409).json({ error: "部門主管尚有待處理的權限或背景 Agent" });
+    return;
+  }
+  if (!providerReady(lead.runner.provider)) {
+    res.status(503).json({ error: `${providerLabel(lead.runner.provider)} 尚未登入`, auth: authStates[lead.runner.provider] });
+    return;
+  }
+  record(lead, { type: "user_message", text: `部門追問：${question}`, departmentFollowUpMissionId: mission.id });
+  try {
+    lead.runner.send(missionFollowUpPrompt(mission, question), [], [], { executionProfile: "read_only_collaboration" });
+  } catch (error) {
+    const message = (error as Error).message || "無法送出部門追問";
+    record(lead, { type: "error", message });
+    res.status(500).json({ error: message });
+    return;
+  }
+  broadcast({ type: "worker_status", workerId: lead.id, busy: true });
+  res.status(202).json({ ok: true, workerId: lead.id });
+});
+
+app.post("/api/missions/:id/approve-plan", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (mission.status !== "needs_attention" || mission.attentionReason !== "plan_approval" || mission.steps.length === 0) {
+    res.status(409).json({ error: "這個 Mission 沒有等待核准的計畫" });
+    return;
+  }
+  const first = mission.steps[0];
+  const assignee = workers.get(first.assigneeWorkerId);
+  if (!assignee || assignee.runner.busy || !providerReady(assignee.runner.provider)) {
+    res.status(409).json({ error: "第一位執行 NPC 目前無法開始，請稍後再核准" });
+    return;
+  }
+  mission.planApprovedAt = new Date().toISOString();
+  mission.attentionReason = null;
+  mission.error = null;
+  activeMissions.set(mission.id, mission);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+  dispatchMissionStep(mission, 0);
+  res.status(202).json({ mission });
+});
+
+function retryMissionPlanning(mission: DepartmentMission): string | null {
+  const boss = workers.get(mission.bossWorkerId);
+  if (!boss) return "部門主管 NPC 已不存在";
+  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return "部門主管正在執行其他工作";
+  if (!providerReady(boss.runner.provider)) return `${providerLabel(boss.runner.provider)} 尚未登入`;
+  const members = missionMembers(mission);
+  mission.status = "planning";
+  mission.attentionReason = null;
+  mission.error = null;
+  mission.formatRepairCount = 0;
+  mission.steps = [];
+  mission.currentStepIndex = null;
+  activeMissions.set(mission.id, mission);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+  const prompt = missionPlanningPrompt({
+    missionId: mission.id,
+    bossWorkerId: mission.bossWorkerId,
+    objective: mission.objective,
+    acceptanceCriteria: mission.acceptanceCriteria,
+    workspacePath: mission.workspacePath,
+    members: members.map((member) => ({
+      id: member.id,
+      name: member.runner.name,
+      role: member.persona?.role || null,
+      provider: member.runner.provider,
+    })),
+  });
+  record(boss, { type: "user_message", text: `交給部門 · 重新規劃：${mission.objective}` });
+  try {
+    boss.runner.send(prompt, [], [], { executionProfile: "read_only_collaboration" });
+    broadcast({ type: "worker_status", workerId: boss.id, busy: true });
+    return null;
+  } catch (error) {
+    pauseMission(mission, (error as Error).message || "無法重新啟動 Mission 規劃");
+    return mission.error;
+  }
+}
+
+app.post("/api/missions/:id/resolve", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!(["needs_attention", "failed"] as DepartmentMission["status"][]).includes(mission.status) || mission.attentionReason === "plan_approval") {
+    res.status(409).json({ error: "這個 Mission 目前沒有可處理的中斷" });
+    return;
+  }
+  const reserved = workspaceMission(mission.workspacePath, mission.departmentId);
+  if (mission.status === "failed" && reserved && reserved.id !== mission.id) {
+    res.status(409).json({ error: "同一工作位置已有進行中的 Department Mission" });
+    return;
+  }
+  const action = String(req.body?.action ?? "");
+  const guidance = collaborationText(req.body?.guidance, 2_000);
+  if (guidance) mission.ownerGuidance = guidance;
+  if (action === "retry" && mission.steps.length === 0) {
+    const error = retryMissionPlanning(mission);
+    if (error) { res.status(409).json({ error }); return; }
+    res.status(202).json({ mission });
+    return;
+  }
+  const currentIndex = mission.currentStepIndex;
+  const current = currentIndex == null ? null : mission.steps[currentIndex];
+  if (!current || currentIndex == null) {
+    res.status(409).json({ error: "Mission 找不到可恢復的步驟" });
+    return;
+  }
+  if (action === "accept_risk") {
+    if (current.kind !== "review" || !current.reviewResult) {
+      res.status(409).json({ error: "只有已有結果的 Review 才能接受風險繼續" });
+      return;
+    }
+    current.status = "completed";
+    mission.attentionReason = null;
+    mission.error = guidance ? `老闆接受風險：${guidance}` : "老闆已接受目前 Review 風險";
+    store.saveDepartmentMission(mission);
+    broadcastMission(mission);
+    completeMissionStep(mission, currentIndex);
+    res.status(202).json({ mission });
+    return;
+  }
+  let targetIndex = currentIndex;
+  if (action === "retry_execute" || action === "guide") {
+    if (current.kind === "review") {
+      const executeIndex = precedingExecuteIndex(mission, currentIndex);
+      if (executeIndex == null) { res.status(409).json({ error: "找不到可重試的 Execute 步驟" }); return; }
+      targetIndex = executeIndex;
+      current.status = "pending";
+      current.completedAt = null;
+    } else if (current.kind !== "execute") {
+      res.status(409).json({ error: "目前步驟不能退回 Execute" });
+      return;
+    }
+  } else if (action === "reassign") {
+    const workerId = String(req.body?.workerId ?? "");
+    const replacement = workers.get(workerId);
+    if (!replacement || !sameWorkspacePath(replacement.runner.workspacePath, mission.workspacePath)) {
+      res.status(409).json({ error: "只能重新指派給同部門 NPC" });
+      return;
+    }
+    const preceding = current.kind === "review" ? precedingExecuteIndex(mission, currentIndex) : null;
+    if (preceding != null && mission.steps[preceding]?.assigneeWorkerId === workerId) {
+      res.status(409).json({ error: "Review 必須由與 Execute 不同的 NPC 負責" });
+      return;
+    }
+    current.assigneeWorkerId = workerId;
+  } else if (action !== "retry") {
+    res.status(400).json({ error: "不支援的 Mission 處理方式" });
+    return;
+  }
+  const target = mission.steps[targetIndex];
+  target.status = "pending";
+  target.completedAt = null;
+  target.formatRepairCount = 0;
+  mission.attentionReason = null;
+  mission.error = null;
+  mission.completedAt = null;
+  activeMissions.set(mission.id, mission);
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+  dispatchMissionStep(mission, targetIndex, current.kind === "review" ? current.reviewResult : null);
+  res.status(202).json({ mission });
+});
+
+app.post("/api/missions/:id/cancel", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!missionLocksWorkspace(mission)) { res.status(409).json({ error: "Mission 已經結束" }); return; }
+  const activeWorkerId = missionActiveWorkerId(mission);
+  activeMissions.delete(mission.id);
+  missionActivities.delete(mission.id);
+  if (activeWorkerId) workers.get(activeWorkerId)?.runner.interrupt();
+  mission.status = "cancelled";
+  mission.error = null;
+  mission.completedAt = new Date().toISOString();
+  store.saveDepartmentMission(mission);
+  broadcastMission(mission);
+  res.json({ mission });
+});
+
+app.post("/api/missions/:id/retry-review", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  const stepIndex = mission.currentStepIndex;
+  const step = stepIndex == null ? null : mission.steps[stepIndex];
+  if (mission.status !== "needs_attention" || !step || step.kind !== "review") {
+    res.status(409).json({ error: "只有等待決定的 Review 可以重新檢查" });
+    return;
+  }
+  if (stepIndex == null) { res.status(409).json({ error: "Mission 找不到 Review 步驟" }); return; }
+  activeMissions.set(mission.id, mission);
+  mission.correctionCount = 0;
+  mission.error = null;
+  step.status = "pending";
+  dispatchMissionStep(mission, stepIndex);
+  res.status(202).json({ mission });
+});
+
+type PreparedCollaboration = {
+  sourceWorkerId: string;
+  targetWorkerId: string;
+  sourceSessionId: string;
+  targetSessionId: string;
+  sourceHistoryLength: number;
+  targetHistoryLength: number;
+  mode: "consult" | "review";
+  objective: string;
+  acceptanceCriteria: string[];
+  expiresAt: number;
+};
+const preparedCollaborations = new Map<string, PreparedCollaboration>();
+
+function collaborationEligibility(source: Worker, target: Worker): string | null {
+  if (source.id === target.id) return "來源與目標 NPC 必須不同";
+  if (!sameWorkspacePath(source.runner.workspacePath, target.runner.workspacePath)) return "Phase 1 只支援相同工作位置的 NPC 協作";
+  if (workspaceMission(source.runner.workspacePath, source.departmentId)) return "部門正在執行 Department Mission，暫時不能開始單次協作";
+  if (source.runner.busy || handoffInProgress(source) || collaborationInProgress(source.id)) return "來源 NPC 正在工作、交接或協作中";
+  if (target.runner.busy || handoffInProgress(target) || collaborationInProgress(target.id)) return "目標 NPC 正在工作、交接或協作中";
+  if (handoffActivityBlock(source.history)) return "來源 NPC 尚有待處理的權限或背景 Agent";
+  if (handoffActivityBlock(target.history)) return "目標 NPC 尚有待處理的權限或背景 Agent";
+  if (!providerReady(target.runner.provider)) return `${providerLabel(target.runner.provider)} 尚未登入`;
+  if (activeCollaborations.size >= MAX_ACTIVE_COLLABORATIONS) return "目前協作工作已達上限";
+  return null;
+}
+
+app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
+  const source = workers.get(req.params.sourceId);
+  const target = workers.get(String(req.body?.targetWorkerId ?? ""));
+  if (!source || !target) {
+    res.status(404).json({ error: "找不到來源或目標 NPC" });
+    return;
+  }
+  const mode = normalizeCollaborationMode(req.body?.mode);
+  const objective = collaborationText(req.body?.objective, 4_000);
+  const acceptanceCriteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
+  if (!mode || !objective) {
+    res.status(400).json({ error: "請選擇協作模式並填寫目標" });
+    return;
+  }
+  const eligibilityError = collaborationEligibility(source, target);
+  if (eligibilityError) {
+    res.status(409).json({ error: eligibilityError });
+    return;
+  }
+  const usage = await usageRegistry.refresh(target.runner.provider, true);
+  const usageError = usageBlockReason(target.runner.provider, usage, target.runner.getModel() ?? null);
+  if (usageError) {
+    res.status(409).json({ error: `目標 NPC 無法開始協作：${usageError}`, usage });
+    return;
+  }
+  for (const [token, prepared] of preparedCollaborations) {
+    if (prepared.expiresAt < Date.now()) preparedCollaborations.delete(token);
+  }
+  const collaborationToken = randomUUID();
+  preparedCollaborations.set(collaborationToken, {
+    sourceWorkerId: source.id,
+    targetWorkerId: target.id,
+    sourceSessionId: source.runner.getPersistenceState().sessionId,
+    targetSessionId: target.runner.getPersistenceState().sessionId,
+    sourceHistoryLength: source.history.length,
+    targetHistoryLength: target.history.length,
+    mode,
+    objective,
+    acceptanceCriteria,
+    expiresAt: Date.now() + 120_000,
+  });
+  res.json({
+    collaborationToken,
+    source: workerSummary(source),
+    target: workerSummary(target),
+    mode,
+    objective,
+    acceptanceCriteria,
+    usage,
+    warnings: [
+      "目標 NPC 會以 provider 原生唯讀模式執行，不能修改 repository。",
+      "目標完成後，結果會自動交回來源 NPC，並以來源 NPC 的正常權限繼續原始任務。",
+      "需要指令、檔案或登入核准時，仍會透過現有介面停下來詢問你；不會自動 commit、push 或提高權限。",
+      "Repository 與對話內容視為不受信任資料，結果仍需人工確認。",
+    ],
+  });
+});
+
+app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
+  const source = workers.get(req.params.sourceId);
+  const token = String(req.body?.collaborationToken ?? "");
+  const prepared = preparedCollaborations.get(token);
+  preparedCollaborations.delete(token);
+  if (!source || !prepared || prepared.sourceWorkerId !== source.id || prepared.expiresAt < Date.now()) {
+    res.status(409).json({ error: "協作確認已過期，請重新檢查" });
+    return;
+  }
+  const target = workers.get(prepared.targetWorkerId);
+  if (!target) {
+    res.status(404).json({ error: "目標 NPC 已不存在" });
+    return;
+  }
+  if (
+    source.runner.getPersistenceState().sessionId !== prepared.sourceSessionId ||
+    target.runner.getPersistenceState().sessionId !== prepared.targetSessionId ||
+    source.history.length !== prepared.sourceHistoryLength ||
+    target.history.length !== prepared.targetHistoryLength
+  ) {
+    res.status(409).json({ error: "檢查後 NPC 狀態已改變，請重新確認" });
+    return;
+  }
+  const eligibilityError = collaborationEligibility(source, target);
+  if (eligibilityError) {
+    res.status(409).json({ error: eligibilityError });
+    return;
+  }
+  if (req.body?.warningAcknowledged !== true) {
+    res.status(400).json({ error: "必須先確認唯讀協作限制" });
+    return;
+  }
+  const usage = await usageRegistry.refresh(target.runner.provider, true);
+  const usageError = usageBlockReason(target.runner.provider, usage, target.runner.getModel() ?? null);
+  if (usageError) {
+    res.status(409).json({ error: `目標 NPC 無法開始協作：${usageError}`, usage });
+    return;
+  }
+  const now = new Date().toISOString();
+  const gitState = await workspaceGitState(source.runner.workspacePath);
+  const finalEligibilityError = collaborationEligibility(source, target);
+  const preparedStateChanged =
+    source.runner.getPersistenceState().sessionId !== prepared.sourceSessionId ||
+    target.runner.getPersistenceState().sessionId !== prepared.targetSessionId ||
+    source.history.length !== prepared.sourceHistoryLength ||
+    target.history.length !== prepared.targetHistoryLength;
+  if (finalEligibilityError || preparedStateChanged) {
+    res.status(409).json({ error: finalEligibilityError || "啟動協作前 NPC 狀態已改變，請重新確認" });
+    return;
+  }
+  const task: CollaborationTask = {
+    id: randomUUID(),
+    sourceWorkerId: source.id,
+    targetWorkerId: target.id,
+    workspacePath: source.runner.workspacePath,
+    mode: prepared.mode,
+    objective: prepared.objective,
+    acceptanceCriteria: prepared.acceptanceCriteria,
+    status: "running",
+    sourceContext: {
+      sourceName: source.runner.name,
+      sourceRole: source.persona?.role || null,
+      recentConversation: collaborationConversation(source.history),
+      gitState,
+    },
+    baseCommit: gitState.match(/HEAD:\s*([^\s]+)/)?.[1] ?? null,
+    result: null,
+    continuationResult: null,
+    error: null,
+    createdAt: now,
+    startedAt: now,
+    completedAt: null,
+    adoptedAt: null,
+    handledAt: null,
+  };
+  activeCollaborations.set(task.id, task);
+  if (!store.saveCollaborationTask(task)) {
+    activeCollaborations.delete(task.id);
+    res.status(500).json({ error: "無法保存協作任務" });
+    return;
+  }
+  broadcastCollaboration(task, true);
+  const prompt = collaborationPrompt({
+    taskId: task.id,
+    mode: task.mode,
+    sourceName: source.runner.name,
+    sourceRole: source.persona?.role || null,
+    objective: task.objective,
+    acceptanceCriteria: task.acceptanceCriteria,
+    recentConversation: String(task.sourceContext.recentConversation ?? ""),
+    gitState,
+  });
+  record(target, { type: "user_message", text: `NPC 協作 · ${task.mode === "review" ? "Review" : "Consult"}：${task.objective}` });
+  try {
+    target.runner.send(prompt, [], [], { executionProfile: "read_only_collaboration" });
+  } catch (error) {
+    finishCollaboration(target, { type: "error", message: (error as Error).message || "無法啟動協作" });
+    res.status(500).json({ error: (error as Error).message || "無法啟動協作", collaboration: task });
+    return;
+  }
+  broadcast({ type: "worker_status", workerId: target.id, busy: true });
+  res.status(202).json({ collaboration: task });
+});
+
+app.get("/api/collaborations", (req, res) => {
+  const workerId = String(req.query.workerId ?? "");
+  if (workerId && !workers.has(workerId)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  res.json({ collaborations: workerId ? store.listCollaborationTasks(workerId) : store.listRecentCollaborationTasks() });
+});
+
+app.get("/api/collaborations/:id", (req, res) => {
+  const task = activeCollaborations.get(req.params.id) ?? store.getCollaborationTask(req.params.id);
+  if (!task) {
+    res.status(404).json({ error: "找不到協作任務" });
+    return;
+  }
+  res.json({ collaboration: task });
+});
+
+app.post("/api/collaborations/:id/cancel", (req, res) => {
+  const task = activeCollaborations.get(req.params.id);
+  if (!task) {
+    res.status(409).json({ error: "協作任務已結束或不存在" });
+    return;
+  }
+  const activeWorkerId = collaborationActiveWorkerId(task);
+  task.status = "cancelled";
+  task.error = null;
+  task.completedAt = new Date().toISOString();
+  activeCollaborations.delete(task.id);
+  store.saveCollaborationTask(task);
+  if (activeWorkerId) workers.get(activeWorkerId)?.runner.interrupt();
+  broadcastCollaboration(task);
+  res.json({ collaboration: task });
+});
+
+app.post("/api/collaborations/:id/adopt", (req, res) => {
+  const task = store.getCollaborationTask(req.params.id);
+  if (!task) {
+    res.status(404).json({ error: "找不到協作任務" });
+    return;
+  }
+  if (task.adoptedAt) {
+    res.json({ collaboration: task });
+    return;
+  }
+  if (task.status !== "completed" || !task.result) {
+    res.status(409).json({ error: "只有舊版已完成但尚未交回的協作結果可以手動交回" });
+    return;
+  }
+  const source = workers.get(task.sourceWorkerId);
+  const target = workers.get(task.targetWorkerId);
+  if (!source || !target) {
+    res.status(409).json({ error: "來源或目標 NPC 已不存在" });
+    return;
+  }
+  if (source.runner.busy || handoffInProgress(source) || collaborationInProgress(source.id) || missionInProgress(source.id)) {
+    res.status(409).json({ error: "來源 NPC 正在工作，暫時無法交回結果" });
+    return;
+  }
+  if (!providerReady(source.runner.provider)) {
+    res.status(503).json({ error: `${source.runner.provider}_not_authenticated`, auth: authStates[source.runner.provider] });
+    return;
+  }
+  const message = adoptedCollaborationMessage(task, target.runner.name);
+  record(source, { type: "user_message", text: message });
+  try {
+    source.runner.send(message);
+  } catch (error) {
+    record(source, { type: "error", message: (error as Error).message || "無法交回協作結果" });
+    res.status(500).json({ error: (error as Error).message || "無法交回協作結果" });
+    return;
+  }
+  task.adoptedAt = new Date().toISOString();
+  store.saveCollaborationTask(task);
+  broadcastCollaboration(task);
+  broadcast({ type: "worker_status", workerId: source.id, busy: true });
+  res.json({ collaboration: task });
+});
+
+app.post("/api/collaborations/:id/handled", (req, res) => {
+  const task = store.getCollaborationTask(req.params.id);
+  if (!task || !["completed", "failed", "cancelled"].includes(task.status)) {
+    res.status(409).json({ error: "協作任務尚未結束或不存在" });
+    return;
+  }
+  task.handledAt ??= new Date().toISOString();
+  store.saveCollaborationTask(task);
+  broadcastCollaboration(task);
+  res.json({ collaboration: task });
+});
+
 type PreparedHandoff = {
   workerId: string;
   fromProvider: ProviderId;
@@ -1291,7 +2692,7 @@ app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
     res.status(400).json({ error: "已經是目前的 LLM" });
     return;
   }
-  if (worker.runner.busy || handoffInProgress(worker)) {
+  if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "NPC 正在工作或交接中，請完成後再切換" });
     return;
   }
@@ -1360,7 +2761,7 @@ app.post("/api/workers/:id/handoff", async (req, res) => {
     res.status(400).json({ error: "必須先確認跨 LLM 交接風險" });
     return;
   }
-  if (worker.runner.busy) {
+  if (worker.runner.busy || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "NPC 正在工作，不能開始交接" });
     return;
   }
@@ -1403,7 +2804,7 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (worker.runner.busy || handoffInProgress(worker)) {
+  if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "NPC 執行中，不能切換工作位置" });
     return;
   }
@@ -1416,6 +2817,7 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     }
 
     const provider = worker.runner.provider;
+    const previousDepartmentId = worker.departmentId;
     const name = worker.runner.name;
     const model = worker.runner.getModel();
     const conversationReset = worker.history.some((event) => event.type === "user_message");
@@ -1426,7 +2828,16 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     worker.runner.name = name;
     if (model && validModel(provider, model)) worker.runner.setModel(model);
     if (providerReady(provider)) worker.runner.warmup();
-    persistWorker(worker);
+    const now = new Date().toISOString();
+    const newDepartment: Department = {
+      id: randomUUID(), name: `${basename(workspacePath) || "個人"}部門`, purpose: "個人工作部門",
+      workspacePath, leadWorkerId: worker.id, memberWorkerIds: [worker.id], createdAt: now, updatedAt: now,
+    };
+    worker.departmentId = newDepartment.id;
+    if (!store.saveDepartment(newDepartment) || !persistWorker(worker)) throw new Error("無法保存新的部門位置");
+    departments.set(newDepartment.id, newDepartment);
+    repairDepartmentAfterMemberLeaves(previousDepartmentId, worker.id);
+    broadcast({ type: "department_created", department: newDepartment });
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
     const summary = workerSummary(worker);
@@ -1448,6 +2859,7 @@ app.post("/api/workers/:id/activate", (req, res) => {
   } else {
     void codexCapabilitiesFor(worker.runner.workspacePath).refresh();
   }
+  if (providerReady(worker.runner.provider) && !worker.runner.busy) worker.runner.warmup();
   res.json({ ok: true, workspacePath: worker.runner.workspacePath });
 });
 
@@ -1457,14 +2869,16 @@ app.delete("/api/workers/:id", async (req, res) => {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (handoffInProgress(worker)) {
-    res.status(409).json({ error: "NPC 正在進行 LLM 交接，暫時不能移除" });
+  if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
+    res.status(409).json({ error: "NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能移除" });
     return;
   }
   worker.runner.stop();
   const avatarId = worker.avatarId;
+  const departmentId = worker.departmentId;
   workers.delete(worker.id);
   store.deleteWorker(worker.id);
+  repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
   if (avatarId) await deleteAvatarIfUnused(avatarId);
@@ -1487,6 +2901,10 @@ app.post("/api/workers/:id/message", (req, res) => {
   }
   if (handoffInProgress(worker)) {
     res.status(409).json({ error: "NPC 正在進行 LLM 交接，請等待完成" });
+    return;
+  }
+  if (collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
+    res.status(409).json({ error: "NPC 正在進行協作或部門 Mission，請等待完成" });
     return;
   }
   const message = String(req.body?.message ?? "").trim();
@@ -1573,7 +2991,7 @@ app.post("/api/workers/:id/model", (req, res) => {
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
     return;
   }
-  if (worker.runner.busy || handoffInProgress(worker)) {
+  if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "worker busy" });
     return;
   }
@@ -1589,13 +3007,64 @@ app.post("/api/workers/:id/model", (req, res) => {
   res.json({ ok: true });
 });
 
+const personaSuggestionsInProgress = new Set<string>();
+
+app.post("/api/workers/:id/persona/suggest", async (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) {
+    res.status(404).json({ error: "找不到這位 NPC" });
+    return;
+  }
+  const provider = worker.runner.provider;
+  if (!providerReady(provider)) {
+    res.status(503).json({ error: `${providerLabel(provider)} 尚未登入，登入後才能由 AI 產生人設`, auth: authStates[provider] });
+    return;
+  }
+  if (personaSuggestionsInProgress.has(worker.id)) {
+    res.status(409).json({ error: "這位 NPC 的 AI 人設正在產生中" });
+    return;
+  }
+
+  const members = [...workers.values()]
+    .filter((member) => sameWorkspacePath(member.runner.workspacePath, worker.runner.workspacePath))
+    .map((member) => ({ name: member.runner.name, role: member.persona?.role || null }));
+  const prompt = personaSuggestionPrompt({
+    workerName: worker.runner.name,
+    workspacePath: worker.runner.workspacePath,
+    members,
+  });
+
+  personaSuggestionsInProgress.add(worker.id);
+  try {
+    const result = await runDetachedTurn(
+      provider,
+      worker.runner.workspacePath,
+      worker.runner.getModel() ?? null,
+      undefined,
+      null,
+      prompt,
+      60_000,
+    );
+    const persona = parsePersonaSuggestion(result.text);
+    if (!persona) {
+      res.status(502).json({ error: "AI 回傳的人設格式不完整，請再產生一次" });
+      return;
+    }
+    res.json({ persona });
+  } catch (error) {
+    res.status(502).json({ error: (error as Error).message || "AI 暫時無法產生人設" });
+  } finally {
+    personaSuggestionsInProgress.delete(worker.id);
+  }
+});
+
 app.post("/api/workers/:id/persona", (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
     res.status(404).json({ error: "unknown worker" });
     return;
   }
-  if (worker.runner.busy || handoffInProgress(worker)) {
+  if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "worker busy" });
     return;
   }
@@ -2100,16 +3569,20 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
     res.status(409).json({ error: "LLM 交接不能從一般中止按鈕取消，請等待交接完成或回滾" });
     return;
   }
+  if (collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
+    res.status(409).json({ error: missionInProgress(worker.id) ? "Department Mission 請從 Mission 面板取消" : "協作任務請從協作面板取消" });
+    return;
+  }
   worker.runner.interrupt();
   broadcast({ type: "worker_status", workerId: worker.id, busy: false });
   res.json({ ok: true });
 });
 
 for (const savedWorker of store.loadWorkers(MAX_HISTORY).slice(0, MAX_WORKERS)) {
-  createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker);
+  createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker, null, null, { warmup: true });
 }
 if (workers.size === 0 && config.targetRepoConfigured) {
-  createWorker(undefined, undefined, "claude", config.targetRepoPath);
+  createWorker(undefined, undefined, "claude", config.targetRepoPath, undefined, null, null, { warmup: true });
 }
 
 const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ workspacePath, provider, revision }) => {

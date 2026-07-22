@@ -209,3 +209,12 @@ test("keeps an approval in the active turn until it is resolved", () => {
   assert.equal(approval?.kind === "approval" ? approval.status : null, "resolved");
   assert.equal(approval?.kind === "approval" ? approval.decision : null, "allow_once");
 });
+
+test("keeps department follow-up Mission metadata on the visible worker turn", () => {
+  const worker = applyRunnerEvent(
+    emptyWorker("lead", "主管", null, false, 0, "claude", "/repo"),
+    { type: "user_message", text: "部門追問：為什麼採用這個方案？", departmentFollowUpMissionId: "mission-1" },
+  );
+  assert.equal(worker.turns[0].departmentFollowUpMissionId, "mission-1");
+  assert.equal(worker.turns[0].command, "部門追問：為什麼採用這個方案？");
+});

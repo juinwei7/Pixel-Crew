@@ -5,7 +5,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
+import type { AgentSession, ExecutionProfile, MessageDocument, MessageImage, SendOptions } from "./providers/session.js";
 import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
@@ -38,10 +38,14 @@ export type RunnerEvent =
       // servers finish connecting, so it typically excludes their tools.
       builtinTools: string[];
     }
-  | { type: "user_message"; text: string }
+  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string }
   | { type: "error"; message: string };
 
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
+
+export function claudePermissionMode(profile: ExecutionProfile, normalMode: string): string {
+  return profile === "read_only_collaboration" ? "plan" : normalMode;
+}
 
 export type ApprovalRequest = {
   id: string;
@@ -109,6 +113,8 @@ export class ClaudeSession implements AgentSession {
   private completedTurns: number;
   private generation = 0;
   private model: string | undefined;
+  private executionProfile: ExecutionProfile = "normal";
+  private spawnedProfile: ExecutionProfile | null = null;
   private readonly approvalToken = randomUUID();
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
   private readonly documentDirectory = join(dirname(config.dbPath), "message-documents");
@@ -170,7 +176,10 @@ export class ClaudeSession implements AgentSession {
     };
   }
 
-  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = []): void {
+  send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
+    const nextProfile = options.executionProfile ?? "normal";
+    if (this.child && this.spawnedProfile !== nextProfile) this.stop();
+    this.executionProfile = nextProfile;
     const files = this.stageInputDocuments(documents);
     try {
       this.busy = true;
@@ -227,6 +236,21 @@ export class ClaudeSession implements AgentSession {
     const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
       ? String((originalInput as Record<string, unknown>).command ?? "").slice(0, 20_000)
       : undefined;
+    if (this.executionProfile === "read_only_collaboration") {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null,
+        category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
+        title: `唯讀協作已拒絕 ${toolName}`,
+        input,
+        command,
+        cwd: this.workspacePath,
+        reason: "唯讀 NPC 協作不允許需要額外權限的操作",
+        decisions: [],
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: "唯讀 NPC 協作不允許需要額外權限的操作" });
+    }
     const mode = this.getAutoApproveMode();
     const autoApproval = evaluateAutoApproval(mode, toolName, command);
 
@@ -286,7 +310,7 @@ export class ClaudeSession implements AgentSession {
       "--include-partial-messages",
       "--verbose",
       "--permission-mode",
-      config.permissionMode,
+      claudePermissionMode(this.executionProfile, config.permissionMode),
       "--mcp-config",
       this.approvalConfigPath,
       "--permission-prompt-tool",
@@ -316,6 +340,7 @@ export class ClaudeSession implements AgentSession {
       env: process.env,
     });
     this.child = child;
+    this.spawnedProfile = this.executionProfile;
     const gen = ++this.generation;
 
     const rl = createInterface({ input: child.stdout });

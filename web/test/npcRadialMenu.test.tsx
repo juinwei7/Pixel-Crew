@@ -18,6 +18,7 @@ function render(worker: ReturnType<typeof emptyWorker>, canRemove: boolean) {
       onRoom={noop}
       onRemove={noop}
       onClose={noop}
+      direction="left"
     />,
   );
 }
@@ -25,10 +26,13 @@ function render(worker: ReturnType<typeof emptyWorker>, canRemove: boolean) {
 test("fans out one arc button per action, each with an icon and a label", () => {
   const worker = emptyWorker("w1", "小助手", null, false, 0, "claude", "/repo");
   const html = render(worker, true);
+  assert.match(html, /npc-radial--left/);
   for (const label of ["重新命名", "個性 / 職務", "像素角色", "切換房間", "移除人員"]) {
     assert.match(html, new RegExp(`aria-label="${label}"`));
   }
+  assert.doesNotMatch(html, /找 NPC 協作|部門 Mission/);
   const circles = html.match(/npc-radial__item/g) ?? [];
+  assert.doesNotMatch(html, /交給部門/);
   assert.equal(html.match(/class="npc-radial__item[^"]*"/g)?.length, 5, `expected 5 arc buttons, markup had: ${circles.length}`);
   // Every button carries an inline SVG icon and its arc position.
   assert.equal(html.match(/<svg/g)?.length, 5);
@@ -55,6 +59,6 @@ test("the arc starts collapsed so the CSS transition can fan it out after mount"
   const worker = emptyWorker("w1", "小助手", null, false, 0, "claude", "/repo");
   const html = render(worker, true);
   // SSR markup is the pre-animation frame: container not yet --open.
-  assert.match(html, /class="npc-radial"/);
+  assert.match(html, /class="npc-radial npc-radial--left"/);
   assert.doesNotMatch(html, /npc-radial--open/);
 });

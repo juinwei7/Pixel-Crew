@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, ApprovalItem, WorkerState } from "../types";
+import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, WorkerState } from "../types";
 import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/person";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
@@ -30,6 +30,11 @@ type VisualWorker = {
   model: string | null;
   role: string | null;
   workspacePath: string;
+  departmentKey: string;
+  workspaceLabel: string;
+  collaborationPhase: "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
+  collaborationRole: "source" | "target" | null;
+  missionProgress: { completed: number; total: number } | null;
 };
 
 // Zoom is now continuous (not stepped to integers), so the readout needs a
@@ -45,9 +50,37 @@ function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
   return last?.items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending") ?? null;
 }
 
-function visualWorkers(workers: WorkerState[], activeId: string | null): VisualWorker[] {
-  return workers.flatMap((worker) => {
+export function groupWorkersByWorkspace(workers: WorkerState[]): WorkerState[] {
+  const groups = new Map<string, WorkerState[]>();
+  for (const worker of workers) {
+    const key = worker.departmentId ?? worker.workspacePath;
+    const group = groups.get(key);
+    if (group) group.push(worker);
+    else groups.set(key, [worker]);
+  }
+  return [...groups.values()].flat();
+}
+
+export function radialMenuDirection(x: number, width: number): "left" | "right" {
+  const edgeGuard = 110;
+  if (x < edgeGuard) return "right";
+  if (x > width - edgeGuard) return "left";
+  return x < width / 2 ? "left" : "right";
+}
+
+function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = []): VisualWorker[] {
+  const departmentById = new Map(departments.map((department) => [department.id, department]));
+  return groupWorkersByWorkspace(workers).flatMap((worker) => {
     const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
+    const collaboration = collaborations.find((task) =>
+      ["running", "returning"].includes(task.status) &&
+      (task.sourceWorkerId === worker.id || task.targetWorkerId === worker.id),
+    );
+    const mission = missions.find((task) =>
+      ["planning", "executing", "reviewing", "needs_attention"].includes(task.status)
+      && (worker.departmentId ? task.departmentId === worker.departmentId : task.workspacePath === worker.workspacePath),
+    );
+    const missionStep = mission?.currentStepIndex == null ? null : mission.steps[mission.currentStepIndex];
     const parent: VisualWorker = {
       id: worker.id,
       selectId: worker.id,
@@ -65,6 +98,21 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       model: worker.model,
       role: worker.persona?.role ?? null,
       workspacePath: worker.workspacePath,
+      departmentKey: worker.departmentId ?? worker.workspacePath,
+      workspaceLabel: worker.departmentId ? departmentById.get(worker.departmentId)?.name ?? roomName(worker.workspacePath) : roomName(worker.workspacePath),
+      collaborationPhase: mission?.status === "planning" ? "planning"
+        : mission?.status === "executing" ? "executing"
+        : mission?.status === "reviewing" && missionStep?.kind === "consult" ? "mission_consult"
+        : mission?.status === "reviewing" ? "mission_review"
+        : mission?.status === "needs_attention" ? "needs_attention"
+        : collaboration?.status === "returning" ? "returning" : collaboration ? "reviewing" : null,
+      collaborationRole: collaboration
+        ? collaboration.sourceWorkerId === worker.id ? "source" : "target"
+        : null,
+      missionProgress: mission && mission.steps.length > 0 ? {
+        completed: mission.steps.filter((step) => step.status === "completed").length,
+        total: mission.steps.length,
+      } : null,
     };
     const subagents: VisualWorker[] = (worker.subagents ?? []).map((agent, index) => ({
       id: `${worker.id}:subagent:${agent.id}`,
@@ -89,6 +137,11 @@ function visualWorkers(workers: WorkerState[], activeId: string | null): VisualW
       model: worker.model,
       role: null,
       workspacePath: worker.workspacePath,
+      departmentKey: worker.departmentId ?? worker.workspacePath,
+      workspaceLabel: worker.departmentId ? departmentById.get(worker.departmentId)?.name ?? roomName(worker.workspacePath) : roomName(worker.workspacePath),
+      collaborationPhase: null,
+      collaborationRole: null,
+      missionProgress: null,
     }));
     return [parent, ...subagents];
   });
@@ -98,6 +151,9 @@ type Props = {
   workers: WorkerState[];
   activeId: string | null;
   completedTurns?: number;
+  collaborations?: CollaborationTask[];
+  missions?: DepartmentMission[];
+  departments?: Department[];
   onSelect(id: string): void;
   onOpenLog?(id: string): void;
   onAvatarError?(id: string, message: string): void;
@@ -107,6 +163,7 @@ type Props = {
   onRename?(id: string, name: string): Promise<string | null>;
   onAvatarWorkshop?(id: string): void;
   onPersonaEditor?(id: string): void;
+  onDepartmentMission?(departmentKey: string): void;
   onRoomSwitch?(id: string): void;
   onRemove?(id: string): void;
   // Lets a pending approval be resolved right on the sprite instead of
@@ -115,8 +172,8 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, onSelect, onOpenLog, onAvatarError,
-  onRename, onAvatarWorkshop, onPersonaEditor, onRoomSwitch, onRemove, onResolveApproval,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], onSelect, onOpenLog, onAvatarError,
+  onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
@@ -126,6 +183,7 @@ export function GameCanvas({
   const approvalRefs = useRef(new Map<string, HTMLDivElement>());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
+  const [menuDirection, setMenuDirection] = useState<"left" | "right">("right");
   const [resolvingApproval, setResolvingApproval] = useState<string | null>(null);
   const hasQuickMenu = Boolean(onRename && onAvatarWorkshop && onPersonaEditor && onRoomSwitch && onRemove);
   const [sceneError, setSceneError] = useState<string | null>(null);
@@ -138,16 +196,25 @@ export function GameCanvas({
   const turnStartRef = useRef(new Map<string, number>());
   const [, forceTick] = useState(0);
   const sceneRef = useRef<SceneHandle | null>(null);
+  const screenPositionsRef = useRef(new Map<string, { x: number; y: number }>());
   const latest = useRef<{ workers: WorkerState[]; activeId: string | null }>({
     workers,
     activeId,
   });
+  const latestCollaborations = useRef(collaborations);
+  latestCollaborations.current = collaborations;
+  const latestMissions = useRef(missions);
+  latestMissions.current = missions;
+  const latestDepartments = useRef(departments);
+  latestDepartments.current = departments;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const milestoneRef = useRef(0);
   milestoneRef.current = milestoneLevel(completedTurns);
   const onAvatarErrorRef = useRef(onAvatarError);
   onAvatarErrorRef.current = onAvatarError;
+  const onDepartmentMissionRef = useRef(onDepartmentMission);
+  onDepartmentMissionRef.current = onDepartmentMission;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -159,10 +226,14 @@ export function GameCanvas({
     createScene(host, {
       onPositions: (positions) => {
         const bounds = host.getBoundingClientRect();
+        screenPositionsRef.current = new Map(positions.map((position) => [position.id, { x: position.x, y: position.y }]));
         for (const pos of positions) {
           const nameplate = nameRefs.current.get(pos.id);
           if (nameplate) {
-            nameplate.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`;
+            // Below the sprite's feet (pos.y is 17 art px above them, feet sit
+            // 19 below pos.y at head-top anchor) — keeps the desk, monitor and
+            // department sign above the head completely clear of DOM chrome.
+            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale}px)`;
             nameplate.style.opacity = String(pos.opacity);
           }
           const identity = identityRefs.current.get(pos.id);
@@ -224,7 +295,12 @@ export function GameCanvas({
       onFurniturePositions: (list) => setFurniturePositions(new Map(list.map((pos) => [pos.key, pos]))),
       onFurnitureHover: setHoveredStation,
       onFurnitureClick: (key) => setPinnedStation((current) => (current === key ? null : key)),
-      onContextMenu: (id) => setMenuOpenFor(id),
+      onDepartmentClick: (workspacePath) => onDepartmentMissionRef.current?.(workspacePath),
+      onContextMenu: (id) => {
+        const position = screenPositionsRef.current.get(id);
+        if (position) setMenuDirection(radialMenuDirection(position.x, host.getBoundingClientRect().width));
+        setMenuOpenFor(id);
+      },
       onViewChange: setView,
     }).then((h) => {
       if (cancelled) {
@@ -247,7 +323,7 @@ export function GameCanvas({
     });
 
     function pushWorkers() {
-      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId));
+      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current));
     }
 
     return () => {
@@ -259,8 +335,8 @@ export function GameCanvas({
 
   useEffect(() => {
     latest.current = { workers, activeId };
-    sceneRef.current?.setWorkers(visualWorkers(workers, activeId));
-  }, [workers, activeId]);
+    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments));
+  }, [workers, activeId, collaborations, missions, departments]);
 
 
   useEffect(() => {
@@ -316,7 +392,7 @@ export function GameCanvas({
     );
   }
 
-  const allVisual = visualWorkers(workers, activeId);
+  const allVisual = visualWorkers(workers, activeId, collaborations, missions, departments);
   const workersById = new Map(workers.map((worker) => [worker.id, worker]));
 
   return (
@@ -359,6 +435,11 @@ export function GameCanvas({
         </div>
       )}
       {allVisual.map((w) => {
+        const collaboration = !w.temporary ? collaborations.find((task) => ["running", "returning"].includes(task.status) && (task.sourceWorkerId === w.id || task.targetWorkerId === w.id)) : undefined;
+        const mission = !w.temporary ? missions.find((task) => ["planning", "executing", "reviewing", "needs_attention"].includes(task.status) && (task.departmentId ? task.departmentId === w.departmentKey : task.workspacePath === w.workspacePath)) : undefined;
+        const missionStep = mission?.currentStepIndex == null ? null : mission.steps[mission.currentStepIndex];
+        const collaboratorId = collaboration?.sourceWorkerId === w.id ? collaboration.targetWorkerId : collaboration?.sourceWorkerId;
+        const collaborator = collaboratorId ? workersById.get(collaboratorId) : undefined;
         const speech = w.character.speech.trim();
         const isActive = w.id === activeId;
         const compact = !isActive;
@@ -388,6 +469,14 @@ export function GameCanvas({
               <span className="npc-nameplate__name">{w.name}</span>
               {w.role && <span className="npc-nameplate__role">{w.role}</span>}
               {elapsedSec != null && <span className="npc-nameplate__elapsed">{elapsedSec}s</span>}
+              {collaboration && <span className="npc-nameplate__collaboration" title={collaboration.objective}>
+                {collaboration.status === "returning"
+                  ? `${collaboration.sourceWorkerId === w.id ? "接續完成中" : "結果已交回"} · ${collaborator?.name ?? "NPC"}`
+                  : `${collaboration.sourceWorkerId === w.id ? "委派中" : "協作執行中"} · ${collaborator?.name ?? "NPC"}`}
+              </span>}
+              {mission && <span className="npc-nameplate__collaboration npc-nameplate__mission" title={mission.objective}>
+                {mission.status === "planning" && mission.bossWorkerId === w.id ? "部門工作規劃中" : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : "部門工作"}
+              </span>}
             </div>
             <div
               ref={(el) => {
@@ -435,6 +524,7 @@ export function GameCanvas({
                     onRoom={onRoomSwitch!}
                     onRemove={onRemove!}
                     onClose={() => setMenuOpenFor(null)}
+                    direction={menuDirection}
                   />
                 )}
               </div>

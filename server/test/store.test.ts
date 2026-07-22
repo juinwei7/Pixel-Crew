@@ -41,6 +41,7 @@ test("migrates existing custom avatars to the custom source without losing them"
       { id: "legacy-custom", avatarId: "kept-avatar.gif", avatarKind: "custom", avatarPresetId: "classic" },
       { id: "legacy-default", avatarId: null, avatarKind: "preset", avatarPresetId: "classic" },
     ]);
+    assert.equal(store.listDepartments()[0]?.name, "repo部門");
   } finally {
     store?.close();
     rmSync(dir, { recursive: true, force: true });
@@ -143,6 +144,96 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(reopened.loadWorkers(20).length, 0);
   } finally {
     for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persists collaboration tasks and fails unfinished work on reopen", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-collaboration-"));
+  const path = join(dir, "test.sqlite");
+  const stores: LocalStore[] = [];
+  try {
+    const store = new LocalStore(path);
+    stores.push(store);
+    const base = { model: null, avatarId: null, avatarKind: "preset" as const, avatarPresetId: "classic", workspacePath: "/repo", completedTurns: 0, persona: null, autoApproveMode: "off" as const };
+    store.saveWorker({ ...base, id: "source", name: "Source", colorIndex: 0, provider: "claude", sessionId: "s1" });
+    store.saveWorker({ ...base, id: "target", name: "Target", colorIndex: 1, provider: "codex", sessionId: "s2" });
+    store.saveCollaborationTask({
+      id: "task-1", sourceWorkerId: "source", targetWorkerId: "target", workspacePath: "/repo",
+      mode: "review", objective: "Review auth", acceptanceCriteria: ["cite files"], status: "running",
+      sourceContext: { gitState: "M auth.ts" }, baseCommit: "abc123", result: null, continuationResult: null, error: null,
+      createdAt: "2026-07-22T00:00:00.000Z", startedAt: "2026-07-22T00:00:01.000Z", completedAt: null,
+      adoptedAt: null, handledAt: null,
+    });
+    store.saveCollaborationTask({
+      id: "task-2", sourceWorkerId: "source", targetWorkerId: "target", workspacePath: "/repo",
+      mode: "consult", objective: "Continue from advice", acceptanceCriteria: [], status: "returning",
+      sourceContext: {}, baseCommit: "abc123", result: null, continuationResult: null, error: null,
+      createdAt: "2026-07-22T00:02:00.000Z", startedAt: "2026-07-22T00:02:01.000Z", completedAt: null,
+      adoptedAt: "2026-07-22T00:03:00.000Z", handledAt: null,
+    });
+    assert.equal(store.getCollaborationTask("task-1")?.status, "running");
+    assert.equal(store.listCollaborationTasks("source").length, 2);
+    store.close();
+    stores.pop();
+
+    const reopened = new LocalStore(path);
+    stores.push(reopened);
+    const recovered = reopened.getCollaborationTask("task-1");
+    assert.equal(recovered?.status, "failed");
+    assert.match(recovered?.error ?? "", /伺服器重啟/);
+    assert.equal(reopened.getCollaborationTask("task-2")?.status, "failed");
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("migrates the original collaboration constraint to returning with continuation results", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-collaboration-v11-"));
+  const path = join(dir, "test.sqlite");
+  try {
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, color_index INTEGER NOT NULL,
+        claude_session_id TEXT NOT NULL, completed_turns INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO workers (id, name, color_index, claude_session_id) VALUES
+        ('source', 'Source', 0, 's1'), ('target', 'Target', 1, 's2');
+      CREATE TABLE collaboration_tasks (
+        id TEXT PRIMARY KEY,
+        source_worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+        target_worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+        workspace_path TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('consult', 'review')),
+        objective TEXT NOT NULL,
+        acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+        source_context_json TEXT NOT NULL DEFAULT '{}', base_commit TEXT, result_json TEXT, error TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at TEXT, completed_at TEXT, adopted_at TEXT, handled_at TEXT
+      );
+      INSERT INTO collaboration_tasks (
+        id, source_worker_id, target_worker_id, workspace_path, mode, objective, status
+      ) VALUES ('legacy-task', 'source', 'target', '/repo', 'review', 'Review old task', 'completed');
+    `);
+    legacy.close();
+
+    const store = new LocalStore(path);
+    try {
+      const task = store.getCollaborationTask("legacy-task")!;
+      assert.equal(task.continuationResult, null);
+      task.status = "returning";
+      task.continuationResult = "Source continuation result";
+      assert.equal(store.saveCollaborationTask(task), true);
+      assert.equal(store.getCollaborationTask(task.id)?.status, "returning");
+      assert.equal(store.getCollaborationTask(task.id)?.continuationResult, "Source continuation result");
+    } finally {
+      store.close();
+    }
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

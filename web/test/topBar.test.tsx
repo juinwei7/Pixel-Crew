@@ -28,6 +28,10 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /Claude Code/);
   assert.match(html, /Sonnet/);
   assert.match(html, /MCP/);
+  assert.match(html, /top-bar__provider-select/);
+  assert.match(html, /top-bar__model-select/);
+  assert.match(html, /top-bar__more/);
+  assert.match(html, /更多 Agent 設定/);
   assert.match(html, /health-dot--ok/);
 });
 

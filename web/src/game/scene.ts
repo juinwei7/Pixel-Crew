@@ -12,7 +12,8 @@ import { Room, ART_W, ART_H } from "./room";
 import { FurnitureLayer, FURNITURE_DEFS } from "./furniture";
 import { Person } from "./person";
 import { ParticleSystem } from "./particles";
-import { PersonalDeskLayer, personalDeskSpot } from "./personalDesks";
+import { PersonalDeskLayer } from "./personalDesks";
+import type { DepartmentPhase, DepartmentSeat } from "./personalDesks";
 import { OfficeDecor } from "./officeDecor";
 import { Cat } from "./cat";
 import { apiAssetUrl } from "../api";
@@ -48,6 +49,12 @@ export type WorkerSceneState = {
   temporary: boolean;
   /** True while a tool-call approval is waiting on the user. */
   waiting: boolean;
+  workspacePath: string;
+  departmentKey?: string;
+  workspaceLabel: string;
+  collaborationPhase: DepartmentPhase;
+  collaborationRole: "source" | "target" | null;
+  missionProgress?: { completed: number; total: number } | null;
 };
 
 export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
@@ -77,6 +84,7 @@ type SceneCallbacks = {
   onFurniturePositions?(list: FurnitureScreenPos[]): void;
   onFurnitureHover?(key: StationKey | null): void;
   onFurnitureClick?(key: StationKey): void;
+  onDepartmentClick?(workspacePath: string): void;
   onContextMenu?(id: string): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
@@ -133,7 +141,7 @@ export async function createScene(
     (key) => callbacks.onFurnitureClick?.(key),
   );
   const particles = new ParticleSystem();
-  const personalDesks = new PersonalDeskLayer(callbacks.onSelect);
+  const personalDesks = new PersonalDeskLayer(callbacks.onSelect, callbacks.onDepartmentClick);
   const officeDecor = new OfficeDecor();
   const cat = new Cat();
 
@@ -284,6 +292,9 @@ export async function createScene(
   app.canvas.addEventListener("dblclick", onDoubleClick);
 
   const entries = new Map<string, PersonEntry>();
+  // Seats depend on the whole crew's department packing, not the worker's
+  // index alone — refreshed from the desk layout on every setWorkers.
+  let homeSeats = new Map<string, DepartmentSeat>();
   let elapsed = 0;
 
   // --- Idle social: occasionally one idle NPC strolls over to another for a
@@ -364,8 +375,11 @@ export async function createScene(
     return "";
   }
 
-  function standSpot(station: StationKey, index: number): { x: number; y: number } {
-    if (station === "home") return personalDeskSpot(index, entries.size || 1);
+  function standSpot(station: StationKey, index: number, id?: string): { x: number; y: number } {
+    if (station === "home") {
+      const seat = id ? homeSeats.get(id) : undefined;
+      return seat ? { x: seat.x, y: seat.y } : { x: ART_W / 2, y: ART_H - 30 };
+    }
     const def = furniture.def(station);
     const [ox, oy] = SPOT_OFFSETS[index % SPOT_OFFSETS.length];
     return {
@@ -374,13 +388,13 @@ export async function createScene(
     };
   }
 
-  function applyCharacter(entry: PersonEntry, next: CharacterState): void {
+  function applyCharacter(entry: PersonEntry, next: CharacterState, id: string): void {
     const prev = entry.last;
     entry.last = next;
     const { person, index } = entry;
 
     if ((!prev || prev.station !== next.station) && entry.transition === "ready") {
-      const spot = standSpot(next.station, index);
+      const spot = standSpot(next.station, index, id);
       person.setTarget(spot.x, spot.y);
     }
     person.activity = next.activity;
@@ -484,7 +498,7 @@ export async function createScene(
   return {
     setWorkers(list: WorkerSceneState[]) {
       const permanentWorkers = list.filter((worker) => !worker.temporary);
-      personalDesks.setWorkers(permanentWorkers);
+      homeSeats = personalDesks.setWorkers(permanentWorkers).seats;
       officeDecor.setWorkerCount(permanentWorkers.length);
       const seen = new Set<string>();
       let permanentIndex = 0;
@@ -493,9 +507,7 @@ export async function createScene(
         const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
         seen.add(w.id);
         let entry = entries.get(w.id);
-        const desiredSpot = w.character.station === "home"
-          ? personalDeskSpot(workerIndex, permanentWorkers.length)
-          : standSpot(w.character.station, workerIndex);
+        const desiredSpot = standSpot(w.character.station, workerIndex, w.id);
         if (!entry) {
           const person = new Person(w.colorIndex);
           person.container.eventMode = "static";
@@ -566,7 +578,7 @@ export async function createScene(
         entry.person.active = w.active;
         entry.waiting = w.waiting;
         if (!w.waiting && entry.person.emoting === "question") entry.person.emote("question", 0);
-        if (entry.last !== w.character) applyCharacter(entry, w.character);
+        if (entry.last !== w.character) applyCharacter(entry, w.character, w.id);
         if (entry.transition === "ready" && w.character.station === "home" && !entry.strolling) {
           entry.person.setTarget(desiredSpot.x, desiredSpot.y);
         }

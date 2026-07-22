@@ -16,6 +16,7 @@ export type UiPreferencesV2 = {
 };
 
 export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
+export const COMPACT_OFFICE_MAX_WIDTH = 1440;
 
 export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   version: 2,
@@ -34,6 +35,15 @@ const FILTERS = new Set<CrewFilter>(["all", "working", "attention", "claude", "c
 
 export function clampTaskLogWidth(width: number, viewportWidth = 916): number {
   return Math.round(Math.max(400, Math.min(width, 860, Math.max(400, viewportWidth - 56))));
+}
+
+export function enteredCompactOffice(previousWidth: number, currentWidth: number): boolean {
+  return previousWidth > COMPACT_OFFICE_MAX_WIDTH && currentWidth <= COMPACT_OFFICE_MAX_WIDTH;
+}
+
+export function crewViewportOffset(collapsed: boolean, viewportWidth: number): number {
+  if (collapsed) return 70;
+  return viewportWidth <= 1279 ? 223 : 248;
 }
 
 export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPreferencesV2 {

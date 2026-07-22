@@ -1,4 +1,5 @@
 import { Container, Graphics } from "pixi.js";
+import { ART_W } from "./room";
 
 /** Decorative office areas that do not represent agent tool destinations. */
 export class OfficeDecor {
@@ -19,10 +20,9 @@ export class OfficeDecor {
   }
 
   setWorkerCount(count: number): void {
-    // At high density the same floor area becomes extra desk space.
-    const showSharedNooks = count <= 8;
-    this.meeting.visible = showSharedNooks;
-    this.coffee.visible = showSharedNooks;
+    // The break-corner meeting table yields to wide department rows; the
+    // coffee bar lives on the wall strip and never conflicts with desks.
+    this.meeting.visible = count <= 4;
   }
 
   /** Office growth unlocked by all-time completed turns — levels stack. */
@@ -35,19 +35,19 @@ export class OfficeDecor {
   private drawMilestones(): void {
     // Lv1 — framed award on the wall.
     const award = new Graphics();
-    award.rect(133, 8, 12, 14).fill(0x6e5a2e);
-    award.rect(134, 9, 10, 12).fill(0xf2e6c8);
-    award.circle(139, 13, 2).fill(0xffd166);
-    award.rect(137.6, 15.5, 1, 4).fill(0xd45c7a);
-    award.rect(139.6, 15.5, 1, 4).fill(0xd45c7a);
+    award.rect(158, 8, 12, 14).fill(0x6e5a2e);
+    award.rect(159, 9, 10, 12).fill(0xf2e6c8);
+    award.circle(164, 13, 2).fill(0xffd166);
+    award.rect(162.6, 15.5, 1, 4).fill(0xd45c7a);
+    award.rect(164.6, 15.5, 1, 4).fill(0xd45c7a);
     this.milestones[0].addChild(award);
 
     // Lv2 — trophy shelf.
     const shelf = new Graphics();
-    shelf.rect(252, 20, 40, 3).fill(0x4a3d63);
-    shelf.rect(254, 23, 2, 3).fill(0x3a3050);
-    shelf.rect(288, 23, 2, 3).fill(0x3a3050);
-    for (const [x, c] of [[259, 0xffd166], [271, 0xcfd8e6], [283, 0xd4915d]] as Array<[number, number]>) {
+    shelf.rect(346, 20, 40, 3).fill(0x4a3d63);
+    shelf.rect(348, 23, 2, 3).fill(0x3a3050);
+    shelf.rect(382, 23, 2, 3).fill(0x3a3050);
+    for (const [x, c] of [[353, 0xffd166], [365, 0xcfd8e6], [377, 0xd4915d]] as Array<[number, number]>) {
       shelf.rect(x - 3, 17, 6, 1.4).fill(c);
       shelf.rect(x - 2, 12, 4, 5).fill(c);
       shelf.rect(x - 3.6, 12.5, 1.4, 2.6).fill(c);
@@ -57,18 +57,18 @@ export class OfficeDecor {
 
     // Lv3 — neon sign over the middle of the wall.
     const neon = new Graphics();
-    neon.roundRect(84, 5, 56, 15, 3).fill({ color: 0x0b1226, alpha: 0.9 }).stroke({ color: 0x4de3ff, width: 1, alpha: 0.9 });
-    neon.roundRect(84, 5, 56, 15, 3).stroke({ color: 0x4de3ff, width: 2.6, alpha: 0.18 });
+    neon.roundRect(178, 5, 56, 15, 3).fill({ color: 0x0b1226, alpha: 0.9 }).stroke({ color: 0x4de3ff, width: 1, alpha: 0.9 });
+    neon.roundRect(178, 5, 56, 15, 3).stroke({ color: 0x4de3ff, width: 2.6, alpha: 0.18 });
     // Abstract "P C" glyphs plus rising signal bars — readable at 4x zoom.
-    neon.rect(90, 8, 2, 9).fill(0xff5c9d);
-    neon.rect(92, 8, 4, 2).fill(0xff5c9d);
-    neon.rect(94, 10, 2, 3).fill(0xff5c9d);
-    neon.rect(92, 12, 2, 1).fill(0xff5c9d);
-    neon.rect(101, 8, 5, 2).fill(0x4de3ff);
-    neon.rect(101, 10, 2, 5).fill(0x4de3ff);
-    neon.rect(101, 15, 5, 2).fill(0x4de3ff);
+    neon.rect(184, 8, 2, 9).fill(0xff5c9d);
+    neon.rect(186, 8, 4, 2).fill(0xff5c9d);
+    neon.rect(188, 10, 2, 3).fill(0xff5c9d);
+    neon.rect(186, 12, 2, 1).fill(0xff5c9d);
+    neon.rect(195, 8, 5, 2).fill(0x4de3ff);
+    neon.rect(195, 10, 2, 5).fill(0x4de3ff);
+    neon.rect(195, 15, 5, 2).fill(0x4de3ff);
     for (let i = 0; i < 4; i++) {
-      neon.rect(112 + i * 6, 15 - i * 2, 3, 2 + i * 2).fill({ color: 0x37d6a3, alpha: 0.5 + i * 0.12 });
+      neon.rect(206 + i * 6, 15 - i * 2, 3, 2 + i * 2).fill({ color: 0x37d6a3, alpha: 0.5 + i * 0.12 });
     }
     this.milestones[2].addChild(neon);
   }
@@ -89,7 +89,7 @@ export class OfficeDecor {
     g.rect(-15, 4, 3, 6).fill(0x293956);
     g.rect(12, 4, 3, 6).fill(0x293956);
 
-    this.meeting.position.set(45, 128);
+    this.meeting.position.set(398, 118);
     this.meeting.addChild(g);
   }
 
@@ -107,13 +107,13 @@ export class OfficeDecor {
     g.rect(-16, 0, 3, 7).fill(0x23334f);
     g.rect(13, 0, 3, 7).fill(0x23334f);
 
-    this.coffee.position.set(282, 130);
+    this.coffee.position.set(402, 84);
     this.coffee.addChild(g);
   }
 
   private drawPlants(): void {
     const g = new Graphics();
-    for (const x of [16, 304]) {
+    for (const x of [16, ART_W - 7]) {
       g.rect(x - 4, 73, 8, 6).fill(0x354566);
       g.rect(x - 3, 71, 6, 4).fill(0x273957);
       g.rect(x - 1, 64, 2, 8).fill(0x27967a);
