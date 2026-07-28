@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { McpConfigWatcher, mcpConfigTargets, type McpConfigChange } from "../src/mcpConfigWatcher.js";
 
@@ -10,14 +10,15 @@ test("builds global and workspace MCP configuration targets without duplicates",
     homeDirectory: "/home/tester",
     codexHome: "/config/codex",
   });
+  const repo = resolve("/repo");
   assert.deepEqual(
     targets.map(({ provider, workspacePath, path, scope, section }) => ({ provider, workspacePath, path, scope, section })),
     [
-      { provider: "claude", workspacePath: null, path: "/home/tester/.claude.json", scope: "global", section: "claude-global" },
-      { provider: "codex", workspacePath: null, path: "/config/codex/config.toml", scope: "global", section: "file" },
-      { provider: "claude", workspacePath: "/repo", path: "/home/tester/.claude.json", scope: "workspace", section: "claude-project" },
-      { provider: "claude", workspacePath: "/repo", path: "/repo/.mcp.json", scope: "workspace", section: "file" },
-      { provider: "codex", workspacePath: "/repo", path: "/repo/.codex/config.toml", scope: "workspace", section: "file" },
+      { provider: "claude", workspacePath: null, path: join("/home/tester", ".claude.json"), scope: "global", section: "claude-global" },
+      { provider: "codex", workspacePath: null, path: join("/config/codex", "config.toml"), scope: "global", section: "file" },
+      { provider: "claude", workspacePath: repo, path: join("/home/tester", ".claude.json"), scope: "workspace", section: "claude-project" },
+      { provider: "claude", workspacePath: repo, path: join(repo, ".mcp.json"), scope: "workspace", section: "file" },
+      { provider: "codex", workspacePath: repo, path: join(repo, ".codex", "config.toml"), scope: "workspace", section: "file" },
     ],
   );
 });
