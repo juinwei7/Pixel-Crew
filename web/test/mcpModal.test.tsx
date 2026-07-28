@@ -3,7 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CapabilityState, McpServerState, ProviderId } from "../src/types";
-import { McpModal } from "../src/components/McpModal";
+import { McpModal, reloadNotice } from "../src/components/McpModal";
 
 function capabilities(mcpServers: McpServerState[], overrides: Partial<CapabilityState> = {}): CapabilityState {
   return {
@@ -40,6 +40,12 @@ function renderModal(
     />,
   );
 }
+
+test("MCP reload notice distinguishes immediate, deferred, and failed session updates", () => {
+  assert.match(reloadNotice("已更新", { reloaded: 2, deferred: 0, failed: 0 }).text, /目前 session 已重連/);
+  assert.match(reloadNotice("已更新", { reloaded: 1, deferred: 2, failed: 0 }).text, /下一回合前自動重載/);
+  assert.equal(reloadNotice("已更新", { reloaded: 1, deferred: 0, failed: 1 }).ok, false);
+});
 
 test("renders scope, transport, and status badges for a mixed server list", () => {
   const html = renderModal([

@@ -19,7 +19,11 @@ test("persists Department Missions, fails active work on restart, and keeps need
     const base: DepartmentMission = {
       id: "active", workspacePath: "/repo", bossWorkerId: "boss", objective: "Ship", acceptanceCriteria: ["tests"],
       status: "planning", planSummary: null, steps: [], currentStepIndex: null, correctionCount: 0, maxCorrections: 2,
+      executionMode: "research",
+      origin: "boss",
       error: null, createdAt: "2026-07-22T00:00:00Z", startedAt: "2026-07-22T00:00:00Z", completedAt: null,
+      delegatedSessions: [{ workerId: "boss", provider: "claude", model: "sonnet", sessionId: "mission-session", completedTurns: 1 }],
+      executionEvents: [{ workerId: "boss", stepId: null, event: { type: "tool_call_start", id: "tool-1", name: "mcp__issues__list", input: {} } }],
     };
     assert.equal(store.saveDepartmentMission(base), true);
     assert.equal(store.saveDepartmentMission({ ...base, id: "attention", status: "needs_attention" }), true);
@@ -28,6 +32,12 @@ test("persists Department Missions, fails active work on restart, and keeps need
     store = new LocalStore(path);
     assert.equal(store.getDepartmentMission("active")?.status, "failed");
     assert.match(store.getDepartmentMission("active")?.error ?? "", /伺服器重啟/);
+    assert.equal(store.getDepartmentMission("active")?.delegatedSessions?.[0]?.sessionId, "mission-session");
+    assert.equal(store.getDepartmentMission("active")?.executionEvents?.[0]?.event.type, "tool_call_start");
+    assert.equal(store.getDepartmentMission("active")?.executionMode, "research");
+    assert.equal(store.getDepartmentMission("active")?.origin, "boss");
+    assert.equal(store.markDepartmentMissionsOrigin(["attention"], "boss"), true);
+    assert.equal(store.getDepartmentMission("attention")?.origin, "boss");
     assert.equal(store.getDepartmentMission("attention")?.status, "needs_attention");
     assert.deepEqual(store.listReservedDepartmentMissions().map((mission) => mission.id), ["attention"]);
   } finally {

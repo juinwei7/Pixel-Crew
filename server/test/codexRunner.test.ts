@@ -60,6 +60,49 @@ test("dispatches compact through app-server instead of sending it as a prompt", 
   assert.equal(session.busy, false);
 });
 
+test("Codex reloads MCP in place through app-server without replacing the thread", async () => {
+  const writes: any[] = [];
+  const session = new CodexSession(() => {}, "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+
+  const pending = session.reloadMcp();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ method: "config/mcpServer/reload", id: 1, params: null }]);
+  internals.handleRpcLine(JSON.stringify({ id: 1, result: {} }), internals.generation);
+  assert.equal(await pending, "reloaded");
+});
+
+test("Codex defers MCP reload while busy and performs it before the next turn", async () => {
+  const writes: any[] = [];
+  const session = new CodexSession(() => {}, "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+  session.busy = true;
+  assert.equal(await session.reloadMcp(), "deferred");
+  session.busy = false;
+
+  session.send("use the new tool");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes[0].method, "config/mcpServer/reload");
+  internals.handleRpcLine(JSON.stringify({ id: writes[0].id, result: {} }), internals.generation);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes[1].method, "turn/start");
+  assert.equal(writes[1].params.threadId, "thread-1");
+});
+
 test("auto-approve resolves a safe command without prompting", () => {
   const events: RunnerEvent[] = [];
   const session = new CodexSession((event) => events.push(event), "/repo", () => "", () => true);
@@ -102,6 +145,20 @@ test("safe mode never auto-approves file-change or permission requests", () => {
 
   assert.equal(requests(events).length, 2);
   assert.equal(resolved(events).length, 0); // both still pending, no auto-resolution
+});
+
+test("read-only query declines command, file-change, and permission escalation", () => {
+  const events: RunnerEvent[] = [];
+  const session = new CodexSession((event) => events.push(event), "/repo");
+  (session as unknown as { executionProfile: "read_only_query" }).executionProfile = "read_only_query";
+  deliverServerRequest(session, "item/commandExecution/requestApproval", { command: "npm test", itemId: "item-1" });
+  deliverServerRequest(session, "item/fileChange/requestApproval", { itemId: "item-2" }, 2);
+  deliverServerRequest(session, "item/permissions/requestApproval", { itemId: "item-3", permissions: ["network"] }, 3);
+
+  assert.equal(requests(events).length, 3);
+  assert.equal(resolved(events).length, 3);
+  assert.ok(resolved(events).every((event) => event.decision === "deny"));
+  assert.ok(requests(events).every((event) => event.request.decisions.length === 0));
 });
 
 test("full mode auto-approves file-change and permission requests too, using the permissions-shaped RPC reply", () => {

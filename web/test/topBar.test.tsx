@@ -35,6 +35,32 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /health-dot--ok/);
 });
 
+test("top bar exposes the single Boss Assignment entry point", () => {
+  const worker = emptyWorker("w1", "一號機", null, false, 0, "codex", "/repo");
+  const html = renderToStaticMarkup(<TopBar
+    active={worker}
+    activeWorkspace="/repo"
+    capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
+    auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null }}
+    wsReady
+    modelOptions={[]}
+    workerCount={1}
+    onRoom={() => {}}
+    onBossAssignment={() => {}}
+    onOpenMcp={() => {}}
+    onOpenBackup={() => {}}
+    onProvider={() => {}}
+    onModel={() => {}}
+    onAutoApprove={() => {}}
+    onRefreshAuth={() => {}}
+    onResetUi={() => {}}
+    notificationsEnabled={false}
+    onNotificationsToggle={() => {}}
+  />);
+  assert.match(html, /BOSS/);
+  assert.match(html, /交辦工作/);
+});
+
 test("cached models remain selectable while capabilities refresh in background", () => {
   const worker = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
   const html = renderToStaticMarkup(<TopBar
