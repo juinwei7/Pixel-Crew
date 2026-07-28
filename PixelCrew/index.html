@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
-<meta name="description" content="Pixel Crew 2.0.0：讓 Claude Code 與 Codex 組成能互相協作的部門，Boss NPC 自動路由 Consult、Review 與 Mission。Local-first、不需要 API key、MIT 開源。">
+<meta name="description" content="Pixel Crew 2.0.1：讓 Claude Code 與 Codex 組成能互相協作的部門，Boss Desk 自動路由 Consult、Review 與跨部門 Mission。Local-first、不需要 API key、MIT 開源。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="assets/style.css">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/">
-<meta property="og:title" content="Pixel Crew 2.0.0 — 像素辦公室裡的部門與協作">
+<meta property="og:title" content="Pixel Crew 2.0.1 — 像素辦公室裡的部門與協作">
 <meta property="og:description" content="部門主管自動路由 Consult、Review 與 Mission，交接與危險動作核准全程可見。無 API key、local-first、MIT 開源。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
@@ -32,7 +32,7 @@
 <meta property="og:image:height" content="960">
 <meta property="og:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pixel Crew 2.0.0 — 像素辦公室裡的部門與協作">
+<meta name="twitter:title" content="Pixel Crew 2.0.1 — 像素辦公室裡的部門與協作">
 <meta name="twitter:description" content="Boss NPC 自動路由 Consult、Review 與 Mission。Local-first、無 API key、MIT 開源。">
 <meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta name="twitter:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
@@ -69,7 +69,7 @@
       "description": "把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC，並讓它們組成部門互相協作。Local-first、不需要 API key、MIT 開源。",
       "inLanguage": "zh-Hant",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-22",
+      "dateModified": "2026-07-28",
       "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
       "about": { "@id": "https://pixelcrew.weibuilds.com/#software" },
       "primaryImageOfPage": {
@@ -85,10 +85,10 @@
       "name": "Pixel Crew",
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
-      "softwareVersion": "2.0.0",
-      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.0",
+      "softwareVersion": "2.0.1",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-22",
+      "dateModified": "2026-07-28",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
       "softwareRequirements": "macOS, Windows 10 22H2 or later, or Linux; Claude Code or Codex CLI",
@@ -137,7 +137,7 @@
       部門主管會自己決定找誰 Consult、找誰 Review，或啟動一段 2 到 5 步的 Mission，每一步都留在你看得見、能核准的地方。
     </p>
     <div class="hero-cta">
-      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.0.0</a>
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.0.1</a>
       <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub 原始碼</a>
     </div>
     <div class="hero-badges">
@@ -467,16 +467,21 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
-          <span class="release-version">v2.0.0</span>
-          <time class="release-date" datetime="2026-07-22">2026.07.22</time>
+          <span class="release-version">v2.0.1</span>
+          <time class="release-date" datetime="2026-07-28">2026.07.28</time>
           <span class="release-current">LATEST</span>
         </div>
-        <h3>部門管理與唯讀協作正式登場</h3>
-        <p>現在可以直接建立部門，讓部門主管自己決定 Quick Consult、Quick Review，或啟動一段 2 到 5 步的完整 Mission；審查沒過最多自動修正兩輪，危險動作永遠留給你核准。</p>
-        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.0">完整 v2.0.0 發布內容 ↗</a>
+        <h3>老闆任務日誌與跨部門編排上線</h3>
+        <p>從持久化的 Boss Desk 直接交辦工作，決策模型會建立跨部門依賴圖並整合成一份報告；同時新增 session 中模型切換、即時 MCP 設定同步，並修正跨機器登入偵測缺少診斷資訊的問題。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1">完整 v2.0.1 發布內容 ↗</a>
       </article>
 
       <div class="release-archive">
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v2.0.0</span><time class="release-date" datetime="2026-07-22">2026.07.22</time></div>
+          <h3>部門管理與唯讀協作正式登場</h3>
+          <p>現在可以直接建立部門，讓部門主管自己決定 Quick Consult、Quick Review，或啟動一段 2 到 5 步的完整 Mission；審查沒過最多自動修正兩輪，危險動作永遠留給你核准。</p>
+        </article>
         <article class="release-card">
           <div class="release-meta"><span class="release-version">v1.0.3</span><time class="release-date" datetime="2026-07-21">2026.07.21</time></div>
           <h3>把管理、備份與專心工作流帶進同一個駕駛艙</h3>
