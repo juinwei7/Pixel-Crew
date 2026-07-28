@@ -4,7 +4,7 @@ export type TaskLogView = "summary" | "activity";
 export type CrewFilter = "all" | "working" | "attention" | "claude" | "codex" | "room";
 
 export type UiPreferencesV2 = {
-  version: 2;
+  version: 3;
   taskLogWidth: number;
   taskLogView: TaskLogView;
   taskLogOpen: boolean;
@@ -19,7 +19,7 @@ export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
 export const COMPACT_OFFICE_MAX_WIDTH = 1440;
 
 export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
-  version: 2,
+  version: 3,
   taskLogWidth: 600,
   taskLogView: "summary",
   taskLogOpen: true,
@@ -38,26 +38,26 @@ export function clampTaskLogWidth(width: number, viewportWidth = 916): number {
 }
 
 export function enteredCompactOffice(previousWidth: number, currentWidth: number): boolean {
-  return previousWidth > COMPACT_OFFICE_MAX_WIDTH && currentWidth <= COMPACT_OFFICE_MAX_WIDTH;
-}
-
-export function crewViewportOffset(collapsed: boolean, viewportWidth: number): number {
-  if (collapsed) return 70;
-  return viewportWidth <= 1279 ? 223 : 248;
+  return Number.isFinite(previousWidth)
+    && previousWidth > COMPACT_OFFICE_MAX_WIDTH
+    && currentWidth <= COMPACT_OFFICE_MAX_WIDTH;
 }
 
 export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPreferencesV2 {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const recoveringLegacyPanelState = raw.version === 2;
   const width = typeof raw.taskLogWidth === "number" && Number.isFinite(raw.taskLogWidth)
     ? raw.taskLogWidth
     : DEFAULT_UI_PREFERENCES.taskLogWidth;
   return {
-    version: 2,
+    version: 3,
     taskLogWidth: clampTaskLogWidth(width, viewportWidth),
     taskLogView: typeof raw.taskLogView === "string" && VIEWS.has(raw.taskLogView as TaskLogView)
       ? raw.taskLogView as TaskLogView
       : DEFAULT_UI_PREFERENCES.taskLogView,
-    taskLogOpen: typeof raw.taskLogOpen === "boolean" ? raw.taskLogOpen : DEFAULT_UI_PREFERENCES.taskLogOpen,
+    taskLogOpen: recoveringLegacyPanelState
+      ? true
+      : typeof raw.taskLogOpen === "boolean" ? raw.taskLogOpen : DEFAULT_UI_PREFERENCES.taskLogOpen,
     crewRailCollapsed: typeof raw.crewRailCollapsed === "boolean"
       ? raw.crewRailCollapsed
       : DEFAULT_UI_PREFERENCES.crewRailCollapsed,

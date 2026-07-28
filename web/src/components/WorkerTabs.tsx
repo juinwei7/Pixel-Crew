@@ -333,7 +333,7 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
           return <section key={key} className={`crew-department ${department?.id === selectedDepartmentId ? "crew-department--active" : ""} ${attention ? "crew-department--attention" : ""}`} title={department?.purpose || roomName(members[0]?.workspacePath ?? "")}>
             {!collapsed && <button type="button" className="crew-department__header" disabled={!selectable} aria-current={department?.id === selectedDepartmentId ? "true" : undefined} onClick={() => department && onSelectDepartment?.(department.id)}>
               <span><strong>{department?.name ?? roomName(members[0]?.workspacePath ?? "")}</strong><small>{department?.memberWorkerIds.length ?? members.length} 位 NPC</small></span>
-              {mission ? <em className={`crew-department__mission crew-department__mission--${mission.status}`}>{mission.status === "needs_attention" ? "需處理" : total ? `${completed}/${total}` : "規劃中"}</em> : <em>待命</em>}
+              {mission ? <em className={`crew-department__mission crew-department__mission--${mission.status}`}>{mission.status === "needs_attention" ? "需處理" : total ? `${completed}/${total}` : "規劃中"}</em> : <em>老闆交辦</em>}
             </button>}
             <div className="crew-department__members">{members.map((worker) => row(worker, false, renderOrder.findIndex((candidate) => candidate.id === worker.id)))}</div>
           </section>;

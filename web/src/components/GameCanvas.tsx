@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, WorkerState } from "../types";
 import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/person";
@@ -163,7 +163,8 @@ type Props = {
   onRename?(id: string, name: string): Promise<string | null>;
   onAvatarWorkshop?(id: string): void;
   onPersonaEditor?(id: string): void;
-  onDepartmentMission?(departmentKey: string): void;
+  onDepartmentMission?(departmentKey: string, options?: { missionId?: string; focusSection?: "team" | "history" }): void;
+  onDepartmentFreshSessions?(departmentKey: string): void;
   onRoomSwitch?(id: string): void;
   onRemove?(id: string): void;
   // Lets a pending approval be resolved right on the sprite instead of
@@ -173,7 +174,7 @@ type Props = {
 
 export function GameCanvas({
   workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], onSelect, onOpenLog, onAvatarError,
-  onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRoomSwitch, onRemove, onResolveApproval,
+  onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onDepartmentFreshSessions, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
@@ -184,6 +185,7 @@ export function GameCanvas({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [menuDirection, setMenuDirection] = useState<"left" | "right">("right");
+  const [departmentMenu, setDepartmentMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [resolvingApproval, setResolvingApproval] = useState<string | null>(null);
   const hasQuickMenu = Boolean(onRename && onAvatarWorkshop && onPersonaEditor && onRoomSwitch && onRemove);
   const [sceneError, setSceneError] = useState<string | null>(null);
@@ -222,6 +224,11 @@ export function GameCanvas({
 
     let cancelled = false;
     let handle: SceneHandle | null = null;
+    const syncSceneSize = () => sceneRef.current?.resize();
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(syncSceneSize);
+    resizeObserver?.observe(host);
 
     createScene(host, {
       onPositions: (positions) => {
@@ -295,7 +302,10 @@ export function GameCanvas({
       onFurniturePositions: (list) => setFurniturePositions(new Map(list.map((pos) => [pos.key, pos]))),
       onFurnitureHover: setHoveredStation,
       onFurnitureClick: (key) => setPinnedStation((current) => (current === key ? null : key)),
-      onDepartmentClick: (workspacePath) => onDepartmentMissionRef.current?.(workspacePath),
+      onDepartmentClick: (workspacePath, position) => {
+        const bounds = host.getBoundingClientRect();
+        setDepartmentMenu({ key: workspacePath, x: bounds.left + position.x, y: bounds.top + position.y });
+      },
       onContextMenu: (id) => {
         const position = screenPositionsRef.current.get(id);
         if (position) setMenuDirection(radialMenuDirection(position.x, host.getBoundingClientRect().width));
@@ -309,6 +319,10 @@ export function GameCanvas({
       }
       handle = h;
       sceneRef.current = h;
+      // The host may have completed its first responsive layout (including
+      // the persisted Crew rail width) while Pixi was initializing.
+      // Synchronize immediately so users never have to nudge a panel first.
+      syncSceneSize();
       setSceneError(null);
       h.setMilestone(milestoneRef.current);
       pushWorkers();
@@ -328,6 +342,7 @@ export function GameCanvas({
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
       handle?.destroy();
       sceneRef.current = null;
     };
@@ -376,6 +391,13 @@ export function GameCanvas({
     window.addEventListener("pointerdown", close);
     return () => window.removeEventListener("pointerdown", close);
   }, [menuOpenFor]);
+
+  useEffect(() => {
+    if (!departmentMenu) return;
+    const close = () => setDepartmentMenu(null);
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [departmentMenu]);
 
 
   if (sceneError) {
@@ -434,6 +456,32 @@ export function GameCanvas({
           </button>
         </div>
       )}
+      {departmentMenu && (() => {
+        const department = departments.find((candidate) => candidate.id === departmentMenu.key);
+        const currentMission = missions.find((mission) => mission.departmentId === departmentMenu.key && ["planning", "executing", "reviewing", "needs_attention"].includes(mission.status));
+        const open = (options?: { missionId?: string; focusSection?: "team" | "history" }) => {
+          onDepartmentMissionRef.current?.(departmentMenu.key, options);
+          setDepartmentMenu(null);
+        };
+        return <div
+          className="department-wheel"
+          style={{ left: departmentMenu.x, top: departmentMenu.y }}
+          role="menu"
+          aria-label={`${department?.name ?? "部門"}操作`}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" className="department-wheel__center" onClick={() => open()}>{department?.name ?? "部門"}</button>
+          <button type="button" style={{ "--wheel-index": 0 } as CSSProperties} onClick={() => open()}>聊天室</button>
+          <button type="button" style={{ "--wheel-index": 1 } as CSSProperties} onClick={() => open()}>交辦</button>
+          <button type="button" style={{ "--wheel-index": 2 } as CSSProperties} onClick={() => open({ missionId: currentMission?.id })} disabled={!currentMission}>目前任務</button>
+          <button type="button" style={{ "--wheel-index": 3 } as CSSProperties} onClick={() => open({ focusSection: "team" })}>成員</button>
+          <button type="button" style={{ "--wheel-index": 4 } as CSSProperties} onClick={() => open({ focusSection: "history" })}>歷史</button>
+          <button type="button" style={{ "--wheel-index": 5 } as CSSProperties} onClick={() => {
+            (onDepartmentFreshSessions ?? onDepartmentMission)?.(departmentMenu.key);
+            setDepartmentMenu(null);
+          }}>全員新對話</button>
+        </div>;
+      })()}
       {allVisual.map((w) => {
         const collaboration = !w.temporary ? collaborations.find((task) => ["running", "returning"].includes(task.status) && (task.sourceWorkerId === w.id || task.targetWorkerId === w.id)) : undefined;
         const mission = !w.temporary ? missions.find((task) => ["planning", "executing", "reviewing", "needs_attention"].includes(task.status) && (task.departmentId ? task.departmentId === w.departmentKey : task.workspacePath === w.workspacePath)) : undefined;

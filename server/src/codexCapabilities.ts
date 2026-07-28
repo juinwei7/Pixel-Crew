@@ -55,6 +55,14 @@ export function parseCodexMcpList(stdout: string): McpServerState[] {
   });
 }
 
+export function mergeCodexMcpConfig(
+  listed: McpServerState[],
+  previous: McpServerState[],
+): McpServerState[] {
+  const previousByName = new Map(previous.map((server) => [server.name, server]));
+  return listed.map((server) => ({ ...previousByName.get(server.name), ...server }));
+}
+
 // Codex's own internal MCP server (not something the user configured via
 // `codex mcp add`) — it appears in mcpServerStatus/list but never in
 // `codex mcp list`. Shown, labeled distinctly, rather than filtered out: it
@@ -64,24 +72,31 @@ const CODEX_BUILTIN_MCP_SERVERS = new Set(["codex_apps"]);
 export type CodexMcpServerToolsEntry = { name: string; tools: McpToolInfo[]; builtin?: boolean };
 
 // Parses the (undocumented, experimental) mcpServerStatus/list app-server
-// response. Defensive about the exact envelope shape since this method isn't
-// covered by any official schema/doc — accepts a bare array or either of the
-// wrapper keys observed/plausible in testing.
+// response. Defensive about the exact envelope shape across Codex versions:
+// current app-server uses {data,nextCursor}; older builds/fixtures used a bare
+// array or one of the server-named wrapper keys below.
 export function parseCodexMcpServerStatus(result: unknown): CodexMcpServerToolsEntry[] {
   const list = Array.isArray(result)
     ? result
-    : Array.isArray((result as any)?.servers)
-      ? (result as any).servers
-      : Array.isArray((result as any)?.mcpServers)
-        ? (result as any).mcpServers
-        : [];
+    : Array.isArray((result as any)?.data)
+      ? (result as any).data
+      : Array.isArray((result as any)?.servers)
+        ? (result as any).servers
+        : Array.isArray((result as any)?.mcpServers)
+          ? (result as any).mcpServers
+          : [];
   return list.flatMap((entry: any) => {
     if (!entry || typeof entry.name !== "string") return [];
     const toolsMap = entry.tools && typeof entry.tools === "object" ? entry.tools : {};
-    const tools: McpToolInfo[] = Object.entries(toolsMap).map(([toolName, tool]: [string, any]) => ({
-      name: typeof tool?.name === "string" ? tool.name : toolName,
-      description: typeof tool?.description === "string" ? tool.description : undefined,
-    }));
+    const tools: McpToolInfo[] = Object.entries(toolsMap).map(([toolName, tool]: [string, any]) => {
+      const annotations = tool?.annotations && typeof tool.annotations === "object" ? tool.annotations : {};
+      return {
+        name: typeof tool?.name === "string" ? tool.name : toolName,
+        description: typeof tool?.description === "string" ? tool.description : undefined,
+        ...(typeof annotations.readOnlyHint === "boolean" ? { readOnlyHint: annotations.readOnlyHint } : {}),
+        ...(typeof annotations.destructiveHint === "boolean" ? { destructiveHint: annotations.destructiveHint } : {}),
+      };
+    });
     const item: CodexMcpServerToolsEntry = { name: entry.name, tools };
     if (CODEX_BUILTIN_MCP_SERVERS.has(entry.name)) item.builtin = true;
     return [item];
@@ -181,7 +196,12 @@ export class CodexCapabilityRegistry {
     let models = this.state.models;
     if (mcpResult.status === "fulfilled") {
       try {
-        mcpServers = parseCodexMcpList(mcpResult.value.stdout);
+        const listed = parseCodexMcpList(mcpResult.value.stdout);
+        // A config refresh and an in-session tool reload may finish in either
+        // order. Preserve the live tool catalog merged by reloadMcpWorkers so
+        // a slower `codex mcp list` result cannot erase it immediately after
+        // the session successfully discovered the new tools.
+        mcpServers = mergeCodexMcpConfig(listed, this.state.mcpServers);
       } catch (error) {
         errors.push(`MCP: ${(error as Error).message}`);
       }

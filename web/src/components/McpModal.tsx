@@ -49,6 +49,18 @@ function detailLine(server: McpServerState): string | null {
 
 type EnvRow = { key: string; value: string };
 type HeaderRow = { name: string; value: string };
+type McpReloadSummary = { reloaded: number; deferred: number; failed: number };
+
+export function reloadNotice(action: string, reload?: McpReloadSummary): { ok: boolean; text: string } {
+  if (!reload) return { ok: true, text: action };
+  if (reload.failed > 0) {
+    return { ok: false, text: `${action}；${reload.failed} 個 NPC 重連失敗` };
+  }
+  if (reload.deferred > 0) {
+    return { ok: true, text: `${action}；${reload.reloaded} 個 NPC 已重連，${reload.deferred} 個執行中的 NPC 會在下一回合前自動重載` };
+  }
+  return { ok: true, text: `${action}；目前 session 已重連 MCP` };
+}
 
 type Props = {
   capabilities: CapabilityState;
@@ -136,8 +148,8 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
     setPending(true);
     setNotice(null);
     try {
-      await apiRequest("/api/mcp/refresh", { method: "POST", body: { provider, workspacePath }, timeoutMs: 65000 });
-      setNotice({ ok: true, text: "MCP 狀態已更新" });
+      const data = await apiRequest<{ reload?: McpReloadSummary }>("/api/mcp/refresh", { method: "POST", body: { provider, workspacePath }, timeoutMs: 65000 });
+      setNotice(reloadNotice("MCP 狀態與工具已更新", data.reload));
     } catch (error) {
       setNotice({ ok: false, text: (error as Error).message });
     } finally {
@@ -150,11 +162,11 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
     setNotice(null);
     try {
       const scope = provider === "claude" && server.scope && server.scope !== "account" ? `&scope=${server.scope}` : "";
-      await apiRequest(`/api/mcp/${encodeURIComponent(server.name)}?provider=${provider}&workspacePath=${encodeURIComponent(workspacePath)}${scope}`, {
+      const data = await apiRequest<{ reload?: McpReloadSummary }>(`/api/mcp/${encodeURIComponent(server.name)}?provider=${provider}&workspacePath=${encodeURIComponent(workspacePath)}${scope}`, {
         method: "DELETE",
         timeoutMs: 65000,
       });
-      setNotice({ ok: true, text: `已移除 ${server.name}，工人下一句話生效` });
+      setNotice(reloadNotice(`已移除 ${server.name}`, data.reload));
     } catch (error) {
       setNotice({ ok: false, text: (error as Error).message });
     } finally {
@@ -254,8 +266,8 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
           }
         }
       }
-      await apiRequest("/api/mcp", { method: "POST", timeoutMs: 65000, body });
-      setNotice({ ok: true, text: `已加入 ${name.trim()}，工人下一句話生效` });
+      const data = await apiRequest<{ reload?: McpReloadSummary }>("/api/mcp", { method: "POST", timeoutMs: 65000, body });
+      setNotice(reloadNotice(`已加入 ${name.trim()}`, data.reload));
       setName("");
       setTarget("");
       setEnvRows([]);

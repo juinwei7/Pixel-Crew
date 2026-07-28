@@ -15,6 +15,7 @@ type Props = {
   workerCount: number;
   providerChanging?: boolean;
   onRoom(): void;
+  onBossAssignment?(): void;
   onOpenMcp(): void;
   onOpenBackup(): void;
   onProvider(provider: ProviderId): void;
@@ -37,6 +38,7 @@ export function TopBar({
   workerCount,
   providerChanging = false,
   onRoom,
+  onBossAssignment,
   onOpenMcp,
   onOpenBackup,
   onProvider,
@@ -81,6 +83,7 @@ export function TopBar({
   return (
     <header className="top-bar">
       <div className="top-bar__brand"><i />PIXEL CREW</div>
+      {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>交辦工作</strong></button>}
       <button className="top-bar__room" type="button" onClick={onRoom} title={activeWorkspace}>
         <span>ROOM</span>
         <strong>{roomName(activeWorkspace)}</strong>

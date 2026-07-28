@@ -9,7 +9,7 @@ import {
 } from "../avatar/normalizeAvatar";
 import { AVATAR_PRESETS, paintPresetPreview, type AvatarPresetId } from "../game/avatarPresets";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/person";
-import { dragContainsFiles } from "./CommandComposer";
+import { dragContainsFiles } from "../composerDrag";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type Props = {

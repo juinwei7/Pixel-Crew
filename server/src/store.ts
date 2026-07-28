@@ -8,7 +8,10 @@ import type { HandoffProgress } from "./handoff.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import type { CollaborationTask } from "./collaboration.js";
 import type { DepartmentMission } from "./mission.js";
+import type { BossTask, BossTaskStatus } from "./bossTask.js";
 import { legacyDepartmentName, type Department } from "./department.js";
+import type { AttachmentRecord } from "./attachmentRepository.js";
+import type { DepartmentMessage, DepartmentThread } from "./departmentThread.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 
 function normalizeAutoApproveMode(value: unknown): AutoApproveMode {
@@ -58,6 +61,11 @@ function missionFromRow(row: Record<string, unknown>): DepartmentMission {
     bossWorkerId: String(row.boss_worker_id),
     objective: String(row.objective),
     acceptanceCriteria: jsonValue<string[]>(row.acceptance_criteria_json, []),
+    attachmentIds: jsonValue<string[]>(row.attachment_ids_json, []),
+    parentMissionId: row.parent_mission_id == null ? null : String(row.parent_mission_id),
+    sourceMessageId: row.source_message_id == null ? null : String(row.source_message_id),
+    executionMode: row.execution_mode === "research" ? "research" : "project",
+    origin: row.mission_origin === "boss" ? "boss" : "department",
     status: normalizedStatus,
     planSummary: row.plan_summary == null ? null : String(row.plan_summary),
     steps,
@@ -72,6 +80,62 @@ function missionFromRow(row: Record<string, unknown>): DepartmentMission {
     planApprovedAt: row.plan_approved_at == null ? null : String(row.plan_approved_at),
     ownerGuidance: row.owner_guidance == null ? null : String(row.owner_guidance),
     formatRepairCount: Number(row.format_repair_count ?? 0),
+    delegatedSessions: jsonValue<DepartmentMission["delegatedSessions"]>(row.delegated_sessions_json, []),
+    executionEvents: jsonValue<DepartmentMission["executionEvents"]>(row.execution_events_json, []),
+  };
+}
+
+function bossTaskFromRow(row: Record<string, unknown>): BossTask {
+  const task = jsonValue<BossTask>(row.payload_json, null as unknown as BossTask);
+  return {
+    ...task,
+    title: typeof task.title === "string" && task.title.trim() ? task.title.trim().slice(0, 120) : task.objective.slice(0, 120),
+    archivedAt: typeof task.archivedAt === "string"
+      ? task.archivedAt
+      : row.archived_at == null ? null : String(row.archived_at),
+  };
+}
+
+function departmentThreadFromRow(row: Record<string, unknown>): DepartmentThread {
+  return {
+    id: String(row.id),
+    departmentId: String(row.department_id),
+    activeMissionId: row.active_mission_id == null ? null : String(row.active_mission_id),
+    summary: String(row.summary ?? ""),
+    historyClearedAt: row.history_cleared_at == null ? null : String(row.history_cleared_at),
+    lastMessageAt: String(row.last_message_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function departmentMessageFromRow(row: Record<string, unknown>): DepartmentMessage {
+  return {
+    id: String(row.id),
+    threadId: String(row.thread_id),
+    role: String(row.role) as DepartmentMessage["role"],
+    intent: String(row.intent) as DepartmentMessage["intent"],
+    text: String(row.text ?? ""),
+    attachmentIds: jsonValue<string[]>(row.attachment_ids_json, []),
+    missionId: row.mission_id == null ? null : String(row.mission_id),
+    deliveryStatus: String(row.delivery_status) as DepartmentMessage["deliveryStatus"],
+    clientMessageId: row.client_message_id == null ? null : String(row.client_message_id),
+    idempotencyKey: row.idempotency_key == null ? null : String(row.idempotency_key),
+    classification: jsonValue<DepartmentMessage["classification"]>(row.classification_json, null),
+    createdAt: String(row.created_at),
+  };
+}
+
+function attachmentFromRow(row: Record<string, unknown>): AttachmentRecord {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    mimeType: String(row.mime_type),
+    size: Number(row.size),
+    checksum: String(row.checksum),
+    storageKey: String(row.storage_key),
+    kind: row.kind === "image" ? "image" : "document",
+    createdAt: String(row.created_at),
   };
 }
 
@@ -245,6 +309,8 @@ export class LocalStore {
         current_step_index INTEGER,
         correction_count INTEGER NOT NULL DEFAULT 0,
         max_corrections INTEGER NOT NULL DEFAULT 2,
+        execution_mode TEXT NOT NULL DEFAULT 'project',
+        mission_origin TEXT NOT NULL DEFAULT 'department',
         error TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         started_at TEXT,
@@ -253,6 +319,82 @@ export class LocalStore {
 
       CREATE INDEX IF NOT EXISTS department_missions_workspace_created
         ON department_missions(workspace_path, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS boss_tasks (
+        id TEXT PRIMARY KEY,
+        workspace_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT,
+        archived_at TEXT,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS boss_tasks_workspace_updated
+        ON boss_tasks(workspace_path, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS department_threads (
+        id TEXT PRIMARY KEY,
+        department_id TEXT NOT NULL UNIQUE REFERENCES departments(id) ON DELETE CASCADE,
+        active_mission_id TEXT,
+        summary TEXT NOT NULL DEFAULT '',
+        history_cleared_at TEXT,
+        last_message_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS department_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES department_threads(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('owner', 'department', 'system', 'report')),
+        intent TEXT NOT NULL CHECK (intent IN ('question', 'context', 'mission_update', 'follow_up_mission', 'approval', 'decision', 'system')),
+        text TEXT NOT NULL DEFAULT '',
+        attachment_ids_json TEXT NOT NULL DEFAULT '[]',
+        mission_id TEXT,
+        delivery_status TEXT NOT NULL CHECK (delivery_status IN ('pending', 'delivered', 'failed')),
+        client_message_id TEXT,
+        idempotency_key TEXT UNIQUE,
+        classification_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS department_messages_thread_created
+        ON department_messages(thread_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        checksum TEXT NOT NULL UNIQUE,
+        storage_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('image', 'document')),
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS attachment_deliveries (
+        attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+        mission_id TEXT NOT NULL,
+        worker_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+        error TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (attachment_id, mission_id, worker_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        department_id TEXT,
+        mission_id TEXT,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS audit_events_department_created
+        ON audit_events(department_id, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS provider_checkpoints (
         worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
@@ -292,6 +434,16 @@ export class LocalStore {
       // Existing databases already migrated to owner-controlled Mission attention.
     }
     try {
+      this.db.exec("ALTER TABLE boss_tasks ADD COLUMN title TEXT");
+    } catch {
+      // Existing databases already migrated to editable Boss task titles.
+    }
+    try {
+      this.db.exec("ALTER TABLE boss_tasks ADD COLUMN archived_at TEXT");
+    } catch {
+      // Existing databases already migrated to archivable Boss task records.
+    }
+    try {
       this.db.exec("ALTER TABLE department_missions ADD COLUMN department_id TEXT");
     } catch {
       // Existing databases already migrated to explicit Mission departments.
@@ -310,6 +462,46 @@ export class LocalStore {
       this.db.exec("ALTER TABLE department_missions ADD COLUMN format_repair_count INTEGER NOT NULL DEFAULT 0");
     } catch {
       // Existing databases already migrated to bounded format repair.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN attachment_ids_json TEXT NOT NULL DEFAULT '[]'");
+    } catch {
+      // Existing databases already migrated to persistent Mission attachments.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN parent_mission_id TEXT");
+    } catch {
+      // Existing databases already migrated to auditable follow-up Missions.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN source_message_id TEXT");
+    } catch {
+      // Existing databases already migrated to thread-linked Missions.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN delegated_sessions_json TEXT NOT NULL DEFAULT '[]'");
+    } catch {
+      // Existing databases already migrated to task-owned provider sessions.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN execution_events_json TEXT NOT NULL DEFAULT '[]'");
+    } catch {
+      // Existing databases already migrated to Mission-owned runner activity.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'project'");
+    } catch {
+      // Existing databases already migrated to bounded research/project execution.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_missions ADD COLUMN mission_origin TEXT NOT NULL DEFAULT 'department'");
+    } catch {
+      // Existing databases already migrated to explicit Boss/department ownership.
+    }
+    try {
+      this.db.exec("ALTER TABLE department_threads ADD COLUMN history_cleared_at TEXT");
+    } catch {
+      // Existing databases already migrated to resettable visible department history.
     }
     try {
       this.db.exec("ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
@@ -514,6 +706,130 @@ export class LocalStore {
       `).run(department.id, department.name, department.purpose, department.workspacePath,
         department.leadWorkerId, department.createdAt, department.updatedAt);
     });
+  }
+
+  getDepartmentThread(departmentId: string): DepartmentThread | null {
+    const row = this.db.prepare("SELECT * FROM department_threads WHERE department_id = ?").get(departmentId) as Record<string, unknown> | undefined;
+    return row ? departmentThreadFromRow(row) : null;
+  }
+
+  saveDepartmentThread(thread: DepartmentThread): boolean {
+    return this.safeWrite("save department thread", () => {
+      this.db.prepare(`
+        INSERT INTO department_threads (id, department_id, active_mission_id, summary, history_cleared_at, last_message_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(department_id) DO UPDATE SET
+          active_mission_id = excluded.active_mission_id,
+          summary = excluded.summary,
+          history_cleared_at = excluded.history_cleared_at,
+          last_message_at = excluded.last_message_at,
+          updated_at = excluded.updated_at
+      `).run(thread.id, thread.departmentId, thread.activeMissionId, thread.summary, thread.historyClearedAt, thread.lastMessageAt, thread.createdAt, thread.updatedAt);
+    });
+  }
+
+  listDepartmentMessages(threadId: string, limit = 200): DepartmentMessage[] {
+    const bounded = Math.max(1, Math.min(500, limit));
+    const rows = this.db.prepare(`
+      SELECT * FROM (
+        SELECT rowid AS _rowid, * FROM department_messages WHERE thread_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+      ) ORDER BY created_at, _rowid
+    `).all(threadId, bounded) as Record<string, unknown>[];
+    return rows.map(departmentMessageFromRow);
+  }
+
+  getDepartmentMessageByIdempotency(idempotencyKey: string): DepartmentMessage | null {
+    if (!idempotencyKey) return null;
+    const row = this.db.prepare("SELECT * FROM department_messages WHERE idempotency_key = ?").get(idempotencyKey) as Record<string, unknown> | undefined;
+    return row ? departmentMessageFromRow(row) : null;
+  }
+
+  saveDepartmentMessage(message: DepartmentMessage): boolean {
+    return this.safeWrite("save department message", () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.prepare(`
+          INSERT INTO department_messages (
+            id, thread_id, role, intent, text, attachment_ids_json, mission_id,
+            delivery_status, client_message_id, idempotency_key, classification_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          message.id, message.threadId, message.role, message.intent, message.text,
+          JSON.stringify(message.attachmentIds), message.missionId, message.deliveryStatus,
+          message.clientMessageId, message.idempotencyKey, message.classification ? JSON.stringify(message.classification) : null,
+          message.createdAt,
+        );
+        this.db.prepare("UPDATE department_threads SET last_message_at = ?, updated_at = ? WHERE id = ?")
+          .run(message.createdAt, message.createdAt, message.threadId);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  updateDepartmentMessageMission(messageId: string, missionId: string | null, deliveryStatus: DepartmentMessage["deliveryStatus"] = "delivered"): boolean {
+    return this.safeWrite("link department message mission", () => {
+      this.db.prepare(`
+        UPDATE department_messages
+        SET mission_id = ?, delivery_status = ?
+        WHERE id = ?
+      `).run(missionId, deliveryStatus, messageId);
+    });
+  }
+
+  saveAttachment(attachment: AttachmentRecord): boolean {
+    return this.safeWrite("save attachment", () => {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO attachments (id, name, mime_type, size, checksum, storage_key, kind, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(attachment.id, attachment.name, attachment.mimeType, attachment.size, attachment.checksum, attachment.storageKey, attachment.kind, attachment.createdAt);
+    });
+  }
+
+  getAttachment(id: string): AttachmentRecord | null {
+    const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? attachmentFromRow(row) : null;
+  }
+
+  getAttachmentByChecksum(checksum: string): AttachmentRecord | null {
+    const row = this.db.prepare("SELECT * FROM attachments WHERE checksum = ?").get(checksum) as Record<string, unknown> | undefined;
+    return row ? attachmentFromRow(row) : null;
+  }
+
+  saveAttachmentDelivery(attachmentId: string, missionId: string, workerId: string, status: "pending" | "delivered" | "failed", error: string | null = null): boolean {
+    return this.safeWrite("save attachment delivery", () => {
+      this.db.prepare(`
+        INSERT INTO attachment_deliveries (attachment_id, mission_id, worker_id, status, error, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(attachment_id, mission_id, worker_id) DO UPDATE SET
+          status = excluded.status, error = excluded.error, updated_at = excluded.updated_at
+      `).run(attachmentId, missionId, workerId, status, error, new Date().toISOString());
+    });
+  }
+
+  saveAuditEvent(event: { id: string; departmentId?: string | null; missionId?: string | null; type: string; payload?: unknown; createdAt: string }): boolean {
+    return this.safeWrite("save audit event", () => {
+      this.db.prepare(`
+        INSERT INTO audit_events (id, department_id, mission_id, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(event.id, event.departmentId ?? null, event.missionId ?? null, event.type, JSON.stringify(event.payload ?? {}), event.createdAt);
+    });
+  }
+
+  listAuditEvents(departmentId: string, limit = 200): Array<{ id: string; departmentId: string | null; missionId: string | null; type: string; payload: unknown; createdAt: string }> {
+    const rows = this.db.prepare(`
+      SELECT * FROM audit_events WHERE department_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `).all(departmentId, Math.max(1, Math.min(500, limit))) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      id: String(row.id),
+      departmentId: row.department_id == null ? null : String(row.department_id),
+      missionId: row.mission_id == null ? null : String(row.mission_id),
+      type: String(row.event_type),
+      payload: jsonValue(row.payload_json, {}),
+      createdAt: String(row.created_at),
+    }));
   }
 
   deleteDepartment(id: string): boolean {
@@ -819,8 +1135,10 @@ export class LocalStore {
           id, department_id, workspace_path, boss_worker_id, objective, acceptance_criteria_json,
           status, plan_summary, steps_json, current_step_index, correction_count,
           max_corrections, error, created_at, started_at, completed_at,
-          attention_reason, plan_approved_at, owner_guidance, format_repair_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          attention_reason, plan_approved_at, owner_guidance, format_repair_count,
+          attachment_ids_json, parent_mission_id, source_message_id,
+          delegated_sessions_json, execution_events_json, execution_mode, mission_origin
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           plan_summary = excluded.plan_summary,
@@ -835,6 +1153,13 @@ export class LocalStore {
           , plan_approved_at = excluded.plan_approved_at
           , owner_guidance = excluded.owner_guidance
           , format_repair_count = excluded.format_repair_count
+          , attachment_ids_json = excluded.attachment_ids_json
+          , parent_mission_id = excluded.parent_mission_id
+          , source_message_id = excluded.source_message_id
+          , delegated_sessions_json = excluded.delegated_sessions_json
+          , execution_events_json = excluded.execution_events_json
+          , execution_mode = excluded.execution_mode
+          , mission_origin = excluded.mission_origin
       `).run(
         mission.id, mission.departmentId ?? null, mission.workspacePath, mission.bossWorkerId, mission.objective,
         JSON.stringify(mission.acceptanceCriteria), mission.status, mission.planSummary,
@@ -842,7 +1167,26 @@ export class LocalStore {
         mission.maxCorrections, mission.error, mission.createdAt, mission.startedAt, mission.completedAt,
         mission.attentionReason ?? null, mission.planApprovedAt ?? null,
         mission.ownerGuidance ?? null, mission.formatRepairCount ?? 0,
+        JSON.stringify(mission.attachmentIds ?? []), mission.parentMissionId ?? null, mission.sourceMessageId ?? null,
+        JSON.stringify(mission.delegatedSessions ?? []), JSON.stringify(mission.executionEvents ?? []),
+        mission.executionMode ?? "project", mission.origin ?? "department",
       );
+    });
+  }
+
+  markDepartmentMissionsOrigin(missionIds: string[], origin: NonNullable<DepartmentMission["origin"]>): boolean {
+    const ids = [...new Set(missionIds.filter(Boolean))];
+    if (ids.length === 0) return true;
+    return this.safeWrite("mark department mission origin", () => {
+      const statement = this.db.prepare("UPDATE department_missions SET mission_origin = ? WHERE id = ?");
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const id of ids) statement.run(origin, id);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
     });
   }
 
@@ -866,6 +1210,51 @@ export class LocalStore {
       ORDER BY created_at
     `).all() as Record<string, unknown>[];
     return rows.map(missionFromRow);
+  }
+
+  saveBossTask(task: BossTask): boolean {
+    return this.safeWrite("save boss task", () => {
+      this.db.prepare(`
+        INSERT INTO boss_tasks (id, workspace_path, status, title, archived_at, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          workspace_path = excluded.workspace_path,
+          status = excluded.status,
+          title = excluded.title,
+          archived_at = excluded.archived_at,
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at
+      `).run(task.id, task.workspacePath, task.status, task.title, task.archivedAt, JSON.stringify(task), task.createdAt, task.updatedAt);
+    });
+  }
+
+  getBossTask(id: string): BossTask | null {
+    const row = this.db.prepare("SELECT payload_json FROM boss_tasks WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return row ? bossTaskFromRow(row) : null;
+  }
+
+  deleteBossTask(id: string): boolean {
+    return this.safeWrite("delete boss task", () => {
+      this.db.prepare("DELETE FROM boss_tasks WHERE id = ?").run(id);
+    });
+  }
+
+  listBossTasks(workspacePath?: string, limit = 200): BossTask[] {
+    const bounded = Math.max(1, Math.min(200, limit));
+    const rows = workspacePath
+      ? this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks WHERE workspace_path = ? ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(workspacePath, bounded)
+      : this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(bounded);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+  }
+
+  listBossTasksByStatus(statuses: BossTaskStatus[]): BossTask[] {
+    const placeholders = statuses.map(() => "?").join(", ");
+    const rows = this.db.prepare(`SELECT payload_json FROM boss_tasks WHERE status IN (${placeholders})`).all(...statuses);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+  }
+
+  listRunningBossTasks(): BossTask[] {
+    return this.listBossTasksByStatus(["running"]);
   }
 
   loadLatestFailedHandoff(workerId: string): HandoffProgress | null {
@@ -911,6 +1300,12 @@ export class LocalStore {
       sessionId: String(row.session_id),
       completedTurns: Number(row.completed_turns),
     } : null;
+  }
+
+  deleteProviderCheckpoint(workerId: string, provider: ProviderId): boolean {
+    return this.safeWrite("delete provider checkpoint", () => {
+      this.db.prepare("DELETE FROM provider_checkpoints WHERE worker_id = ? AND provider = ?").run(workerId, provider);
+    });
   }
 
   // SQLite can't ALTER a CHECK constraint in place, so adding the 'returning'

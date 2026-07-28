@@ -210,7 +210,7 @@ export class PersonalDeskLayer {
 
   constructor(
     private readonly onSelect: (id: string) => void,
-    private readonly onDepartmentSelect?: (workspacePath: string) => void,
+    private readonly onDepartmentSelect?: (workspacePath: string, position: { x: number; y: number }) => void,
   ) {
     this.container.sortableChildren = true;
     this.departmentLayer.zIndex = -10;
@@ -391,7 +391,10 @@ export class PersonalDeskLayer {
           .fill({ color: department.accent, alpha: 0.001 });
         sign.eventMode = "static";
         sign.cursor = "pointer";
-        sign.on("pointertap", () => this.onDepartmentSelect?.(department.workspacePath));
+        sign.on("pointertap", (event) => {
+          event.stopPropagation();
+          this.onDepartmentSelect?.(department.workspacePath, { x: event.global.x, y: event.global.y });
+        });
         group.addChild(sign);
       }
       if (department.missionProgress && department.missionProgress.total > 0) {
