@@ -13,6 +13,7 @@ function auth(provider: ProviderId, status: ProviderAuthState["status"]): Provid
     loginCommand: provider === "claude" ? "claude auth login" : "codex login",
     checkedAt: null,
     error: status === "cli_missing" ? `找不到 ${provider} CLI` : null,
+    debug: null,
   };
 }
 
@@ -94,6 +95,24 @@ test("renders no onboarding UI for an authenticated active provider", () => {
     onUseProvider={() => {}}
   />);
   assert.equal(html, "");
+});
+
+test("shows collapsible diagnostic info when a debug snippet is present", () => {
+  const providers = {
+    claude: { ...auth("claude", "error"), debug: "resolved executable: /usr/local/bin/claude\nexit: 1\nstdout: not json" },
+    codex: auth("codex", "authenticated"),
+  };
+  const html = renderToStaticMarkup(<AuthGate
+    auth={providers.claude}
+    providers={providers}
+    installs={installs()}
+    platform="darwin"
+    onRefresh={() => {}}
+    onInstall={() => null}
+    onUseProvider={() => {}}
+  />);
+  assert.match(html, /診斷資訊/);
+  assert.match(html, /resolved executable: \/usr\/local\/bin\/claude/);
 });
 
 test("selects official platform install and verification commands", () => {

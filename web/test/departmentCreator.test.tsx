@@ -6,8 +6,8 @@ import { DepartmentCreator } from "../src/components/DepartmentCreator";
 
 test("department creator asks for purpose, count, provider, and workspace", () => {
   const auth = {
-    claude: { provider: "claude" as const, displayName: "Claude Code", status: "authenticated" as const, loginCommand: "", checkedAt: null, error: null },
-    codex: { provider: "codex" as const, displayName: "Codex", status: "unauthenticated" as const, loginCommand: "", checkedAt: null, error: null },
+    claude: { provider: "claude" as const, displayName: "Claude Code", status: "authenticated" as const, loginCommand: "", checkedAt: null, error: null, debug: null },
+    codex: { provider: "codex" as const, displayName: "Codex", status: "unauthenticated" as const, loginCommand: "", checkedAt: null, error: null, debug: null },
   };
   const html = renderToStaticMarkup(<DepartmentCreator initialProvider="claude" initialWorkspacePath="/repo" recentPaths={[]} providers={auth} maxMembers={8} onBrowse={async () => ({ canceled: true })} onCreated={() => {}} onClose={() => {}} />);
   assert.match(html, /直接建立一個部門/);

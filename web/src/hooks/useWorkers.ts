@@ -101,6 +101,7 @@ function defaultAuth(
     loginCommand,
     checkedAt: null,
     error: null,
+    debug: null,
   };
 }
 
