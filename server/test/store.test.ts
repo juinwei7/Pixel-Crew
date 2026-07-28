@@ -135,6 +135,8 @@ test("persists workers, bounded events, and capability cache", () => {
       completedTurns: 4,
     });
     assert.equal(reopened.loadProviderCheckpoint("worker-1", "claude", "/tmp/other-project"), null);
+    assert.equal(reopened.deleteProviderCheckpoint("worker-1", "claude"), true);
+    assert.equal(reopened.loadProviderCheckpoint("worker-1", "claude", "/tmp/project"), null);
     assert.equal(reopened.listProviderHandoffs("worker-1").length, 1);
 
     reopened.clearWorkerEvents("worker-1");
@@ -456,6 +458,55 @@ test("flush() forces the debounced event queue to disk and checkpoint() truncate
     // memory-mapped bookkeeping file SQLite keeps around regardless, so it
     // is not expected to shrink to zero.
     if (existsSync(`${path}-wal`)) assert.equal(statSync(`${path}-wal`).size, 0);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persists Boss task chat, stages, and final report across reopen", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-boss-task-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+    const task = {
+      id: "boss-1",
+      title: "ERP delivery",
+      archivedAt: null,
+      workspacePath: "/repo",
+      decisionProvider: "codex" as const,
+      decisionModel: "gpt",
+      objective: "Build ERP",
+      acceptanceCriteria: ["QA passes"],
+      attachmentIds: ["attachment-1"],
+      clientMessageId: "client-1",
+      idempotencyKey: "idem-1",
+      status: "completed" as const,
+      executionMode: "project" as const,
+      messages: [{ id: "msg-1", role: "boss" as const, text: "Build ERP", attachmentIds: ["attachment-1"], clientMessageId: "client-1", idempotencyKey: "idem-1", createdAt: "2026-01-01" }],
+      stages: [{
+        id: "plan", departmentId: "pm", departmentName: "PM", title: "Plan", objective: "Plan",
+        acceptanceCriteria: ["scope"], dependsOn: [], status: "completed" as const, missionId: "mission-1", report: "Done",
+        executionMode: "project" as const,
+      }],
+      finalReport: "Final",
+      error: null,
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-02",
+      completedAt: "2026-01-02",
+    };
+    assert.equal(store.saveBossTask(task), true);
+    const reopened = new LocalStore(path);
+    stores.push(reopened);
+    assert.deepEqual(reopened.getBossTask("boss-1"), task);
+    assert.deepEqual(reopened.listBossTasks("/repo").map((item) => item.id), ["boss-1"]);
+    const archived = { ...task, archivedAt: "2026-01-03", updatedAt: "2026-01-03" };
+    assert.equal(reopened.saveBossTask(archived), true);
+    assert.equal(reopened.getBossTask("boss-1")?.archivedAt, "2026-01-03");
+    assert.equal(reopened.deleteBossTask("boss-1"), true);
+    assert.equal(reopened.getBossTask("boss-1"), null);
   } finally {
     for (const store of stores.reverse()) store.close();
     rmSync(dir, { recursive: true, force: true });

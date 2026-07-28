@@ -84,6 +84,7 @@ test("groups persisted departments independently and exposes mission progress", 
   assert.match(html, /品質部/);
   assert.match(html, /2 位 NPC/);
   assert.match(html, /1\/2/);
+  assert.match(html, /老闆交辦/);
   assert.equal((html.match(/class="crew-department /g) ?? []).length, 2);
   assert.doesNotMatch(html, /crew-row--active/);
 });

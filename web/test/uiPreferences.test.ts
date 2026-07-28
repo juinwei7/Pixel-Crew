@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { crewViewportOffset, DEFAULT_UI_PREFERENCES, enteredCompactOffice, parseUiPreferences } from "../src/uiPreferences";
+import { DEFAULT_UI_PREFERENCES, enteredCompactOffice, parseUiPreferences } from "../src/uiPreferences";
 
 test("parses UI preferences field by field and bounds task log width", () => {
   const parsed = parseUiPreferences({
@@ -32,18 +32,25 @@ test("taskFocusMode persists across reload (survives round-trip through JSON)", 
   assert.equal(parseUiPreferences(stored, 900).taskFocusMode, true);
 });
 
+test("migrates the panel-layout regression once while preserving other v2 preferences", () => {
+  const migrated = parseUiPreferences({
+    version: 2,
+    taskLogOpen: false,
+    taskLogWidth: 544,
+    taskLogView: "activity",
+    crewRailCollapsed: true,
+  }, 1_024);
+  assert.equal(migrated.version, 3);
+  assert.equal(migrated.taskLogOpen, true);
+  assert.equal(migrated.taskLogWidth, 544);
+  assert.equal(migrated.taskLogView, "activity");
+  assert.equal(migrated.crewRailCollapsed, true);
+});
+
 test("only auto-collapses the task log when crossing into compact desktop width", () => {
-  assert.equal(enteredCompactOffice(Number.POSITIVE_INFINITY, 1_440), true);
+  assert.equal(enteredCompactOffice(Number.POSITIVE_INFINITY, 1_440), false);
   assert.equal(enteredCompactOffice(1_441, 1_280), true);
   assert.equal(enteredCompactOffice(1_280, 1_100), false);
   assert.equal(enteredCompactOffice(1_280, 1_440), false);
   assert.equal(enteredCompactOffice(1_440, 1_600), false);
-});
-
-test("reserves the actual CREW rail footprint for the office viewport", () => {
-  assert.equal(crewViewportOffset(false, 1_772), 248);
-  assert.equal(crewViewportOffset(false, 1_280), 248);
-  assert.equal(crewViewportOffset(false, 1_279), 223);
-  assert.equal(crewViewportOffset(true, 1_772), 70);
-  assert.equal(crewViewportOffset(true, 1_000), 70);
 });

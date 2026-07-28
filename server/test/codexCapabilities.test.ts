@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, parseCodexMcpList, parseCodexMcpServerStatus, parseCodexModels } from "../src/codexCapabilities.js";
+import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, mergeCodexMcpConfig, parseCodexMcpList, parseCodexMcpServerStatus, parseCodexModels } from "../src/codexCapabilities.js";
 import { LocalStore } from "../src/store.js";
 
 test("seeds Codex native slash commands before the first live refresh", () => {
@@ -120,6 +120,35 @@ test("parseCodexMcpServerStatus accepts a bare array or a mcpServers-keyed envel
 
   const mcpServersEnvelope = parseCodexMcpServerStatus({ mcpServers: [{ name: "b", tools: {} }] });
   assert.deepEqual(mcpServersEnvelope, [{ name: "b", tools: [] }]);
+
+  const currentDataEnvelope = parseCodexMcpServerStatus({
+    data: [{ name: "my-hub", tools: { pending: { annotations: { readOnlyHint: true } } } }],
+    nextCursor: null,
+  });
+  assert.deepEqual(currentDataEnvelope, [{
+    name: "my-hub",
+    tools: [{ name: "pending", description: undefined, readOnlyHint: true }],
+  }]);
+});
+
+test("parseCodexMcpServerStatus retains read-only and destructive annotations", () => {
+  const [server] = parseCodexMcpServerStatus({
+    servers: [{
+      name: "my-hub",
+      tools: {
+        pending: {
+          description: "List pending work",
+          annotations: { readOnlyHint: true, destructiveHint: false },
+        },
+      },
+    }],
+  });
+  assert.deepEqual(server.tools, [{
+    name: "pending",
+    description: "List pending work",
+    readOnlyHint: true,
+    destructiveHint: false,
+  }]);
 });
 
 test("parseCodexMcpServerStatus tolerates malformed or missing entries without throwing", () => {
@@ -163,6 +192,24 @@ test("CodexCapabilityRegistry.markMcpToolsUnavailable degrades servers without a
   const servers = registry.getState().mcpServers;
   assert.equal(servers.find((s) => s.name === "has-tools")?.toolsStatus, "available");
   assert.equal(servers.find((s) => s.name === "no-tools-yet")?.toolsStatus, "error");
+});
+
+test("Codex config refresh preserves a tool catalog merged by an in-session reload", () => {
+  assert.deepEqual(mergeCodexMcpConfig(
+    [{ name: "my-hub", status: "enabled", transport: "stdio" }],
+    [{
+      name: "my-hub",
+      status: "starting",
+      toolsStatus: "available",
+      tools: [{ name: "list_pending", readOnlyHint: true }],
+    }],
+  ), [{
+    name: "my-hub",
+    status: "enabled",
+    transport: "stdio",
+    toolsStatus: "available",
+    tools: [{ name: "list_pending", readOnlyHint: true }],
+  }]);
 });
 
 test("keeps visible Codex models in catalog priority order", () => {

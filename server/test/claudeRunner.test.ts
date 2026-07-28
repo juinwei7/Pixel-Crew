@@ -180,6 +180,58 @@ test("auto-approve is off by default (existing worker behavior is unchanged)", a
   session.stop();
 });
 
+test("read-only query allows only the request-scoped MCP query catalog", async () => {
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), "/repo");
+  session.busy = true;
+  const internals = session as unknown as {
+    approvalToken: string;
+    executionProfile: "read_only_query";
+    queryAllowedTools: Set<string>;
+  };
+  internals.executionProfile = "read_only_query";
+  internals.queryAllowedTools = new Set(["mcp__my-hub__list_pending"]);
+
+  assert.deepEqual(await session.handleApprovalBridge(internals.approvalToken, {
+    tool_name: "mcp__my-hub__list_pending",
+    input: {},
+  }), { behavior: "allow", updatedInput: {} });
+  assert.deepEqual(await session.handleApprovalBridge(internals.approvalToken, {
+    tool_name: "mcp__my-hub__close_item",
+    input: { id: "1" },
+  }), { behavior: "deny", message: "MCP 工具未提供可信的唯讀標記" });
+
+  const decisions = events
+    .filter((event): event is Extract<RunnerEvent, { type: "approval_resolved" }> => event.type === "approval_resolved")
+    .map((event) => event.decision);
+  assert.deepEqual(decisions, ["auto_allow", "deny"]);
+  session.stop();
+});
+
+test("Claude defers MCP reload while busy and restarts the transport before the next turn", async () => {
+  const session = new ClaudeSession(() => {}, "/repo");
+  session.busy = true;
+  assert.equal(await session.reloadMcp(), "deferred");
+
+  let stops = 0;
+  const writes: string[] = [];
+  const internals = session as unknown as {
+    stop(): void;
+    ensureChild(): { stdin: { write(data: string): void } };
+  };
+  internals.stop = () => {
+    stops++;
+    session.busy = false;
+  };
+  internals.ensureChild = () => ({ stdin: { write: (data) => writes.push(data) } });
+  session.busy = false;
+  session.send("查詢新工具");
+
+  assert.equal(stops, 1);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0], /查詢新工具/);
+});
+
 test("builds Claude stream-json image content blocks", () => {
   assert.deepEqual(claudeMessageContent("這是什麼？", [{ name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=" }]), [
     { type: "text", text: "這是什麼？" },

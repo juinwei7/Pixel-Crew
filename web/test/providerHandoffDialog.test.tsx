@@ -18,7 +18,7 @@ test("renders an explicit cross-LLM handoff progress and local fallback warning"
     error: null,
   };
   const html = renderToStaticMarkup(
-    <ProviderHandoffDialog worker={worker} toProvider="codex" onPrepare={async () => ({ error: "unused" })} onStart={async () => null} onClose={() => undefined} />,
+    <ProviderHandoffDialog worker={worker} toProvider="codex" onPrepare={async () => ({ error: "unused" })} onStart={async () => null} onDirectSwitch={async () => null} onClose={() => undefined} />,
   );
   assert.match(html, /SHIFT CHANGE/);
   assert.match(html, /Claude Code/);
@@ -40,8 +40,9 @@ test("ignores a terminal handoff from before the dialog opened so the user can r
     error: "old error",
   };
   const html = renderToStaticMarkup(
-    <ProviderHandoffDialog worker={worker} toProvider="codex" onPrepare={async () => ({ error: "unused" })} onStart={async () => null} onClose={() => undefined} />,
+    <ProviderHandoffDialog worker={worker} toProvider="codex" onPrepare={async () => ({ error: "unused" })} onStart={async () => null} onDirectSwitch={async () => null} onClose={() => undefined} />,
   );
   assert.match(html, /正在確認登入狀態與即時工作能量/);
+  assert.match(html, /不交接，直接切換/);
   assert.doesNotMatch(html, /old error/);
 });

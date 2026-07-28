@@ -55,8 +55,10 @@ test("collaboration prompt establishes the read-only contract", () => {
 
 test("provider adapters map collaboration turns to native read-only profiles", () => {
   assert.equal(claudePermissionMode("read_only_collaboration", "default"), "plan");
+  assert.equal(claudePermissionMode("read_only_query", "default"), "plan");
   assert.equal(claudePermissionMode("normal", "default"), "default");
   assert.equal(codexSandbox("read_only_collaboration", "workspace-write"), "read-only");
+  assert.equal(codexSandbox("read_only_query", "workspace-write"), "read-only");
   assert.equal(codexSandbox("normal", "workspace-write"), "workspace-write");
 });
 
