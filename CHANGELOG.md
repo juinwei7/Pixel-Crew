@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-28
+
+### Added
+
+- Added a persistent Boss task log: assign work through one chat-first Boss Desk, with tasks, discovery questions, replies, department progress, and final reports persisting across navigation and restarts.
+- Added multi-department orchestration: the decision model builds a validated dependency graph across real departments and NPC roles, passes each department its upstream reports, and returns one consolidated result to the Boss.
+- Added mid-session model switching and a fresh-session flow for restarting a worker's context without losing its configuration.
+- Added a live MCP configuration watcher that detects external edits to Claude/Codex MCP config files and refreshes capabilities automatically instead of requiring a manual refresh.
+
+### Changed
+
+- Replaced `CommandComposer` with a modularized `TaskComposer` and supporting composer hooks/helpers.
+
+### Fixed
+
+- Surfaced diagnostic info (resolved CLI executable, exit code, raw CLI output) when Claude/Codex authentication detection disagrees with reality, so machines where login isn't detected despite being logged in can be debugged instead of guessed at.
+
 ## [2.0.0] - 2026-07-22
 
 ### Added
@@ -79,7 +96,9 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.3...v2.0.0
 [1.0.3]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.0...v1.0.1
