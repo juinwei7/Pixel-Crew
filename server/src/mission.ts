@@ -1,4 +1,6 @@
 import type { CollaborationResult } from "./collaboration.js";
+import type { RunnerEvent } from "./claudeRunner.js";
+import type { ProviderId } from "./providers/types.js";
 
 export type DepartmentMissionStatus =
   | "planning"
@@ -8,6 +10,8 @@ export type DepartmentMissionStatus =
   | "completed"
   | "failed"
   | "cancelled";
+export type MissionExecutionMode = "research" | "project";
+export type MissionOrigin = "department" | "boss";
 
 export type DepartmentMissionStep = {
   id: string;
@@ -16,6 +20,7 @@ export type DepartmentMissionStep = {
   kind: "execute" | "review" | "consult" | "synthesize";
   assigneeWorkerId: string;
   acceptanceCriteria: string[];
+  attachmentIds?: string[];
   status: "pending" | "running" | "completed" | "failed";
   attempt: number;
   result: string | null;
@@ -23,6 +28,20 @@ export type DepartmentMissionStep = {
   startedAt: string | null;
   completedAt: string | null;
   formatRepairCount?: number;
+};
+
+export type MissionDelegatedSession = {
+  workerId: string;
+  provider: ProviderId;
+  model: string | null;
+  sessionId: string;
+  completedTurns: number;
+};
+
+export type MissionExecutionEvent = {
+  workerId: string;
+  stepId: string | null;
+  event: RunnerEvent;
 };
 
 export type MissionAttentionReason =
@@ -39,6 +58,11 @@ export type DepartmentMission = {
   bossWorkerId: string;
   objective: string;
   acceptanceCriteria: string[];
+  attachmentIds?: string[];
+  parentMissionId?: string | null;
+  sourceMessageId?: string | null;
+  executionMode?: MissionExecutionMode;
+  origin?: MissionOrigin;
   status: DepartmentMissionStatus;
   planSummary: string | null;
   steps: DepartmentMissionStep[];
@@ -53,11 +77,13 @@ export type DepartmentMission = {
   planApprovedAt?: string | null;
   ownerGuidance?: string | null;
   formatRepairCount?: number;
+  delegatedSessions?: MissionDelegatedSession[];
+  executionEvents?: MissionExecutionEvent[];
 };
 
 export type MissionPlan = {
   summary: string;
-  steps: Array<Pick<DepartmentMissionStep, "title" | "objective" | "kind" | "assigneeWorkerId" | "acceptanceCriteria">>;
+  steps: Array<Pick<DepartmentMissionStep, "title" | "objective" | "kind" | "assigneeWorkerId" | "acceptanceCriteria" | "attachmentIds">>;
 };
 
 export type MissionMember = {
@@ -118,7 +144,13 @@ function stringList(value: unknown, limit = 8): string[] {
   return value.map((item) => text(item, 500)).filter(Boolean).slice(0, limit);
 }
 
-export function parseMissionPlan(raw: string, allowedWorkerIds: Set<string>, bossWorkerId?: string): { plan?: MissionPlan; error?: string } {
+export function parseMissionPlan(
+  raw: string,
+  allowedWorkerIds: Set<string>,
+  bossWorkerId?: string,
+  allowedAttachmentIds = new Set<string>(),
+  executionMode: MissionExecutionMode = "project",
+): { plan?: MissionPlan; error?: string } {
   const bounded = text(raw, 50_000);
   const marked = bounded.match(/<department_mission_plan>\s*([\s\S]*?)\s*<\/department_mission_plan>/i)?.[1];
   if (!marked) return { error: "部門主管沒有回傳 Department Mission 計畫" };
@@ -130,8 +162,12 @@ export function parseMissionPlan(raw: string, allowedWorkerIds: Set<string>, bos
   }
   if (!parsed || typeof parsed !== "object") return { error: "Mission 計畫格式無效" };
   const value = parsed as Record<string, unknown>;
-  if (!Array.isArray(value.steps) || value.steps.length < 2 || value.steps.length > 5) {
-    return { error: "Mission 計畫必須包含 2 到 5 個步驟" };
+  const minimumSteps = executionMode === "research" ? 1 : 2;
+  const maximumSteps = executionMode === "research" ? 2 : 4;
+  if (!Array.isArray(value.steps) || value.steps.length < minimumSteps || value.steps.length > maximumSteps) {
+    return { error: executionMode === "research"
+      ? "研究模式分工計畫必須包含 1 到 2 個步驟"
+      : "Mission 分工計畫必須包含 2 到 4 個步驟；系統會再加入最終彙整報告" };
   }
   const steps: MissionPlan["steps"] = [];
   for (let index = 0; index < value.steps.length; index++) {
@@ -145,9 +181,32 @@ export function parseMissionPlan(raw: string, allowedWorkerIds: Set<string>, bos
     if (!title || !objective || !kind || !allowedWorkerIds.has(assigneeWorkerId)) {
       return { error: `Mission 步驟 ${index + 1} 缺少內容、類型錯誤，或指派了部門外 NPC` };
     }
-    steps.push({ title, objective, kind, assigneeWorkerId, acceptanceCriteria: stringList(step.acceptanceCriteria) });
+    steps.push({
+      title,
+      objective,
+      kind,
+      assigneeWorkerId,
+      acceptanceCriteria: stringList(step.acceptanceCriteria),
+      attachmentIds: stringList(step.attachmentIds).filter((id) => allowedAttachmentIds.has(id)),
+    });
   }
   if (!steps.some((step) => step.kind === "execute")) return { error: "Mission 至少需要一個 Execute 步驟" };
+  if (executionMode === "research") {
+    const finalStep = steps[steps.length - 1];
+    if (finalStep.kind !== "execute" || (bossWorkerId && finalStep.assigneeWorkerId !== bossWorkerId)) {
+      return { error: "研究模式最後一步必須是由部門主管完成的 Execute 回答" };
+    }
+    if (steps.length === 2 && steps[0].kind !== "consult") {
+      return { error: "研究模式的雙步驟流程只能是專家 Consult 後接主管 Execute" };
+    }
+    if (steps.some((step) => step.kind === "review")) {
+      return { error: "研究模式不建立 Review 修正迴圈；需要時以一次 Consult 提供反證與風險" };
+    }
+    if (steps.length === 2 && bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) {
+      return { error: "研究模式的 Consult 必須指派給主管以外的專家" };
+    }
+    return { plan: { summary: text(value.summary, 2_000), steps } };
+  }
   const quick = steps[0].kind === "consult" || steps[0].kind === "review";
   if (quick) {
     if (steps.length !== 2 || steps[1].kind !== "execute") return { error: "快速協作必須是 Consult／Review 後接一個主管 Execute" };
@@ -217,8 +276,13 @@ export function missionPlanningPrompt(input: {
   acceptanceCriteria: string[];
   workspacePath: string;
   members: MissionMember[];
+  attachments?: Array<{ id: string; name: string; mimeType: string }>;
+  executionMode?: MissionExecutionMode;
 }): string {
-  return `你是 Department Work 的部門主管。使用者是老闆與最終決策者；你負責規劃、分工與彙整。請只規劃，不要修改檔案。\nMISSION ID: ${text(input.missionId, 200)}\nDEPARTMENT LEAD WORKER ID: ${text(input.bossWorkerId, 200)}\nWORKSPACE: ${text(input.workspacePath, 1_000)}\n老闆交辦目標: ${text(input.objective, 4_000)}\n驗收條件: ${JSON.stringify(input.acceptanceCriteria)}\n可指派的部門 NPC: ${JSON.stringify(input.members)}\n\n規則:\n- ${POLICY}\n- 不要啟動背景 Agent；在同一回合直接完成規劃。\n- 自己判斷最小充分流程，不要為了看起來像協作而增加步驟。\n- 聚焦建議或調查：用 Quick Consult，第一步 consult 指派專家，第二步 execute 必須交回部門主管。\n- 檢查既有成果：用 Quick Review，第一步 review 指派專家，第二步 execute 必須交回部門主管。\n- 跨多個實作責任：用完整 Mission，從 execute 開始，review 必須緊接其 execute，且 Review 與前一 Execute 必須由不同 NPC 負責。\n- 總共產出 2 到 5 個依序執行的步驟；assigneeWorkerId 必須逐字使用上方清單中的 id。\n- Consult 與 Review 唯讀；Execute 負責實作或由部門主管根據快速協作結果接續完成。\n- 權限、認證、重大取捨與無法確認的事項必須留給老闆決定。\n- 任務應能在不自動進行 Git release 操作的情況下完成。\n\n最後只能以這個標記回傳結構化計畫：\n<department_mission_plan>{"summary":"說明為何選 Quick 或 Mission","steps":[{"title":"","objective":"","kind":"execute|review|consult","assigneeWorkerId":"","acceptanceCriteria":[]}]}</department_mission_plan>`;
+  if (input.executionMode === "research") {
+    return `你是 Department Work 的部門主管。這是 RESEARCH MODE：老闆要的是可靠、及時、可直接閱讀的答案，不是交付專案或研究檔案。請只規劃，不要執行研究。\nMISSION ID: ${text(input.missionId, 200)}\nDEPARTMENT LEAD WORKER ID: ${text(input.bossWorkerId, 200)}\nWORKSPACE: ${text(input.workspacePath, 1_000)}\n老闆研究問題: ${text(input.objective, 4_000)}\n驗收條件: ${JSON.stringify(input.acceptanceCriteria)}\n可指派的部門 NPC: ${JSON.stringify(input.members)}\n可使用的附件: ${JSON.stringify(input.attachments ?? [])}\n\n規則:\n- ${POLICY}\n- 不可建立或修改檔案，不可建立程式、回測或 durable artifact，除非目標明確要求該交付物。\n- 不要啟動背景 Agent，不要建立 Review 或修正迴圈。\n- 使用最小充分流程，產出 1 到 2 個步驟。\n- 單一步驟：由部門主管 execute，完成必要查詢並直接回答老闆。\n- 雙步驟：先由另一位專家 consult 查證即時資料、反證與風險，再由部門主管 execute 整合成最終答案。\n- 最後一步必須是部門主管 execute；系統不會再加入重複的 Synthesis。\n- 所有步驟均為唯讀查詢；資料敏感或高風險時，答案必須標示來源、日期、不確定性、反方證據與條件式結論。\n- attachmentIds 只能使用上方附件 id。\n\n最後只能回傳：\n<department_mission_plan>{"summary":"最小充分研究路徑","steps":[{"title":"","objective":"","kind":"execute|consult","assigneeWorkerId":"","acceptanceCriteria":[],"attachmentIds":[]}]}</department_mission_plan>`;
+  }
+  return `你是 Department Work 的部門主管。使用者是老闆與最終決策者；老闆已經用這次交辦授權部門依計畫開始工作，不需要再次核准一般分工。你負責依每位 NPC 的職務規劃、分工、接續與彙整。請只規劃，不要修改檔案。\nMISSION ID: ${text(input.missionId, 200)}\nDEPARTMENT LEAD WORKER ID: ${text(input.bossWorkerId, 200)}\nWORKSPACE: ${text(input.workspacePath, 1_000)}\n老闆交辦目標: ${text(input.objective, 4_000)}\n驗收條件: ${JSON.stringify(input.acceptanceCriteria)}\n可指派的部門 NPC: ${JSON.stringify(input.members)}\n可分派的附件: ${JSON.stringify(input.attachments ?? [])}\n\n規則:\n- ${POLICY}\n- 不要啟動背景 Agent；在同一回合直接完成規劃。\n- 依照每位 NPC 的 role 分派最符合其職責與專長的工作，不要把所有工作交給主管。\n- 自己判斷最小充分流程，不要為了看起來像協作而增加步驟。\n- 聚焦建議或調查：用 Quick Consult，第一步 consult 指派專家，第二步 execute 必須交回部門主管。\n- 檢查既有成果：用 Quick Review，第一步 review 指派專家，第二步 execute 必須交回部門主管。\n- 跨多個實作責任：用完整 Mission，從 execute 開始，review 必須緊接其 execute，且 Review 與前一 Execute 必須由不同 NPC 負責。\n- 產出 2 到 4 個依序執行的分工步驟；系統會自動再加入第 3～5 步的部門最終報告。assigneeWorkerId 必須逐字使用上方清單中的 id。\n- attachmentIds 只能使用上方附件 id，且只把該步驟真正需要的附件交給該成員。\n- Consult 與 Review 唯讀；Execute 負責實作或由部門主管根據快速協作結果接續完成。\n- 權限、認證、重大取捨與無法確認的事項必須留給老闆決定。\n- 任務應能在不自動進行 Git release 操作的情況下完成。\n\n最後只能以這個標記回傳結構化計畫：\n<department_mission_plan>{"summary":"說明分工依據與為何選 Quick 或 Mission","steps":[{"title":"","objective":"","kind":"execute|review|consult","assigneeWorkerId":"","acceptanceCriteria":[],"attachmentIds":[]}]}</department_mission_plan>`;
 }
 
 export function missionStepPrompt(input: {
@@ -237,11 +301,14 @@ export function missionStepPrompt(input: {
     ? `\n已完成的步驟結果: ${JSON.stringify(input.mission.steps.filter((step) => step.status === "completed").map((step) => ({ title: step.title, kind: step.kind, result: step.result, reviewResult: step.reviewResult })))}\n`
     : "";
   const ownerGuidance = input.mission.ownerGuidance ? `\n老闆補充指示: ${text(input.mission.ownerGuidance, 2_000)}\n` : "";
+  const researchRule = input.mission.executionMode === "research"
+    ? "\n- 這是 RESEARCH MODE。所有步驟均為唯讀查詢：不可 Edit、Write、修改 repository 或外部狀態，不可建立研究檔案或背景 Agent。\n- 只做完成答案必要的查詢與有界限計算；標示資料來源與日期、關鍵不確定性、反方證據及條件式結論。"
+    : "";
   return `Department Work · ${label}\nMISSION ID: ${text(input.mission.id, 200)}\nWORKSPACE: ${text(input.mission.workspacePath, 1_000)}\n執行 NPC: ${text(input.assigneeName, 120)}\nMission 目標: ${text(input.mission.objective, 4_000)}\nMission 驗收條件: ${JSON.stringify(input.mission.acceptanceCriteria)}\n目前步驟: ${text(input.step.title, 120)}\n步驟目標: ${text(input.step.objective, 2_000)}\n步驟驗收條件: ${JSON.stringify(input.step.acceptanceCriteria)}${correction}${completedResults}${ownerGuidance}\n\n規則:\n- ${POLICY}\n${input.step.kind === "review" || input.step.kind === "consult"
     ? `- 這是唯讀 ${input.step.kind === "consult" ? "Consult" : "Review"}，不可修改檔案。請檢查目前 workspace、目標與驗收條件。\n- 不要啟動背景 Agent；在同一回合完成檢查與結論。\n- 最後回傳：<collaboration_result>{\"verdict\":\"${input.step.kind === "consult" ? "advice|inconclusive" : "pass|changes_requested|inconclusive"}\",\"summary\":\"\",\"findings\":[],\"risks\":[],\"openQuestions\":[],\"recommendedNextAction\":\"\"}</collaboration_result>`
     : input.step.kind === "synthesize"
-      ? "- 這是唯讀主管彙整，不可修改檔案，也不要啟動背景 Agent。\n- 根據已完成步驟，直接向老闆摘要最終結果、驗收狀態、風險與需要決定的事項；不要重述過程。"
-      : "- 完成步驟並執行合理驗證；保持變更範圍聚焦。\n- 最後清楚摘要完成內容、驗證結果與剩餘風險。"}`;
+      ? "- 這是唯讀主管彙整，不可修改檔案，也不要啟動背景 Agent。\n- 你代表整個部門向老闆提交唯一的最終報告。\n- 報告必須清楚列出：完成結論、各項驗收條件是否達成、主要交付或變更、驗證結果、剩餘風險，以及需要老闆決定的事項。\n- 整合成可直接閱讀的結論，不要逐字重述每位 NPC 的工作過程。"
+      : "- 完成步驟並執行合理驗證；保持變更範圍聚焦。\n- 最後清楚摘要完成內容、驗證結果與剩餘風險."}${researchRule}`;
 }
 
 export function missionFormatRepairPrompt(

@@ -17,6 +17,7 @@ import type { DepartmentPhase, DepartmentSeat } from "./personalDesks";
 import { OfficeDecor } from "./officeDecor";
 import { Cat } from "./cat";
 import { apiAssetUrl } from "../api";
+import { responsiveOfficeFitScale } from "./camera";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -64,6 +65,8 @@ export type SceneView = { scale: number; minScale: number; maxScale: number; isD
 
 export type SceneHandle = {
   setWorkers(list: WorkerSceneState[]): void;
+  /** Synchronize renderer bounds with the browser-owned canvas host. */
+  resize(): void;
   /** Zoom to an integer scale, keeping the screen center anchored. */
   setZoom(nextScale: number): void;
   /** Back to auto-fit scale, centered. */
@@ -84,7 +87,7 @@ type SceneCallbacks = {
   onFurniturePositions?(list: FurnitureScreenPos[]): void;
   onFurnitureHover?(key: StationKey | null): void;
   onFurnitureClick?(key: StationKey): void;
-  onDepartmentClick?(workspacePath: string): void;
+  onDepartmentClick?(workspacePath: string, position: { x: number; y: number }): void;
   onContextMenu?(id: string): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
@@ -210,7 +213,11 @@ export async function createScene(
   }
 
   function layout(): void {
-    fitScale = Math.max(2, Math.floor(Math.min(app.screen.width / ART_W, app.screen.height / ART_H)));
+    // Width alone can request more vertical room than a short-but-wide
+    // viewport has available (e.g. after docking panels) — cap by height too,
+    // like the office always has, so the default view never clips the room.
+    const heightFitScale = Math.floor(app.screen.height / ART_H);
+    fitScale = Math.max(2, Math.min(responsiveOfficeFitScale(app.screen.width), heightFitScale));
     applyView();
   }
   layout();
@@ -601,6 +608,12 @@ export async function createScene(
         if (!w.temporary && w.character.activity === "working") activeStations.add(w.character.station);
       }
       furniture.setActive(activeStations);
+    },
+    resize() {
+      app.renderer.resize(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
+      // Renderer dimensions may already match immediately after Pixi init,
+      // so guarantee the browser-width camera fit is applied.
+      layout();
     },
     setZoom(nextScale: number) {
       zoomAnchored(nextScale, app.screen.width / 2, app.screen.height / 2);

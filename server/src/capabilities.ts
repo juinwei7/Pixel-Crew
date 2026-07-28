@@ -8,7 +8,12 @@ import { execCli } from "./platform/processes.js";
 export type McpScope = "local" | "project" | "user" | "account";
 export type McpTransport = "stdio" | "sse" | "http";
 
-export type McpToolInfo = { name: string; description?: string };
+export type McpToolInfo = {
+  name: string;
+  description?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+};
 
 export type McpServerState = {
   name: string;

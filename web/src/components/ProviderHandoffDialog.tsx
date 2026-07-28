@@ -7,6 +7,7 @@ type Props = {
   toProvider: ProviderId;
   onPrepare(workerId: string, provider: ProviderId): Promise<{ data?: PreparedHandoff; error?: string }>;
   onStart(workerId: string, token: string): Promise<string | null>;
+  onDirectSwitch(workerId: string, provider: ProviderId): Promise<string | null>;
   onClose(): void;
 };
 
@@ -19,7 +20,7 @@ const STAGES = [
 
 const providerLabel = (provider: ProviderId) => provider === "claude" ? "Claude Code" : "Codex";
 
-export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, onClose }: Props) {
+export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, onDirectSwitch, onClose }: Props) {
   const initialTerminalHandoffId = useRef(
     worker.handoff?.toProvider === toProvider && ["completed", "failed"].includes(worker.handoff.stage)
       ? worker.handoff.id
@@ -29,6 +30,7 @@ export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, 
   const [checking, setChecking] = useState(true);
   const [acknowledged, setAcknowledged] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [switchingDirectly, setSwitchingDirectly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef);
@@ -68,6 +70,16 @@ export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, 
     const startError = await onStart(worker.id, prepared.handoffToken);
     setStarting(false);
     if (startError) setError(startError);
+  }
+
+  async function directSwitch() {
+    if (!acknowledged) return;
+    setSwitchingDirectly(true);
+    setError(null);
+    const switchError = await onDirectSwitch(worker.id, toProvider);
+    setSwitchingDirectly(false);
+    if (switchError) setError(switchError);
+    else onClose();
   }
 
   const stageIndex = progress ? STAGES.findIndex((stage) => stage.id === progress.stage) : -1;
@@ -121,7 +133,8 @@ export function ProviderHandoffDialog({ worker, toProvider, onPrepare, onStart, 
 
         <footer className="handoff-dialog__actions">
           <button type="button" onClick={onClose} disabled={Boolean(active)}>{progress?.stage === "completed" || progress?.stage === "failed" ? "完成" : "取消"}</button>
-          {!progress && <button type="button" className="handoff-dialog__start" disabled={!prepared || !acknowledged || starting || checking} onClick={() => void start()}>{starting ? "啟動交接中…" : "整理記憶並切換"}</button>}
+          {!progress && <button type="button" className="handoff-dialog__direct" disabled={!prepared || !acknowledged || starting || switchingDirectly || checking} onClick={() => void directSwitch()}>{switchingDirectly ? "直接切換中…" : "不交接，直接切換"}</button>}
+          {!progress && <button type="button" className="handoff-dialog__start" disabled={!prepared || !acknowledged || starting || switchingDirectly || checking} onClick={() => void start()}>{starting ? "啟動交接中…" : "整理記憶並切換"}</button>}
         </footer>
       </div>
     </div>

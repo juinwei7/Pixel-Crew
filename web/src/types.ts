@@ -14,7 +14,12 @@ export type McpLoginResult = {
 export type McpScope = "local" | "project" | "user" | "account";
 export type McpTransport = "stdio" | "sse" | "http";
 
-export type McpToolInfo = { name: string; description?: string };
+export type McpToolInfo = {
+  name: string;
+  description?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+};
 
 export type McpServerState = {
   name: string;
@@ -65,6 +70,8 @@ export type CommandSubmission = {
   text: string;
   images: MessageImagePayload[];
   documents: MessageDocumentPayload[];
+  clientMessageId?: string;
+  idempotencyKey?: string;
 };
 
 export type ApprovalRequest = {
@@ -303,6 +310,7 @@ export type DepartmentMissionStep = {
   kind: "execute" | "review" | "consult" | "synthesize";
   assigneeWorkerId: string;
   acceptanceCriteria: string[];
+  attachmentIds?: string[];
   status: "pending" | "running" | "completed" | "failed";
   attempt: number;
   result: string | null;
@@ -311,6 +319,18 @@ export type DepartmentMissionStep = {
   completedAt: string | null;
   formatRepairCount?: number;
 };
+export type MissionDelegatedSession = {
+  workerId: string;
+  provider: ProviderId;
+  model: string | null;
+  sessionId: string;
+  completedTurns: number;
+};
+export type MissionExecutionEvent = {
+  workerId: string;
+  stepId: string | null;
+  event: RunnerEvent;
+};
 export type DepartmentMission = {
   id: string;
   departmentId?: string | null;
@@ -318,6 +338,11 @@ export type DepartmentMission = {
   bossWorkerId: string;
   objective: string;
   acceptanceCriteria: string[];
+  attachmentIds?: string[];
+  parentMissionId?: string | null;
+  sourceMessageId?: string | null;
+  executionMode?: "research" | "project";
+  origin?: "department" | "boss";
   status: DepartmentMissionStatus;
   planSummary: string | null;
   steps: DepartmentMissionStep[];
@@ -332,6 +357,8 @@ export type DepartmentMission = {
   planApprovedAt?: string | null;
   ownerGuidance?: string | null;
   formatRepairCount?: number;
+  delegatedSessions?: MissionDelegatedSession[];
+  executionEvents?: MissionExecutionEvent[];
 };
 export type PreparedMission = {
   missionToken: string;
@@ -340,6 +367,77 @@ export type PreparedMission = {
   maxCorrections: number;
   members: Array<{ id: string; name: string; provider: ProviderId; workspacePath: string }>;
   warnings: string[];
+};
+export type BossAssignmentRoute = {
+  departmentId: string;
+  departmentName: string;
+  workspacePath: string;
+  leadWorkerId: string;
+  confidence: number;
+  reasons: string[];
+  decisionProvider: ProviderId;
+  decisionModel: string;
+};
+export type BossAssignmentResult = {
+  route: BossAssignmentRoute;
+  mission: DepartmentMission;
+};
+
+export type BossAssignmentClarification = {
+  clarification: {
+    question: string;
+    confidence: number;
+    reasons: string[];
+  };
+};
+
+export type BossAssignmentResponse = BossAssignmentResult | BossAssignmentClarification;
+
+export type BossTaskMessage = {
+  id: string;
+  role: "boss" | "decision_model" | "system" | "report";
+  text: string;
+  attachmentIds?: string[];
+  clientMessageId?: string | null;
+  idempotencyKey?: string | null;
+  createdAt: string;
+};
+
+export type BossTaskStage = {
+  id: string;
+  departmentId: string;
+  departmentName: string;
+  title: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  dependsOn: string[];
+  status: "pending" | "running" | "completed" | "needs_attention" | "failed" | "cancelled";
+  missionId: string | null;
+  report: string | null;
+  executionMode?: "research" | "project";
+};
+
+export type BossTask = {
+  id: string;
+  title: string;
+  archivedAt: string | null;
+  workspacePath: string;
+  decisionProvider: ProviderId;
+  decisionModel: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  attachmentIds?: string[];
+  clientMessageId?: string | null;
+  idempotencyKey?: string | null;
+  status: "discovering" | "ready" | "running" | "needs_input" | "needs_attention" | "synthesizing" | "completed" | "failed" | "cancelled";
+  executionMode?: "research" | "project";
+  messages: BossTaskMessage[];
+  stages: BossTaskStage[];
+  finalReport: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
 };
 
 export type Persona = {
@@ -356,6 +454,52 @@ export type Department = {
   memberWorkerIds: string[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type DepartmentMessageIntent = "question" | "context" | "mission_update" | "follow_up_mission" | "approval" | "decision" | "system";
+export type DepartmentMessage = {
+  id: string;
+  threadId: string;
+  role: "owner" | "department" | "system" | "report";
+  intent: DepartmentMessageIntent;
+  text: string;
+  attachmentIds: string[];
+  missionId: string | null;
+  deliveryStatus: "pending" | "delivered" | "failed";
+  clientMessageId: string | null;
+  idempotencyKey: string | null;
+  classification: {
+    intent: DepartmentMessageIntent;
+    confidence: number;
+    reason: string;
+    changeImpact: "none" | "minor" | "major";
+    clarificationQuestion: string | null;
+  } | null;
+  createdAt: string;
+};
+export type DepartmentThread = {
+  id: string;
+  departmentId: string;
+  activeMissionId: string | null;
+  summary: string;
+  historyClearedAt: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type DepartmentAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "document";
+  createdAt: string;
+};
+export type DepartmentThreadPayload = {
+  thread: DepartmentThread;
+  messages: DepartmentMessage[];
+  attachments: DepartmentAttachment[];
+  missions?: DepartmentMission[];
 };
 
 export type PersonaTemplate = Persona & {

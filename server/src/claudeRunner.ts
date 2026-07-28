@@ -10,6 +10,7 @@ import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
+import { queryToolPolicy, readOnlyBuiltinToolNames } from "./toolPolicy.js";
 
 export type RunnerEvent =
   | { type: "text_delta"; text: string }
@@ -44,7 +45,7 @@ export type RunnerEvent =
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
 
 export function claudePermissionMode(profile: ExecutionProfile, normalMode: string): string {
-  return profile === "read_only_collaboration" ? "plan" : normalMode;
+  return profile === "read_only_collaboration" || profile === "read_only_query" ? "plan" : normalMode;
 }
 
 export type ApprovalRequest = {
@@ -114,6 +115,8 @@ export class ClaudeSession implements AgentSession {
   private generation = 0;
   private model: string | undefined;
   private executionProfile: ExecutionProfile = "normal";
+  private queryAllowedTools = new Set<string>();
+  private mcpReloadPending = false;
   private spawnedProfile: ExecutionProfile | null = null;
   private readonly approvalToken = randomUUID();
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
@@ -158,6 +161,21 @@ export class ClaudeSession implements AgentSession {
     this.ensureChild();
   }
 
+  async reloadMcp(): Promise<"reloaded" | "deferred"> {
+    if (this.busy) {
+      this.mcpReloadPending = true;
+      return "deferred";
+    }
+    this.mcpReloadPending = false;
+    // Claude Code exposes `/mcp reconnect` only inside its interactive UI,
+    // not as a `claude mcp` subcommand or stream-json control request. Restart
+    // the transport process and resume the same Claude session so config and
+    // tools are re-read without losing conversation continuity.
+    this.stop();
+    this.warmup();
+    return "reloaded";
+  }
+
   setModel(model: string | undefined): void {
     if (model === this.model) return;
     this.model = model;
@@ -177,9 +195,19 @@ export class ClaudeSession implements AgentSession {
   }
 
   send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
+    if (this.mcpReloadPending && !this.busy) {
+      this.mcpReloadPending = false;
+      this.stop();
+    }
     const nextProfile = options.executionProfile ?? "normal";
-    if (this.child && this.spawnedProfile !== nextProfile) this.stop();
+    const nextQueryAllowedTools = new Set(options.queryAllowedTools ?? []);
+    const queryToolsChanged = nextProfile === "read_only_query" && (
+      this.queryAllowedTools.size !== nextQueryAllowedTools.size
+      || [...nextQueryAllowedTools].some((tool) => !this.queryAllowedTools.has(tool))
+    );
+    if (this.child && (this.spawnedProfile !== nextProfile || queryToolsChanged)) this.stop();
     this.executionProfile = nextProfile;
+    this.queryAllowedTools = nextQueryAllowedTools;
     const files = this.stageInputDocuments(documents);
     try {
       this.busy = true;
@@ -236,6 +264,24 @@ export class ClaudeSession implements AgentSession {
     const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
       ? String((originalInput as Record<string, unknown>).command ?? "").slice(0, 20_000)
       : undefined;
+    if (this.executionProfile === "read_only_query") {
+      const policy = queryToolPolicy(toolName, this.queryAllowedTools);
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null,
+        category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
+        title: policy.allowed ? `唯讀查詢使用 ${toolName}` : `唯讀查詢已拒絕 ${toolName}`,
+        input,
+        command,
+        cwd: this.workspacePath,
+        reason: policy.reason,
+        decisions: [],
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: policy.allowed ? "auto_allow" : "deny" });
+      return Promise.resolve(policy.allowed
+        ? { behavior: "allow", updatedInput: originalInput }
+        : { behavior: "deny", message: policy.reason });
+    }
     if (this.executionProfile === "read_only_collaboration") {
       const id = randomUUID();
       this.onEvent({ type: "approval_requested", request: {
@@ -332,7 +378,12 @@ export class ClaudeSession implements AgentSession {
     if (this.model) args.push("--model", this.model);
     const personaPrompt = this.getPersonaPrompt().trim();
     if (personaPrompt) args.push("--append-system-prompt", personaPrompt);
-    const allowed = [...this.getAllowedTools(), "mcp__pixel_crew_approval__approval_prompt"];
+    const allowed = [
+      ...(this.executionProfile === "read_only_query"
+        ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
+        : this.getAllowedTools()),
+      "mcp__pixel_crew_approval__approval_prompt",
+    ];
     if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
 
     const child = spawnCli(config.claudeBin, args, {

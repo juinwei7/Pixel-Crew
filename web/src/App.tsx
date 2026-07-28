@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useWorkers } from "./hooks/useWorkers";
 import { topDismissibleLayer, useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { useUiPreferences, clampTaskLogWidth, crewViewportOffset, enteredCompactOffice } from "./uiPreferences";
+import { useUiPreferences, clampTaskLogWidth, enteredCompactOffice } from "./uiPreferences";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
-import { CommandComposer } from "./components/CommandComposer";
+import { TaskComposer } from "./components/TaskComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { EnergyHud, FocusEnergy } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
@@ -18,7 +18,9 @@ import { PersonaEditor } from "./components/PersonaEditor";
 import { DepartmentCreator } from "./components/DepartmentCreator";
 import { McpModal } from "./components/McpModal";
 import { BackupModal } from "./components/BackupModal";
+import { BossTaskDesk } from "./components/BossTaskDesk";
 import { FocusControls } from "./components/FocusControls";
+import { ModelSwitchCard } from "./components/ModelSwitchCard";
 import { parseMcpToolName } from "./mcpToolName";
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerFocusStatus } from "./crew";
@@ -50,11 +52,11 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
-    switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff,
-    prepareMission, startMission, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
-    send, askMission, setModel, setPersona, setAutoApproveMode, interrupt, resolveApproval, refreshAuth, refreshUsage, installProvider,
+    switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, createBossTask, messageBossTask, updateBossTask, deleteBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
+    send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -65,11 +67,17 @@ export function App() {
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
+  const [bossMissionDetailId, setBossMissionDetailId] = useState<string | null>(null);
+  const [departmentFocusSection, setDepartmentFocusSection] = useState<"team" | "history" | null>(null);
+  const [departmentFreshRequest, setDepartmentFreshRequest] = useState(0);
   const [providerChanging, setProviderChanging] = useState(false);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [bossAssignmentOpen, setBossAssignmentOpen] = useState(false);
+  const [pendingModelSwitch, setPendingModelSwitch] = useState<{ workerId: string; model: string } | null>(null);
+  const [modelSwitchSubmitting, setModelSwitchSubmitting] = useState(false);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
@@ -77,6 +85,8 @@ export function App() {
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [composerHost, setComposerHost] = useState<HTMLDivElement | null>(null);
+  const setComposerHostRef = useCallback((node: HTMLDivElement | null) => setComposerHost(node), []);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const focusLayerRef = useRef<HTMLDivElement>(null);
@@ -100,6 +110,27 @@ export function App() {
     activeCapabilities.models,
     active?.model,
   );
+  const decisionModelOptions = useMemo(() => {
+    const options = new Map<string, { provider: ProviderId; model: string; label: string }>();
+    for (const provider of ["claude", "codex"] as const) {
+      if (auth[provider].status !== "authenticated") continue;
+      const discovered = capabilitiesByWorkspace[activeWorkspace]?.[provider]?.models ?? [];
+      const configured = Object.values(workers)
+        .filter((worker) => worker.workspacePath === activeWorkspace && worker.provider === provider && worker.model)
+        .map((worker) => ({ id: worker.model!, label: worker.model! }));
+      const catalog = provider === "claude" ? [...CLAUDE_MODEL_OPTIONS, ...discovered, ...configured] : [...discovered, ...configured];
+      for (const model of catalog) {
+        if (!model.id) continue;
+        const key = `${provider}:${model.id}`;
+        if (!options.has(key)) options.set(key, {
+          provider,
+          model: model.id,
+          label: `${provider === "claude" ? "Claude" : "Codex"} · ${model.label}`,
+        });
+      }
+    }
+    return [...options.values()];
+  }, [activeWorkspace, auth, capabilitiesByWorkspace, workers]);
   const usedMcpTools = useMemo(() => {
     const map: Record<string, Set<string>> = {};
     for (const worker of workerList) {
@@ -132,6 +163,8 @@ export function App() {
   const activateNpc = useCallback((id: string) => {
     setActiveId(id);
     setSelectedDepartmentId(null);
+    setBossMissionDetailId(null);
+    setBossAssignmentOpen(false);
     updatePreferences({ taskLogOpen: true });
     setComposerFocusRequest((request) => request + 1);
   }, [setActiveId, updatePreferences]);
@@ -191,7 +224,7 @@ export function App() {
     setWorkspaceOpen(true);
   }, []);
 
-  const openDepartmentMission = useCallback((departmentKey: string) => {
+  const openDepartmentMission = useCallback((departmentKey: string, options?: { missionId?: string; focusSection?: "team" | "history" }) => {
     const departmentRecord = departments[departmentKey];
     const department = workerList.filter((worker) => departmentRecord
       ? worker.departmentId === departmentRecord.id
@@ -208,6 +241,9 @@ export function App() {
       ?? department.find((worker) => !worker.busy)
       ?? department[0];
     setSelectedDepartmentId(departmentRecord?.id ?? coordinator.departmentId ?? null);
+    setBossMissionDetailId(options?.missionId ?? null);
+    setDepartmentFocusSection(options?.focusSection ?? null);
+    setBossAssignmentOpen(false);
     updatePreferences({ taskLogOpen: true });
   }, [departments, missions, updatePreferences, workerList, workers]);
 
@@ -215,6 +251,9 @@ export function App() {
     const department = departments[departmentId];
     if (!department) return;
     setSelectedDepartmentId(departmentId);
+    setBossMissionDetailId(null);
+    setDepartmentFocusSection(null);
+    setBossAssignmentOpen(false);
     setTaskSearchOpen(false);
     updatePreferences({ taskLogOpen: true });
   }, [departments, updatePreferences]);
@@ -243,6 +282,7 @@ export function App() {
       if (!approvalWorker) return;
       setActiveId(approvalWorker.id);
       setSelectedDepartmentId(null);
+      setBossMissionDetailId(null);
       updatePreferences({ taskLogOpen: true });
     },
     onEscape: () => {
@@ -279,7 +319,10 @@ export function App() {
   }, [activeId, activeProvider, activeWorkspace]);
 
   useEffect(() => {
-    if (selectedDepartmentId && !departments[selectedDepartmentId]) setSelectedDepartmentId(null);
+    if (selectedDepartmentId && !departments[selectedDepartmentId]) {
+      setSelectedDepartmentId(null);
+      setBossMissionDetailId(null);
+    }
   }, [departments, selectedDepartmentId]);
 
   useEffect(() => {
@@ -301,7 +344,7 @@ export function App() {
   useEffect(() => () => resizeCleanupRef.current?.(), []);
 
   useEffect(() => {
-    let previousWidth = Number.POSITIVE_INFINITY;
+    let previousWidth = window.innerWidth;
     const preserveOffice = () => {
       const currentWidth = window.innerWidth;
       if (enteredCompactOffice(previousWidth, currentWidth)) {
@@ -309,7 +352,6 @@ export function App() {
       }
       previousWidth = currentWidth;
     };
-    preserveOffice();
     window.addEventListener("resize", preserveOffice);
     return () => window.removeEventListener("resize", preserveOffice);
   }, [updatePreferences]);
@@ -396,10 +438,23 @@ export function App() {
   }
 
   function handleModelChange(model: string) {
-    if (!activeId) return;
-    void setModel(activeId, model).then((error) => {
-      if (error) notify(error, "error");
-      else notify("模型設定已更新");
+    if (!activeId || model === (active?.model ?? "")) return;
+    setPendingModelSwitch({ workerId: activeId, model });
+    updatePreferences({ taskLogOpen: true });
+  }
+
+  function commitModelSwitch(fresh: boolean) {
+    if (!pendingModelSwitch || modelSwitchSubmitting) return;
+    const { workerId, model } = pendingModelSwitch;
+    setModelSwitchSubmitting(true);
+    void (fresh ? setModelFresh(workerId, model) : setModel(workerId, model)).then((error) => {
+      setModelSwitchSubmitting(false);
+      if (error) {
+        notify(error, "error");
+        return;
+      }
+      setPendingModelSwitch(null);
+      notify(fresh ? "已切換模型並開啟全新工作階段" : "模型設定已更新");
     });
   }
 
@@ -414,9 +469,8 @@ export function App() {
   }
 
   return (
-    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen && !taskFocusMode ? "game-root--log-open" : ""}`} style={{
+    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
-      "--crew-viewport-offset": `${crewViewportOffset(preferences.crewRailCollapsed, typeof window === "undefined" ? 1280 : window.innerWidth)}px`,
     } as CSSProperties}>
       <GameCanvas
         workers={workerList}
@@ -432,6 +486,10 @@ export function App() {
         onAvatarWorkshop={setAvatarWorkerId}
         onPersonaEditor={setPersonaWorkerId}
         onDepartmentMission={openDepartmentMission}
+        onDepartmentFreshSessions={(departmentKey) => {
+          openDepartmentMission(departmentKey);
+          setDepartmentFreshRequest((value) => value + 1);
+        }}
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
@@ -447,6 +505,7 @@ export function App() {
         workerCount={workerList.length}
         providerChanging={providerChanging}
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
+        onBossAssignment={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); setTaskSearchOpen(false); updatePreferences({ taskLogOpen: true }); }}
         onOpenMcp={() => setMcpModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
         onProvider={(provider) => void changeProvider(provider)}
@@ -486,13 +545,14 @@ export function App() {
           updatePreferences({ taskLogWidth: preferences.taskLogWidth + (event.key === "ArrowLeft" ? 24 : -24) });
         }} />}
         <div className="holo-panel__title">
-          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{taskFocusMode ? selectedDepartment ? "FOCUS DEPARTMENT" : "FOCUS READER" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{taskFocusMode ? selectedDepartment ? "專注部門" : "專心閱讀" : selectedDepartment ? selectedDepartment.name : "任務日誌"}</strong></div>
+          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "FOCUS BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "FOCUS DEPARTMENT" : "FOCUS READER" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? "老闆交辦" : taskFocusMode ? selectedDepartment ? "專注部門" : "專心閱讀" : selectedDepartment ? selectedDepartment.name : "任務日誌"}</strong></div>
           {taskFocusMode ? <div className="focus-context-switch">
             <div className="focus-context-switch__kind" aria-label="專注模式工作對象">
-              <button type="button" className={!selectedDepartment ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
+              <button type="button" className={!selectedDepartment && !bossAssignmentOpen ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
               <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>部門</button>
+              <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>老闆</button>
             </div>
-            {!selectedDepartment ? <label className="focus-worker-switch">
+            {!bossAssignmentOpen && (!selectedDepartment ? <label className="focus-worker-switch">
               <span>NPC</span>
               <select aria-label="切換專心模式的 NPC 工作介面" value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
                 {!activeId && <option value="" disabled>選擇 NPC</option>}
@@ -506,15 +566,15 @@ export function App() {
             </label> : <label className="focus-worker-switch focus-department-switch"><span>部門</span><select aria-label="切換專心模式的部門工作介面" value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? "需處理" : "進行中"}` : " · 待命"}</option>;
-            })}</select></label>}
-          </div> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{selectedDepartment.memberWorkerIds.length} 位 NPC · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
+            })}</select></label>)}
+          </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />依部門職責與 NPC 職務自動路由</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{selectedDepartment.memberWorkerIds.length} 位 NPC · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
           {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
-            {!taskFocusMode && !selectedDepartment && <div className="task-log-toolbar__view" aria-label="日誌模式">
+            {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label="日誌模式">
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
               <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>活動</button>
             </div>}
-            {!selectedDepartment && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label="搜尋任務日誌" title="搜尋">
+            {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label="搜尋任務日誌" title="搜尋">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
             </button>}
             {!taskFocusMode && <button type="button" className="task-log-toolbar__focus" onClick={enterTaskFocusMode} aria-label="進入專心閱讀模式" title="專心閱讀"><span aria-hidden="true">▣</span> 專心</button>}
@@ -546,14 +606,45 @@ export function App() {
             {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label="退出專心閱讀模式">退出 <kbd>Esc</kbd></button>}
           </div>
         </div>
-        {!selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? "搜尋目前 NPC 的任務" : "搜尋全部 NPC 的任務"} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label="搜尋範圍"><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>目前</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>全部</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
-        {!selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={(approvalId, decision) => {
+        {bossAssignmentOpen && <BossTaskDesk
+          workspacePath={activeWorkspace}
+          tasks={Object.values(bossTasks)}
+          decisionModels={decisionModelOptions}
+          onCreate={createBossTask}
+          onMessage={messageBossTask}
+          onUpdate={updateBossTask}
+          onDelete={deleteBossTask}
+          onOpenMission={(missionId) => {
+            const mission = missions[missionId];
+            if (!mission?.departmentId) return;
+            setBossAssignmentOpen(false);
+            setBossMissionDetailId(missionId);
+            setSelectedDepartmentId(mission.departmentId);
+          }}
+          onClose={() => setBossAssignmentOpen(false)}
+          composerHost={composerHost}
+          focusMode={taskFocusMode}
+        />}
+        {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? "搜尋目前 NPC 的任務" : "搜尋全部 NPC 的任務"} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label="搜尋範圍"><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>目前</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>全部</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
+        {!bossAssignmentOpen && !selectedDepartment && active && pendingModelSwitch?.workerId === active.id && <ModelSwitchCard
+          workerName={active.name}
+          currentModelLabel={modelOptions.find((option) => option.id === (active.model ?? ""))?.label ?? active.model ?? "預設模型"}
+          targetModelLabel={modelOptions.find((option) => option.id === pendingModelSwitch.model)?.label ?? (pendingModelSwitch.model || "預設模型")}
+          focusMode={taskFocusMode}
+          submitting={modelSwitchSubmitting}
+          onContinue={() => commitModelSwitch(false)}
+          onFresh={() => commitModelSwitch(true)}
+          onCancel={() => setPendingModelSwitch(null)}
+        />}
+        {!bossAssignmentOpen && !selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={(approvalId, decision) => {
           const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
           return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve("找不到需要核准的 NPC");
         }} />}
-        {selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
+        {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
           focusMode={taskFocusMode}
+          missionDetailId={bossMissionDetailId}
+          focusSection={departmentFocusSection}
           boss={selectedDepartmentLead}
           workers={workerList}
           missions={Object.values(missions)}
@@ -561,35 +652,52 @@ export function App() {
           departmentRecord={selectedDepartment}
           onPrepare={prepareMission}
           onStart={startMission}
+          onLoadThread={loadDepartmentThread}
+          onMessageDepartment={messageDepartment}
+          onResetSessions={resetDepartmentSessions}
+          resetRequestKey={departmentFreshRequest}
           onCancel={cancelMission}
           onRetryReview={retryMissionReview}
           onApprovePlan={approveMissionPlan}
           onResolve={resolveMission}
+          onResolveApproval={resolveMissionApproval}
           onAsk={askMission}
           onSelectWorker={activateNpc}
-          onClose={() => setSelectedDepartmentId(null)}
+          onClose={() => { setSelectedDepartmentId(null); setBossMissionDetailId(null); setDepartmentFocusSection(null); }}
+          composerHost={composerHost}
         />}
       </aside>
 
-      {!selectedDepartment && <CommandComposer
-        active={active}
-        workers={workerList}
-        workspacePath={activeWorkspace}
-        capabilities={activeCapabilities}
-        authReady={activeAuth.status === "authenticated"}
+      <div ref={setComposerHostRef} className="unified-composer-host">
+      {!bossAssignmentOpen && !selectedDepartment && <TaskComposer
+        draftKey={activeSessionKey}
+        placeholder={active?.busy ? `${active.name} 執勤中，可輸入或附加檔案排隊…` : `對 ${active?.name ?? "…"} 下指令（可附加圖片或文件）`}
+        submitLabel="執行"
+        disabled={!active || activeAuth.status !== "authenticated"}
+        layout="dock"
         focusMode={taskFocusMode}
-        sessionKey={activeSessionKey}
-        globalDropEnabled={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen}
-        paletteOpen={commandPaletteOpen}
         focusRequest={composerFocusRequest}
-        onPaletteOpen={setCommandPaletteOpen}
+        busy={Boolean(active?.busy)}
+        queueEnabled
+        persistExtras
+        globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen}
+        dropTargetLabel={active?.name}
+        palette={{
+          workspacePath: activeWorkspace,
+          provider: activeProvider,
+          capabilities: activeCapabilities,
+          open: commandPaletteOpen,
+          onOpenChange: setCommandPaletteOpen,
+          onManage: () => { setCommandPaletteOpen(false); setCommandCenterOpen(true); },
+        }}
+        history={{ workers: workerList, provider: activeProvider, workspacePath: activeWorkspace }}
         onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
         onInterrupt={() => {
           if (!activeId) return;
           void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
         }}
-        onManage={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
       />}
+      </div>
       </div>
 
       <WorkerTabs
@@ -644,7 +752,7 @@ export function App() {
 
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("自訂角色已套用"); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify("官方角色已套用"); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify("已切回自訂角色"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已刪除自訂角色並恢復經典隊員"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
-      {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onClose={() => setHandoffTarget(null)} />}
+      {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onDirectSwitch={switchProviderFresh} onClose={() => setHandoffTarget(null)} />}
 
       {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, AutoApproveMode, CapabilityState, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 
@@ -32,6 +32,7 @@ type ServerMessage =
       capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
       collaborations?: CollaborationTask[];
       missions?: DepartmentMission[];
+      bossTasks?: BossTask[];
       departments?: Department[];
       workers: Array<{
         id: string;
@@ -59,6 +60,8 @@ type ServerMessage =
   | { type: "worker_status"; workerId: string; busy: boolean }
   | { type: "collaboration_created" | "collaboration_updated"; collaboration: CollaborationTask }
   | { type: "mission_created" | "mission_updated"; mission: DepartmentMission }
+  | { type: "boss_task_created" | "boss_task_updated"; bossTask: BossTask }
+  | { type: "boss_task_deleted"; bossTaskId: string }
   | { type: "department_created" | "department_updated"; department: Department }
   | { type: "department_removed"; departmentId: string }
   | { type: "capabilities_updated"; workspacePath: string; provider: ProviderId; capabilities: CapabilityState }
@@ -105,6 +108,7 @@ export function useWorkers() {
   const [workers, setWorkers] = useState<Record<string, WorkerState>>({});
   const [collaborations, setCollaborations] = useState<Record<string, CollaborationTask>>({});
   const [missions, setMissions] = useState<Record<string, DepartmentMission>>({});
+  const [bossTasks, setBossTasks] = useState<Record<string, BossTask>>({});
   const [departments, setDepartments] = useState<Record<string, Department>>({});
   const [order, setOrder] = useState<string[]>([]);
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
@@ -186,6 +190,7 @@ export function useWorkers() {
           setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
           setCollaborations(Object.fromEntries((data.collaborations ?? []).map((task) => [task.id, task])));
           setMissions(Object.fromEntries((data.missions ?? []).map((mission) => [mission.id, mission])));
+          setBossTasks(Object.fromEntries((data.bossTasks ?? []).map((task) => [task.id, task])));
           setDepartments(Object.fromEntries((data.departments ?? []).map((department) => [department.id, department])));
           const record: Record<string, WorkerState> = {};
           const ids: string[] = [];
@@ -329,6 +334,19 @@ export function useWorkers() {
           setMissions((current) => ({ ...current, [data.mission.id]: data.mission }));
           break;
         }
+        case "boss_task_created":
+        case "boss_task_updated": {
+          setBossTasks((current) => ({ ...current, [data.bossTask.id]: data.bossTask }));
+          break;
+        }
+        case "boss_task_deleted": {
+          setBossTasks((current) => {
+            const next = { ...current };
+            delete next[data.bossTaskId];
+            return next;
+          });
+          break;
+        }
         case "department_created":
         case "department_updated": {
           setDepartments((current) => ({ ...current, [data.department.id]: data.department }));
@@ -456,6 +474,22 @@ export function useWorkers() {
     }
   }, []);
 
+  const switchProviderFresh = useCallback(async (
+    id: string,
+    provider: ProviderId,
+    model: string | null = null,
+  ): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/provider/fresh`, {
+        method: "POST",
+        body: { provider, model },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const prepareCollaboration = useCallback(async (input: {
     sourceWorkerId: string;
     targetWorkerId: string;
@@ -500,6 +534,11 @@ export function useWorkers() {
     bossWorkerId: string;
     objective: string;
     acceptanceCriteria: string[];
+    images?: CommandSubmission["images"];
+    documents?: CommandSubmission["documents"];
+    clientMessageId?: string;
+    idempotencyKey?: string;
+    parentMissionId?: string;
   }): Promise<{ data?: PreparedMission; error?: string }> => {
     try {
       const data = await apiRequest<PreparedMission>(`/api/workers/${input.bossWorkerId}/missions/prepare`, {
@@ -522,6 +561,142 @@ export function useWorkers() {
       return null;
     } catch (error) {
       return (error as Error).message;
+    }
+  }, []);
+
+  const loadDepartmentThread = useCallback(async (departmentId: string): Promise<{ data?: DepartmentThreadPayload; error?: string }> => {
+    try {
+      return { data: await apiRequest<DepartmentThreadPayload>(`/api/departments/${departmentId}/thread`) };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const messageDepartment = useCallback(async (
+    departmentId: string,
+    submission: CommandSubmission,
+    acceptanceCriteria: string[] = [],
+  ): Promise<{ data?: DepartmentThreadPayload; error?: string }> => {
+    try {
+      const data = await apiRequest<DepartmentThreadPayload>(`/api/departments/${departmentId}/messages`, {
+        method: "POST",
+        body: {
+          message: submission.text,
+          images: submission.images,
+          documents: submission.documents,
+          clientMessageId: submission.clientMessageId,
+          idempotencyKey: submission.idempotencyKey,
+          acceptanceCriteria,
+        },
+        timeoutMs: 135_000,
+      });
+      return { data };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const resetDepartmentSessions = useCallback(async (
+    departmentId: string,
+    confirm: boolean,
+    workerIds?: string[],
+  ): Promise<{ data?: { requiresConfirmation?: boolean; members?: Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }>; results?: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>; retryWorkerIds?: string[]; historyClearedAt?: string | null }; error?: string }> => {
+    try {
+      return { data: await apiRequest(`/api/departments/${departmentId}/sessions/reset`, {
+        method: "POST",
+        body: { confirm, workerIds },
+        timeoutMs: 90_000,
+      }) };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const assignBossTask = useCallback(async (input: {
+    objective: string;
+    acceptanceCriteria: string[];
+    preferredWorkspace?: string;
+    decisionProvider?: ProviderId;
+    decisionModel?: string;
+    clarifications?: Array<{ question: string; answer: string }>;
+  }): Promise<{ data?: BossAssignmentResponse; error?: string }> => {
+    try {
+      const data = await apiRequest<BossAssignmentResponse>("/api/assignments", {
+        method: "POST",
+        body: input,
+        timeoutMs: 135_000,
+      });
+      return { data };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const createBossTask = useCallback(async (input: {
+    message: string;
+    acceptanceCriteria: string[];
+    workspacePath: string;
+    decisionProvider?: ProviderId;
+    decisionModel?: string;
+    images?: CommandSubmission["images"];
+    documents?: CommandSubmission["documents"];
+    clientMessageId?: string;
+    idempotencyKey?: string;
+  }): Promise<{ data?: BossTask; error?: string }> => {
+    try {
+      const data = await apiRequest<{ bossTask: BossTask }>("/api/boss-tasks", {
+        method: "POST",
+        body: input,
+        timeoutMs: 135_000,
+      });
+      setBossTasks((current) => ({ ...current, [data.bossTask.id]: data.bossTask }));
+      return { data: data.bossTask };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const messageBossTask = useCallback(async (id: string, submission: CommandSubmission): Promise<{ data?: BossTask; error?: string }> => {
+    try {
+      const data = await apiRequest<{ bossTask: BossTask }>(`/api/boss-tasks/${id}/messages`, {
+        method: "POST",
+        body: { message: submission.text, images: submission.images, documents: submission.documents, clientMessageId: submission.clientMessageId, idempotencyKey: submission.idempotencyKey },
+        timeoutMs: 135_000,
+      });
+      setBossTasks((current) => ({ ...current, [data.bossTask.id]: data.bossTask }));
+      return { data: data.bossTask };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const updateBossTask = useCallback(async (
+    id: string,
+    patch: { title?: string; archived?: boolean },
+  ): Promise<{ data?: BossTask; error?: string }> => {
+    try {
+      const data = await apiRequest<{ bossTask: BossTask }>(`/api/boss-tasks/${id}`, {
+        method: "PATCH",
+        body: patch,
+      });
+      setBossTasks((current) => ({ ...current, [data.bossTask.id]: data.bossTask }));
+      return { data: data.bossTask };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const deleteBossTask = useCallback(async (id: string): Promise<{ error?: string }> => {
+    try {
+      await apiRequest(`/api/boss-tasks/${id}`, { method: "DELETE" });
+      setBossTasks((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      return {};
+    } catch (error) {
+      return { error: (error as Error).message };
     }
   }, []);
 
@@ -641,7 +816,7 @@ export function useWorkers() {
     try {
       await apiRequest<{ ok: boolean }>(`/api/workers/${id}/message`, {
         method: "POST",
-        body: { message: command.text, images: command.images, documents: command.documents },
+        body: { message: command.text, images: command.images, documents: command.documents, clientMessageId: command.clientMessageId, idempotencyKey: command.idempotencyKey },
         timeoutMs: 30000,
       });
       return null;
@@ -666,6 +841,15 @@ export function useWorkers() {
   const setModel = useCallback(async (id: string, model: string): Promise<string | null> => {
     try {
       await apiRequest(`/api/workers/${id}/model`, { method: "POST", body: { model } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const setModelFresh = useCallback(async (id: string, model: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${id}/model/fresh`, { method: "POST", body: { model } });
       return null;
     } catch (error) {
       return (error as Error).message;
@@ -706,6 +890,22 @@ export function useWorkers() {
   ): Promise<string | null> => {
     try {
       await apiRequest(`/api/workers/${workerId}/approvals/${approvalId}`, {
+        method: "POST",
+        body: { decision },
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const resolveMissionApproval = useCallback(async (
+    missionId: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+  ): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/missions/${missionId}/approvals/${approvalId}`, {
         method: "POST",
         body: { decision },
       });
@@ -781,6 +981,7 @@ export function useWorkers() {
 
   return {
     workers,
+    bossTasks,
     collaborations,
     missions,
     departments,
@@ -803,6 +1004,7 @@ export function useWorkers() {
     pickWorkspace,
     prepareHandoff,
     startHandoff,
+    switchProviderFresh,
     prepareCollaboration,
     startCollaboration,
     cancelCollaboration: (id: string) => collaborationAction(id, "cancel"),
@@ -810,6 +1012,14 @@ export function useWorkers() {
     handleCollaboration: (id: string) => collaborationAction(id, "handled"),
     prepareMission,
     startMission,
+    loadDepartmentThread,
+    messageDepartment,
+    resetDepartmentSessions,
+    assignBossTask,
+    createBossTask,
+    messageBossTask,
+    updateBossTask,
+    deleteBossTask,
     cancelMission: (id: string) => missionAction(id, "cancel"),
     retryMissionReview: (id: string) => missionAction(id, "retry-review"),
     approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),
@@ -825,10 +1035,12 @@ export function useWorkers() {
     send,
     askMission,
     setModel,
+    setModelFresh,
     setPersona,
     setAutoApproveMode,
     interrupt,
     resolveApproval,
+    resolveMissionApproval,
     refreshAuth,
     refreshUsage,
     installProvider,

@@ -17,7 +17,7 @@ type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
 type PendingApproval = { rpcId: RpcId; method: string; params: any; request: ApprovalRequest };
 
 export function codexSandbox(profile: ExecutionProfile, normalSandbox: string): string {
-  return profile === "read_only_collaboration" ? "read-only" : normalSandbox;
+  return profile === "read_only_collaboration" || profile === "read_only_query" ? "read-only" : normalSandbox;
 }
 
 export type CodexNativeCommand =
@@ -62,6 +62,7 @@ export class CodexSession implements AgentSession {
   private stagedInputImages = new Set<string>();
   private stagedInputDocuments = new Set<string>();
   private executionProfile: ExecutionProfile = "normal";
+  private mcpReloadPending = false;
   busy = false;
   name = "";
 
@@ -88,6 +89,23 @@ export class CodexSession implements AgentSession {
 
   warmup(): void {
     void this.ensureThread().catch((error) => console.warn("Codex app-server warmup failed:", error.message));
+  }
+
+  async reloadMcp(): Promise<"reloaded" | "deferred"> {
+    if (this.busy) {
+      this.mcpReloadPending = true;
+      return "deferred";
+    }
+    this.mcpReloadPending = true;
+    this.busy = true;
+    try {
+      await this.ensureThread();
+      await this.request("config/mcpServer/reload", null);
+      this.mcpReloadPending = false;
+      return "reloaded";
+    } finally {
+      this.busy = false;
+    }
   }
 
   send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
@@ -117,15 +135,21 @@ export class CodexSession implements AgentSession {
     this.streamedReasoning.clear();
     this.finalText = "";
     void this.ensureThread()
-      .then((threadId) => this.request("turn/start", {
-        threadId,
-        input: codexTurnInput([text, documentPrompt(documentFiles)].filter(Boolean).join("\n\n"), imagePaths),
-        cwd: this.workspacePath,
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-        sandbox: codexSandbox(this.executionProfile, config.codexSandbox),
-        ...(this.model ? { model: this.model } : {}),
-      }))
+      .then(async (threadId) => {
+        if (this.mcpReloadPending) {
+          await this.request("config/mcpServer/reload", null);
+          this.mcpReloadPending = false;
+        }
+        return this.request("turn/start", {
+          threadId,
+          input: codexTurnInput([text, documentPrompt(documentFiles)].filter(Boolean).join("\n\n"), imagePaths),
+          cwd: this.workspacePath,
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+          sandbox: codexSandbox(this.executionProfile, config.codexSandbox),
+          ...(this.model ? { model: this.model } : {}),
+        });
+      })
       .catch((error) => this.finishWithError(error.message));
   }
 
@@ -479,21 +503,23 @@ export class CodexSession implements AgentSession {
       return;
     }
     const category = method.includes("commandExecution") ? "command" : method.includes("fileChange") ? "file_change" : "permissions";
-    if (this.executionProfile === "read_only_collaboration") {
+    if (this.executionProfile === "read_only_collaboration" || this.executionProfile === "read_only_query") {
       const id = randomUUID();
       const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
       this.onEvent({ type: "approval_requested", request: {
         id,
         activityId: params.itemId ? String(params.itemId) : null,
         category,
-        title: category === "command" ? "唯讀協作已拒絕指令" : category === "file_change" ? "唯讀協作已拒絕檔案變更" : "唯讀協作已拒絕提高權限",
+        title: category === "command" ? "唯讀模式已拒絕指令" : category === "file_change" ? "唯讀模式已拒絕檔案變更" : "唯讀模式已拒絕提高權限",
         input: boundedValue(category === "command" ? { command: params.command ?? "", actions: params.commandActions ?? [] } : params),
         command,
         cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
-        reason: "唯讀 NPC 協作不允許需要額外權限的操作",
+        reason: this.executionProfile === "read_only_query"
+          ? "唯讀查詢不允許需要額外權限的操作"
+          : "唯讀 NPC 協作不允許需要額外權限的操作",
         decisions: [],
       } });
-      if (method === "item/permissions/requestApproval") this.sendRpcError(message.id, -32000, "Read-only collaboration declined permissions");
+      if (method === "item/permissions/requestApproval") this.sendRpcError(message.id, -32000, "Read-only mode declined permissions");
       else this.sendRpcResult(message.id, { decision: "decline" });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return;

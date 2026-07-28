@@ -13,8 +13,11 @@ export type MessageDocument = {
   dataBase64: string;
 };
 
-export type ExecutionProfile = "normal" | "read_only_collaboration";
-export type SendOptions = { executionProfile?: ExecutionProfile };
+export type ExecutionProfile = "normal" | "read_only_collaboration" | "read_only_query";
+export type SendOptions = {
+  executionProfile?: ExecutionProfile;
+  queryAllowedTools?: string[];
+};
 
 export interface AgentSession {
   readonly provider: ProviderId;
@@ -22,6 +25,7 @@ export interface AgentSession {
   busy: boolean;
   name: string;
   warmup(): void;
+  reloadMcp(): Promise<"reloaded" | "deferred">;
   send(text: string, images?: MessageImage[], documents?: MessageDocument[], options?: SendOptions): void;
   interrupt(): void;
   stop(): void;
