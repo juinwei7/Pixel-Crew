@@ -147,6 +147,12 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                 )}
 
                 {state.error && <div className="auth-gate__error">{state.error}</div>}
+                {state.debug && (
+                  <details className="auth-gate__debug">
+                    <summary>診斷資訊</summary>
+                    <pre>{state.debug}</pre>
+                  </details>
+                )}
                 {state.status !== "authenticated" && (
                   <div className="auth-provider-card__footer">
                     <a href={DOCS[provider]} target="_blank" rel="noreferrer">官方安裝說明 ↗</a>

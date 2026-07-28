@@ -495,6 +495,7 @@ function initialAuthState(provider: AgentAuthProvider): ProviderAuthState {
     loginCommand: provider.loginCommand,
     checkedAt: null,
     error: null,
+    debug: null,
   };
 }
 

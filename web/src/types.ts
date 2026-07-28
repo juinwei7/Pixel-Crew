@@ -203,6 +203,7 @@ export type ProviderAuthState = {
   loginCommand: string;
   checkedAt: string | null;
   error: string | null;
+  debug: string | null;
 };
 
 export type ProviderInstallState = {

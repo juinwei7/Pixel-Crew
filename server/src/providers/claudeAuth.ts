@@ -2,6 +2,7 @@ import type { AgentAuthProvider, ProviderAuthState } from "./types.js";
 import { config } from "../config.js";
 import { resolveClaudeAuthStatus } from "./claudeAuthStatus.js";
 import { execCli } from "../platform/processes.js";
+import { buildAuthDebug } from "./authDebug.js";
 
 function shellCommand(value: string): string {
   if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
@@ -26,23 +27,32 @@ export class ClaudeAuthProvider implements AgentAuthProvider {
   }
 
   private async runCheck(): Promise<ProviderAuthState> {
+    const args = ["auth", "status", "--json"];
+    const startedAt = Date.now();
     let error: NodeJS.ErrnoException | null = null;
     let stdout = "";
+    let stderr = "";
     try {
-      ({ stdout } = await execCli(config.claudeBin, ["auth", "status", "--json"], { timeout: 10_000 }));
+      ({ stdout, stderr } = await execCli(config.claudeBin, args, { timeout: 10_000 }));
     } catch (caught) {
       error = caught as NodeJS.ErrnoException;
       stdout = String((caught as any).stdout ?? "");
+      stderr = String((caught as any).stderr ?? "");
     }
     const checkedAt = new Date().toISOString();
     const result = resolveClaudeAuthStatus(error, stdout);
-    return this.state(result.status, checkedAt, result.error);
+    const debug = result.status === "authenticated"
+      ? null
+      : buildAuthDebug({ command: config.claudeBin, args, durationMs: Date.now() - startedAt, stdout, stderr, error });
+    if (debug) console.error(`[claude-auth] status=${result.status}\n${debug}`);
+    return this.state(result.status, checkedAt, result.error, debug);
   }
 
   private state(
     status: ProviderAuthState["status"],
     checkedAt: string,
     error: string | null = null,
+    debug: string | null = null,
   ): ProviderAuthState {
     return {
       provider: this.id,
@@ -51,6 +61,7 @@ export class ClaudeAuthProvider implements AgentAuthProvider {
       loginCommand: this.loginCommand,
       checkedAt,
       error,
+      debug,
     };
   }
 }

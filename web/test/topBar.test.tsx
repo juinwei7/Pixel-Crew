@@ -11,7 +11,7 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
     active={worker}
     activeWorkspace="/repo/my-room"
     capabilities={{ slashCommands: [], mcpServers: [{ name: "local", status: "connected" }], models: [], toolCount: 4, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
-    auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null }}
+    auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null, debug: null }}
     wsReady
     modelOptions={[{ id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
@@ -41,7 +41,7 @@ test("top bar exposes the single Boss Assignment entry point", () => {
     active={worker}
     activeWorkspace="/repo"
     capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
-    auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null }}
+    auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null, debug: null }}
     wsReady
     modelOptions={[]}
     workerCount={1}
@@ -67,7 +67,7 @@ test("cached models remain selectable while capabilities refresh in background",
     active={worker}
     activeWorkspace="/repo/my-room"
     capabilities={{ slashCommands: [], mcpServers: [], models: [{ id: "sonnet", label: "Sonnet" }], toolCount: null, builtinTools: null, loading: true, source: "cache", updatedAt: null, error: null }}
-    auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null }}
+    auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null, debug: null }}
     wsReady
     modelOptions={[{ id: "", label: "預設模型" }, { id: "sonnet", label: "Sonnet" }]}
     workerCount={1}
@@ -89,7 +89,7 @@ test("shows the auto-approve toggle for Claude and reflects the worker's current
   const commonProps = {
     activeWorkspace: "/repo/my-room",
     capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live" as const, updatedAt: null, error: null },
-    auth: { provider: "claude" as const, displayName: "Claude Code", status: "authenticated" as const, loginCommand: "claude", checkedAt: null, error: null },
+    auth: { provider: "claude" as const, displayName: "Claude Code", status: "authenticated" as const, loginCommand: "claude", checkedAt: null, error: null, debug: null },
     wsReady: true,
     modelOptions: [{ id: "sonnet", label: "Sonnet" }],
     workerCount: 1,
@@ -126,7 +126,7 @@ test("also shows the auto-approve control for Codex", () => {
     active={off}
     activeWorkspace="/repo/my-room"
     capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
-    auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null }}
+    auth={{ provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "codex", checkedAt: null, error: null, debug: null }}
     wsReady
     modelOptions={[]}
     workerCount={1}
@@ -146,7 +146,7 @@ test("also shows the auto-approve control for Codex", () => {
 const updateBaseProps = {
   activeWorkspace: "/repo/my-room",
   capabilities: { slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null },
-  auth: { provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null },
+  auth: { provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null, debug: null },
   wsReady: true,
   modelOptions: [],
   workerCount: 1,
