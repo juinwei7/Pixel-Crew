@@ -5667,6 +5667,11 @@ const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ work
   if (provider === "claude") {
     void claudeCapabilitiesFor(workspacePath).refreshCommands(true);
     restartIdleWorkers("claude", workspacePath);
+  } else {
+    // Codex skills aren't cached in a capability registry (they're read fresh
+    // from disk per invocation, see the /api/skills routes above) — restarting
+    // idle workers is the only thing an external skill-file edit needs here.
+    restartIdleWorkers("codex", workspacePath);
   }
 });
 workflowWatcher.start();
