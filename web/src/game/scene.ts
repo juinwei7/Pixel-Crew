@@ -87,7 +87,8 @@ type SceneCallbacks = {
   onFurniturePositions?(list: FurnitureScreenPos[]): void;
   onFurnitureHover?(key: StationKey | null): void;
   onFurnitureClick?(key: StationKey): void;
-  onDepartmentClick?(workspacePath: string, position: { x: number; y: number }): void;
+  onDepartmentClick?(workspacePath: string): void;
+  onDepartmentRename?(workspacePath: string, position: { x: number; y: number }): void;
   onContextMenu?(id: string): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
@@ -144,7 +145,11 @@ export async function createScene(
     (key) => callbacks.onFurnitureClick?.(key),
   );
   const particles = new ParticleSystem();
-  const personalDesks = new PersonalDeskLayer(callbacks.onSelect, callbacks.onDepartmentClick);
+  const personalDesks = new PersonalDeskLayer(
+    callbacks.onSelect,
+    callbacks.onDepartmentClick,
+    callbacks.onDepartmentRename,
+  );
   const officeDecor = new OfficeDecor();
   const cat = new Cat();
 

@@ -210,7 +210,8 @@ export class PersonalDeskLayer {
 
   constructor(
     private readonly onSelect: (id: string) => void,
-    private readonly onDepartmentSelect?: (workspacePath: string, position: { x: number; y: number }) => void,
+    private readonly onDepartmentSelect?: (workspacePath: string) => void,
+    private readonly onDepartmentRename?: (workspacePath: string, position: { x: number; y: number }) => void,
   ) {
     this.container.sortableChildren = true;
     this.departmentLayer.zIndex = -10;
@@ -393,9 +394,33 @@ export class PersonalDeskLayer {
         sign.cursor = "pointer";
         sign.on("pointertap", (event) => {
           event.stopPropagation();
-          this.onDepartmentSelect?.(department.workspacePath, { x: event.global.x, y: event.global.y });
+          this.onDepartmentSelect?.(department.workspacePath);
         });
         group.addChild(sign);
+
+        if (department.kind === "department" && this.onDepartmentRename) {
+          const pencil = new Text({
+            text: "✎",
+            style: {
+              fill: 0x8fa7c3,
+              fontSize: 6,
+              fontFamily: "sans-serif",
+              fontWeight: "600",
+            },
+          });
+          pencil.resolution = 4;
+          pencil.anchor.set(0, 1);
+          pencil.position.set((first.left + first.right) / 2 + text.width / 2 + 3, first.top - 2);
+          pencil.eventMode = "static";
+          pencil.cursor = "pointer";
+          pencil.on("pointerover", () => { pencil.style.fill = 0x4de3ff; });
+          pencil.on("pointerout", () => { pencil.style.fill = 0x8fa7c3; });
+          pencil.on("pointertap", (event) => {
+            event.stopPropagation();
+            this.onDepartmentRename?.(department.workspacePath, { x: event.global.x, y: event.global.y });
+          });
+          group.addChild(pencil);
+        }
       }
       if (department.missionProgress && department.missionProgress.total > 0) {
         const rail = new Graphics();

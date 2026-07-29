@@ -57,7 +57,39 @@ test("renders same-department Mission progress, assignees, review result, and re
   assert.match(html, /這項工作需要你的核准/);
   assert.match(html, /本次任務都允許/);
   assert.match(html, /任務執行紀錄 · 2/);
-  assert.match(html, /開始使用工具：mcp__issues__list/);
+  assert.match(html, /tool-row__name">list</);
+  assert.match(html, /MCP·issues/);
+  assert.match(html, /等待核准：更新 issue/);
+});
+
+test("collapses consecutive tool calls from the same NPC into one grouped activity row", () => {
+  const boss = emptyWorker("boss", "BOSS", null, false, 0, "claude", "/repo");
+  const builder = emptyWorker("builder", "Builder", null, false, 1, "codex", "/repo");
+  const mission: DepartmentMission = {
+    id: "mission", workspacePath: "/repo", bossWorkerId: boss.id, objective: "Ship the feature",
+    acceptanceCriteria: [], status: "executing", planSummary: null,
+    currentStepIndex: 0, correctionCount: 0, maxCorrections: 2, error: null, attentionReason: null,
+    createdAt: "2026-07-22T00:00:00Z", startedAt: "2026-07-22T00:00:00Z", completedAt: null,
+    steps: [
+      { id: "execute", title: "Implement", objective: "Build it", kind: "execute", assigneeWorkerId: builder.id, acceptanceCriteria: [], status: "running", attempt: 1, result: null, reviewResult: null, startedAt: null, completedAt: null },
+    ],
+    executionEvents: [
+      { workerId: builder.id, stepId: "execute", event: { type: "tool_call_start", id: "tool-1", name: "Bash", input: { command: "npm test" } } },
+      { workerId: builder.id, stepId: "execute", event: { type: "tool_call_result", id: "tool-1", output: "ok", isError: false } },
+      { workerId: builder.id, stepId: "execute", event: { type: "tool_call_start", id: "tool-2", name: "Read", input: { file_path: "a.ts" } } },
+      { workerId: builder.id, stepId: "execute", event: { type: "tool_call_result", id: "tool-2", output: "contents", isError: false } },
+    ],
+  };
+  const html = renderToStaticMarkup(<DepartmentMissionDialog
+    boss={boss} workers={[boss, builder]} missions={[mission]}
+    onPrepare={async () => ({ error: "unused" })} onStart={noopAction}
+    onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction} onResolveApproval={noopAction} onClose={() => undefined}
+  />);
+  assert.match(html, /任務執行紀錄 · 4/);
+  assert.match(html, /tool-group__summary/);
+  assert.match(html, />2 項</);
+  const builderNameCount = (html.match(/mission-activity-row__who">Builder</g) ?? []).length;
+  assert.equal(builderNameCount, 1);
 });
 
 test("allows a one-person department to receive Execute work while explaining Review limits", () => {
