@@ -433,6 +433,8 @@ export function App() {
   }
 
   function handleRemoveWorker(id: string) {
+    const name = workers[id]?.name;
+    if (!window.confirm(name ? `確定永久移除「${name}」嗎？工位與完整對話紀錄都會一併拆除，此動作無法復原。` : "確定永久移除這位 NPC 嗎？此動作無法復原。")) return;
     void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info"));
   }
 
