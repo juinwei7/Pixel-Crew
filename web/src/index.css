@@ -455,12 +455,11 @@ body {
   font-size: 10px;
 }
 .npc-radial__confirm-danger { border-color: rgba(255, 92, 122, 0.4) !important; background: rgba(255, 92, 122, 0.12) !important; color: #ff9aae !important; }
-.department-wheel { position: fixed; z-index: 120; width: 220px; height: 220px; transform: translate(-50%, -50%); border: 1px solid rgba(77,227,255,.17); border-radius: 50%; background: radial-gradient(circle, rgba(8,20,38,.96) 0 31%, rgba(5,13,27,.82) 32% 65%, transparent 66%); filter: drop-shadow(0 18px 28px rgba(0,0,0,.42)); }
-.department-wheel button { position: absolute; display: grid; width: 70px; min-height: 34px; place-items: center; border: 1px solid rgba(77,227,255,.3); border-radius: 999px; background: rgba(7,20,37,.96); color: #b7c9da; cursor: pointer; font: 700 8px var(--mono); }
-.department-wheel > button:not(.department-wheel__center) { --wheel-angle: calc(var(--wheel-index) * 60deg); top: calc(50% - 17px); left: calc(50% - 35px); transform: rotate(var(--wheel-angle)) translateY(-88px) rotate(calc(var(--wheel-angle) * -1)); }
-.department-wheel button:hover, .department-wheel button:focus-visible { border-color: rgba(77,227,255,.72); background: rgba(13,48,68,.98); color: #e8faff; outline: none; }
-.department-wheel button:disabled { cursor: not-allowed; opacity: .35; }
-.department-wheel__center { top: calc(50% - 31px); left: calc(50% - 31px); width: 62px !important; min-height: 62px !important; padding: 7px; border-color: rgba(151,123,255,.46) !important; background: rgba(37,26,79,.96) !important; color: #e5defe !important; line-height: 1.2 !important; }
+.department-rename { position: fixed; z-index: 120; display: grid; width: 190px; gap: 5px; transform: translate(-50%, 8px); padding: 8px; border: 1px solid rgba(77,227,255,.34); border-radius: 9px; background: rgba(5,14,29,.98); box-shadow: 0 14px 34px rgba(0,0,0,.48); }
+.department-rename input { width: 100%; height: 30px; padding: 0 9px; border: 1px solid rgba(77,227,255,.24); border-radius: 6px; outline: none; background: rgba(1,7,17,.86); color: #e4eef9; font: 11px var(--sans); }
+.department-rename input:focus { border-color: rgba(77,227,255,.72); box-shadow: 0 0 0 2px rgba(77,227,255,.08); }
+.department-rename input:disabled { opacity: .55; }
+.department-rename small { color: #ff9aae; font-size: 9px; }
 
 .canvas-zoom {
   position: absolute;
@@ -3253,10 +3252,16 @@ body {
 .mission-card__approval button:disabled { cursor: not-allowed; opacity: .42; }
 .mission-card__activity { margin: 11px 0; border: 1px solid rgba(145,164,194,.14); border-radius: 8px; background: rgba(0,0,0,.14); }
 .mission-card__activity > summary { padding: 9px 11px; color: #8093ab; cursor: pointer; font: 9px var(--mono); }
-.mission-card__activity > ol { display: grid; gap: 0; margin: 0; padding: 0 11px 9px; list-style: none; }
-.mission-card__activity li { display: grid; grid-template-columns: minmax(70px, auto) 1fr; gap: 10px; padding: 6px 0; border-top: 1px solid rgba(145,164,194,.1); }
-.mission-card__activity li span { color: #7ed8ea; font: 9px var(--mono); }
-.mission-card__activity li p { margin: 0; color: #98a9be; font-size: 10px; }
+.mission-card__activity-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 11px 9px; }
+.mission-activity-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid rgba(145,164,194,.1); font-size: 10px; }
+.mission-activity-row__who { flex: 0 0 auto; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7ed8ea; font: 9px var(--mono); }
+.mission-activity-row__icon { flex: 0 0 auto; width: 14px; text-align: center; color: #8093ab; }
+.mission-activity-row__label { flex: 1; min-width: 0; color: #98a9be; }
+.mission-activity-row__body { flex: 1; min-width: 0; }
+.mission-activity-row--ok .mission-activity-row__icon { color: #6bd9a0; }
+.mission-activity-row--error .mission-activity-row__icon { color: var(--err); }
+.mission-activity-row--error .mission-activity-row__label { color: var(--err); }
+.mission-activity-row--pending .mission-activity-row__icon { color: #ffb75e; }
 
 @media (max-width: 620px) {
   .department-creator { padding: 12px; }

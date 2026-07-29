@@ -54,6 +54,7 @@ export type BossTask = {
   status: BossTaskStatus;
   executionMode?: BossExecutionMode;
   messages: BossTaskMessage[];
+  historyClearedAt?: string | null;
   stages: BossTaskStage[];
   finalReport: string | null;
   error: string | null;

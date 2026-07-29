@@ -110,6 +110,7 @@ import {
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
 import { replaceWithFreshSession } from "./freshSession.js";
+import { cleanWorkerSession, matchNativeCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
   bossTaskDecisionPrompt,
@@ -118,6 +119,7 @@ import {
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   type BossTask,
+  type BossTaskMessage,
   type BossTaskMessageRole,
 } from "./bossTask.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
@@ -432,11 +434,27 @@ function visibleDepartmentMessages(thread: DepartmentThread, limit = 200): Depar
     });
 }
 
-function appendDepartmentMessage(input: Omit<DepartmentMessage, "id" | "createdAt">): DepartmentMessage {
+function visibleBossTaskMessages(task: BossTask): BossTaskMessage[] {
+  const clearedAt = task.historyClearedAt;
+  return clearedAt ? task.messages.filter((message) => message.createdAt > clearedAt) : task.messages;
+}
+
+function bossTaskForDisplay(task: BossTask): BossTask {
+  return { ...task, messages: visibleBossTaskMessages(task) };
+}
+
+function timestampAfter(timestamp: string): string {
+  return new Date(Math.max(Date.now(), Date.parse(timestamp) + 1)).toISOString();
+}
+
+function appendDepartmentMessage(
+  input: Omit<DepartmentMessage, "id" | "createdAt"> & { createdAt?: string },
+): DepartmentMessage {
+  const { createdAt, ...messageInput } = input;
   const message: DepartmentMessage = {
-    ...input,
+    ...messageInput,
     id: randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt ?? new Date().toISOString(),
   };
   if (!store.saveDepartmentMessage(message)) throw new Error("無法保存部門訊息");
   broadcast({ type: "department_message_created", message });
@@ -469,7 +487,7 @@ function departmentAudit(
 }
 
 function broadcastBossTask(task: BossTask, created = false): void {
-  broadcast({ type: created ? "boss_task_created" : "boss_task_updated", bossTask: task });
+  broadcast({ type: created ? "boss_task_created" : "boss_task_updated", bossTask: bossTaskForDisplay(task) });
 }
 
 function broadcastCollaboration(task: CollaborationTask, created = false): void {
@@ -1254,6 +1272,43 @@ function createRunner(
       );
 }
 
+function workerCleanDeps(worker: Worker): WorkerCleanDeps {
+  return {
+    isBusy: () =>
+      worker.runner.busy
+      || handoffInProgress(worker)
+      || collaborationInProgress(worker.id)
+      || missionInProgress(worker.id),
+    createRunner: (provider, workspacePath) => createRunner(worker, provider, workspacePath),
+    persistWorker: () => persistWorker(worker),
+    saveCheckpoint: (runner) => store.saveProviderCheckpoint(
+      worker.id,
+      runner.provider,
+      runner.workspacePath,
+      runner.getModel() ?? null,
+      runner.getPersistenceState(),
+    ),
+    clearWorkerEvents: (workerId) => store.clearWorkerEvents(workerId),
+  };
+}
+
+function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; error: string } {
+  const result = cleanWorkerSession(worker, workerCleanDeps(worker));
+  if (!result.ok) return result;
+  broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
+  const announcement = "已清除工作階段，NPC 記憶重新開始。";
+  record(worker, { type: "text_delta", text: announcement });
+  record(worker, {
+    type: "turn_end",
+    resultText: announcement,
+    costUsd: 0,
+    durationMs: 0,
+    isError: false,
+    permissionDenials: [],
+  });
+  return { ok: true };
+}
+
 function missionRunnerKey(missionId: string, workerId: string): string {
   return `${missionId}\0${workerId}`;
 }
@@ -1793,7 +1848,7 @@ wss.on("connection", (socket) => {
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       collaborations: store.listRecentCollaborationTasks(),
       missions: store.listDepartmentMissions(),
-      bossTasks: store.listBossTasks(),
+      bossTasks: store.listBossTasks().map(bossTaskForDisplay),
       departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
@@ -1809,6 +1864,31 @@ app.get("/api/workers", (_req, res) => {
 
 app.get("/api/departments", (_req, res) => {
   res.json({ departments: store.listDepartments() });
+});
+
+app.patch("/api/departments/:departmentId", (req, res) => {
+  const department = departments.get(req.params.departmentId);
+  if (!department) {
+    res.status(404).json({ error: "找不到部門" });
+    return;
+  }
+  const name = normalizeDepartmentName(req.body?.name);
+  if (!name) {
+    res.status(400).json({ error: "請輸入部門名稱" });
+    return;
+  }
+  const updated: Department = {
+    ...department,
+    name,
+    updatedAt: new Date().toISOString(),
+  };
+  if (!store.saveDepartment(updated)) {
+    res.status(500).json({ error: "無法儲存部門名稱" });
+    return;
+  }
+  departments.set(updated.id, updated);
+  broadcast({ type: "department_updated", department: updated });
+  res.json({ department: updated });
 });
 
 app.get("/api/workspaces", (_req, res) => {
@@ -2831,6 +2911,50 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
     res.status(400).json({ error: "請輸入訊息或附加檔案" });
     return;
   }
+  if (matchNativeCommand(text) === "clean") {
+    const activeMission = workspaceMission(department.workspacePath, department.id);
+    if (activeMission) {
+      res.status(409).json({ error: "部門仍有進行中或待決定的 Mission，不能重建工作階段", mission: activeMission });
+      return;
+    }
+    const members = department.memberWorkerIds.flatMap((id) => {
+      const worker = workers.get(id);
+      return worker ? [worker] : [];
+    });
+    if (members.length === 0) {
+      res.status(400).json({ error: "沒有可重建工作階段的部門成員" });
+      return;
+    }
+    const preflightError = await departmentCleanPreflightError(members);
+    if (preflightError) {
+      res.status(409).json({ error: preflightError });
+      return;
+    }
+    const outcome = cleanDepartment(department, members);
+    const failed = outcome.results.filter((result) => !result.ok);
+    const responseMessage = appendDepartmentMessage({
+      threadId: thread.id,
+      role: "system",
+      intent: "system",
+      text: failed.length > 0
+        ? `部門工作階段部分重建失敗：${failed.map((result) => result.name).join("、")}`
+        : "已清除部門工作階段，所有成員記憶重新開始。",
+      attachmentIds: [],
+      missionId: null,
+      deliveryStatus: "delivered",
+      clientMessageId: null,
+      idempotencyKey: null,
+      classification: null,
+      createdAt: outcome.historyClearedAt ? timestampAfter(outcome.historyClearedAt) : undefined,
+    });
+    res.status(failed.length > 0 ? 207 : 200).json({
+      responseMessage,
+      results: outcome.results,
+      historyClearedAt: outcome.historyClearedAt,
+      ...departmentThreadPayload(department.id),
+    });
+    return;
+  }
   const attachmentRecords = persistAttachments(images, documents, res);
   if (!attachmentRecords) return;
   const attachmentIds = attachmentRecords.map((attachment) => attachment.id);
@@ -3126,6 +3250,7 @@ function bossTaskMessage(
   attachmentIds: string[] = [],
   clientMessageId: string | null = null,
   idempotencyKey: string | null = null,
+  createdAt = new Date().toISOString(),
 ) {
   return {
     id: randomUUID(),
@@ -3134,7 +3259,7 @@ function bossTaskMessage(
     attachmentIds: [...new Set(attachmentIds)],
     clientMessageId,
     idempotencyKey,
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
 }
 
@@ -3356,13 +3481,13 @@ app.get("/api/boss-tasks", (req, res) => {
     try { workspacePath = normalizeManagedWorkspacePath(requested); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
   }
-  res.json({ bossTasks: store.listBossTasks(workspacePath) });
+  res.json({ bossTasks: store.listBossTasks(workspacePath).map(bossTaskForDisplay) });
 });
 
 app.get("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
   if (!task) { res.status(404).json({ error: "找不到 Boss Task" }); return; }
-  res.json({ bossTask: task });
+  res.json({ bossTask: bossTaskForDisplay(task) });
 });
 
 app.post("/api/boss-tasks", async (req, res) => {
@@ -3373,7 +3498,7 @@ app.post("/api/boss-tasks", async (req, res) => {
   if (idempotencyKey) {
     const existing = store.listBossTasks().find((task) => task.idempotencyKey === idempotencyKey);
     if (existing) {
-      res.json({ bossTask: existing, duplicate: true });
+      res.json({ bossTask: bossTaskForDisplay(existing), duplicate: true });
       return;
     }
   }
@@ -3427,7 +3552,7 @@ app.post("/api/boss-tasks", async (req, res) => {
   if (!store.saveBossTask(task)) { res.status(500).json({ error: "無法保存 Boss Task" }); return; }
   broadcastBossTask(task, true);
   await decideBossTask(task);
-  res.status(201).json({ bossTask: task });
+  res.status(201).json({ bossTask: bossTaskForDisplay(task) });
 });
 
 app.patch("/api/boss-tasks/:id", (req, res) => {
@@ -3439,7 +3564,7 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
     return;
   }
   persistBossTask(task);
-  res.json({ bossTask: task });
+  res.json({ bossTask: bossTaskForDisplay(task) });
 });
 
 app.delete("/api/boss-tasks/:id", (req, res) => {
@@ -3464,7 +3589,7 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     || collaborationText(req.body?.clientMessageId, 200)
     || null;
   if (idempotencyKey && task.messages.some((entry) => entry.idempotencyKey === idempotencyKey)) {
-    res.json({ bossTask: task, duplicate: true });
+    res.json({ bossTask: bossTaskForDisplay(task), duplicate: true });
     return;
   }
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || null;
@@ -3483,6 +3608,33 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   }
   if (!message && images.length === 0 && documents.length === 0) {
     res.status(400).json({ error: "請輸入回覆內容或加入附件" });
+    return;
+  }
+  if (matchNativeCommand(message) === "clean") {
+    const bossDepartments = bossTaskDepartments(task);
+    if (bossDepartments.length === 0) {
+      res.status(400).json({ error: "這個 Boss Task 沒有可重建工作階段的部門" });
+      return;
+    }
+    const preflightError = await cleanBossTaskPreflightError(bossDepartments);
+    if (preflightError) {
+      res.status(409).json({ error: preflightError });
+      return;
+    }
+    const outcome = cleanBossTask(task, bossDepartments);
+    const failed = outcome.results.filter((result) => !result.ok);
+    task.messages.push(bossTaskMessage(
+      "system",
+      failed.length > 0
+        ? `工作階段部分重建失敗：${failed.map((result) => result.name).join("、")}`
+        : "已清除 Boss Task 與所屬部門的工作階段，所有成員記憶重新開始。",
+      [],
+      null,
+      null,
+      task.historyClearedAt ? timestampAfter(task.historyClearedAt) : undefined,
+    ));
+    persistBossTask(task);
+    res.status(failed.length > 0 ? 207 : 200).json({ bossTask: bossTaskForDisplay(task), results: outcome.results });
     return;
   }
   if (task.status !== "needs_input" && task.status !== "needs_attention" && task.status !== "completed" && task.status !== "failed") {
@@ -3508,14 +3660,14 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     if (blockedMission) {
       task.messages.push(bossTaskMessage("system", "指示已保存在 Boss Task；此中斷屬於進行中的部門 Mission，請從跨部門階段開啟該 Mission 後選擇重試、重新指派或接受風險。"));
       persistBossTask(task);
-      res.json({ bossTask: task });
+      res.json({ bossTask: bossTaskForDisplay(task) });
       return;
     }
     task.status = "ready";
     task.error = null;
     persistBossTask(task);
     advanceBossTask(task);
-    res.json({ bossTask: task });
+    res.json({ bossTask: bossTaskForDisplay(task) });
     return;
   }
   if (task.status === "completed" || task.status === "failed") {
@@ -3527,7 +3679,7 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   task.error = null;
   persistBossTask(task);
   await decideBossTask(task);
-  res.json({ bossTask: task });
+  res.json({ bossTask: bossTaskForDisplay(task) });
 });
 
 app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
@@ -4489,6 +4641,15 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(400).json({ error: "message or attachment required" });
     return;
   }
+  if (matchNativeCommand(message) === "clean") {
+    const result = cleanWorkerAndAnnounce(worker);
+    if (!result.ok) {
+      res.status(409).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true, cleaned: true });
+    return;
+  }
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   record(worker, { type: "user_message", text: [message, imageLabels, documentLabels].filter(Boolean).join("\n") });
@@ -4605,6 +4766,98 @@ app.post("/api/workers/:id/model", (req, res) => {
   res.json({ ok: true });
 });
 
+async function departmentCleanPreflightError(members: Worker[]): Promise<string | null> {
+  const blocked = members.filter((worker) =>
+    worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id),
+  );
+  if (blocked.length > 0) {
+    return `以下 NPC 正在工作，不能重建：${blocked.map((worker) => worker.runner.name).join("、")}`;
+  }
+  const providerErrors: string[] = [];
+  for (const provider of new Set(members.map((member) => member.runner.provider))) {
+    if (!providerReady(provider)) providerErrors.push(`${providerLabel(provider)} 尚未登入`);
+    else {
+      const usage = await usageRegistry.refresh(provider, true);
+      const usageError = usageBlockReason(provider, usage, null);
+      if (usageError) providerErrors.push(`${providerLabel(provider)}：${usageError}`);
+    }
+  }
+  return providerErrors.length > 0 ? providerErrors.join("；") : null;
+}
+
+type DepartmentCleanResult = {
+  ok: boolean;
+  results: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>;
+  historyClearedAt: string | null;
+};
+
+function cleanDepartment(department: Department, members: Worker[]): DepartmentCleanResult {
+  const results = members.map((worker) => {
+    const result = cleanWorkerAndAnnounce(worker);
+    return { workerId: worker.id, name: worker.runner.name, ok: result.ok, error: result.ok ? null : result.error };
+  });
+  departmentAudit("session_reset", department.id, null, {
+    requestedWorkerIds: members.map((worker) => worker.id),
+    results,
+  });
+  const failed = results.filter((result) => !result.ok);
+  let historyClearedAt: string | null = null;
+  if (failed.length === 0) {
+    const thread = ensureDepartmentThread(department.id);
+    historyClearedAt = new Date().toISOString();
+    thread.activeMissionId = null;
+    thread.summary = "";
+    thread.historyClearedAt = historyClearedAt;
+    thread.updatedAt = historyClearedAt;
+    store.saveDepartmentThread(thread);
+    broadcast({ type: "department_thread_updated", thread });
+  }
+  return { ok: failed.length === 0, results, historyClearedAt };
+}
+
+function bossTaskDepartments(task: BossTask): Department[] {
+  const ids = [...new Set(task.stages.map((stage) => stage.departmentId))];
+  return ids.flatMap((id) => {
+    const department = departments.get(id);
+    return department ? [department] : [];
+  });
+}
+
+function departmentMembers(department: Department): Worker[] {
+  return department.memberWorkerIds.flatMap((id) => {
+    const worker = workers.get(id);
+    return worker ? [worker] : [];
+  });
+}
+
+async function cleanBossTaskPreflightError(bossDepartments: Department[]): Promise<string | null> {
+  for (const department of bossDepartments) {
+    const activeMission = workspaceMission(department.workspacePath, department.id);
+    if (activeMission) return `${department.name} 仍有進行中或待決定的 Mission，不能重建工作階段`;
+  }
+  const members = bossDepartments.flatMap((department) => departmentMembers(department));
+  if (members.length === 0) return "這個 Boss Task 沒有可重建工作階段的部門成員";
+  return departmentCleanPreflightError(members);
+}
+
+type BossTaskCleanResult = {
+  ok: boolean;
+  results: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>;
+};
+
+function cleanBossTask(task: BossTask, bossDepartments: Department[]): BossTaskCleanResult {
+  const results: BossTaskCleanResult["results"] = [];
+  for (const department of bossDepartments) {
+    const members = departmentMembers(department);
+    if (members.length === 0) continue;
+    results.push(...cleanDepartment(department, members).results);
+  }
+  if (results.length > 0 && results.every((result) => result.ok)) {
+    task.historyClearedAt = new Date().toISOString();
+  }
+  return { ok: results.every((result) => result.ok), results };
+}
+
 app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
   const department = departments.get(req.params.departmentId);
   if (!department) { res.status(404).json({ error: "找不到部門" }); return; }
@@ -4623,24 +4876,9 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
       return worker ? [worker] : [];
     });
   if (members.length === 0) { res.status(400).json({ error: "沒有可重建工作階段的部門成員" }); return; }
-  const blocked = members.filter((worker) =>
-    worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id),
-  );
-  if (blocked.length > 0) {
-    res.status(409).json({ error: `以下 NPC 正在工作，不能重建：${blocked.map((worker) => worker.runner.name).join("、")}` });
-    return;
-  }
-  const providerErrors: string[] = [];
-  for (const provider of new Set(members.map((member) => member.runner.provider))) {
-    if (!providerReady(provider)) providerErrors.push(`${providerLabel(provider)} 尚未登入`);
-    else {
-      const usage = await usageRegistry.refresh(provider, true);
-      const usageError = usageBlockReason(provider, usage, null);
-      if (usageError) providerErrors.push(`${providerLabel(provider)}：${usageError}`);
-    }
-  }
-  if (providerErrors.length > 0) {
-    res.status(409).json({ error: providerErrors.join("；") });
+  const preflightError = await departmentCleanPreflightError(members);
+  if (preflightError) {
+    res.status(409).json({ error: preflightError });
     return;
   }
   const preview = members.map((worker) => ({
@@ -4658,49 +4896,13 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
     });
     return;
   }
-  const results = members.map((worker) => {
-    const provider = worker.runner.provider;
-    const workspacePath = worker.runner.workspacePath;
-    const model = worker.runner.getModel() ?? undefined;
-    const fresh = replaceWithFreshSession(
-      worker,
-      model,
-      () => createRunner(worker, provider, workspacePath),
-      () => persistWorker(worker),
-      (runner) => store.saveProviderCheckpoint(
-        worker.id,
-        provider,
-        workspacePath,
-        runner.getModel() ?? null,
-        runner.getPersistenceState(),
-      ),
-    );
-    if (!fresh) return { workerId: worker.id, name: worker.runner.name, ok: false, error: "無法保存新的工作階段" };
-    fresh.warmup();
-    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
-    return { workerId: worker.id, name: worker.runner.name, ok: true, error: null };
-  });
-  departmentAudit("session_reset", department.id, null, {
-    requestedWorkerIds: members.map((worker) => worker.id),
-    results,
-  });
-  const failed = results.filter((result) => !result.ok);
-  let historyClearedAt: string | null = null;
-  if (failed.length === 0) {
-    const thread = ensureDepartmentThread(department.id);
-    historyClearedAt = new Date().toISOString();
-    thread.activeMissionId = null;
-    thread.summary = "";
-    thread.historyClearedAt = historyClearedAt;
-    thread.updatedAt = historyClearedAt;
-    store.saveDepartmentThread(thread);
-    broadcast({ type: "department_thread_updated", thread });
-  }
+  const outcome = cleanDepartment(department, members);
+  const failed = outcome.results.filter((result) => !result.ok);
   res.status(failed.length > 0 ? 207 : 200).json({
-    ok: failed.length === 0,
-    results,
+    ok: outcome.ok,
+    results: outcome.results,
     retryWorkerIds: failed.map((result) => result.workerId),
-    historyClearedAt,
+    historyClearedAt: outcome.historyClearedAt,
   });
 });
 

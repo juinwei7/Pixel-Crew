@@ -613,6 +613,19 @@ export function useWorkers() {
     }
   }, []);
 
+  const renameDepartment = useCallback(async (departmentId: string, name: string): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ department: Department }>(`/api/departments/${departmentId}`, {
+        method: "PATCH",
+        body: { name },
+      });
+      setDepartments((current) => ({ ...current, [data.department.id]: data.department }));
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const assignBossTask = useCallback(async (input: {
     objective: string;
     acceptanceCriteria: string[];
@@ -1016,6 +1029,7 @@ export function useWorkers() {
     loadDepartmentThread,
     messageDepartment,
     resetDepartmentSessions,
+    renameDepartment,
     assignBossTask,
     createBossTask,
     messageBossTask,

@@ -99,7 +99,7 @@ function occurrenceCount(text: string, needle: string): number {
   return count;
 }
 
-function formatValue(value: unknown): string {
+export function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   try {
     return JSON.stringify(value, null, 2);
@@ -118,7 +118,7 @@ function CopyButton({ value, label = "複製" }: { value: string; label?: string
   }}>{copied ? "✓" : "⧉"}</button>;
 }
 
-function ToolRow({ item }: { item: ToolCallItem }) {
+export function ToolRow({ item }: { item: ToolCallItem }) {
   const [open, setOpen] = useState(item.status === "running" || item.isError);
   const { label, mcpServer } = toolMeta(item.name);
 
@@ -210,7 +210,7 @@ function ApprovalCard({ item, onApprove }: {
   );
 }
 
-function ToolGroup({ items, summary }: { items: ToolCallItem[]; summary: boolean }) {
+export function ToolGroup({ items, summary }: { items: ToolCallItem[]; summary: boolean }) {
   const urgent = items.some((item) => item.status === "running" || item.isError);
   const failed = items.filter((item) => item.isError).length;
   const running = items.filter((item) => item.status === "running").length;

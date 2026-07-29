@@ -55,7 +55,7 @@ export function App() {
     workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
-    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, createBossTask, messageBossTask, updateBossTask, deleteBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
     send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -69,7 +69,6 @@ export function App() {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
   const [bossMissionDetailId, setBossMissionDetailId] = useState<string | null>(null);
   const [departmentFocusSection, setDepartmentFocusSection] = useState<"team" | "history" | null>(null);
-  const [departmentFreshRequest, setDepartmentFreshRequest] = useState(0);
   const [providerChanging, setProviderChanging] = useState(false);
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
@@ -486,10 +485,7 @@ export function App() {
         onAvatarWorkshop={setAvatarWorkerId}
         onPersonaEditor={setPersonaWorkerId}
         onDepartmentMission={openDepartmentMission}
-        onDepartmentFreshSessions={(departmentKey) => {
-          openDepartmentMission(departmentKey);
-          setDepartmentFreshRequest((value) => value + 1);
-        }}
+        onRenameDepartment={renameDepartment}
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
@@ -655,7 +651,6 @@ export function App() {
           onLoadThread={loadDepartmentThread}
           onMessageDepartment={messageDepartment}
           onResetSessions={resetDepartmentSessions}
-          resetRequestKey={departmentFreshRequest}
           onCancel={cancelMission}
           onRetryReview={retryMissionReview}
           onApprovePlan={approveMissionPlan}
