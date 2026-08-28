@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { WorkerState } from "./types";
 
 export type WorkerSnapshot = {
@@ -45,7 +46,7 @@ export function diffNotifications(prev: Map<string, WorkerSnapshot>, workers: Wo
     if (approvalId && approvalId !== before.pendingApprovalId) {
       events.push({
         tag: `approval:${worker.id}:${approvalId}`,
-        title: `${worker.name} 等待核准`,
+        title: t("{name} 等待核准", { name: worker.name }),
         body: trim(approval && approval.kind === "approval" ? approval.request.title : ""),
       });
     }
@@ -53,7 +54,7 @@ export function diffNotifications(prev: Map<string, WorkerSnapshot>, workers: Wo
     if (before.busy && !worker.busy && last && (last.status === "done" || last.status === "error")) {
       events.push({
         tag: `turn:${worker.id}:${last.key}`,
-        title: last.status === "done" ? `${worker.name} 完成任務` : `${worker.name} 任務失敗`,
+        title: last.status === "done" ? t("{name} 完成任務", { name: worker.name }) : t("{name} 任務失敗", { name: worker.name }),
         body: trim(last.command),
       });
     }

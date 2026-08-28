@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { AVATAR_ID, validateGif, validatePng } from "./avatarStore.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 export class BackupValidationError extends Error {}
 
@@ -60,7 +61,7 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
       entryCount++;
       extractedBytes += Number(entry.size) || 0;
       if (entryCount > MAX_ARCHIVE_ENTRIES || extractedBytes > MAX_EXTRACTED_BYTES) {
-        rejected = "備份檔案解壓後過大或包含過多項目";
+        rejected = t("備份檔案解壓後過大或包含過多項目");
         return false;
       }
       // A tar entry can itself be typed as a symlink/hardlink — `tar`'s own
@@ -68,13 +69,13 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
       // renames/copies through the staged tree, so a symlink entry is a
       // distinct escape vector once that happens.
       if ("type" in entry && (entry.type === "SymbolicLink" || entry.type === "Link")) {
-        rejected = `不允許的檔案類型：${entryPath}`;
+        rejected = t("不允許的檔案類型：{path}", { path: entryPath });
         return false;
       }
       const resolved = join(stagingDir, entryPath);
       const rel = relative(stagingDir, resolved);
       if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel))) {
-        rejected = `不安全的路徑：${entryPath}`;
+        rejected = t("不安全的路徑：{path}", { path: entryPath });
         return false;
       }
 
@@ -88,7 +89,7 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
         || /^db\/cockpit\.sqlite(?:-(?:wal|shm))?$/.test(normalized)
         || /^avatars\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:png|gif)$/i.test(normalized);
       if ((isDirectory && !allowedDirectory) || (!isDirectory && !allowedFile)) {
-        rejected = `備份檔案包含未知項目：${entryPath}`;
+        rejected = t("備份檔案包含未知項目：{path}", { path: entryPath });
         return false;
       }
       return true;
@@ -100,16 +101,16 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
   try {
     manifest = JSON.parse(readFileSync(join(stagingDir, "manifest.json"), "utf8"));
   } catch {
-    throw new BackupValidationError("不是有效的 Pixel Crew 備份檔案");
+    throw new BackupValidationError(t("不是有效的 Pixel Crew 備份檔案"));
   }
   if (manifest.formatVersion !== 1) {
-    throw new BackupValidationError("備份檔案版本不受支援，請使用相容版本的 Pixel Crew 匯出");
+    throw new BackupValidationError(t("備份檔案版本不受支援，請使用相容版本的 Pixel Crew 匯出"));
   }
 
   const dbPath = join(stagingDir, "db", "cockpit.sqlite");
-  if (!existsSync(dbPath)) throw new BackupValidationError("備份檔案缺少資料庫");
+  if (!existsSync(dbPath)) throw new BackupValidationError(t("備份檔案缺少資料庫"));
   if (!readMagicHeader(dbPath).equals(SQLITE_MAGIC)) {
-    throw new BackupValidationError("資料庫檔案格式無效");
+    throw new BackupValidationError(t("資料庫檔案格式無效"));
   }
 
   let workerCount = 0;
@@ -117,12 +118,12 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
   try {
     const integrity = db.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check?: string }>;
     if (integrity.length !== 1 || integrity[0]?.integrity_check !== "ok") {
-      throw new BackupValidationError("資料庫完整性檢查失敗，此備份檔案可能已損毀");
+      throw new BackupValidationError(t("資料庫完整性檢查失敗，此備份檔案可能已損毀"));
     }
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workers','runner_events')")
       .all() as Array<{ name: string }>;
-    if (tables.length !== 2) throw new BackupValidationError("資料庫缺少必要的資料表");
+    if (tables.length !== 2) throw new BackupValidationError(t("資料庫缺少必要的資料表"));
     const countRow = db.prepare("SELECT COUNT(*) AS count FROM workers").get() as { count?: number } | undefined;
     workerCount = countRow?.count ?? 0;
   } finally {
@@ -151,7 +152,7 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
         skipped++;
       }
     }
-    if (skipped > 0) warnings.push(`已略過 ${skipped} 個角色圖片（驗證失敗）`);
+    if (skipped > 0) warnings.push(t("已略過 {n} 個角色圖片（驗證失敗）", { n: skipped }));
   }
 
   return {

@@ -6,7 +6,8 @@ import { apiRequest } from "../api";
 import { parseWorkflowDocument, workflowText } from "../workflowDocument";
 import { CodexSkillCenter } from "./CodexSkillCenter";
 import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { Modal } from "./Modal";
+import { t } from "../i18n";
 
 const NEW_COMMAND = `---
 description: 說明這個指令適合在什麼情況使用
@@ -60,8 +61,6 @@ export function CommandCenter({
   const [reloadNonce, setReloadNonce] = useState(0);
   const forceReload = useRef(false);
   const loadScope = useRef("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef);
   const [runTargetId, setRunTargetId] = useState(activeWorkerId ?? "");
   const [runInput, setRunInput] = useState("");
   const [running, setRunning] = useState(false);
@@ -89,7 +88,7 @@ export function CommandCenter({
     }
     if (dirty && !forceReload.current) {
       setExternalChange(true);
-      setNotice({ ok: false, text: "指令檔已在外部更新；目前修改尚未被覆蓋" });
+      setNotice({ ok: false, text: t("指令檔已在外部更新；目前修改尚未被覆蓋") });
       return;
     }
     forceReload.current = false;
@@ -131,13 +130,13 @@ export function CommandCenter({
   function switchProviderView(next: ProviderId) {
     if (next === providerView) return;
     const activeDirty = providerView === "claude" ? dirty : codexDirty;
-    if (activeDirty && !window.confirm("目前修改尚未儲存，確定要切換 Provider 嗎？")) return;
+    if (activeDirty && !window.confirm(t("目前修改尚未儲存，確定要切換 Provider 嗎？"))) return;
     setProviderView(next);
     setNotice(null);
   }
 
   function select(command: CommandDocument) {
-    if (dirty && !window.confirm("目前修改尚未儲存，確定要切換指令嗎？")) return;
+    if (dirty && !window.confirm(t("目前修改尚未儲存，確定要切換指令嗎？"))) return;
     setSelectedName(command.name);
     setName(command.name);
     setContent(command.content);
@@ -145,7 +144,7 @@ export function CommandCenter({
   }
 
   function create() {
-    if (dirty && !window.confirm("目前修改尚未儲存，確定要建立新指令嗎？")) return;
+    if (dirty && !window.confirm(t("目前修改尚未儲存，確定要建立新指令嗎？"))) return;
     setSelectedName(null);
     setName("");
     setContent(NEW_COMMAND);
@@ -154,17 +153,9 @@ export function CommandCenter({
 
   function close() {
     const activeDirty = providerView === "claude" ? dirty : codexDirty;
-    if (activeDirty && !window.confirm("目前修改尚未儲存，確定要關閉嗎？")) return;
+    if (activeDirty && !window.confirm(t("目前修改尚未儲存，確定要關閉嗎？"))) return;
     onClose();
   }
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [codexDirty, dirty, onClose, providerView]);
 
   async function save() {
     setSaving(true);
@@ -181,7 +172,7 @@ export function CommandCenter({
       setName(saved.name);
       setContent(saved.content);
       setExternalChange(false);
-      setNotice({ ok: true, text: `/${saved.name} 已儲存，斜線選單已更新` });
+      setNotice({ ok: true, text: t("/{name} 已儲存，斜線選單已更新", { name: saved.name }) });
     } catch (error) {
       setExternalChange(true);
       setNotice({ ok: false, text: (error as Error).message });
@@ -191,7 +182,7 @@ export function CommandCenter({
   }
 
   async function remove() {
-    if (!selected || !window.confirm(`確定要刪除 /${selected.name} 嗎？`)) return;
+    if (!selected || !window.confirm(t("確定要刪除 /{name} 嗎？", { name: selected.name }))) return;
     setSaving(true);
     setNotice(null);
     try {
@@ -203,7 +194,7 @@ export function CommandCenter({
       setSelectedName(null);
       setName("");
       setContent("");
-      setNotice({ ok: true, text: `/${selected.name} 已刪除` });
+      setNotice({ ok: true, text: t("/{name} 已刪除", { name: selected.name }) });
     } catch (error) {
       setExternalChange(true);
       setNotice({ ok: false, text: (error as Error).message });
@@ -220,7 +211,7 @@ export function CommandCenter({
       const error = await onRun(effectiveRunTarget, workflowInvocation("claude", selected.name, runInput));
       setNotice(error
         ? { ok: false, text: error }
-        : { ok: true, text: `已交給 ${targets.find((target) => target.id === effectiveRunTarget)?.name ?? "NPC"} 試跑` });
+        : { ok: true, text: t("已交給 {name} 試跑", { name: targets.find((target) => target.id === effectiveRunTarget)?.name ?? "NPC" }) });
     } finally {
       setRunning(false);
     }
@@ -235,13 +226,12 @@ export function CommandCenter({
     : targets.find((target) => target.id === activeWorkerId)?.id ?? targets[0]?.id ?? "";
 
   return (
-    <div ref={dialogRef} className="command-center" role="dialog" aria-modal="true" aria-label="指令中心">
-      <div className="command-center__shell">
+    <Modal label={t("指令中心")} overlayClassName="command-center" cardClassName="command-center__shell" hideClose onClose={close}>
         <header className="command-center__header">
           <div>
             <span className="command-center__eyebrow">PROVIDER WORKFLOWS</span>
-            <h2>{providerView === "claude" ? "Claude 指令中心" : "Codex Skills"}</h2>
-            <p>{providerView === "claude" ? "管理這個房間的 Claude Code 專屬指令。" : "管理這個房間的 repo-scoped Codex Skills。"}</p>
+            <h2>{providerView === "claude" ? t("Claude 指令中心") : "Codex Skills"}</h2>
+            <p>{providerView === "claude" ? t("管理這個房間的 Claude Code 專屬指令。") : t("管理這個房間的 repo-scoped Codex Skills。")}</p>
           </div>
           <div className="command-center__providers" aria-label="Provider">
             <button
@@ -260,10 +250,10 @@ export function CommandCenter({
             </button>
           </div>
           <div className="command-center__room">
-            <span>目前房間</span>
+            <span>{t("目前房間")}</span>
             <strong>{roomName(workspacePath)}</strong>
           </div>
-          <button className="command-center__close" type="button" onClick={close} aria-label="關閉">×</button>
+          <button className="command-center__close" type="button" onClick={close} aria-label={t("關閉")}>×</button>
         </header>
 
         {providerView === "claude" ? <div className="command-center__body">
@@ -272,19 +262,19 @@ export function CommandCenter({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜尋名稱或用途…"
-                aria-label="搜尋指令"
+                placeholder={t("搜尋名稱或用途…")}
+                aria-label={t("搜尋指令")}
               />
-              <button type="button" onClick={create}>＋ 新增</button>
+              <button type="button" onClick={create}>{t("＋ 新增")}</button>
             </div>
             <div className="command-library__scope">
               <span>PROJECT</span>
               <code>.claude/commands</code>
             </div>
             <div className="command-library__list">
-              {loading && <div className="command-library__empty">正在讀取本機指令…</div>}
+              {loading && <div className="command-library__empty">{t("正在讀取本機指令…")}</div>}
               {!loading && filtered.length === 0 && (
-                <div className="command-library__empty">這個房間還沒有符合的指令。</div>
+                <div className="command-library__empty">{t("這個房間還沒有符合的指令。")}</div>
               )}
               {filtered.map((command) => (
                 <button
@@ -294,7 +284,7 @@ export function CommandCenter({
                   onClick={() => select(command)}
                 >
                   <code>/{command.name}</code>
-                  <span>{command.description || "尚未填寫用途說明"}</span>
+                  <span>{command.description || t("尚未填寫用途說明")}</span>
                 </button>
               ))}
             </div>
@@ -305,9 +295,9 @@ export function CommandCenter({
               <div className="command-editor__welcome">
                 {notice && <div className="command-editor__load-error" role="alert">{notice.text}</div>}
                 <div className="command-editor__glyph">/</div>
-                <h3>選擇一個指令開始編輯</h3>
-                <p>或建立新的工作流程，儲存後就能直接從輸入框的 `/` 選單使用。</p>
-                <button type="button" onClick={create}>建立第一個指令</button>
+                <h3>{t("選擇一個指令開始編輯")}</h3>
+                <p>{t("或建立新的工作流程，儲存後就能直接從輸入框的 `/` 選單使用。")}</p>
+                <button type="button" onClick={create}>{t("建立第一個指令")}</button>
               </div>
             ) : (
               <>
@@ -320,35 +310,35 @@ export function CommandCenter({
                     </div>
                   </label>
                   <div className="command-editor__meta">
-                    <span>{liveDescription || "加入 description，讓其他人知道什麼時候該使用"}</span>
+                    <span>{liveDescription || t("加入 description，讓其他人知道什麼時候該使用")}</span>
                     {liveArgumentHint && <code>{liveArgumentHint}</code>}
                   </div>
                 </div>
                 <WorkflowDocumentEditor key={selectedName ?? "new-command"} provider="claude" content={content} onChange={setContent} />
                 {selected && (
                   <div className="workflow-test">
-                    <span>試跑</span>
+                    <span>{t("試跑")}</span>
                     <select value={effectiveRunTarget} onChange={(event) => setRunTargetId(event.target.value)} disabled={targets.length === 0 || running}>
-                      {targets.length === 0 && <option value="">沒有可用的 Claude NPC</option>}
+                      {targets.length === 0 && <option value="">{t("沒有可用的 Claude NPC")}</option>}
                       {targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
                     </select>
-                    <input value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder={liveArgumentHint || "選填參數"} />
-                    <button type="button" disabled={dirty || !effectiveRunTarget || running} onClick={() => void runWorkflow()}>{running ? "送出中…" : "執行"}</button>
+                    <input value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder={liveArgumentHint || t("選填參數")} />
+                    <button type="button" disabled={dirty || !effectiveRunTarget || running} onClick={() => void runWorkflow()}>{running ? t("送出中…") : t("執行")}</button>
                   </div>
                 )}
                 <footer className="command-editor__footer">
                   <div className={`command-editor__notice ${notice?.ok ? "command-editor__notice--ok" : ""}`}>
-                    {notice?.text ?? (dirty ? "有尚未儲存的修改" : "所有修改已儲存")}
+                    {notice?.text ?? (dirty ? t("有尚未儲存的修改") : t("所有修改已儲存"))}
                   </div>
                   {externalChange && <button className="command-editor__reload" type="button" onClick={() => {
-                    if (!window.confirm("載入外部版本會捨棄目前未儲存的修改，確定嗎？")) return;
+                    if (!window.confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？"))) return;
                     forceReload.current = true;
                     setExternalChange(false);
                     setReloadNonce((value) => value + 1);
-                  }}>載入外部版本</button>}
-                  {selected && <button className="command-editor__delete" type="button" disabled={saving} onClick={() => void remove()}>刪除</button>}
+                  }}>{t("載入外部版本")}</button>}
+                  {selected && <button className="command-editor__delete" type="button" disabled={saving} onClick={() => void remove()}>{t("刪除")}</button>}
                   <button className="command-editor__save" type="button" disabled={saving || !name.trim() || !content.trim() || !dirty} onClick={() => void save()}>
-                    {saving ? "儲存中…" : "儲存指令"}
+                    {saving ? t("儲存中…") : t("儲存指令")}
                   </button>
                 </footer>
               </>
@@ -362,7 +352,6 @@ export function CommandCenter({
           onRun={onRun}
           onDirtyChange={setCodexDirty}
         />}
-      </div>
-    </div>
+    </Modal>
   );
 }

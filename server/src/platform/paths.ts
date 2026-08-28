@@ -1,6 +1,7 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, posix, resolve, win32 } from "node:path";
+import { t } from "../i18n.js";
 
 export type PlatformName = NodeJS.Platform;
 
@@ -51,17 +52,17 @@ export function sameWorkspace(left: string, right: string, platform: PlatformNam
 export function canonicalWorkspacePath(input: unknown, fallback: string): string {
   const requested = String(input ?? "").trim() || fallback;
   const expanded = expandHomePath(requested);
-  if (!isAbsolute(expanded)) throw new Error("請輸入本機絕對路徑");
+  if (!isAbsolute(expanded)) throw new Error(t("請輸入本機絕對路徑"));
   if (process.platform === "win32" && /^\\\\/.test(expanded)) {
-    throw new Error("目前 Windows 版本先支援本機磁碟；UNC 與 WSL 網路路徑尚未開放");
+    throw new Error(t("目前 Windows 版本先支援本機磁碟；UNC 與 WSL 網路路徑尚未開放"));
   }
   try {
     const canonical = realpathSync(expanded);
-    if (!statSync(canonical).isDirectory()) throw new Error("工作位置不是資料夾");
+    if (!statSync(canonical).isDirectory()) throw new Error(t("工作位置不是資料夾"));
     return canonical;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("找不到這個資料夾，請確認本機絕對路徑");
+      throw new Error(t("找不到這個資料夾，請確認本機絕對路徑"));
     }
     throw error;
   }

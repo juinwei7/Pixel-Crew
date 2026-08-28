@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import { SHIRT_COLORS } from "./person";
 import { ART_W } from "./room";
+import { t } from "../i18n";
 
 export type DepartmentPhase = "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
 
@@ -212,6 +213,7 @@ export class PersonalDeskLayer {
     private readonly onSelect: (id: string) => void,
     private readonly onDepartmentSelect?: (workspacePath: string) => void,
     private readonly onDepartmentRename?: (workspacePath: string, position: { x: number; y: number }) => void,
+    private readonly isDragging: () => boolean = () => false,
   ) {
     this.container.sortableChildren = true;
     this.departmentLayer.zIndex = -10;
@@ -350,8 +352,8 @@ export class PersonalDeskLayer {
         : department.phase === "mission_consult" ? "CONSULT"
         : department.phase === "needs_attention" ? "NEEDS INPUT" : "";
       const suffixParts = [
-        department.kind === "department" ? `${department.memberCount}人` : "個人工作站",
-        phaseLabel || (this.onDepartmentSelect ? "交辦" : ""),
+        department.kind === "department" ? t("{count}人", { count: department.memberCount }) : t("個人工作站"),
+        phaseLabel || (this.onDepartmentSelect ? t("交辦") : ""),
       ]
         .filter(Boolean);
       const suffix = suffixParts.length ? ` · ${suffixParts.join(" · ")}` : "";
@@ -392,7 +394,15 @@ export class PersonalDeskLayer {
           .fill({ color: department.accent, alpha: 0.001 });
         sign.eventMode = "static";
         sign.cursor = "pointer";
-        sign.on("pointertap", (event) => {
+        // Open on a real tap, not pointertap — Pixi's tap tolerance is generous
+        // enough that a small pan over the sign still fired, which is exactly the
+        // accidental "直接交辦" dialog on phones. Guard with the shared drag flag.
+        let signPid = -1;
+        sign.on("pointerdown", (event) => { signPid = event.pointerId; });
+        sign.on("pointerup", (event) => {
+          if (event.pointerId !== signPid) return;
+          signPid = -1;
+          if (this.isDragging()) return;
           event.stopPropagation();
           this.onDepartmentSelect?.(department.workspacePath);
         });
@@ -415,7 +425,12 @@ export class PersonalDeskLayer {
           pencil.cursor = "pointer";
           pencil.on("pointerover", () => { pencil.style.fill = 0x4de3ff; });
           pencil.on("pointerout", () => { pencil.style.fill = 0x8fa7c3; });
-          pencil.on("pointertap", (event) => {
+          let pencilPid = -1;
+          pencil.on("pointerdown", (event) => { pencilPid = event.pointerId; });
+          pencil.on("pointerup", (event) => {
+            if (event.pointerId !== pencilPid) return;
+            pencilPid = -1;
+            if (this.isDragging()) return;
             event.stopPropagation();
             this.onDepartmentRename?.(department.workspacePath, { x: event.global.x, y: event.global.y });
           });
@@ -505,7 +520,15 @@ export class PersonalDeskLayer {
     container.hitArea = {
       contains: (x: number, y: number) => x >= -16 && x <= 16 && y >= -23 && y <= 7,
     };
-    container.on("pointerdown", () => this.onSelect(worker.id));
+    // Select on a real tap, not pointerdown — dragging the map from on top of a
+    // desk must pan, not select (which would open the task log). See scene.ts.
+    let deskPid = -1;
+    container.on("pointerdown", (event) => { deskPid = event.pointerId; });
+    container.on("pointerup", (event) => {
+      if (event.pointerId !== deskPid) return;
+      deskPid = -1;
+      if (!this.isDragging()) this.onSelect(worker.id);
+    });
     container.addChild(highlight, blueprint, ...parts, effect);
     for (const part of parts) part.visible = false;
     return {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AutoApproveMode, ProviderId, WorkerState } from "../types";
+import { t, tc } from "../i18n";
 
 type ModelOption = { id: string; label: string; description?: string };
 
@@ -106,18 +107,18 @@ export function FocusControls({
         className="focus-controls__trigger"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-label="專心模式管理面板"
+        aria-label={t("專心模式管理面板")}
       >
-        <span aria-hidden="true">⚙</span> 管理
+        <span aria-hidden="true">⚙</span> {t("管理")}
       </button>
       {open && (
-        <div className="focus-controls__panel" role="menu" aria-label="專心模式功能">
+        <div className="focus-controls__panel" role="menu" aria-label={t("專心模式功能")}>
           <section>
-            <h4>目前 NPC</h4>
+            <h4>{t("目前 NPC")}</h4>
             {active ? (
               <>
                 <label className="focus-controls__row">
-                  <span>模型</span>
+                  <span>{t("模型")}</span>
                   <select
                     value={active.model ?? ""}
                     disabled={active.busy || !authReady || modelOptions.length === 0}
@@ -127,19 +128,20 @@ export function FocusControls({
                   </select>
                 </label>
                 <label className="focus-controls__row">
-                  <span>自動核准</span>
+                  <span>{t("自動核准")}</span>
                   <select
                     className={`focus-controls__auto-approve focus-controls__auto-approve--${active.autoApproveMode}`}
                     value={active.autoApproveMode}
                     onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
                   >
-                    <option value="off">關閉</option>
-                    <option value="safe">安全</option>
-                    <option value="full">完全</option>
+                    <option value="off">{tc("自動核准", "關閉")}</option>
+                    <option value="safe">{t("安全")}</option>
+                    <option value="full">{t("完全")}</option>
+                    <option value="invincible">{t("⚡ 無限制")}</option>
                   </select>
                 </label>
                 <label className="focus-controls__row">
-                  <span>引擎</span>
+                  <span>{t("引擎")}</span>
                   <select
                     value={active.provider}
                     disabled={active.busy || providerChanging}
@@ -150,7 +152,7 @@ export function FocusControls({
                   </select>
                 </label>
                 <div className="focus-controls__row">
-                  <span>名稱</span>
+                  <span>{t("名稱")}</span>
                   {renaming ? (
                     <span className="focus-controls__rename">
                       <input
@@ -158,29 +160,29 @@ export function FocusControls({
                         autoFocus
                         maxLength={24}
                         className={renameError ? "focus-controls__rename--error" : ""}
-                        title={renameError ?? "Enter 儲存，Esc 取消"}
+                        title={renameError ?? t("Enter 儲存，Esc 取消")}
                         onChange={(event) => { setDraft(event.target.value); setRenameError(null); }}
                         onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveName(); } }}
                       />
-                      <button type="button" onClick={() => void saveName()}>儲存</button>
+                      <button type="button" onClick={() => void saveName()}>{t("儲存")}</button>
                     </span>
                   ) : (
                     <button type="button" onClick={() => { setRenaming(true); setConfirmRemove(false); setDraft(active.name); setRenameError(null); }}>
-                      {active.name} · 改名
+                      {t("{name} · 改名", { name: active.name })}
                     </button>
                   )}
                 </div>
                 <div className="focus-controls__actions">
-                  <button type="button" onClick={() => { onPersona(); setOpen(false); }}>個性 / 職務</button>
-                  <button type="button" onClick={() => { onAvatar(); setOpen(false); }}>像素角色</button>
-                  <button type="button" onClick={() => { onRoom(); setOpen(false); }}>切換房間</button>
+                  <button type="button" onClick={() => { onPersona(); setOpen(false); }}>{t("個性 / 職務")}</button>
+                  <button type="button" onClick={() => { onAvatar(); setOpen(false); }}>{t("像素角色")}</button>
+                  <button type="button" onClick={() => { onRoom(); setOpen(false); }}>{t("切換房間")}</button>
                 </div>
                 {workerCount > 1 && (
                   confirmRemove ? (
                     <div className="focus-controls__confirm">
-                      <span>確定移除 {active.name}？</span>
-                      <button type="button" className="focus-controls__danger" onClick={() => { onRemove(active.id); setConfirmRemove(false); setOpen(false); }}>移除</button>
-                      <button type="button" onClick={() => setConfirmRemove(false)}>取消</button>
+                      <span>{t("確定移除 {name}？", { name: active.name })}</span>
+                      <button type="button" className="focus-controls__danger" onClick={() => { onRemove(active.id); setConfirmRemove(false); setOpen(false); }}>{t("移除")}</button>
+                      <button type="button" onClick={() => setConfirmRemove(false)}>{t("取消")}</button>
                     </div>
                   ) : (
                     <div className="focus-controls__actions">
@@ -198,25 +200,25 @@ export function FocusControls({
                           }
                         }}
                       >
-                        移除人員
+                        {t("移除人員")}
                       </button>
                     </div>
                   )
                 )}
               </>
-            ) : <p className="focus-controls__empty">尚未選擇 NPC</p>}
+            ) : <p className="focus-controls__empty">{t("尚未選擇 NPC")}</p>}
           </section>
           <section>
-            <h4>團隊</h4>
+            <h4>{t("團隊")}</h4>
             <div className="focus-controls__actions">
-              <button type="button" onClick={() => { onCreateNpc(); setOpen(false); }}>＋ 新增 NPC</button>
-              {onCreateDepartment && <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>＋ 建立部門</button>}
-              <button type="button" onClick={() => { onOpenMcp(); setOpen(false); }}>MCP 伺服器</button>
-              <button type="button" onClick={() => { onOpenBackup(); setOpen(false); }}>備份與還原</button>
-              <button type="button" onClick={() => { onOpenCommandCenter(); setOpen(false); }}>指令庫</button>
+              <button type="button" onClick={() => { onCreateNpc(); setOpen(false); }}>{t("＋ 新增 NPC")}</button>
+              {onCreateDepartment && <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>{t("＋ 建立部門")}</button>}
+              <button type="button" onClick={() => { onOpenMcp(); setOpen(false); }}>{t("MCP 伺服器")}</button>
+              <button type="button" onClick={() => { onOpenBackup(); setOpen(false); }}>{t("備份與還原")}</button>
+              <button type="button" onClick={() => { onOpenCommandCenter(); setOpen(false); }}>{t("指令庫")}</button>
             </div>
             <label className="focus-controls__row focus-controls__notify">
-              <span>桌面通知</span>
+              <span>{t("桌面通知")}</span>
               <input type="checkbox" checked={notificationsEnabled} onChange={onNotificationsToggle} />
             </label>
           </section>

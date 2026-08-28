@@ -1,3 +1,5 @@
+import { t } from "../i18n.js";
+
 export function parseCommandLine(input: string): string[] {
   const result: string[] = [];
   let token = "";
@@ -23,8 +25,8 @@ export function parseCommandLine(input: string): string[] {
       token += input[++index];
     } else token += char;
   }
-  if (quote) throw new Error("MCP 指令的引號沒有成對");
+  if (quote) throw new Error(t("MCP 指令的引號沒有成對"));
   if (token) result.push(token);
-  if (result.length === 0) throw new Error("MCP 指令不能是空白");
+  if (result.length === 0) throw new Error(t("MCP 指令不能是空白"));
   return result;
 }

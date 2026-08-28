@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../i18n";
 import type { ProviderAuthState, ProviderId, ProviderInstallState } from "../types";
 
 type Props = {
@@ -30,11 +31,11 @@ export function providerVerifyCommand(provider: ProviderId): string {
 }
 
 function statusLabel(auth: ProviderAuthState): string {
-  if (auth.status === "authenticated") return "已就緒";
-  if (auth.status === "checking") return "檢查中";
-  if (auth.status === "cli_missing") return "尚未安裝";
-  if (auth.status === "unauthenticated") return "需要登入";
-  return "連線異常";
+  if (auth.status === "authenticated") return t("已就緒");
+  if (auth.status === "checking") return t("檢查中");
+  if (auth.status === "cli_missing") return t("尚未安裝");
+  if (auth.status === "unauthenticated") return t("需要登入");
+  return t("連線異常");
 }
 
 export function AuthGate({ auth, providers, installs, platform, onRefresh, onInstall, onUseProvider }: Props) {
@@ -75,14 +76,14 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
         <h1 id="auth-title" className="auth-gate__title">
           {blocking
             ? checkingAll
-              ? "正在尋找可用的 AI 隊員…"
-              : "連接一位 AI 隊員"
-            : `${auth.displayName} 尚未就緒`}
+              ? t("正在尋找可用的 AI 隊員…")
+              : t("連接一位 AI 隊員")
+            : t("{name} 尚未就緒", { name: auth.displayName })}
         </h1>
         <p className="auth-gate__body">
           {blocking
-            ? "Claude Code 或 Codex 任一完成安裝與登入，就能開始工作。Pixel Crew 不會接收帳號、密碼或 token。"
-            : `辦公室仍可使用 ${readyProviders.map((provider) => providers[provider].displayName).join(" 或 ")}。你可以先切換隊員，或依下方步驟設定 ${auth.displayName}。`}
+            ? t("Claude Code 或 Codex 任一完成安裝與登入，就能開始工作。Pixel Crew 不會接收帳號、密碼或 token。")
+            : t("辦公室仍可使用 {providers}。你可以先切換隊員，或依下方步驟設定 {name}。", { providers: readyProviders.map((provider) => providers[provider].displayName).join(" 或 "), name: auth.displayName })}
         </p>
 
         <div className={`auth-provider-grid ${blocking ? "" : "auth-provider-grid--single"}`}>
@@ -94,7 +95,7 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
             const showInstall = state.status === "cli_missing" || state.status === "error";
             const showSetup = state.status !== "checking" && state.status !== "authenticated";
             return (
-              <section key={provider} className={`auth-provider-card auth-provider-card--${state.status}`} aria-label={`${state.displayName} 連線設定`}>
+              <section key={provider} className={`auth-provider-card auth-provider-card--${state.status}`} aria-label={t("{name} 連線設定", { name: state.displayName })}>
                 <header className="auth-provider-card__header">
                   <div>
                     <span>{provider === "claude" ? "CL" : "CX"}</span>
@@ -103,24 +104,24 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                   <b>{statusLabel(state)}</b>
                 </header>
 
-                {state.status === "checking" && <div className="auth-provider-card__checking"><span className="spinner" />正在確認 CLI 與登入狀態</div>}
-                {state.status === "authenticated" && <p className="auth-provider-card__ready">已可接收任務。</p>}
+                {state.status === "checking" && <div className="auth-provider-card__checking"><span className="spinner" />{t("正在確認 CLI 與登入狀態")}</div>}
+                {state.status === "authenticated" && <p className="auth-provider-card__ready">{t("已可接收任務。")}</p>}
 
                 {showSetup && (
                   <ol className="auth-provider-steps">
                     {showInstall && (
                       <li>
                         <span>1</span>
-                        <div><strong>安裝 CLI</strong><CommandRow command={installCommand} copyKey={`${provider}:install`} copied={copied} onCopy={copyCommand} /></div>
+                        <div><strong>{t("安裝 CLI")}</strong><CommandRow command={installCommand} copyKey={`${provider}:install`} copied={copied} onCopy={copyCommand} /></div>
                       </li>
                     )}
                     <li>
                       <span>{showInstall ? "2" : "1"}</span>
-                      <div><strong>在終端機登入</strong><CommandRow command={state.loginCommand} copyKey={`${provider}:login`} copied={copied} onCopy={copyCommand} /></div>
+                      <div><strong>{t("在終端機登入")}</strong><CommandRow command={state.loginCommand} copyKey={`${provider}:login`} copied={copied} onCopy={copyCommand} /></div>
                     </li>
                     <li>
                       <span>{showInstall ? "3" : "2"}</span>
-                      <div><strong>確認安裝完成</strong><CommandRow command={verifyCommand} copyKey={`${provider}:verify`} copied={copied} onCopy={copyCommand} /></div>
+                      <div><strong>{t("確認安裝完成")}</strong><CommandRow command={verifyCommand} copyKey={`${provider}:verify`} copied={copied} onCopy={copyCommand} /></div>
                     </li>
                   </ol>
                 )}
@@ -132,7 +133,7 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                         {install.status === "running" && <span className="spinner" />}
                         <strong>{install.phase}</strong>
                         {install.error && <p>{install.error}</p>}
-                        {install.output && <details><summary>安裝器輸出</summary><pre>{install.output}</pre></details>}
+                        {install.output && <details><summary>{t("安裝器輸出")}</summary><pre>{install.output}</pre></details>}
                       </div>
                     )}
                     <button
@@ -141,7 +142,7 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                       onClick={() => setConfirmProvider(provider)}
                       disabled={install.status === "running"}
                     >
-                      {install.status === "running" ? "安裝中…" : install.status === "failed" ? "重新安裝／修復" : "一鍵安裝／修復"}
+                      {install.status === "running" ? t("安裝中…") : install.status === "failed" ? t("重新安裝／修復") : t("一鍵安裝／修復")}
                     </button>
                   </div>
                 )}
@@ -149,15 +150,15 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                 {state.error && <div className="auth-gate__error">{state.error}</div>}
                 {state.debug && (
                   <details className="auth-gate__debug">
-                    <summary>診斷資訊</summary>
+                    <summary>{t("診斷資訊")}</summary>
                     <pre>{state.debug}</pre>
                   </details>
                 )}
                 {state.status !== "authenticated" && (
                   <div className="auth-provider-card__footer">
-                    <a href={DOCS[provider]} target="_blank" rel="noreferrer">官方安裝說明 ↗</a>
+                    <a href={DOCS[provider]} target="_blank" rel="noreferrer">{t("官方安裝說明 ↗")}</a>
                     <button type="button" onClick={() => void onRefresh(provider)} disabled={state.status === "checking"}>
-                      {state.status === "checking" ? "檢查中…" : "重新檢查"}
+                      {state.status === "checking" ? t("檢查中…") : t("重新檢查")}
                     </button>
                   </div>
                 )}
@@ -170,29 +171,29 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
           <div className="auth-gate__actions">
             {readyProviders.map((provider) => (
               <button key={provider} type="button" className="auth-gate__alternative" onClick={() => onUseProvider(provider)}>
-                改用 {providers[provider].displayName}
+                {t("改用 {name}", { name: providers[provider].displayName })}
               </button>
             ))}
           </div>
         )}
-        {blocking && <div className="auth-gate__hint">完成安裝或登入後按「重新檢查」；系統也會每 3 秒自動確認。</div>}
+        {blocking && <div className="auth-gate__hint">{t("完成安裝或登入後按「重新檢查」；系統也會每 3 秒自動確認。")}</div>}
 
         {confirmProvider && (
           <div className="auth-install-confirm" role="alertdialog" aria-modal="true" aria-labelledby="install-confirm-title">
             <div className="auth-install-confirm__card">
               <div className="auth-gate__eyebrow">OFFICIAL INSTALLER</div>
-              <h2 id="install-confirm-title">安裝 {providers[confirmProvider].displayName}？</h2>
-              <p>Pixel Crew 將執行下列固定的官方安裝器。它會修改你的使用者程式目錄，但不會安裝 npm，也不會取得帳號密碼或 token。</p>
+              <h2 id="install-confirm-title">{t("安裝 {name}？", { name: providers[confirmProvider].displayName })}</h2>
+              <p>{t("Pixel Crew 將執行下列固定的官方安裝器。它會修改你的使用者程式目錄，但不會安裝 npm，也不會取得帳號密碼或 token。")}</p>
               <div className="auth-gate__command"><code>{providerInstallCommand(confirmProvider, platform)}</code></div>
-              <a href={DOCS[confirmProvider]} target="_blank" rel="noreferrer">查看官方安裝說明 ↗</a>
-              <p className="auth-install-confirm__note">安裝完成後仍需由你在官方 CLI 完成登入。</p>
+              <a href={DOCS[confirmProvider]} target="_blank" rel="noreferrer">{t("查看官方安裝說明 ↗")}</a>
+              <p className="auth-install-confirm__note">{t("安裝完成後仍需由你在官方 CLI 完成登入。")}</p>
               <div className="auth-install-confirm__actions">
-                <button type="button" onClick={() => setConfirmProvider(null)}>取消</button>
+                <button type="button" onClick={() => setConfirmProvider(null)}>{t("取消")}</button>
                 <button type="button" className="auth-install-button" onClick={() => {
                   const provider = confirmProvider;
                   setConfirmProvider(null);
                   void onInstall(provider);
-                }}>確認並安裝</button>
+                }}>{t("確認並安裝")}</button>
               </div>
             </div>
           </div>
@@ -216,8 +217,8 @@ function CommandRow({
   return (
     <div className="auth-gate__command">
       <code>{command}</code>
-      <button type="button" onClick={() => void onCopy(copyKey, command)} aria-label={`複製 ${command}`}>
-        {copied === copyKey ? "已複製" : "複製"}
+      <button type="button" onClick={() => void onCopy(copyKey, command)} aria-label={t("複製 {command}", { command })}>
+        {copied === copyKey ? t("已複製") : t("複製")}
       </button>
     </div>
   );

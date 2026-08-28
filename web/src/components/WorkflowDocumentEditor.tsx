@@ -1,18 +1,19 @@
 import { useMemo, useState } from "react";
 import type { ProviderId } from "../types";
 import { parseWorkflowDocument, updateWorkflowDocument, workflowText } from "../workflowDocument";
+import { t } from "../i18n";
 
 type Field = { key: string; label: string; placeholder: string };
 
 const CLAUDE_FIELDS: Field[] = [
-  { key: "description", label: "用途說明", placeholder: "這個指令適合在什麼情況使用" },
-  { key: "argument-hint", label: "參數提示", placeholder: "例如 [branch] [issue]" },
-  { key: "allowed-tools", label: "允許工具", placeholder: "例如 Read, Bash, WebSearch" },
-  { key: "model", label: "指定模型", placeholder: "留空使用 NPC 選擇的模型" },
+  { key: "description", label: t("用途說明"), placeholder: t("這個指令適合在什麼情況使用") },
+  { key: "argument-hint", label: t("參數提示"), placeholder: t("例如 [branch] [issue]") },
+  { key: "allowed-tools", label: t("允許工具"), placeholder: t("例如 Read, Bash, WebSearch") },
+  { key: "model", label: t("指定模型"), placeholder: t("留空使用 NPC 選擇的模型") },
 ];
 
 const CODEX_FIELDS: Field[] = [
-  { key: "description", label: "觸發情境", placeholder: "描述 Codex 何時應該使用這個 Skill" },
+  { key: "description", label: t("觸發情境"), placeholder: t("描述 Codex 何時應該使用這個 Skill") },
 ];
 
 export function WorkflowDocumentEditor({
@@ -40,9 +41,9 @@ export function WorkflowDocumentEditor({
     <div className="command-editor__document">
       <div className="command-editor__bar">
         <span>{provider === "claude" ? "COMMAND DOCUMENT" : "SKILL.md"}</span>
-        <small>{mode === "structured" ? "結構化欄位 ＋ Prompt" : "完整 Markdown / YAML"}</small>
-        <div className="workflow-mode" role="tablist" aria-label="編輯模式">
-          <button type="button" className={mode === "structured" ? "workflow-mode--active" : ""} onClick={() => setMode("structured")}>欄位</button>
+        <small>{mode === "structured" ? t("結構化欄位 ＋ Prompt") : t("完整 Markdown / YAML")}</small>
+        <div className="workflow-mode" role="tablist" aria-label={t("編輯模式")}>
+          <button type="button" className={mode === "structured" ? "workflow-mode--active" : ""} onClick={() => setMode("structured")}>{t("欄位")}</button>
           <button type="button" className={mode === "raw" ? "workflow-mode--active" : ""} onClick={() => setMode("raw")}>RAW</button>
         </div>
       </div>
@@ -51,7 +52,7 @@ export function WorkflowDocumentEditor({
         <div className="workflow-structured">
           {parsed.error ? (
             <div className="workflow-structured__error" role="alert">
-              YAML 無法解析：{parsed.error}。請切換 RAW 修正內容。
+              {t("YAML 無法解析：{error}。請切換 RAW 修正內容。", { error: parsed.error })}
             </div>
           ) : (
             <div className="workflow-fields">
@@ -83,7 +84,7 @@ export function WorkflowDocumentEditor({
           value={content}
           onChange={(event) => onChange(event.target.value)}
           spellCheck={false}
-          aria-label={provider === "claude" ? "指令 Markdown" : "Skill Markdown"}
+          aria-label={provider === "claude" ? t("指令 Markdown") : t("Skill Markdown")}
         />
       )}
     </div>

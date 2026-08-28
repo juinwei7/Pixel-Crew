@@ -1,6 +1,7 @@
 import { Container, Graphics, Sprite } from "pixi.js";
 import type { StationKey } from "../stations";
 import { PAL, texFromMap } from "./pixels";
+import { t } from "../i18n";
 
 const BOARD = [
   "WWWWWWWWWWWWWWWWWWWW",
@@ -124,15 +125,18 @@ export type FurnitureDef = {
 };
 
 export const FURNITURE_DEFS: FurnitureDef[] = [
-  { key: "board", label: "任務板", map: BOARD, x: 32, bottom: 48, standX: 32, standY: 72, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
-  { key: "books", label: "讀檔案", map: SHELF, x: 84, bottom: 68, standX: 84, standY: 82, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
-  { key: "code", label: "寫程式", map: CODE_DESK, x: 136, bottom: 68, standX: 136, standY: 82, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
-  { key: "web", label: "上網查", map: GLOBE, x: 190, bottom: 68, standX: 190, standY: 82, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
-  { key: "terminal", label: "終端機", map: RACK, x: 244, bottom: 68, standX: 244, standY: 83, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
-  { key: "check", label: "驗證", map: KIOSK, x: 298, bottom: 68, standX: 298, standY: 83, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
-  { key: "desk", label: "其他工具", map: CRATE, x: 352, bottom: 66, standX: 352, standY: 81, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
+  { key: "board", label: t("任務板"), map: BOARD, x: 32, bottom: 48, standX: 32, standY: 72, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
+  { key: "books", label: t("讀檔案"), map: SHELF, x: 84, bottom: 68, standX: 84, standY: 82, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
+  { key: "code", label: t("寫程式"), map: CODE_DESK, x: 136, bottom: 68, standX: 136, standY: 82, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
+  { key: "web", label: t("上網查"), map: GLOBE, x: 190, bottom: 68, standX: 190, standY: 82, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
+  { key: "terminal", label: t("終端機"), map: RACK, x: 244, bottom: 68, standX: 244, standY: 83, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
+  { key: "check", label: t("驗證"), map: KIOSK, x: 298, bottom: 68, standX: 298, standY: 83, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
+  { key: "desk", label: t("其他工具"), map: CRATE, x: 352, bottom: 66, standX: 352, standY: 81, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
   // Invisible rendezvous point around the meeting table drawn by OfficeDecor.
-  { key: "meeting", label: "", map: ["."], x: 30, bottom: 94, standX: 30, standY: 107, leds: [] },
+  // 作戰室會議桌：桌子本體由 OfficeDecor 畫（在最底部空地），這裡放一塊「透明的點擊區」
+  // 蓋在桌面上，讓它跟其他工作站一樣可以懸停看說明、點擊互動（點桌子＝開圓桌模式）。
+  // map 全是透明點：pixi 的點擊判定用貼圖邊界矩形、不看像素透明度，所以照樣可點。
+  { key: "meeting", label: t("作戰室"), map: Array.from({ length: 34 }, () => ".".repeat(112)), x: 120, bottom: 318, standX: 120, standY: 320, leds: [] },
   // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.
   { key: "home", label: "", map: ["."], x: 200, bottom: 220, standX: 200, standY: 232, leds: [] },
 ];
@@ -199,9 +203,21 @@ export class FurnitureLayer {
       if (def.label) {
         sprite.container.eventMode = "static";
         sprite.container.cursor = "pointer";
-        sprite.container.on("pointerover", () => this.onHover(def.key));
-        sprite.container.on("pointerout", () => this.onHover(null));
-        sprite.container.on("pointerdown", () => this.onSelect(def.key));
+        // Touch has no hover: a finger dragging across furniture while panning
+        // fires pointerover and would pop tooltips mid-swipe. Mouse hovers only;
+        // touch users tap (pointertap below) to pin a station's info instead.
+        sprite.container.on("pointerover", (e) => { if (e.pointerType !== "touch") this.onHover(def.key); });
+        sprite.container.on("pointerout", (e) => { if (e.pointerType !== "touch") this.onHover(null); });
+        // Fire only on a genuine tap (down + up with negligible movement), not on
+        // pointerdown — otherwise starting a pan/swipe over the war-room table on a
+        // phone instantly opened the roundtable. A drag past ~10px counts as a pan.
+        let dx = 0, dy = 0, dpid = -1;
+        sprite.container.on("pointerdown", (e) => { dx = e.global.x; dy = e.global.y; dpid = e.pointerId; });
+        sprite.container.on("pointerup", (e) => {
+          if (e.pointerId !== dpid) return;
+          dpid = -1;
+          if (Math.hypot(e.global.x - dx, e.global.y - dy) <= 10) this.onSelect(def.key);
+        });
       }
       this.sprites.set(def.key, sprite);
       this.container.addChild(sprite.container);
