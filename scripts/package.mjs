@@ -22,6 +22,16 @@ await cp(join(root, "start-pixel-crew.cmd"), join(releaseRoot, "start-pixel-crew
 await cp(join(root, "install-pixel-crew.cmd"), join(releaseRoot, "install-pixel-crew.cmd"));
 await cp(join(root, "scripts", "macos", "install-release.sh"), join(releaseRoot, "install-pixel-crew-macos.sh"));
 await cp(join(root, "WINDOWS_SETUP.md"), join(releaseRoot, "WINDOWS_SETUP.md"));
+// 手機連線（遠端存取轉接站）：伺服器用 /api/remote-access/start 從安裝目錄拉起，
+// 不打包的話「手機連線」整個功能在正式安裝版直接消失（只剩開發環境能用）。
+await cp(join(root, "_tsproxy.mjs"), join(releaseRoot, "_tsproxy.mjs"));
+await cp(join(root, "_tsproxy.secret.example.json"), join(releaseRoot, "_tsproxy.secret.example.json"));
+await cp(join(root, "_tsproxy_launch.vbs"), join(releaseRoot, "_tsproxy_launch.vbs"));
+// Windows 優雅重啟鏈：/api/restart-server → restart-pixel-crew-hidden.vbs →
+// restart-pixel-crew.cmd → relaunch-pixel-crew.ps1（全部自我定位，缺一不可）。
+for (const file of ["restart-pixel-crew.cmd", "restart-pixel-crew-hidden.vbs", "relaunch-pixel-crew.ps1"]) {
+  await cp(join(root, file), join(releaseRoot, file));
+}
 
 // The release has no source/dev dependencies. Keep the workspace layout so
 // npm can install only server production packages from the existing lockfile.
@@ -44,7 +54,7 @@ async function auditRelease(directory) {
       await auditRelease(path);
       continue;
     }
-    if (/^(\.env(?:\..*)?|\.DS_Store)$/.test(name) || /\.(sqlite(?:-(?:wal|shm))?|log)$/i.test(name)) {
+    if (/^(\.env(?:\..*)?|\.DS_Store|_tsproxy\.secret\.json)$/.test(name) || /\.(sqlite(?:-(?:wal|shm))?|log)$/i.test(name)) {
       throw new Error(`release contains forbidden local file: ${releasePath}`);
     }
     const info = await stat(path);
