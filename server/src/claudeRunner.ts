@@ -6,59 +6,31 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import type { AgentSession, ExecutionProfile, MessageDocument, MessageImage, SendOptions } from "./providers/session.js";
-import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
+import { stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 import { queryToolPolicy, readOnlyBuiltinToolNames } from "./toolPolicy.js";
+import { t } from "./i18n.js";
+import {
+  ABORTED_MESSAGE,
+  autoApproveConfirmReason,
+  autoApproveEnabledReason,
+  boundedValue,
+  composeMessageText,
+  isReadOnlyExecutionProfile,
+  messageDocumentsDirectory,
+  riskReasonFor,
+  truncateCommand,
+} from "./runnerShared.js";
 
-export type RunnerEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "thinking_delta"; text: string }
-  | { type: "tool_call_start"; id: string; name: string; input: unknown }
-  | { type: "tool_call_output_delta"; id: string; delta: string }
-  | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
-  | { type: "approval_requested"; request: ApprovalRequest }
-  | { type: "approval_resolved"; id: string; decision: ApprovalDecision }
-  | {
-      type: "turn_end";
-      resultText: string;
-      costUsd: number;
-      durationMs: number;
-      isError: boolean;
-      permissionDenials: unknown[];
-    }
-  | {
-      type: "meta";
-      model: string;
-      slashCommands: string[];
-      mcpServers: Array<{ name: string; status: string }>;
-      toolCount: number;
-      // Built-in tools (Bash, Read, Edit, …) available at session init time —
-      // NOT an MCP server's tool list. The init frame fires before slow MCP
-      // servers finish connecting, so it typically excludes their tools.
-      builtinTools: string[];
-    }
-  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string }
-  | { type: "error"; message: string };
+import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./protocol.js";
 
-export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
+export type { ApprovalDecision, ApprovalRequest, RunnerEvent };
 
 export function claudePermissionMode(profile: ExecutionProfile, normalMode: string): string {
-  return profile === "read_only_collaboration" || profile === "read_only_query" ? "plan" : normalMode;
+  return isReadOnlyExecutionProfile(profile) ? "plan" : normalMode;
 }
-
-export type ApprovalRequest = {
-  id: string;
-  activityId: string | null;
-  category: "command" | "file_change" | "tool" | "permissions";
-  title: string;
-  input: unknown;
-  command?: string;
-  cwd?: string;
-  reason?: string;
-  decisions: ApprovalDecision[];
-};
 
 type SessionPermissionUpdate = {
   type: "addRules";
@@ -120,7 +92,7 @@ export class ClaudeSession implements AgentSession {
   private spawnedProfile: ExecutionProfile | null = null;
   private readonly approvalToken = randomUUID();
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
-  private readonly documentDirectory = join(dirname(config.dbPath), "message-documents");
+  private readonly documentDirectory = messageDocumentsDirectory();
   private stagedInputDocuments = new Set<string>();
   private pendingApprovals = new Map<string, {
     input: unknown;
@@ -153,7 +125,7 @@ export class ClaudeSession implements AgentSession {
   interrupt(): void {
     const wasBusy = this.busy;
     this.stop();
-    if (wasBusy) this.onEvent({ type: "error", message: "已中止" });
+    if (wasBusy) this.onEvent({ type: "error", message: t(ABORTED_MESSAGE) });
   }
 
   /** Spawn the CLI ahead of the first message so MCP connections warm up. */
@@ -212,11 +184,10 @@ export class ClaudeSession implements AgentSession {
     try {
       this.busy = true;
       const child = this.ensureChild();
-      const attachmentNote = documentPrompt(files);
       const line =
         JSON.stringify({
           type: "user",
-          message: { role: "user", content: claudeMessageContent([text, attachmentNote].filter(Boolean).join("\n\n"), images) },
+          message: { role: "user", content: claudeMessageContent(composeMessageText(text, files), images) },
         }) + "\n";
       child.stdin.write(line);
     } catch (error) {
@@ -244,7 +215,7 @@ export class ClaudeSession implements AgentSession {
     if (decision === "allow_session" && pending.permissionUpdates.length === 0) return false;
     this.pendingApprovals.delete(id);
     pending.resolve(decision === "deny"
-      ? { behavior: "deny", message: "使用者拒絕這項操作" }
+      ? { behavior: "deny", message: t("使用者拒絕這項操作") }
       : {
           behavior: "allow",
           updatedInput: pending.input,
@@ -262,7 +233,7 @@ export class ClaudeSession implements AgentSession {
     const permissionUpdates = sessionPermissionUpdates(detail.permission_suggestions ?? detail.suggestions, toolName);
     const input = boundedValue(originalInput);
     const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
-      ? String((originalInput as Record<string, unknown>).command ?? "").slice(0, 20_000)
+      ? truncateCommand((originalInput as Record<string, unknown>).command)
       : undefined;
     if (this.executionProfile === "read_only_query") {
       const policy = queryToolPolicy(toolName, this.queryAllowedTools);
@@ -270,7 +241,7 @@ export class ClaudeSession implements AgentSession {
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null,
         category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
-        title: policy.allowed ? `唯讀查詢使用 ${toolName}` : `唯讀查詢已拒絕 ${toolName}`,
+        title: policy.allowed ? t("唯讀查詢使用 {tool}", { tool: toolName }) : t("唯讀查詢已拒絕 {tool}", { tool: toolName }),
         input,
         command,
         cwd: this.workspacePath,
@@ -287,15 +258,17 @@ export class ClaudeSession implements AgentSession {
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null,
         category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
-        title: `唯讀協作已拒絕 ${toolName}`,
+        title: t("唯讀協作已拒絕 {tool}", { tool: toolName }),
         input,
         command,
         cwd: this.workspacePath,
-        reason: "唯讀 NPC 協作不允許需要額外權限的操作",
+        reason: t("唯讀 NPC 協作不允許需要額外權限的操作"),
         decisions: [],
+        toolName,
+        riskReason: riskReasonFor(command),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
-      return Promise.resolve({ behavior: "deny", message: "唯讀 NPC 協作不允許需要額外權限的操作" });
+      return Promise.resolve({ behavior: "deny", message: t("唯讀 NPC 協作不允許需要額外權限的操作") });
     }
     const mode = this.getAutoApproveMode();
     const autoApproval = evaluateAutoApproval(mode, toolName, command);
@@ -310,12 +283,14 @@ export class ClaudeSession implements AgentSession {
           id,
           activityId: null,
           category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
-          title: toolName === "Bash" ? "Claude 執行了這個指令" : `Claude 使用了 ${toolName}`,
+          title: toolName === "Bash" ? t("Claude 執行了這個指令") : t("Claude 使用了 {tool}", { tool: toolName }),
           input,
           command,
           cwd: this.workspacePath,
-          reason: mode === "full" ? "完全自動核准已開啟" : "安全自動核准已開啟",
+          reason: autoApproveEnabledReason(mode),
           decisions: [],
+          toolName,
+          riskReason: riskReasonFor(command),
         },
       });
       this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
@@ -327,16 +302,18 @@ export class ClaudeSession implements AgentSession {
       id,
       activityId: null,
       category: toolName === "Bash" ? "command" : ["Edit", "Write", "NotebookEdit"].includes(toolName) ? "file_change" : "tool",
-      title: toolName === "Bash" ? "允許 Claude 執行這個指令？" : `允許 Claude 使用 ${toolName}？`,
+      title: toolName === "Bash" ? t("允許 Claude 執行這個指令？") : t("允許 Claude 使用 {tool}？", { tool: toolName }),
       input,
       command,
       cwd: this.workspacePath,
       reason: mode !== "off"
-        ? `${mode === "full" ? "完全" : "安全"}自動核准已開啟，但此操作仍需確認（${autoApproval.reason}）`
+        ? autoApproveConfirmReason(mode, autoApproval.reason)
         : permissionUpdates.length
-          ? `Claude Code 需要額外權限；「本次皆允許」只套用目前工作階段的建議規則：${permissionUpdates.flatMap((update) => update.rules.map((rule) => `${rule.toolName}(${rule.ruleContent})`)).join("、").slice(0, 500)}`
-          : "Claude Code 需要額外權限才能繼續目前回合",
+          ? t("Claude Code 需要額外權限；「本次皆允許」只套用目前工作階段的建議規則：{rules}", { rules: permissionUpdates.flatMap((update) => update.rules.map((rule) => `${rule.toolName}(${rule.ruleContent})`)).join("、").slice(0, 500) })
+          : t("Claude Code 需要額外權限才能繼續目前回合"),
       decisions: permissionUpdates.length ? ["allow_once", "allow_session", "deny"] : ["allow_once", "deny"],
+      toolName,
+      riskReason: riskReasonFor(command),
     };
     const pending = new Promise((resolve) => this.pendingApprovals.set(id, { input: originalInput, permissionUpdates, resolve }));
     this.onEvent({ type: "approval_requested", request });
@@ -347,6 +324,12 @@ export class ClaudeSession implements AgentSession {
     if (this.child) return this.child;
 
     this.writeApprovalConfig();
+    // 無敵模式（且非唯讀檔位）：直接用 --dangerously-skip-permissions，完全不掛核准橋。
+    // 橋接是「CLI 帶 session token 打回 /internal/claude-approval」的機制，token 一過期
+    // （後端重啟、session 輪替）所有工具呼叫都會撞「Approval bridge is no longer active」。
+    // 無敵本來就什麼都放行，繞過橋 = 同樣的行為，卻對橋接死活完全免疫（實際踩過多次）。
+    // 注意：模式是在 spawn 時讀的，切換無敵後要等下一個 session（重啟/warmup）才吃到這條路。
+    const invincible = this.getAutoApproveMode() === "invincible" && this.executionProfile === "normal";
     const args = [
       "-p",
       "--input-format",
@@ -355,13 +338,19 @@ export class ClaudeSession implements AgentSession {
       "stream-json",
       "--include-partial-messages",
       "--verbose",
-      "--permission-mode",
-      claudePermissionMode(this.executionProfile, config.permissionMode),
-      "--mcp-config",
-      this.approvalConfigPath,
-      "--permission-prompt-tool",
-      "mcp__pixel_crew_approval__approval_prompt",
     ];
+    if (invincible) {
+      args.push("--dangerously-skip-permissions");
+    } else {
+      args.push(
+        "--permission-mode",
+        claudePermissionMode(this.executionProfile, config.permissionMode),
+        "--mcp-config",
+        this.approvalConfigPath,
+        "--permission-prompt-tool",
+        "mcp__pixel_crew_approval__approval_prompt",
+      );
+    }
     // Attachments live in Pixel Crew's private app-data directory rather than
     // polluting the user's repo. Explicitly grant this one read scope so
     // Claude can inspect them without an unrelated outside-workspace prompt.
@@ -378,13 +367,15 @@ export class ClaudeSession implements AgentSession {
     if (this.model) args.push("--model", this.model);
     const personaPrompt = this.getPersonaPrompt().trim();
     if (personaPrompt) args.push("--append-system-prompt", personaPrompt);
-    const allowed = [
-      ...(this.executionProfile === "read_only_query"
-        ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
-        : this.getAllowedTools()),
-      "mcp__pixel_crew_approval__approval_prompt",
-    ];
-    if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
+    if (!invincible) {
+      const allowed = [
+        ...(this.executionProfile === "read_only_query"
+          ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
+          : this.getAllowedTools()),
+        "mcp__pixel_crew_approval__approval_prompt",
+      ];
+      if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
+    }
 
     const child = spawnCli(config.claudeBin, args, {
       cwd: this.workspacePath,
@@ -395,6 +386,10 @@ export class ClaudeSession implements AgentSession {
     const gen = ++this.generation;
 
     const rl = createInterface({ input: child.stdout });
+    // result 事件的 usage 是整回合「所有」API 呼叫的累計（每步工具呼叫都重讀一次
+    // cache，多步回合會累加到數百萬），不能當 context 佔用量。真正的佔用要看
+    // 最後一則 assistant 訊息那「單次」呼叫的 usage。
+    let lastContextTokens: number | undefined;
     rl.on("line", (line) => {
       if (gen !== this.generation || !line.trim()) return;
       let parsed: any;
@@ -403,13 +398,24 @@ export class ClaudeSession implements AgentSession {
       } catch {
         return;
       }
+      if (parsed.type === "assistant") {
+        const usage = parsed.message?.usage;
+        if (usage) {
+          const total =
+            (usage.input_tokens ?? 0) +
+            (usage.cache_read_input_tokens ?? 0) +
+            (usage.cache_creation_input_tokens ?? 0) +
+            (usage.output_tokens ?? 0);
+          if (total > 0) lastContextTokens = total;
+        }
+      }
       if (parsed.type === "result") {
         this.completedTurns++;
         this.busy = false;
         this.cleanupInputDocuments();
         this.cancelApprovals();
       }
-      handleLine(parsed, this.onEvent);
+      handleLine(parsed, this.onEvent, lastContextTokens);
     });
 
     let stderrBuf = "";
@@ -457,7 +463,7 @@ export class ClaudeSession implements AgentSession {
 
   private cancelApprovals(): void {
     for (const [id, pending] of this.pendingApprovals) {
-      pending.resolve({ behavior: "deny", message: "Pixel Crew 工作階段已結束" });
+      pending.resolve({ behavior: "deny", message: t("Pixel Crew 工作階段已結束") });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
     }
     this.pendingApprovals.clear();
@@ -487,7 +493,7 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
   return content;
 }
 
-function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {
+function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
   switch (parsed.type) {
     case "system": {
       if (parsed.subtype === "init") {
@@ -555,6 +561,15 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {
     case "result": {
       const subtype = String(parsed.subtype ?? "");
       const isError = Boolean(parsed.is_error) || subtype.startsWith("error");
+      // 優先用最後一次 assistant 呼叫的單次 usage（≈ 目前 context 佔用）；
+      // 只有完全沒收到 assistant usage 時才退回 result 的累計值（單步回合兩者相同）。
+      const usage = parsed.usage ?? {};
+      const resultTotal =
+        (usage.input_tokens ?? 0) +
+        (usage.cache_read_input_tokens ?? 0) +
+        (usage.cache_creation_input_tokens ?? 0) +
+        (usage.output_tokens ?? 0);
+      const contextTokens = lastContextTokens ?? resultTotal;
       onEvent({
         type: "turn_end",
         resultText: parsed.result ?? parsed.error?.message ?? parsed.message ?? (isError ? subtype : ""),
@@ -562,20 +577,11 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void): void {
         durationMs: parsed.duration_ms ?? 0,
         isError,
         permissionDenials: parsed.permission_denials ?? [],
+        contextTokens: contextTokens > 0 ? contextTokens : undefined,
       });
       break;
     }
     default:
       break;
-  }
-}
-
-function boundedValue(value: unknown, maxLength = 20_000): unknown {
-  try {
-    const serialized = JSON.stringify(value);
-    if (serialized.length <= maxLength) return value;
-    return `${serialized.slice(0, maxLength)}\n…[內容已截斷]`;
-  } catch {
-    return String(value).slice(0, maxLength);
   }
 }

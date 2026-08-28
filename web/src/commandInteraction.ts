@@ -1,3 +1,5 @@
+import { t } from "./i18n";
+
 export type PaletteEntry = { name: string; description: string; argumentHint?: string };
 export type ProviderWorkflowEntry = PaletteEntry & {
   key: string;
@@ -17,7 +19,7 @@ export function mergePaletteNames(library: PaletteEntry[], slashCommands: string
   const seen = new Set(library.map((entry) => entry.name));
   const extra = slashCommands
     .filter((name) => !seen.has(name))
-    .map((name) => ({ name, description: "Claude 指令" }));
+    .map((name) => ({ name, description: t("Claude 指令") }));
   return [...library, ...extra];
 }
 
@@ -52,7 +54,7 @@ export function buildProviderWorkflowEntries(
     .filter(Boolean)
     .map((name) => ({
       name,
-      description: "Codex 原生指令",
+      description: t("Codex 原生指令"),
       key: `slash-${name}`,
       label: `/${name}`,
       value: `/${name} `,

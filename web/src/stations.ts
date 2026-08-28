@@ -13,7 +13,7 @@ export function stationForTool(name: string, input: unknown): StationKey {
   const n = name.toLowerCase();
   const blob = `${n} ${safeStringify(input).toLowerCase()}`;
 
-  if (n === "bash") return "terminal";
+  if (n === "bash" || n === "powershell" || n === "pwsh") return "terminal";
   if (n === "edit" || n === "write" || n === "notebookedit") return "code";
   if (n === "read") return "books";
   if (n === "websearch" || n === "webfetch") return "web";

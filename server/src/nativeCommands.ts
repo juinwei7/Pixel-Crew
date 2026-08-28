@@ -2,6 +2,7 @@ import type { RunnerEvent } from "./claudeRunner.js";
 import type { AgentSession } from "./providers/session.js";
 import type { ProviderId } from "./providers/types.js";
 import { replaceWithFreshSession } from "./freshSession.js";
+import { t } from "./i18n.js";
 
 export type NativeCommand = "clean";
 
@@ -27,7 +28,7 @@ export type CleanResult = { ok: true } | { ok: false; error: string };
 
 export function cleanWorkerSession(worker: CleanableWorker, deps: WorkerCleanDeps): CleanResult {
   if (deps.isBusy(worker)) {
-    return { ok: false, error: `${worker.runner.name} 正在忙碌中` };
+    return { ok: false, error: t("{name} 正在忙碌中", { name: worker.runner.name }) };
   }
   const provider = worker.runner.provider;
   const workspacePath = worker.runner.workspacePath;
@@ -38,7 +39,7 @@ export function cleanWorkerSession(worker: CleanableWorker, deps: WorkerCleanDep
     () => deps.persistWorker(worker),
     (runner) => deps.saveCheckpoint(runner),
   );
-  if (!fresh) return { ok: false, error: "無法重建工作階段" };
+  if (!fresh) return { ok: false, error: t("無法重建工作階段") };
   worker.history = [];
   deps.clearWorkerEvents(worker.id);
   fresh.warmup();

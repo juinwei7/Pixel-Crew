@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ProviderId } from "./providers/types.js";
 import { config } from "./config.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { t } from "./i18n.js";
 
 export type McpLoginStatus = "running" | "succeeded" | "failed" | "timeout" | "cancelled";
 
@@ -76,15 +77,15 @@ export class McpLoginTracker {
 
     const timer = setTimeout(() => {
       void this.terminator(child);
-      this.finish(k, "timeout", "登入逾時（4 分鐘內未完成瀏覽器授權），已自動取消");
+      this.finish(k, "timeout", t("登入逾時（4 分鐘內未完成瀏覽器授權），已自動取消"));
     }, this.safetyTimeoutMs);
     timer.unref?.();
 
     child.on("close", (code) => {
       clearTimeout(timer);
       if (this.states.get(k)?.status !== "running") return;
-      if (code === 0) this.finish(k, "succeeded", boundedTail(stdout) || "登入成功");
-      else this.finish(k, "failed", boundedTail(stderr || stdout) || `登入失敗（exit ${code}）`);
+      if (code === 0) this.finish(k, "succeeded", boundedTail(stdout) || t("登入成功"));
+      else this.finish(k, "failed", boundedTail(stderr || stdout) || t("登入失敗（exit {code}）", { code: code ?? "" }));
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -99,7 +100,7 @@ export class McpLoginTracker {
     const child = this.children.get(k);
     if (!child || this.states.get(k)?.status !== "running") return false;
     void this.terminator(child);
-    this.finish(k, "cancelled", "使用者取消登入");
+    this.finish(k, "cancelled", t("使用者取消登入"));
     return true;
   }
 

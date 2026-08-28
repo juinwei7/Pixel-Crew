@@ -1,5 +1,6 @@
 import type { ProviderId } from "./providers/types.js";
 import type { AssignmentDecisionCandidate } from "./assignmentDecision.js";
+import { t } from "./i18n.js";
 
 export type BossTaskStatus =
   | "discovering"
@@ -172,10 +173,10 @@ export function applyBossTaskRecordPatch(
   const hasTitle = Object.prototype.hasOwnProperty.call(patch, "title");
   const hasArchived = Object.prototype.hasOwnProperty.call(patch, "archived");
   const title = hasTitle ? bounded(patch.title, 120) : task.title;
-  if (hasTitle && !title) return "任務標題不能空白";
-  if (hasArchived && typeof patch.archived !== "boolean") return "封存狀態格式錯誤";
+  if (hasTitle && !title) return t("任務標題不能空白");
+  if (hasArchived && typeof patch.archived !== "boolean") return t("封存狀態格式錯誤");
   if (patch.archived === true && !["completed", "failed", "cancelled"].includes(task.status)) {
-    return "進行中或等待處理的任務不能封存";
+    return t("進行中或等待處理的任務不能封存");
   }
   if (hasTitle) task.title = title;
   if (hasArchived) task.archivedAt = patch.archived ? now : null;
@@ -293,25 +294,26 @@ export function explainBossTaskDecisionFailure(
 }
 
 export function bossTaskFinalReport(task: BossTask): string {
-  const sections = task.stages.map((stage) => `## ${stage.title} · ${stage.departmentName}\n\n${stage.report || "部門未提供報告。"}`);
+  const sections = task.stages.map((stage) => t("## {title} · {departmentName}\n\n{report}", {
+    title: stage.title,
+    departmentName: stage.departmentName,
+    report: stage.report || t("部門未提供報告。"),
+  }));
   const research = task.executionMode === "research" || task.stages[0]?.executionMode === "research";
-  return `# Boss Task 最終報告
-
-## 交辦目標
-
-${task.objective}
-
-## ${research ? "研究結論" : "跨部門執行結果"}
-
-${sections.join("\n\n")}
-
-## 驗收與後續
-
-${task.acceptanceCriteria.length
+  const acceptanceBlock = task.acceptanceCriteria.length
     ? task.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")
-    : "- 已由各部門依任務目標完成合理驗證並回報風險。"}
-
-${research
-    ? "以上為快速研究結果。你可以追問依據，或另行要求深入研究、回測或建立正式交付物。"
-    : `以上為 ${task.stages.length} 個部門階段的彙整結果。你可以在 Boss Task 對話中繼續詢問或交辦修改。`}`;
+    : t("- 已由各部門依任務目標完成合理驗證並回報風險。");
+  const closing = research
+    ? t("以上為快速研究結果。你可以追問依據，或另行要求深入研究、回測或建立正式交付物。")
+    : t("以上為 {count} 個部門階段的彙整結果。你可以在 Boss Task 對話中繼續詢問或交辦修改。", { count: task.stages.length });
+  return t(
+    "# Boss Task 最終報告\n\n## 交辦目標\n\n{objective}\n\n## {resultHeading}\n\n{sections}\n\n## 驗收與後續\n\n{acceptanceBlock}\n\n{closing}",
+    {
+      objective: task.objective,
+      resultHeading: research ? t("研究結論") : t("跨部門執行結果"),
+      sections: sections.join("\n\n"),
+      acceptanceBlock,
+      closing,
+    },
+  );
 }

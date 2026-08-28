@@ -23,7 +23,7 @@ function render(busy: boolean, focusRequest = 0, focusMode = false) {
   const worker = emptyWorker("worker", "小助手", null, busy, 0, "claude", "/repo");
   return renderToStaticMarkup(<TaskComposer
     draftKey="worker:claude:/repo"
-    placeholder={busy ? "小助手 執勤中，可輸入或附加檔案排隊…" : "對 小助手 下指令（可附加圖片或文件）"}
+    placeholder={busy ? "小助手 執勤中·可排隊" : "對 小助手 下指令（可附加圖片或文件）"}
     submitLabel="執行"
     disabled={false}
     layout="dock"
@@ -44,7 +44,7 @@ test("keeps the composer editable while an agent is busy", () => {
   assert.match(html, /aria-busy="true"/);
   assert.doesNotMatch(html, /<textarea[^>]*disabled=""/);
   assert.doesNotMatch(html, /<textarea[^>]*readonly=""/);
-  assert.match(html, /執勤中，可輸入或附加檔案排隊/);
+  assert.match(html, /執勤中·可排隊/);
   assert.match(html, /aria-label="附加圖片或文件"/);
 });
 

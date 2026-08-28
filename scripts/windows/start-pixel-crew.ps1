@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([int]$Port = 8787)
+param([int]$Port = 8787, [switch]$NoBrowser)
 
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -30,7 +30,7 @@ $Url = "http://127.0.0.1:$Port"
 try {
   $Existing = Invoke-RestMethod -Uri "$Url/healthz" -TimeoutSec 1
   if ($Existing.ok) {
-    Start-Process $Url
+    if (-not $NoBrowser) { Start-Process $Url }
     Write-Host "Pixel Crew is already running at $Url" -ForegroundColor Cyan
     exit 0
   }
@@ -47,7 +47,7 @@ try {
     } catch { Start-Sleep -Milliseconds 250 }
   }
   if (-not $Ready) { throw "Pixel Crew server 啟動逾時，請執行 doctor.ps1 檢查環境" }
-  Start-Process $Url
+  if (-not $NoBrowser) { Start-Process $Url }
   Write-Host "Pixel Crew is running at $Url" -ForegroundColor Cyan
   Write-Host "Keep this window open. Press Ctrl+C to stop."
   Wait-Process -Id $Server.Id

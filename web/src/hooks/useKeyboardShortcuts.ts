@@ -4,10 +4,11 @@ type ShortcutHandlers = {
   onCommandPalette(): void;
   onToggleTaskLog(): void;
   onApproval(): void;
+  onShortcutsHelp(): void;
   onEscape?(): void;
 };
 
-export type KeyboardShortcut = "command_palette" | "toggle_task_log" | "approval" | "escape";
+export type KeyboardShortcut = "command_palette" | "toggle_task_log" | "approval" | "shortcuts_help" | "escape";
 export type DismissibleLayer = "command_palette" | "task_search" | "focus_mode";
 
 export function topDismissibleLayer(commandPaletteOpen: boolean, taskSearchOpen: boolean, focusMode: boolean): DismissibleLayer | null {
@@ -23,6 +24,7 @@ export function keyboardShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | 
   const key = event.key.toLowerCase();
   if (command && key === "k") return "command_palette";
   if (editable) return null;
+  if (!command && (event.key === "?" || (event.shiftKey && key === "/"))) return "shortcuts_help";
   if (command && !event.shiftKey && key === "j") return "toggle_task_log";
   if (command && event.shiftKey && key === "a") return "approval";
   return null;
@@ -46,6 +48,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
       if (shortcut === "command_palette") handlers.onCommandPalette();
       else if (shortcut === "toggle_task_log") handlers.onToggleTaskLog();
       else if (shortcut === "approval") handlers.onApproval();
+      else if (shortcut === "shortcuts_help") handlers.onShortcutsHelp();
       else handlers.onEscape?.();
     };
     window.addEventListener("keydown", keydown);

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { roomName } from "../workspace";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { t } from "../i18n";
+import { Modal } from "./Modal";
 
 type Props = {
   required?: boolean;
@@ -19,17 +20,10 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   const [error, setError] = useState<string | null>(null);
   const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
   const creating = required || mode === "create";
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef);
 
   useEffect(() => setPath(currentPath), [currentPath]);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !required && !pending) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, pending, required]);
+  // ×／Esc 共用同一個關閉入口：首次設定（required）永遠不准關，其餘忙碌中不准關。
+  function closeIfAllowed() { if (!required && !pending) onClose(); }
 
   async function choose(nextPath: string) {
     const trimmed = nextPath.trim();
@@ -64,48 +58,45 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   }
 
   return (
-    <div ref={dialogRef} className="workspace-picker" role="dialog" aria-modal="true" aria-labelledby="workspace-title">
+    <Modal
+      label={required ? t("先設定安全工作區") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置")}
+      overlayClassName="workspace-picker"
+      cardClassName="workspace-picker__card"
+      closeClassName="workspace-picker__close"
+      closeLabel={t("關閉")}
+      hideClose={required}
+      onClose={closeIfAllowed}
+    >
       <form
-        className="workspace-picker__card"
         onSubmit={(event) => {
           event.preventDefault();
           void choose(path);
         }}
       >
-        {!required && <button
-          type="button"
-          className="workspace-picker__close"
-          aria-label="關閉"
-          onClick={onClose}
-          disabled={pending}
-        >
-          ×
-        </button>}
-
         <header className="workspace-picker__header">
           <div className="workspace-picker__glyph" aria-hidden="true" />
           <div>
             <div className="workspace-picker__eyebrow">{required ? "FIRST ROOM SETUP" : creating ? "NEW CREW STATION" : "ENTER A ROOM"}</div>
-            <h2 id="workspace-title">{required ? "先設定安全工作區" : creating ? "新 NPC 要在哪裡工作？" : "選擇工作位置"}</h2>
+            <h2>{required ? t("先設定安全工作區") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置")}</h2>
             <p>{required
-              ? "Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。"
+              ? t("Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。")
               : creating
-                ? "先選擇一個本機資料夾作為新 NPC 的房間；確認後才會建立人員與工位。"
-                : "一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。"}</p>
+                ? t("先選擇一個本機資料夾作為新 NPC 的房間；確認後才會建立人員與工位。")
+                : t("一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。")}</p>
           </div>
         </header>
 
         {required && (
           <button type="button" className="workspace-picker__default" disabled={pending} onClick={() => void choose(currentPath)}>
             <span className="workspace-picker__default-mark" aria-hidden="true">✓</span>
-            <span><strong>使用 Pixel Crew 專用工作區</strong><small>{currentPath}</small></span>
-            <b>建議</b>
+            <span><strong>{t("使用 Pixel Crew 專用工作區")}</strong><small>{currentPath}</small></span>
+            <b>{t("建議")}</b>
           </button>
         )}
 
         {resetsConversation && (
           <div className="workspace-picker__reset-warning">
-            這位 NPC 已有對話。搬到其他專案時會重設其 CLI session 與對話紀錄，但不會新增 NPC。
+            {t("這位 NPC 已有對話。搬到其他專案時會重設其 CLI session 與對話紀錄，但不會新增 NPC。")}
           </div>
         )}
 
@@ -117,16 +108,16 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         >
           <span className="workspace-picker__browse-icon" aria-hidden="true" />
           <span className="workspace-picker__browse-copy">
-            <strong>{pending ? "正在開啟…" : "從系統選擇資料夾"}</strong>
-            <small>瀏覽這台電腦上的專案</small>
+            <strong>{pending ? t("正在開啟…") : t("從系統選擇資料夾")}</strong>
+            <small>{t("瀏覽這台電腦上的專案")}</small>
           </span>
           <span className="workspace-picker__browse-arrow" aria-hidden="true">→</span>
         </button>
 
-        <div className="workspace-picker__divider"><span>{required ? "或指定現有專案" : "或貼上完整路徑"}</span></div>
+        <div className="workspace-picker__divider"><span>{required ? t("或指定現有專案") : t("或貼上完整路徑")}</span></div>
 
         <label className="workspace-picker__label" htmlFor="workspace-path">
-          本機絕對路徑
+          {t("本機絕對路徑")}
         </label>
         <div className="workspace-picker__path-row">
           <input
@@ -141,7 +132,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
 
         {recentPaths.length > 0 && (
           <div className="workspace-picker__recent">
-            <div className="workspace-picker__label">最近房間</div>
+            <div className="workspace-picker__label">{t("最近房間")}</div>
             {recentPaths.map((recentPath) => (
               <button
                 key={recentPath}
@@ -156,7 +147,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
                   <small>{recentPath}</small>
                 </span>
                 {recentPath === currentPath
-                  ? <span className="workspace-picker__current">目前</span>
+                  ? <span className="workspace-picker__current">{t("目前")}</span>
                   : <span className="workspace-picker__room-arrow" aria-hidden="true">↗</span>}
               </button>
             ))}
@@ -165,12 +156,12 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
 
         {error && <div className="workspace-picker__error">{error}</div>}
         <div className="workspace-picker__actions">
-          {!required && <button type="button" onClick={onClose} disabled={pending}>取消</button>}
+          {!required && <button type="button" onClick={onClose} disabled={pending}>{t("取消")}</button>}
           <button type="submit" className="workspace-picker__confirm" disabled={pending || !path.trim()}>
-            {pending ? "請稍候…" : creating ? "在此建立工位" : resetsConversation ? "搬遷並重設對話" : "搬到此位置"}
+            {pending ? t("請稍候…") : creating ? t("在此建立工位") : resetsConversation ? t("搬遷並重設對話") : t("搬到此位置")}
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

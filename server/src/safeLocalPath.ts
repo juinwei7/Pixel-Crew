@@ -1,5 +1,6 @@
 import { lstat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
+import { t } from "./i18n.js";
 
 /**
  * Reject paths that escape the workspace or traverse an existing symlink.
@@ -11,7 +12,7 @@ export async function assertSafeLocalPath(workspacePath: string, targetPath: str
   const target = resolve(targetPath);
   const relativeTarget = relative(workspace, target);
   if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`)) {
-    throw new Error("目標路徑超出工作資料夾");
+    throw new Error(t("目標路徑超出工作資料夾"));
   }
 
   let current = workspace;
@@ -20,7 +21,7 @@ export async function assertSafeLocalPath(workspacePath: string, targetPath: str
     current = resolve(current, component);
     try {
       const info = await lstat(current);
-      if (info.isSymbolicLink()) throw new Error("工作路徑不能包含符號連結");
+      if (info.isSymbolicLink()) throw new Error(t("工作路徑不能包含符號連結"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;

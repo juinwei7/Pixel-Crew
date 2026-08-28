@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import type { ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
 import { execCli, spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { t } from "./i18n.js";
 const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
 export type UsageWindow = {
@@ -58,7 +59,7 @@ export function parseClaudeUsage(raw: string): UsageWindow[] {
           ? "model"
           : "rate";
     const modelMatch = sourceLabel.match(/\(([^)]+)\)/);
-    const label = scope === "session" ? "本次時段" : scope === "weekly" ? "本週" : modelMatch?.[1] ?? sourceLabel.replace(/^Current\s+/i, "");
+    const label = scope === "session" ? t("本次時段") : scope === "weekly" ? t("本週") : modelMatch?.[1] ?? sourceLabel.replace(/^Current\s+/i, "");
     windows.push({
       id: `claude-${scope}-${windows.length}`,
       label: safeText(label, 40),
@@ -82,9 +83,9 @@ type CodexRateSnapshot = {
 function codexWindowLabel(window: CodexRateWindow, fallback: string): string {
   const minutes = Number(window.windowDurationMins);
   if (!Number.isFinite(minutes) || minutes <= 0) return fallback;
-  if (minutes < 60) return `${minutes} 分鐘`;
-  if (minutes < 1440) return `${Math.round(minutes / 60)} 小時`;
-  return `${Math.round(minutes / 1440)} 天`;
+  if (minutes < 60) return t("{n} 分鐘", { n: minutes });
+  if (minutes < 1440) return t("{n} 小時", { n: Math.round(minutes / 60) });
+  return t("{n} 天", { n: Math.round(minutes / 1440) });
 }
 
 function codexResetTime(value: unknown): string | null {
@@ -112,7 +113,7 @@ export function normalizeCodexUsage(payload: any): UsageWindow[] {
       const usedPercent = percent(value.usedPercent);
       windows.push({
         id: `codex-${id}`,
-        label: codexWindowLabel(value, kind === "primary" ? "短期" : "長期"),
+        label: codexWindowLabel(value, kind === "primary" ? t("短期") : t("長期")),
         usedPercent,
         remainingPercent: 100 - usedPercent,
         resetsAt: codexResetTime(value.resetsAt),
@@ -130,7 +131,7 @@ async function readClaudeUsage(): Promise<UsageWindow[]> {
     maxBuffer: 1_000_000,
   });
   const windows = parseClaudeUsage(stdout);
-  if (windows.length === 0) throw new Error("Claude /usage 沒有回傳可辨識的用量區間");
+  if (windows.length === 0) throw new Error(t("Claude /usage 沒有回傳可辨識的用量區間"));
   return windows;
 }
 
@@ -159,7 +160,7 @@ async function readCodexUsage(): Promise<UsageWindow[]> {
       else resolve(windows ?? []);
     };
     const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
-    const timer = setTimeout(() => finish(new Error("Codex 用量查詢逾時")), 20_000);
+    const timer = setTimeout(() => finish(new Error(t("Codex 用量查詢逾時"))), 20_000);
     child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk.toString()}`.slice(-4_000); });
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {
@@ -175,7 +176,7 @@ async function readCodexUsage(): Promise<UsageWindow[]> {
       } else if (message.id === 2) {
         if (message.error) { finish(new Error(safeText(message.error.message, 300))); return; }
         const windows = normalizeCodexUsage(message.result);
-        if (windows.length === 0) finish(new Error("Codex 沒有回傳可用的 rate-limit 區間"));
+        if (windows.length === 0) finish(new Error(t("Codex 沒有回傳可用的 rate-limit 區間")));
         else finish(undefined, windows);
       }
     });
@@ -232,7 +233,7 @@ export class ProviderUsageRegistry {
         return state;
       })
       .catch((error) => {
-        const state: ProviderUsageState = { ...this.states[provider], loading: false, error: safeText((error as Error).message, 300) || "無法讀取工作能量" };
+        const state: ProviderUsageState = { ...this.states[provider], loading: false, error: safeText((error as Error).message, 300) || t("無法讀取工作能量") };
         this.publish(state, false);
         return state;
       })

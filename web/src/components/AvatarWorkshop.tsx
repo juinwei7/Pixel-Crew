@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../i18n";
 import { apiAssetUrl } from "../api";
 import type { WorkerState } from "../types";
 import {
@@ -82,12 +83,12 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   async function chooseFile(file: File | undefined) {
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
-      setError("請選擇 PNG、JPEG、WebP 或 GIF 圖片");
+      setError(t("請選擇 PNG、JPEG、WebP 或 GIF 圖片"));
       return;
     }
     const maxSize = file.type === "image/gif" ? 2 * 1024 * 1024 : 5 * 1024 * 1024;
     if (file.size > maxSize) {
-      setError(file.type === "image/gif" ? "GIF 最多 2 MiB" : "來源圖片最多 5 MiB");
+      setError(file.type === "image/gif" ? t("GIF 最多 2 MiB") : t("來源圖片最多 5 MiB"));
       return;
     }
     if (file.type === "image/gif") {
@@ -95,7 +96,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
       try {
         const dimensions = await imageDimensions(url);
         if (dimensions.width > MAX_GIF_DIMENSION || dimensions.height > MAX_GIF_DIMENSION) {
-          throw new Error(`GIF 尺寸最大為 ${MAX_GIF_DIMENSION} × ${MAX_GIF_DIMENSION}`);
+          throw new Error(t("GIF 尺寸最大為 {size} × {size}", { size: MAX_GIF_DIMENSION }));
         }
         source?.close();
         setSource(null);
@@ -106,19 +107,19 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
         setError(null);
       } catch (gifError) {
         URL.revokeObjectURL(url);
-        setError((gifError as Error).message || "無法解析這個 GIF");
+        setError((gifError as Error).message || t("無法解析這個 GIF"));
       }
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setError("來源圖片最多 5 MiB");
+      setError(t("來源圖片最多 5 MiB"));
       return;
     }
     try {
       const bitmap = await createImageBitmap(file);
       if (bitmap.width > 4096 || bitmap.height > 4096) {
         bitmap.close();
-        setError("來源圖片最大尺寸為 4096 × 4096");
+        setError(t("來源圖片最大尺寸為 4096 × 4096"));
         return;
       }
       source?.close();
@@ -129,7 +130,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
       setControls(DEFAULT_CONTROLS);
       setError(null);
     } catch {
-      setError("無法解析這張圖片，檔案可能已損壞");
+      setError(t("無法解析這張圖片，檔案可能已損壞"));
     }
   }
 
@@ -199,7 +200,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
     setDragActive(false);
     const files = Array.from(event.dataTransfer.files);
     if (files.length !== 1) {
-      setError("角色工坊一次只能接收一張圖片");
+      setError(t("角色工坊一次只能接收一張圖片"));
       return;
     }
     setMode("custom");
@@ -208,31 +209,31 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
 
   return (
     <div ref={dialogRef} className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
-      {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>放開以設定自訂角色</strong><small>PNG、JPEG、WebP 或 GIF</small></div>}
+      {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>{t("放開以設定自訂角色")}</strong><small>{t("PNG、JPEG、WebP 或 GIF")}</small></div>}
       <div className="avatar-workshop__card">
-        <button type="button" className="avatar-workshop__close" onClick={onClose} disabled={saving} aria-label="關閉角色工坊">×</button>
+        <button type="button" className="avatar-workshop__close" onClick={onClose} disabled={saving} aria-label={t("關閉角色工坊")}>×</button>
         <header className="avatar-workshop__header">
           <span className="avatar-workshop__eyebrow">AVATAR WORKSHOP · {AVATAR_WIDTH}×{AVATAR_HEIGHT}</span>
-          <h2 id="avatar-workshop-title">替 {worker.name} 換一個樣子</h2>
+          <h2 id="avatar-workshop-title">{t("替 {name} 換一個樣子", { name: worker.name })}</h2>
           <p>
             {mode === "official"
-              ? "從官方隊員中選一位；每個造型都有完整辦公室動作，切換不會刪除你的自訂角色。"
+              ? t("從官方隊員中選一位；每個造型都有完整辦公室動作，切換不會刪除你的自訂角色。")
               : gifMode
-              ? "GIF 會保留原始動畫，並自動適配 NPC 在辦公室裡的顯示尺寸。"
-              : `圖片只在瀏覽器內縮圖與降色；伺服器只保存最後的 ${AVATAR_WIDTH}×${AVATAR_HEIGHT} PNG。`}
+              ? t("GIF 會保留原始動畫，並自動適配 NPC 在辦公室裡的顯示尺寸。")
+              : t("圖片只在瀏覽器內縮圖與降色；伺服器只保存最後的 {size} PNG。", { size: `${AVATAR_WIDTH}×${AVATAR_HEIGHT}` })}
           </p>
         </header>
 
-        <div className="avatar-workshop__source-tabs" role="tablist" aria-label="角色來源">
-          <button type="button" role="tab" aria-selected={mode === "official"} className={mode === "official" ? "is-active" : ""} onClick={() => setMode("official")}><span>OFFICIAL</span>官方角色</button>
-          <button type="button" role="tab" aria-selected={mode === "custom"} className={mode === "custom" ? "is-active" : ""} onClick={() => setMode("custom")}><span>CUSTOM</span>自訂上傳{worker.avatarId && <i>已保存</i>}</button>
+        <div className="avatar-workshop__source-tabs" role="tablist" aria-label={t("角色來源")}>
+          <button type="button" role="tab" aria-selected={mode === "official"} className={mode === "official" ? "is-active" : ""} onClick={() => setMode("official")}><span>OFFICIAL</span>{t("官方角色")}</button>
+          <button type="button" role="tab" aria-selected={mode === "custom"} className={mode === "custom" ? "is-active" : ""} onClick={() => setMode("custom")}><span>CUSTOM</span>{t("自訂上傳")}{worker.avatarId && <i>{t("已保存")}</i>}</button>
         </div>
 
         {mode === "official" ? (
-          <section className="avatar-workshop__official" aria-label="官方角色選擇">
+          <section className="avatar-workshop__official" aria-label={t("官方角色選擇")}>
             <div className="avatar-workshop__official-copy">
-              <strong>PIXEL CREW 官方隊員</strong>
-              <span>每一位都保留走路、工作與歡呼動畫。</span>
+              <strong>{t("PIXEL CREW 官方隊員")}</strong>
+              <span>{t("每一位都保留走路、工作與歡呼動畫。")}</span>
             </div>
             <div className="avatar-workshop__preset-grid">
               {AVATAR_PRESETS.map((preset) => (
@@ -248,21 +249,21 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
           <section className="avatar-workshop__preview-panel">
             <div className="avatar-workshop__preview-frame">
               {gifPreviewUrl ? (
-                <img className="avatar-workshop__existing" src={gifPreviewUrl} alt="GIF 動態角色預覽" />
+                <img className="avatar-workshop__existing" src={gifPreviewUrl} alt={t("GIF 動態角色預覽")} />
               ) : output ? (
                 <div ref={previewRef} className="avatar-workshop__preview" />
               ) : worker.avatarId ? (
-                <img className="avatar-workshop__existing" src={apiAssetUrl(`/api/avatars/${worker.avatarId}`)} alt={`${worker.name} 目前的自訂角色`} />
+                <img className="avatar-workshop__existing" src={apiAssetUrl(`/api/avatars/${worker.avatarId}`)} alt={t("{name} 目前的自訂角色", { name: worker.name })} />
               ) : (
                 <div className="avatar-workshop__empty">
                   <span>＋</span>
-                  <strong>選一張角色圖片</strong>
-                  <small>支援靜態圖片與動態 GIF</small>
+                  <strong>{t("選一張角色圖片")}</strong>
+                  <small>{t("支援靜態圖片與動態 GIF")}</small>
                 </div>
               )}
             </div>
             <div className="avatar-workshop__scale-note">
-              {gifMode ? "GIF 保留原始動畫 · 顯示時自動適配" : `實際尺寸 ${AVATAR_WIDTH} × ${AVATAR_HEIGHT} px · 預覽放大 8 倍`}
+              {gifMode ? t("GIF 保留原始動畫 · 顯示時自動適配") : t("實際尺寸 {size} px · 預覽放大 8 倍", { size: `${AVATAR_WIDTH} × ${AVATAR_HEIGHT}` })}
             </div>
             <label className="avatar-workshop__upload">
               <input
@@ -270,8 +271,8 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
                 accept="image/png,image/jpeg,image/webp,image/gif"
                 onChange={(event) => void chooseFile(event.target.files?.[0])}
               />
-              <span>{fileName || "從電腦選擇圖片"}</span>
-              <b>瀏覽…</b>
+              <span>{fileName || t("從電腦選擇圖片")}</span>
+              <b>{t("瀏覽…")}</b>
             </label>
           </section>
 
@@ -279,25 +280,25 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
             <section className="avatar-workshop__gif-info">
               <div className="avatar-workshop__gif-mark">GIF</div>
               <div>
-                <strong>保留原始動畫</strong>
-                <p>GIF 不提供裁切、縮放、去背或降色調整，套用後會依比例自動適配 NPC 尺寸。</p>
+                <strong>{t("保留原始動畫")}</strong>
+                <p>{t("GIF 不提供裁切、縮放、去背或降色調整，套用後會依比例自動適配 NPC 尺寸。")}</p>
               </div>
               <dl>
-                <div><dt>最大尺寸</dt><dd>320 × 320</dd></div>
-                <div><dt>檔案上限</dt><dd>2 MiB</dd></div>
-                <div><dt>影格上限</dt><dd>120 幀</dd></div>
-                <div><dt>解碼預算</dt><dd>800 萬像素</dd></div>
-                <div><dt>播放方式</dt><dd>依原始幀時間循環</dd></div>
+                <div><dt>{t("最大尺寸")}</dt><dd>320 × 320</dd></div>
+                <div><dt>{t("檔案上限")}</dt><dd>2 MiB</dd></div>
+                <div><dt>{t("影格上限")}</dt><dd>{t("120 幀")}</dd></div>
+                <div><dt>{t("解碼預算")}</dt><dd>{t("800 萬像素")}</dd></div>
+                <div><dt>{t("播放方式")}</dt><dd>{t("依原始幀時間循環")}</dd></div>
               </dl>
             </section>
           ) : (
           <section className={`avatar-workshop__controls ${source ? "" : "avatar-workshop__controls--disabled"}`}>
-            <Control label="縮放" value={controls.zoom} min={0.5} max={4} step={0.05} display={`${Math.round(controls.zoom * 100)}%`} onChange={(zoom) => setControls((current) => ({ ...current, zoom }))} />
-            <Control label="左右位置" value={controls.offsetX} min={-1} max={1} step={0.02} display={formatOffset(controls.offsetX)} onChange={(offsetX) => setControls((current) => ({ ...current, offsetX }))} />
-            <Control label="上下位置" value={controls.offsetY} min={-1} max={1} step={0.02} display={formatOffset(controls.offsetY)} onChange={(offsetY) => setControls((current) => ({ ...current, offsetY }))} />
+            <Control label={t("縮放")} value={controls.zoom} min={0.5} max={4} step={0.05} display={`${Math.round(controls.zoom * 100)}%`} onChange={(zoom) => setControls((current) => ({ ...current, zoom }))} />
+            <Control label={t("左右位置")} value={controls.offsetX} min={-1} max={1} step={0.02} display={formatOffset(controls.offsetX)} onChange={(offsetX) => setControls((current) => ({ ...current, offsetX }))} />
+            <Control label={t("上下位置")} value={controls.offsetY} min={-1} max={1} step={0.02} display={formatOffset(controls.offsetY)} onChange={(offsetY) => setControls((current) => ({ ...current, offsetY }))} />
 
             <div className="avatar-workshop__field">
-              <div className="avatar-workshop__field-title"><span>色彩數量</span><output>{controls.paletteSize} 色</output></div>
+              <div className="avatar-workshop__field-title"><span>{t("色彩數量")}</span><output>{t("{count} 色", { count: controls.paletteSize })}</output></div>
               <div className="avatar-workshop__segments">
                 {([8, 12, 16] as const).map((size) => (
                   <button key={size} type="button" disabled={!source} className={controls.paletteSize === size ? "is-active" : ""} onClick={() => setControls((current) => ({ ...current, paletteSize: size }))}>{size}</button>
@@ -307,7 +308,7 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
 
             <label className="avatar-workshop__toggle">
               <input type="checkbox" checked={controls.removeBackground} disabled={!source} onChange={(event) => setControls((current) => ({ ...current, removeBackground: event.target.checked }))} />
-              <span><strong>移除角落背景色</strong><small>適合單色底圖；透明圖不受影響</small></span>
+              <span><strong>{t("移除角落背景色")}</strong><small>{t("適合單色底圖；透明圖不受影響")}</small></span>
             </label>
           </section>
           )}
@@ -315,13 +316,13 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
 
         {error && <div className="avatar-workshop__error" role="alert">{error}</div>}
         <footer className="avatar-workshop__actions">
-          {mode === "custom" ? <button type="button" className="avatar-workshop__reset" disabled={!worker.avatarId || saving} onClick={() => void restoreDefault()}>刪除自訂角色</button> : <span />}
+          {mode === "custom" ? <button type="button" className="avatar-workshop__reset" disabled={!worker.avatarId || saving} onClick={() => void restoreDefault()}>{t("刪除自訂角色")}</button> : <span />}
           <span />
-          <button type="button" disabled={saving} onClick={onClose}>取消</button>
+          <button type="button" disabled={saving} onClick={onClose}>{t("取消")}</button>
           {mode === "official" ? (
-            <button type="button" className="avatar-workshop__save" disabled={saving || (worker.avatarKind === "preset" && worker.avatarPresetId === selectedPreset)} onClick={() => void saveOfficial()}>{saving ? "儲存中…" : "套用官方角色"}</button>
+            <button type="button" className="avatar-workshop__save" disabled={saving || (worker.avatarKind === "preset" && worker.avatarPresetId === selectedPreset)} onClick={() => void saveOfficial()}>{saving ? t("儲存中…") : t("套用官方角色")}</button>
           ) : (
-            <button type="button" className="avatar-workshop__save" disabled={(!output && !gifFile && (!worker.avatarId || worker.avatarKind === "custom")) || saving} onClick={() => void saveCustom()}>{saving ? "儲存中…" : output || gifFile ? "上傳並套用" : "切回自訂角色"}</button>
+            <button type="button" className="avatar-workshop__save" disabled={(!output && !gifFile && (!worker.avatarId || worker.avatarKind === "custom")) || saving} onClick={() => void saveCustom()}>{saving ? t("儲存中…") : output || gifFile ? t("上傳並套用") : t("切回自訂角色")}</button>
           )}
         </footer>
       </div>
@@ -341,7 +342,7 @@ function imageDimensions(url: string): Promise<{ width: number; height: number }
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error("無法解析這個 GIF"));
+    image.onerror = () => reject(new Error(t("無法解析這個 GIF")));
     image.src = url;
   });
 }
@@ -373,6 +374,6 @@ function Control({ label, value, min, max, step, display, onChange }: {
 }
 
 function formatOffset(value: number): string {
-  if (Math.abs(value) < 0.01) return "置中";
+  if (Math.abs(value) < 0.01) return t("置中");
   return `${value > 0 ? "+" : ""}${Math.round(value * 100)}`;
 }

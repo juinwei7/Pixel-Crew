@@ -3,6 +3,8 @@
  * Stored per worker and re-injected into the provider CLI on every spawn, so
  * it survives /clear, model switches, and server restarts.
  */
+import { t } from "./i18n.js";
+
 export type Persona = {
   role: string;
   instructions: string;
@@ -44,7 +46,7 @@ export function normalizePersona(input: unknown): Persona | null {
 export function composePersonaPrompt(persona: Persona | null): string {
   if (!persona) return "";
   const parts: string[] = [];
-  if (persona.role) parts.push(`【職務 / Role】${persona.role}`);
+  if (persona.role) parts.push(t("【職務 / Role】{role}", { role: persona.role }));
   if (persona.instructions) parts.push(persona.instructions);
   return parts.join("\n\n");
 }
@@ -59,7 +61,15 @@ export function personaSuggestionPrompt(input: PersonaSuggestionInput): string {
     name: String(member.name).slice(0, 100),
     role: member.role ? String(member.role).slice(0, MAX_PERSONA_ROLE) : null,
   }));
-  return `請替 Pixel Crew 的 NPC 草擬一份實用且可直接編輯的人設。不要呼叫工具、讀取或修改檔案，也不要臆測專案內容。\nNPC: ${JSON.stringify(String(input.workerName).slice(0, 100))}\n工作位置: ${JSON.stringify(String(input.workspacePath).slice(0, 1_000))}\n同部門人員（包含目前 NPC）: ${JSON.stringify(members)}\n\n要求:\n- 依 NPC 名稱、工作位置名稱和現有職務，補上部門尚缺且不重複的職務。\n- role 是清楚的職稱，最多 ${MAX_PERSONA_ROLE} 字。\n- instructions 使用繁體中文，具體描述專長、責任範圍、工作方式、交付品質與溝通方式；保持精簡，不超過 600 字。\n- 不要加入無法由軟體代理執行的背景故事。\n- 若資訊不足，選擇通用且能補足軟體團隊的角色。\n\n最後只能輸出：\n<persona_suggestion>{"role":"職務","instructions":"詳細指示"}</persona_suggestion>`;
+  return t(
+    "請替 Pixel Crew 的 NPC 草擬一份實用且可直接編輯的人設。不要呼叫工具、讀取或修改檔案，也不要臆測專案內容。\nNPC: {workerName}\n工作位置: {workspacePath}\n同部門人員（包含目前 NPC）: {members}\n\n要求:\n- 依 NPC 名稱、工作位置名稱和現有職務，補上部門尚缺且不重複的職務。\n- role 是清楚的職稱，最多 {maxRole} 字。\n- instructions 使用繁體中文，具體描述專長、責任範圍、工作方式、交付品質與溝通方式；保持精簡，不超過 600 字。\n- 不要加入無法由軟體代理執行的背景故事。\n- 若資訊不足，選擇通用且能補足軟體團隊的角色。\n\n最後只能輸出：\n<persona_suggestion>{\"role\":\"職務\",\"instructions\":\"詳細指示\"}</persona_suggestion>",
+    {
+      workerName: JSON.stringify(String(input.workerName).slice(0, 100)),
+      workspacePath: JSON.stringify(String(input.workspacePath).slice(0, 1_000)),
+      members: JSON.stringify(members),
+      maxRole: MAX_PERSONA_ROLE,
+    },
+  );
 }
 
 /** Parse the marked JSON draft and apply the same limits as persisted personas. */

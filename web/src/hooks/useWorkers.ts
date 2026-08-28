@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
+import { t } from "../i18n";
 
 const browserWsOrigin = typeof window !== "undefined"
   ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`
@@ -150,7 +151,7 @@ export function useWorkers() {
     codex: emptyUsage("codex"),
   });
   const emptyInstall = (provider: ProviderId): ProviderInstallState => ({
-    provider, status: "idle", phase: "尚未開始", command: "", sourceUrl: "",
+    provider, status: "idle", phase: t("尚未開始"), command: "", sourceUrl: "",
     startedAt: null, finishedAt: null, output: "", error: null,
   });
   const [providerInstalls, setProviderInstalls] = useState<Record<ProviderId, ProviderInstallState>>({
@@ -219,7 +220,7 @@ export function useWorkers() {
             if (!w.busy && state.turns[state.turns.length - 1]?.status === "running") {
               state = applyRunnerEvent(state, {
                 type: "error",
-                message: "工作階段已中止；請重新下指令",
+                message: t("工作階段已中止；請重新下指令"),
               });
             }
             state.busy = w.busy;
@@ -414,11 +415,12 @@ export function useWorkers() {
     name?: string,
     provider: ProviderId = "claude",
     workspacePath?: string,
+    model?: string,
   ): Promise<{ id?: string; error?: string }> => {
     try {
       const data = await apiRequest<{ id: string }>("/api/workers", {
         method: "POST",
-        body: { name, provider, workspacePath },
+        body: { name, provider, workspacePath, model },
       });
       if (data.id) setActiveId(data.id);
       return { id: data.id };
@@ -973,12 +975,12 @@ export function useWorkers() {
         setProviderInstalls((current) => ({ ...current, [provider]: state }));
       }
       await refreshAuth(provider);
-      return state.status === "failed" ? state.error || "安裝失敗" : null;
+      return state.status === "failed" ? state.error || t("安裝失敗") : null;
     } catch (error) {
       const message = (error as Error).message;
       setProviderInstalls((current) => ({
         ...current,
-        [provider]: { ...current[provider], status: "failed", phase: "安裝失敗", error: message },
+        [provider]: { ...current[provider], status: "failed", phase: t("安裝失敗"), error: message },
       }));
       return message;
     }

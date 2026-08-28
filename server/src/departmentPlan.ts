@@ -1,4 +1,5 @@
 import { normalizePersona, type Persona } from "./persona.js";
+import { t } from "./i18n.js";
 
 export const MAX_DEPARTMENT_PURPOSE = 200;
 
@@ -23,7 +24,16 @@ export function departmentPlanPrompt(input: {
     name: String(member.name).slice(0, 24),
     role: member.role ? String(member.role).slice(0, 80) : null,
   }));
-  return `請規劃一個 Pixel Crew AI 軟體部門。不要呼叫工具、讀取或修改檔案，也不要臆測專案內容。\n部門用途: ${JSON.stringify(input.purpose)}\nNPC 數量: ${input.count}\n工作位置: ${JSON.stringify(input.workspacePath.slice(0, 1_000))}\n該工作位置既有人員: ${JSON.stringify(existing)}\n\n要求:\n- 必須恰好產生 ${input.count} 位新 NPC。\n- 每位 NPC 的 name 使用簡短繁體中文暱稱，最多 24 字，且不可重複。\n- role 是清楚、互補且不與既有人員重複的職稱，最多 80 字。\n- instructions 使用繁體中文，具體描述專長、責任邊界、工作方式、交付品質與溝通方式，最多 600 字。\n- 角色必須能共同完成「${input.purpose}」，但不要加入虛構背景故事。\n- summary 用一句話說明配置原則。\n\n最後只能輸出：\n<department_plan>{"summary":"配置說明","members":[{"name":"名稱","role":"職務","instructions":"詳細指示"}]}</department_plan>`;
+  return t(
+    "請規劃一個 Pixel Crew AI 軟體部門。不要呼叫工具、讀取或修改檔案，也不要臆測專案內容。\n部門用途: {purpose}\nNPC 數量: {count}\n工作位置: {workspacePath}\n該工作位置既有人員: {existing}\n\n要求:\n- 必須恰好產生 {count} 位新 NPC。\n- 每位 NPC 的 name 使用簡短繁體中文暱稱，最多 24 字，且不可重複。\n- role 是清楚、互補且不與既有人員重複的職稱，最多 80 字。\n- instructions 使用繁體中文，具體描述專長、責任邊界、工作方式、交付品質與溝通方式，最多 600 字。\n- 角色必須能共同完成「{purposeLabel}」，但不要加入虛構背景故事。\n- summary 用一句話說明配置原則。\n\n最後只能輸出：\n<department_plan>{\"summary\":\"配置說明\",\"members\":[{\"name\":\"名稱\",\"role\":\"職務\",\"instructions\":\"詳細指示\"}]}</department_plan>",
+    {
+      purpose: JSON.stringify(input.purpose),
+      count: input.count,
+      workspacePath: JSON.stringify(input.workspacePath.slice(0, 1_000)),
+      existing: JSON.stringify(existing),
+      purposeLabel: input.purpose,
+    },
+  );
 }
 
 export function parseDepartmentPlan(output: string, expectedCount: number): DepartmentPlan | null {

@@ -1,4 +1,5 @@
 import type { MessageImage } from "./providers/session.js";
+import { t } from "./i18n.js";
 
 export const MAX_MESSAGE_IMAGES = 4;
 export const MAX_MESSAGE_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -10,22 +11,22 @@ export class MessageImageValidationError extends Error {}
 
 export function parseMessageImages(value: unknown): MessageImage[] {
   if (value == null) return [];
-  if (!Array.isArray(value)) throw new MessageImageValidationError("圖片附件格式不正確");
-  if (value.length > MAX_MESSAGE_IMAGES) throw new MessageImageValidationError(`每則訊息最多 ${MAX_MESSAGE_IMAGES} 張圖片`);
+  if (!Array.isArray(value)) throw new MessageImageValidationError(t("圖片附件格式不正確"));
+  if (value.length > MAX_MESSAGE_IMAGES) throw new MessageImageValidationError(t("每則訊息最多 {max} 張圖片", { max: MAX_MESSAGE_IMAGES }));
 
   let totalBytes = 0;
   return value.map((raw, index) => {
-    if (!raw || typeof raw !== "object") throw new MessageImageValidationError(`第 ${index + 1} 張圖片格式不正確`);
+    if (!raw || typeof raw !== "object") throw new MessageImageValidationError(t("第 {n} 張圖片格式不正確", { n: index + 1 }));
     const item = raw as Record<string, unknown>;
     const mimeType = String(item.mimeType ?? "") as MessageImage["mimeType"];
-    if (!MIME_TYPES.has(mimeType)) throw new MessageImageValidationError("只支援 PNG、JPEG 與 WebP 圖片");
+    if (!MIME_TYPES.has(mimeType)) throw new MessageImageValidationError(t("只支援 PNG、JPEG 與 WebP 圖片"));
     const dataBase64 = String(item.dataBase64 ?? "").trim();
-    if (!dataBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64)) throw new MessageImageValidationError(`第 ${index + 1} 張圖片資料無效`);
+    if (!dataBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64)) throw new MessageImageValidationError(t("第 {n} 張圖片資料無效", { n: index + 1 }));
     const data = Buffer.from(dataBase64, "base64");
-    if (!data.length || data.length > MAX_MESSAGE_IMAGE_BYTES) throw new MessageImageValidationError(`每張圖片不可超過 ${MAX_MESSAGE_IMAGE_BYTES / 1024 / 1024} MiB`);
-    if (!matchesImageSignature(data, mimeType)) throw new MessageImageValidationError(`第 ${index + 1} 張圖片內容與格式不符`);
+    if (!data.length || data.length > MAX_MESSAGE_IMAGE_BYTES) throw new MessageImageValidationError(t("每張圖片不可超過 {mib} MiB", { mib: MAX_MESSAGE_IMAGE_BYTES / 1024 / 1024 }));
+    if (!matchesImageSignature(data, mimeType)) throw new MessageImageValidationError(t("第 {n} 張圖片內容與格式不符", { n: index + 1 }));
     totalBytes += data.length;
-    if (totalBytes > MAX_MESSAGE_IMAGES_TOTAL_BYTES) throw new MessageImageValidationError(`圖片總大小不可超過 ${MAX_MESSAGE_IMAGES_TOTAL_BYTES / 1024 / 1024} MiB`);
+    if (totalBytes > MAX_MESSAGE_IMAGES_TOTAL_BYTES) throw new MessageImageValidationError(t("圖片總大小不可超過 {mib} MiB", { mib: MAX_MESSAGE_IMAGES_TOTAL_BYTES / 1024 / 1024 }));
     const fallback = `image-${index + 1}.${mimeType === "image/png" ? "png" : mimeType === "image/jpeg" ? "jpg" : "webp"}`;
     const name = String(item.name ?? fallback).replace(/[\r\n\0]/g, "").trim().slice(0, 120) || fallback;
     return { name, mimeType, dataBase64 };
