@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { t } from "../i18n";
 import { apiRequest } from "../api";
 import { compatibleWorkflowTargets, workflowInvocation, type WorkflowTarget } from "../workflowTypes";
 import { parseWorkflowDocument, updateWorkflowDocument, workflowText } from "../workflowDocument";
@@ -74,7 +75,7 @@ export function CodexSkillCenter({
   useEffect(() => {
     if (dirty && !forceReload.current) {
       setExternalChange(true);
-      setNotice({ ok: false, text: "Skill 已在外部更新；目前修改尚未被覆蓋" });
+      setNotice({ ok: false, text: t("Skill 已在外部更新；目前修改尚未被覆蓋") });
       return;
     }
     forceReload.current = false;
@@ -120,7 +121,7 @@ export function CodexSkillCenter({
   }, [skills, query]);
 
   function select(skill: SkillDocument) {
-    if (dirty && !window.confirm("目前 Skill 修改尚未儲存，確定要切換嗎？")) return;
+    if (dirty && !window.confirm(t("目前 Skill 修改尚未儲存，確定要切換嗎？"))) return;
     setSelectedName(skill.name);
     setName(skill.name);
     setContent(skill.content);
@@ -128,7 +129,7 @@ export function CodexSkillCenter({
   }
 
   function create() {
-    if (dirty && !window.confirm("目前 Skill 修改尚未儲存，確定要建立新的嗎？")) return;
+    if (dirty && !window.confirm(t("目前 Skill 修改尚未儲存，確定要建立新的嗎？"))) return;
     setSelectedName(null);
     setName("new-skill");
     setContent(NEW_SKILL);
@@ -155,7 +156,7 @@ export function CodexSkillCenter({
       setName(saved.name);
       setContent(saved.content);
       setExternalChange(false);
-      setNotice({ ok: true, text: `$${saved.name} 已儲存，Codex 下次工作即可使用` });
+      setNotice({ ok: true, text: t("${name} 已儲存，Codex 下次工作即可使用", { name: saved.name }) });
     } catch (error) {
       setExternalChange(true);
       setNotice({ ok: false, text: (error as Error).message });
@@ -165,7 +166,7 @@ export function CodexSkillCenter({
   }
 
   async function remove() {
-    if (!selected || !window.confirm(`確定刪除 ${selected.name} Skill 及其 references/scripts 資產嗎？`)) return;
+    if (!selected || !window.confirm(t("確定刪除 {name} Skill 及其 references/scripts 資產嗎？", { name: selected.name }))) return;
     setSaving(true);
     try {
       await apiRequest<{ ok: boolean }>("/api/skills", {
@@ -176,7 +177,7 @@ export function CodexSkillCenter({
       setSelectedName(null);
       setName("");
       setContent("");
-      setNotice({ ok: true, text: `${selected.name} Skill 已刪除` });
+      setNotice({ ok: true, text: t("{name} Skill 已刪除", { name: selected.name }) });
     } catch (error) {
       setExternalChange(true);
       setNotice({ ok: false, text: (error as Error).message });
@@ -193,7 +194,7 @@ export function CodexSkillCenter({
       const error = await onRun(effectiveRunTarget, workflowInvocation("codex", selected.name, runInput));
       setNotice(error
         ? { ok: false, text: error }
-        : { ok: true, text: `已交給 ${targets.find((target) => target.id === effectiveRunTarget)?.name ?? "NPC"} 試跑` });
+        : { ok: true, text: t("已交給 {name} 試跑", { name: targets.find((target) => target.id === effectiveRunTarget)?.name ?? "NPC" }) });
     } finally {
       setRunning(false);
     }
@@ -211,16 +212,16 @@ export function CodexSkillCenter({
     <div className="command-center__body">
       <aside className="command-library command-library--codex">
         <div className="command-library__actions">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋 Skill…" aria-label="搜尋 Skill" />
-          <button type="button" onClick={create}>＋ 新增</button>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("搜尋 Skill…")} aria-label={t("搜尋 Skill")} />
+          <button type="button" onClick={create}>{t("＋ 新增")}</button>
         </div>
         <div className="command-library__scope">
           <span>CODEX REPO</span>
           <code>.agents/skills</code>
         </div>
         <div className="command-library__list">
-          {loading && <div className="command-library__empty">正在讀取 Repo Skills…</div>}
-          {!loading && filtered.length === 0 && <div className="command-library__empty">這個房間還沒有 Codex Skill。</div>}
+          {loading && <div className="command-library__empty">{t("正在讀取 Repo Skills…")}</div>}
+          {!loading && filtered.length === 0 && <div className="command-library__empty">{t("這個房間還沒有 Codex Skill。")}</div>}
           {filtered.map((skill) => (
             <button
               type="button"
@@ -229,7 +230,7 @@ export function CodexSkillCenter({
               onClick={() => select(skill)}
             >
               <code>${skill.name}</code>
-              <span>{skill.description || "尚未填寫觸發情境"}</span>
+              <span>{skill.description || t("尚未填寫觸發情境")}</span>
             </button>
           ))}
         </div>
@@ -240,9 +241,9 @@ export function CodexSkillCenter({
           <div className="command-editor__welcome">
             {notice && <div className="command-editor__load-error" role="alert">{notice.text}</div>}
             <div className="command-editor__glyph command-editor__glyph--codex">$</div>
-            <h3>建立可重複使用的 Codex Skill</h3>
-            <p>Skill 可以被明確呼叫，也能由 Codex 根據 description 自動選用。</p>
-            <button type="button" onClick={create}>建立第一個 Skill</button>
+            <h3>{t("建立可重複使用的 Codex Skill")}</h3>
+            <p>{t("Skill 可以被明確呼叫，也能由 Codex 根據 description 自動選用。")}</p>
+            <button type="button" onClick={create}>{t("建立第一個 Skill")}</button>
           </div>
         ) : (
           <>
@@ -255,35 +256,35 @@ export function CodexSkillCenter({
                 </div>
               </label>
               <div className="command-editor__meta">
-                <span>{description || "description 決定 Codex 何時會選用這個 Skill"}</span>
-                {declaredName && declaredName !== name.trim() && <code>name 不一致</code>}
+                <span>{description || t("description 決定 Codex 何時會選用這個 Skill")}</span>
+                {declaredName && declaredName !== name.trim() && <code>{t("name 不一致")}</code>}
               </div>
             </div>
             <WorkflowDocumentEditor key={selectedName ?? "new-skill"} provider="codex" content={content} onChange={setContent} />
             {selected && (
               <div className="workflow-test workflow-test--codex">
-                <span>試跑</span>
+                <span>{t("試跑")}</span>
                 <select value={effectiveRunTarget} onChange={(event) => setRunTargetId(event.target.value)} disabled={targets.length === 0 || running}>
-                  {targets.length === 0 && <option value="">沒有可用的 Codex NPC</option>}
+                  {targets.length === 0 && <option value="">{t("沒有可用的 Codex NPC")}</option>}
                   {targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
                 </select>
-                <input value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder="選填任務情境" />
-                <button type="button" disabled={dirty || !effectiveRunTarget || running} onClick={() => void runWorkflow()}>{running ? "送出中…" : "執行"}</button>
+                <input value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder={t("選填任務情境")} />
+                <button type="button" disabled={dirty || !effectiveRunTarget || running} onClick={() => void runWorkflow()}>{running ? t("送出中…") : t("執行")}</button>
               </div>
             )}
             <footer className="command-editor__footer">
               <div className={`command-editor__notice ${notice?.ok ? "command-editor__notice--ok" : ""}`}>
-                {notice?.text ?? (dirty ? "有尚未儲存的修改" : "所有修改已儲存")}
+                {notice?.text ?? (dirty ? t("有尚未儲存的修改") : t("所有修改已儲存"))}
               </div>
               {externalChange && <button className="command-editor__reload" type="button" onClick={() => {
-                if (!window.confirm("載入外部版本會捨棄目前未儲存的修改，確定嗎？")) return;
+                if (!window.confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？"))) return;
                 forceReload.current = true;
                 setExternalChange(false);
                 setReloadNonce((value) => value + 1);
-              }}>載入外部版本</button>}
-              {selected && <button className="command-editor__delete" type="button" disabled={saving} onClick={() => void remove()}>刪除 Skill</button>}
+              }}>{t("載入外部版本")}</button>}
+              {selected && <button className="command-editor__delete" type="button" disabled={saving} onClick={() => void remove()}>{t("刪除 Skill")}</button>}
               <button className="command-editor__save command-editor__save--codex" type="button" disabled={saving || !name.trim() || !content.trim() || !dirty} onClick={() => void save()}>
-                {saving ? "儲存中…" : "儲存 Skill"}
+                {saving ? t("儲存中…") : t("儲存 Skill")}
               </button>
             </footer>
           </>

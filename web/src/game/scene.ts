@@ -5,12 +5,13 @@
 // to use precompiled fallbacks instead, so it works under strict CSP without
 // loosening it. Must be imported before the first `Application` is created.
 import "pixi.js/unsafe-eval";
-import { Application, Container, Text } from "pixi.js";
+import { Application, Container, Graphics, Text } from "pixi.js";
 import type { CharacterState } from "../types";
 import type { StationKey } from "../stations";
 import { Room, ART_W, ART_H } from "./room";
 import { FurnitureLayer, FURNITURE_DEFS } from "./furniture";
 import { Person } from "./person";
+import type { EmoteKind } from "./person";
 import { ParticleSystem } from "./particles";
 import { PersonalDeskLayer } from "./personalDesks";
 import type { DepartmentPhase, DepartmentSeat } from "./personalDesks";
@@ -35,6 +36,19 @@ const SPOT_OFFSETS: Array<[number, number]> = [
   [0, 22],
   [-28, 22],
   [28, 22],
+];
+
+/** 會議桌專屬座位：讓 NPC 分坐在長桌上下兩側、沿桌長分散，像真的圍桌開會，而不是擠在同一側。
+ *  位移相對於 meeting 站點 (standX, standY)；oy 負得多＝桌子上方（後排），接近 0＝桌子下方（前排）。 */
+const MEETING_SEATS: Array<[number, number]> = [
+  [-45, 0],
+  [-27, 0],
+  [-9, 0],
+  [9, 0],
+  [27, 0],
+  [45, 0],
+  [-18, 9],
+  [18, 9],
 ];
 
 export type WorkerSceneState = {
@@ -90,6 +104,8 @@ type SceneCallbacks = {
   onDepartmentClick?(workspacePath: string): void;
   onDepartmentRename?(workspacePath: string, position: { x: number; y: number }): void;
   onContextMenu?(id: string): void;
+  /** A genuine tap on empty floor (not on an NPC/desk, and not a pan). */
+  onEmptyTap?(): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
 };
@@ -136,6 +152,25 @@ export async function createScene(
   const world = new Container();
   world.sortableChildren = true;
 
+  // Pixi-native tap-vs-drag detection shared by NPCs and their desks. Native
+  // pointer events can silently drop out on touch (a pan fires pointercancel and
+  // no pointermove), so movement is tracked through Pixi's own event system — the
+  // same one the sprite pointerup fires from, keeping them in sync. Any press that
+  // travels past ~6px is a pan, not a tap, so selection (which opens the task log)
+  // is suppressed. This is why "finger down on an NPC and drag" no longer selects.
+  app.stage.eventMode = "static";
+  let pressGX = 0, pressGY = 0, pointerDragged = false;
+  app.stage.on("pointerdown", (e) => { pressGX = e.global.x; pressGY = e.global.y; pointerDragged = false; });
+  app.stage.on("globalpointermove", (e) => {
+    if (!pointerDragged && Math.hypot(e.global.x - pressGX, e.global.y - pressGY) > 6) pointerDragged = true;
+  });
+  const isDragging = () => pointerDragged;
+  // A tap that lands on the stage itself (no interactive sprite caught it) and
+  // isn't a pan is an "empty floor" tap — used to dismiss the task log/tooltip.
+  app.stage.on("pointerup", (e) => {
+    if (!pointerDragged && e.target === app.stage) callbacks.onEmptyTap?.();
+  });
+
   const room = new Room();
   const furniture = new FurnitureLayer(
     (key) => {
@@ -149,6 +184,7 @@ export async function createScene(
     callbacks.onSelect,
     callbacks.onDepartmentClick,
     callbacks.onDepartmentRename,
+    isDragging,
   );
   const officeDecor = new OfficeDecor();
   const cat = new Cat();
@@ -156,6 +192,51 @@ export async function createScene(
   room.container.zIndex = -1000;
   particles.g.zIndex = 10000;
   world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g, cat.container);
+
+  // 日夜循環只作用在窗外：天空顏色照真實時間依關鍵影格連續漸變（白天亮藍、
+  // 黃昏燒橘、入夜深藍），星星/太陽/月亮跟著切。室內不蓋色紗，場景維持原色。
+  const DAYLIGHT_KEYS: Array<{ h: number; night: number; sky: number }> = [
+    { h: 0, night: 1, sky: 0x080c1a },    // 深夜
+    { h: 5, night: 1, sky: 0x080c1a },    // 黎明前最暗
+    { h: 6.5, night: 0, sky: 0xd98a5a },  // 清晨暖橘
+    { h: 9, night: 0, sky: 0x6fb7e8 },    // 白天亮藍
+    { h: 17, night: 0, sky: 0x6fb7e8 },   // 白天撐到 17:00 才開始轉黃昏
+    { h: 18.5, night: 0, sky: 0xe8845a }, // 黃昏燒橘
+    { h: 20, night: 1, sky: 0x080c1a },   // 入夜
+    { h: 24, night: 1, sky: 0x080c1a },
+  ];
+
+  function lerpColor(a: number, b: number, t: number): number {
+    const ch = (shift: number) => {
+      const from = (a >> shift) & 0xff;
+      return Math.round(from + (((b >> shift) & 0xff) - from) * t) << shift;
+    };
+    return ch(16) | ch(8) | ch(0);
+  }
+
+  function daylightPhase(hourFloat: number): { night: number; sky: number } {
+    let prev = DAYLIGHT_KEYS[0];
+    for (const key of DAYLIGHT_KEYS) {
+      if (hourFloat <= key.h) {
+        const t = key.h === prev.h ? 0 : (hourFloat - prev.h) / (key.h - prev.h);
+        return {
+          night: prev.night + (key.night - prev.night) * t,
+          sky: lerpColor(prev.sky, key.sky, t),
+        };
+      }
+      prev = key;
+    }
+    return { ...DAYLIGHT_KEYS[DAYLIGHT_KEYS.length - 1] };
+  }
+
+  function applyDaylight(): void {
+    const now = new Date();
+    const phase = daylightPhase(now.getHours() + now.getMinutes() / 60);
+    room.setSky(phase.sky);
+    room.setNight(phase.night >= 0.5);
+    room.setClock(now);
+  }
+  applyDaylight();
   for (const child of [...furniture.container.children]) {
     world.addChild(child);
   }
@@ -177,6 +258,8 @@ export async function createScene(
   });
 
   app.stage.addChild(world, labelLayer);
+
+  // 像素世界不套任何濾鏡皮膚層（賽博皮膚路線已淘汰，改為獨立的「現代工作台」DOM 主題）。
 
   let scale = 1;
   let fitScale = 2;
@@ -240,14 +323,46 @@ export async function createScene(
   let dragLastY = 0;
   let dragPanning = false;
 
+  // Live positions of every pointer currently down on the canvas. Two of them
+  // means a pinch: zoom by the ratio of their distance, anchored at their
+  // midpoint — the touch equivalent of the wheel handler below.
+  const pointers = new Map<number, { x: number; y: number }>();
+  let pinchStartDist = 0;
+  let pinchStartScale = 1;
+  const pinchGeometry = () => {
+    const [a, b] = [...pointers.values()];
+    const rect = app.canvas.getBoundingClientRect();
+    return {
+      dist: Math.hypot(a.x - b.x, a.y - b.y),
+      cx: (a.x + b.x) / 2 - rect.left,
+      cy: (a.y + b.y) / 2 - rect.top,
+    };
+  };
+
   const onPointerDown = (event: PointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2) {
+      // Second finger down → start a pinch and abandon any single-finger pan.
+      dragId = null;
+      dragPanning = false;
+      const g = pinchGeometry();
+      pinchStartDist = g.dist;
+      pinchStartScale = scale;
+      return;
+    }
     dragId = event.pointerId;
     dragPanning = false;
     dragStartX = dragLastX = event.clientX;
     dragStartY = dragLastY = event.clientY;
   };
   const onPointerMove = (event: PointerEvent) => {
+    if (pointers.has(event.pointerId)) pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2) {
+      const g = pinchGeometry();
+      if (pinchStartDist > 0) zoomAnchored(pinchStartScale * (g.dist / pinchStartDist), g.cx, g.cy);
+      return;
+    }
     if (dragId !== event.pointerId) return;
     if (!dragPanning && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
     dragPanning = true;
@@ -258,7 +373,17 @@ export async function createScene(
     applyView();
   };
   const onPointerUp = (event: PointerEvent) => {
+    pointers.delete(event.pointerId);
     if (dragId === event.pointerId) dragId = null;
+    if (pointers.size < 2) pinchStartDist = 0;
+    // One finger left after a pinch → hand panning back to it without a jump.
+    if (pointers.size === 1) {
+      const [[id, p]] = [...pointers.entries()];
+      dragId = id;
+      dragPanning = false;
+      dragStartX = dragLastX = p.x;
+      dragStartY = dragLastY = p.y;
+    }
   };
   // Continuous, not stepped to integers — smooth zoom in/out at any size,
   // only clamped at the min/max bounds.
@@ -300,6 +425,7 @@ export async function createScene(
   app.canvas.addEventListener("pointerdown", onPointerDown);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
   app.canvas.addEventListener("wheel", onWheel, { passive: false });
   app.canvas.addEventListener("dblclick", onDoubleClick);
 
@@ -308,6 +434,9 @@ export async function createScene(
   // index alone — refreshed from the desk layout on every setWorkers.
   let homeSeats = new Map<string, DepartmentSeat>();
   let elapsed = 0;
+  let daylightAccum = 0;
+  let idleEmoteAccum = 0;
+  let idleEmoteNext = 10_000;
 
   // --- Idle social: occasionally one idle NPC strolls over to another for a
   // short coffee chat, then walks home. Purely visual; aborts the moment
@@ -393,7 +522,8 @@ export async function createScene(
       return seat ? { x: seat.x, y: seat.y } : { x: ART_W / 2, y: ART_H - 30 };
     }
     const def = furniture.def(station);
-    const [ox, oy] = SPOT_OFFSETS[index % SPOT_OFFSETS.length];
+    const seats = station === "meeting" ? MEETING_SEATS : SPOT_OFFSETS;
+    const [ox, oy] = seats[index % seats.length];
     return {
       x: Math.max(8, Math.min(ART_W - 8, def.standX + ox)),
       y: Math.max(52, Math.min(ART_H - 6, def.standY + oy)),
@@ -416,6 +546,9 @@ export async function createScene(
       person.flash(success ? GREEN : RED, success);
       particles.burst(person.x, person.y - 8, success ? GREEN : RED, success ? 14 : 18, 0.045);
       if (success) {
+        // A lingering "✓" spark makes a finished turn as readable as the
+        // "cloud" that marks a failed one, not just a single-frame flash.
+        person.emote("spark", 2_600);
         // Nearby colleagues turn and applaud.
         for (const other of entries.values()) {
           if (other === entry || other.temporary || other.transition !== "ready") continue;
@@ -437,6 +570,32 @@ export async function createScene(
     particles.update(dt);
     updateSocial(dt);
     cat.update(elapsed, dt);
+
+    // 日夜循環：每 30 秒對一次真實時間（跨過清晨/黃昏的分界時色調就會換）。
+    daylightAccum += dt;
+    if (daylightAccum >= 30_000) {
+      daylightAccum = 0;
+      applyDaylight();
+    }
+
+    // 閒置生命感：每 9~18 秒隨機挑一位「沒在忙」的常駐 NPC，冒個小表情——
+    // 喝咖啡☕、跟旁邊的人聊兩句💬、偶爾靈光一閃✨。讓辦公室像有人味的地方，
+    // 而不是一排等待指令的雕像。忙碌中/等核准/正在冒表情的人不打擾。
+    idleEmoteAccum += dt;
+    if (idleEmoteAccum >= idleEmoteNext) {
+      idleEmoteAccum = 0;
+      idleEmoteNext = 9_000 + Math.random() * 9_000;
+      const idlers = [...entries.values()].filter((entry) =>
+        entry.transition === "ready" && !entry.temporary && !entry.waiting &&
+        entry.last !== null && entry.last.activity !== "working" && entry.last.activity !== "thinking" &&
+        entry.person.emoting === null,
+      );
+      if (idlers.length > 0) {
+        const pick = idlers[Math.floor(Math.random() * idlers.length)];
+        const kind: EmoteKind = Math.random() < 0.15 ? "spark" : (Math.random() < 0.5 ? "coffee" : "chat");
+        pick.person.emote(kind, 2_400);
+      }
+    }
 
     const positions: PersonScreenPos[] = [];
     for (const [id, entry] of entries) {
@@ -511,7 +670,8 @@ export async function createScene(
     setWorkers(list: WorkerSceneState[]) {
       const permanentWorkers = list.filter((worker) => !worker.temporary);
       homeSeats = personalDesks.setWorkers(permanentWorkers).seats;
-      officeDecor.setWorkerCount(permanentWorkers.length);
+      // 圓桌進行時（有 NPC 站到 meeting 會議桌），強制顯示會議桌，即使目前人數 >4。
+      officeDecor.setWorkerCount(permanentWorkers.length, list.some((w) => w.character.station === "meeting"));
       const seen = new Set<string>();
       let permanentIndex = 0;
       let temporaryIndex = 0;
@@ -527,7 +687,16 @@ export async function createScene(
           person.container.hitArea = {
             contains: (x: number, y: number) => x >= -8 && x <= 8 && y >= -18 && y <= 2,
           };
-          person.container.on("pointerdown", () => callbacks.onSelect(w.selectId));
+          // Select on a genuine tap, not on pointerdown — otherwise beginning a
+          // pan/swipe on top of an NPC instantly selected it (which opens the task
+          // log). isDragging() is the shared Pixi-native pan check (see above).
+          let ppid = -1;
+          person.container.on("pointerdown", (event) => { ppid = event.pointerId; });
+          person.container.on("pointerup", (event) => {
+            if (event.pointerId !== ppid) return;
+            ppid = -1;
+            if (!isDragging()) callbacks.onSelect(w.selectId);
+          });
           person.container.on("pointertap", (event) => {
             if (event.detail >= 2) callbacks.onOpen(w.selectId);
           });
@@ -535,13 +704,17 @@ export async function createScene(
             event.preventDefault();
             callbacks.onContextMenu?.(w.selectId);
           });
-          person.container.on("pointerover", () => {
+          person.container.on("pointerover", (event) => {
             overInteractive = true;
-            callbacks.onHover(w.temporary ? null : w.id);
+            // Touch has no hover: a finger panning past an NPC — even one sitting
+            // behind the task-log sheet, reached via the canvas's implicit pointer
+            // capture — fired its card mid-swipe. Mouse hovers show the card; touch
+            // users tap (pointertap above) to open the NPC instead.
+            if (event.pointerType !== "touch") callbacks.onHover(w.temporary ? null : w.id);
           });
-          person.container.on("pointerout", () => {
+          person.container.on("pointerout", (event) => {
             overInteractive = false;
-            callbacks.onHover(null);
+            if (event.pointerType !== "touch") callbacks.onHover(null);
           });
           world.addChild(person.container);
           const entering = !w.temporary;
@@ -591,7 +764,10 @@ export async function createScene(
         entry.waiting = w.waiting;
         if (!w.waiting && entry.person.emoting === "question") entry.person.emote("question", 0);
         if (entry.last !== w.character) applyCharacter(entry, w.character, w.id);
-        if (entry.transition === "ready" && w.character.station === "home" && !entry.strolling) {
+        // home 會持續回座位；meeting（作戰室圍桌）也要持續把 NPC 拉到會議桌邊——否則非 home 站點
+        // 只有在「station 剛改變且已 ready」那一瞬間才會移動，剛建立的 NPC 還在 entering、錯過那瞬間
+        // 就永遠不會走過去（這就是先前「沒有過去」的原因）。
+        if (entry.transition === "ready" && !entry.strolling && (w.character.station === "home" || w.character.station === "meeting")) {
           entry.person.setTarget(desiredSpot.x, desiredSpot.y);
         }
       }
@@ -631,6 +807,7 @@ export async function createScene(
       app.renderer.off("resize", layout);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
       for (const entry of entries.values()) entry.person.destroy();
       entries.clear();
       app.destroy(true, { children: true, texture: true });

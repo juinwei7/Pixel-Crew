@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { lang, t } from "../i18n";
 import type { ProviderId, ProviderUsageState, UsageWindow } from "../types";
 
 type Props = {
@@ -21,29 +22,30 @@ function tone(remaining: number | null): "good" | "warn" | "low" | "empty" {
 }
 
 function resetCopy(value: string | null): string {
-  if (!value) return "重置時間未提供";
+  if (!value) return t("重置時間未提供");
+  const locale = lang === "zh" ? "zh-TW" : "en-US";
   if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return `重置：${date.toLocaleDateString("zh-TW", { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}`;
+    if (!Number.isNaN(date.getTime())) return t("重置：{time}", { time: `${date.toLocaleDateString(locale, { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}` });
   }
-  return `重置：${value.replace(/^resets\s+/i, "")}`;
+  return t("重置：{time}", { time: value.replace(/^resets\s+/i, "") });
 }
 
 function ProviderMeter({ provider, state }: { provider: ProviderId; state: ProviderUsageState }) {
   const remaining = headline(state);
   return (
-    <div className={`energy-meter energy-meter--${tone(remaining)}`} title={remaining == null ? "尚無用量資料" : `剩餘工作能量 ${remaining}%`}>
+    <div className={`energy-meter energy-meter--${tone(remaining)}`} title={remaining == null ? t("尚無用量資料") : t("剩餘工作能量 {pct}%", { pct: remaining })}>
       <span>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
       <div className="energy-meter__track"><i style={{ width: `${remaining ?? 0}%` }} /></div>
       <strong>{remaining == null ? "--" : `${remaining}%`}</strong>
-      {state.loading && <b aria-label="更新中" title="背景更新中">·</b>}
+      {state.loading && <b aria-label={t("更新中")} title={t("背景更新中")}>·</b>}
     </div>
   );
 }
 
 function WindowRow({ window }: { window: UsageWindow }) {
   return (
-    <div className={`energy-detail__window energy-detail__window--${tone(window.remainingPercent)}`} title={`剩餘 ${window.remainingPercent}%（已用 ${window.usedPercent}%）`}>
+    <div className={`energy-detail__window energy-detail__window--${tone(window.remainingPercent)}`} title={t("剩餘 {pct}%（已用 {used}%）", { pct: window.remainingPercent, used: window.usedPercent })}>
       <div><strong>{window.label}</strong><span>{resetCopy(window.resetsAt)}</span></div>
       <div className="energy-detail__bar"><i style={{ width: `${window.remainingPercent}%` }} /></div>
       <b>{window.remainingPercent}%</b>
@@ -81,23 +83,23 @@ export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
 
   return (
     <div ref={rootRef} className="energy-hud">
-      <button type="button" className="energy-hud__summary" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-label="查看工作能量">
+      <button type="button" className="energy-hud__summary" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-label={t("查看工作能量")}>
         <span className="energy-hud__title"><i />WORK ENERGY</span>
         <ProviderMeter provider="claude" state={usage.claude} />
         <ProviderMeter provider="codex" state={usage.codex} />
-        <span className="energy-hud__cost" title="Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）">
+        <span className="energy-hud__cost" title={t("Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）")}>
           US$ {totalCostUsd.toFixed(2)}
         </span>
       </button>
       {open && (
         <div className="energy-detail">
-          <header><div><span>OFFICE POWER</span><strong>全域工作能量</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "更新中…" : "重新整理"}</button></header>
+          <header><div><span>OFFICE POWER</span><strong>{t("全域工作能量")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
           {(["claude", "codex"] as ProviderId[]).map((provider) => {
             const state = usage[provider];
-            return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? "快取" : state.updatedAt ? "即時" : "尚無資料"}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? "正在讀取工作能量…" : state.error || "Provider 沒有提供用量資料"}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
+            return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
           })}
           {error && <div className="energy-detail__error">{error}</div>}
-          <footer>帳號共用 · 不隨房間或 NPC 切換 · Claude 累計花費 US$ {totalCostUsd.toFixed(2)} · Codex 以配額百分比計費，無美元金額</footer>
+          <footer>{t("帳號共用 · 不隨房間或 NPC 切換 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
         </div>
       )}
     </div>
@@ -133,21 +135,21 @@ export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange
 
   return (
     <div ref={rootRef} className="focus-energy">
-      <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label="查看專心模式工作用量">
+      <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label={t("查看專心模式工作用量")}>
         <ProviderMeter provider={activeProvider} state={usage[activeProvider]} />
-        <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? "用量偏低" : "全部"}</span>
-        <span className="energy-hud__cost" title="Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）">
+        <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? t("用量偏低") : t("全部")}</span>
+        <span className="energy-hud__cost" title={t("Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）")}>
           US$ {totalCostUsd.toFixed(2)}
         </span>
       </button>
-      <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label="工作用量詳情">
-        <header><div><span>WORK ENERGY</span><strong>用量與重置時間</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "更新中…" : "重新整理"}</button></header>
+      <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label={t("工作用量詳情")}>
+        <header><div><span>WORK ENERGY</span><strong>{t("用量與重置時間")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
         {(["claude", "codex"] as ProviderId[]).map((provider) => {
           const state = usage[provider];
-          return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? "快取" : state.updatedAt ? "即時" : "尚無資料"}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? "正在讀取工作能量…" : state.error || "Provider 沒有提供用量資料"}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
+          return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
         })}
         {error && <div className="energy-detail__error">{error}</div>}
-        <footer>帳號共用 · 不隨 NPC 切換 · Claude 累計花費 US$ {totalCostUsd.toFixed(2)} · Codex 以配額百分比計費，無美元金額</footer>
+        <footer>{t("帳號共用 · 不隨 NPC 切換 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
       </aside>
     </div>
   );

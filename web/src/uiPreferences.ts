@@ -6,6 +6,7 @@ export type CrewFilter = "all" | "working" | "attention" | "claude" | "codex" | 
 export type UiPreferencesV2 = {
   version: 3;
   taskLogWidth: number;
+  taskLogHeight: number;
   taskLogView: TaskLogView;
   taskLogOpen: boolean;
   crewRailCollapsed: boolean;
@@ -21,6 +22,7 @@ export const COMPACT_OFFICE_MAX_WIDTH = 1440;
 export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   version: 3,
   taskLogWidth: 600,
+  taskLogHeight: 62,
   taskLogView: "summary",
   taskLogOpen: true,
   crewRailCollapsed: false,
@@ -35,6 +37,14 @@ const FILTERS = new Set<CrewFilter>(["all", "working", "attention", "claude", "c
 
 export function clampTaskLogWidth(width: number, viewportWidth = 916): number {
   return Math.round(Math.max(400, Math.min(width, 860, Math.max(400, viewportWidth - 56))));
+}
+
+// Phone-only: the log becomes a bottom sheet whose height (in vh) the user drags.
+// Kept between "just a peek" and "almost full screen" so the office and the ▶ toggle
+// never get fully swallowed.
+export function clampTaskLogHeight(heightVh: number): number {
+  if (!Number.isFinite(heightVh)) return DEFAULT_UI_PREFERENCES.taskLogHeight;
+  return Math.round(Math.max(34, Math.min(heightVh, 92)));
 }
 
 export function enteredCompactOffice(previousWidth: number, currentWidth: number): boolean {
@@ -52,6 +62,9 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
   return {
     version: 3,
     taskLogWidth: clampTaskLogWidth(width, viewportWidth),
+    taskLogHeight: clampTaskLogHeight(
+      typeof raw.taskLogHeight === "number" ? raw.taskLogHeight : DEFAULT_UI_PREFERENCES.taskLogHeight,
+    ),
     taskLogView: typeof raw.taskLogView === "string" && VIEWS.has(raw.taskLogView as TaskLogView)
       ? raw.taskLogView as TaskLogView
       : DEFAULT_UI_PREFERENCES.taskLogView,

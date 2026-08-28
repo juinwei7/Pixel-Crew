@@ -1,4 +1,5 @@
 import { execCli } from "./processes.js";
+import { t } from "../i18n.js";
 
 export type DirectoryPickerResult = { path?: string; canceled?: boolean };
 
@@ -18,7 +19,7 @@ export async function pickDirectory(platform: NodeJS.Platform = process.platform
     if (platform === "darwin") {
       const { stdout } = await execCli("/usr/bin/osascript", [
         "-e",
-        'POSIX path of (choose folder with prompt "Pixel Crew：選擇工作資料夾")',
+        `POSIX path of (choose folder with prompt "Pixel Crew：${t("選擇工作資料夾")}")`,
       ], { timeout: 120_000 });
       return { path: stdout.trim() };
     }
@@ -38,7 +39,7 @@ export async function pickDirectory(platform: NodeJS.Platform = process.platform
       }
       throw lastError;
     }
-    throw new Error("目前平台不支援原生資料夾選擇器");
+    throw new Error(t("目前平台不支援原生資料夾選擇器"));
   } catch (error) {
     const detail = String((error as any)?.stderr ?? (error as Error)?.message ?? error);
     if (/cancel|取消|-128|code 2|exited with code 2/i.test(detail)) return { canceled: true };

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { ComposerDocument, ComposerImage } from "../composerFiles";
 import { mergeComposerItems, type QueuedCommand } from "../composerQueue";
+import { t } from "../i18n";
 
 type ComposerSession = { images: ComposerImage[]; documents: ComposerDocument[]; queued: QueuedCommand[]; error: string | null };
 type PersistedComposerExtras = Pick<ComposerSession, "images" | "documents" | "queued">;
@@ -56,7 +57,7 @@ export function useComposerSessionExtras(config: { enabled: boolean; sessionKey:
     const previousOwner = sessionOwnerRef.current;
     sessionCacheRef.current.set(previousOwner, { images, documents, queued, error });
     if (hydratedExtrasRef.current.has(previousOwner)) {
-      void saveComposerExtras(previousOwner, { images, documents, queued }).catch(() => setPersistenceWarning("上一個 NPC 的附件與待送訊息無法保存"));
+      void saveComposerExtras(previousOwner, { images, documents, queued }).catch(() => setPersistenceWarning(t("上一個 NPC 的附件與待送訊息無法保存")));
     }
     const next = sessionCacheRef.current.get(sessionKey) ?? { images: [], documents: [], queued: [], error: null };
     sessionOwnerRef.current = sessionKey;
@@ -90,7 +91,7 @@ export function useComposerSessionExtras(config: { enabled: boolean; sessionKey:
       setExtrasSaved(true);
       setPersistenceWarning(null);
     }).catch(() => {
-      if (!cancelled) setPersistenceWarning("附件與待送訊息無法從本機儲存空間復原");
+      if (!cancelled) setPersistenceWarning(t("附件與待送訊息無法從本機儲存空間復原"));
       hydratedExtrasRef.current.add(owner);
     }).finally(() => {
       if (!cancelled) setRestoringExtras(false);
@@ -113,7 +114,7 @@ export function useComposerSessionExtras(config: { enabled: boolean; sessionKey:
           setPersistenceWarning(null);
         }
       }).catch(() => {
-        if (sessionOwnerRef.current === owner && extrasSaveRevisionRef.current === revision) setPersistenceWarning("附件與待送訊息無法保存，離開前請先送出");
+        if (sessionOwnerRef.current === owner && extrasSaveRevisionRef.current === revision) setPersistenceWarning(t("附件與待送訊息無法保存，離開前請先送出"));
       });
     }, 300);
     return () => window.clearTimeout(timer);

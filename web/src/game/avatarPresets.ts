@@ -1,4 +1,5 @@
 import { PAL, type Palette } from "./pixels";
+import { t } from "../i18n";
 
 export type AvatarPresetId = "classic" | "cyber" | "signal" | "spark" | "ops";
 
@@ -11,11 +12,11 @@ export type AvatarPreset = {
 };
 
 export const AVATAR_PRESETS: AvatarPreset[] = [
-  { id: "classic", name: "經典隊員", role: "原始制服 · 隨隊員配色", accent: "#4de3ff", palette: null },
-  { id: "cyber", name: "霓虹工程師", role: "深藍髮 · 青藍制服", accent: "#35e3dc", palette: { H: 0x182b4a, h: 0x101c34, B: 0x35e3dc, b: 0x168f9b, P: 0x2b4770, p: 0x1d3152 } },
-  { id: "signal", name: "訊號分析師", role: "銀灰髮 · 紫羅蘭制服", accent: "#a98bff", palette: { H: 0xb9c8dd, h: 0x7787a3, B: 0xa98bff, b: 0x7355c7, P: 0x384064, p: 0x292f4e } },
-  { id: "spark", name: "火花設計師", role: "暖棕髮 · 桃紅制服", accent: "#ff69cf", palette: { H: 0x7a3d45, h: 0x4c2731, S: 0xe8b58f, B: 0xff69cf, b: 0xb8348d, P: 0x53375f, p: 0x38263f } },
-  { id: "ops", name: "夜班維運", role: "黑藍髮 · 金橘制服", accent: "#ffc857", palette: { H: 0x17243b, h: 0x0d1526, S: 0xc98f6d, B: 0xffc857, b: 0xb77a21, P: 0x333c54, p: 0x22293d } },
+  { id: "classic", name: t("經典隊員"), role: t("原始制服 · 隨隊員配色"), accent: "#00e5ff", palette: null },
+  { id: "cyber", name: t("霓虹工程師"), role: t("深藍髮 · 青藍制服"), accent: "#35e3dc", palette: { H: 0x182b4a, h: 0x101c34, B: 0x35e3dc, b: 0x168f9b, P: 0x2b4770, p: 0x1d3152 } },
+  { id: "signal", name: t("訊號分析師"), role: t("銀灰髮 · 紫羅蘭制服"), accent: "#a98bff", palette: { H: 0xb9c8dd, h: 0x7787a3, B: 0xa98bff, b: 0x7355c7, P: 0x384064, p: 0x292f4e } },
+  { id: "spark", name: t("火花設計師"), role: t("暖棕髮 · 桃紅制服"), accent: "#ff69cf", palette: { H: 0x7a3d45, h: 0x4c2731, S: 0xe8b58f, B: 0xff69cf, b: 0xb8348d, P: 0x53375f, p: 0x38263f } },
+  { id: "ops", name: t("夜班維運"), role: t("黑藍髮 · 金橘制服"), accent: "#ffc857", palette: { H: 0x17243b, h: 0x0d1526, S: 0xc98f6d, B: 0xffc857, b: 0xb77a21, P: 0x333c54, p: 0x22293d } },
 ];
 
 const PRESET_IDS = new Set(AVATAR_PRESETS.map((preset) => preset.id));

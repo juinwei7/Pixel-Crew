@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type Spa
 import { existsSync } from "node:fs";
 import { delimiter, extname, isAbsolute, join, win32 } from "node:path";
 import crossSpawn from "cross-spawn";
+import { t } from "../i18n.js";
 
 type Invocation = { file: string; args: string[]; resolvedExecutable: string };
 
@@ -32,7 +33,7 @@ export function resolveExecutable(
 }
 
 export function quoteWindowsCmdArgument(value: string): string {
-  if (/[\r\n\0]/.test(value)) throw new Error("Windows 指令參數包含不安全的換行字元");
+  if (/[\r\n\0]/.test(value)) throw new Error(t("Windows 指令參數包含不安全的換行字元"));
   // cmd expands percent variables even inside quotes. Doubling them keeps
   // literal percent signs when invoking npm-generated .cmd shims.
   const escapedPercent = value.replaceAll("%", "%%");
@@ -89,7 +90,7 @@ export function execCli(
       const next = (target === "stdout" ? stdout : stderr) + chunk.toString();
       if (Buffer.byteLength(next) > maxBuffer) {
         void terminateProcessTree(child);
-        const error = new Error(`CLI ${target} 超過 ${maxBuffer} bytes`) as NodeJS.ErrnoException;
+        const error = new Error(t("CLI {target} 超過 {maxBuffer} bytes", { target, maxBuffer })) as NodeJS.ErrnoException;
         error.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
         finish(error);
         return;

@@ -1,3 +1,5 @@
+import { t } from "./i18n.js";
+
 export type DepartmentMessageIntent =
   | "question"
   | "context"
@@ -117,27 +119,19 @@ export function intentClassificationPrompt(input: {
   message: string;
   attachmentNames: string[];
 }): string {
-  return `你是部門訊息意圖分類器，只分類，不執行工作，也不可使用工具。
-部門: ${text(input.departmentName, 200)}
-部門職責: ${text(input.departmentPurpose, 1_000)}
-進行中 Mission: ${JSON.stringify(input.activeMission)}
-最近完成 Mission: ${JSON.stringify(input.latestCompletedMission)}
-Thread 摘要: ${text(input.threadSummary, 4_000)}
-最近訊息: ${text(JSON.stringify(input.recentMessages.slice(-12)), 8_000)}
-附件名稱: ${JSON.stringify(input.attachmentNames.slice(0, 8))}
-使用者訊息: ${text(input.message, 4_000)}
-
-intent 必須是 question、context、mission_update、follow_up_mission、approval、decision、system 之一。
-- question: 只詢問、解釋或查明現況，不要求變更成果。
-- context: 對進行中工作補充背景，不改變目標。
-- mission_update: 修改進行中 Mission；changeImpact 必須是 minor 或 major。
-- follow_up_mission: 已完成工作後要求修改、補做或新交付。
-- approval / decision: 回答系統正在等待的核准或取捨。
-- 沒有進行中 Mission 且是新的工作要求時，使用 follow_up_mission。
-confidence 低於 0.7 時必須提供 clarificationQuestion，不可猜測。
-
-只回傳：
-<department_intent>{"intent":"","confidence":0,"reason":"","changeImpact":"none|minor|major","clarificationQuestion":null}</department_intent>`;
+  return t(
+    "你是部門訊息意圖分類器，只分類，不執行工作，也不可使用工具。\n部門: {departmentName}\n部門職責: {departmentPurpose}\n進行中 Mission: {activeMission}\n最近完成 Mission: {latestCompletedMission}\nThread 摘要: {threadSummary}\n最近訊息: {recentMessages}\n附件名稱: {attachmentNames}\n使用者訊息: {message}\n\nintent 必須是 question、context、mission_update、follow_up_mission、approval、decision、system 之一。\n- question: 只詢問、解釋或查明現況，不要求變更成果。\n- context: 對進行中工作補充背景，不改變目標。\n- mission_update: 修改進行中 Mission；changeImpact 必須是 minor 或 major。\n- follow_up_mission: 已完成工作後要求修改、補做或新交付。\n- approval / decision: 回答系統正在等待的核准或取捨。\n- 沒有進行中 Mission 且是新的工作要求時，使用 follow_up_mission。\nconfidence 低於 0.7 時必須提供 clarificationQuestion，不可猜測。\n\n只回傳：\n<department_intent>{\"intent\":\"\",\"confidence\":0,\"reason\":\"\",\"changeImpact\":\"none|minor|major\",\"clarificationQuestion\":null}</department_intent>",
+    {
+      departmentName: text(input.departmentName, 200),
+      departmentPurpose: text(input.departmentPurpose, 1_000),
+      activeMission: JSON.stringify(input.activeMission),
+      latestCompletedMission: JSON.stringify(input.latestCompletedMission),
+      threadSummary: text(input.threadSummary, 4_000),
+      recentMessages: text(JSON.stringify(input.recentMessages.slice(-12)), 8_000),
+      attachmentNames: JSON.stringify(input.attachmentNames.slice(0, 8)),
+      message: text(input.message, 4_000),
+    },
+  );
 }
 
 export function boundedDepartmentContext(input: {

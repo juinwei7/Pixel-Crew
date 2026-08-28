@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 export const AVATAR_WIDTH = 24;
 export const AVATAR_HEIGHT = 32;
 
@@ -21,7 +23,7 @@ export function renderNormalizedAvatar(
   canvas.width = AVATAR_WIDTH;
   canvas.height = AVATAR_HEIGHT;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("瀏覽器無法建立圖片畫布");
+  if (!context) throw new Error(t("瀏覽器無法建立圖片畫布"));
   context.imageSmoothingEnabled = false;
   context.clearRect(0, 0, AVATAR_WIDTH, AVATAR_HEIGHT);
 

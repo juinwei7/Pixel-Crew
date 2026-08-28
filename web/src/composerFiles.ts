@@ -1,4 +1,5 @@
 import type { MessageDocumentPayload, MessageImagePayload } from "./types";
+import { t } from "./i18n";
 
 export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
 export type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
@@ -20,14 +21,14 @@ export function validateComposerAttachment(input: {
   currentDocuments: ComposerDocument[];
 }): string | null {
   const { imageFiles, documentFiles, currentImages, currentDocuments } = input;
-  if (imageFiles.length > MAX_IMAGES - currentImages.length) return `每則訊息最多 ${MAX_IMAGES} 張圖片`;
-  if (documentFiles.length > MAX_DOCUMENTS - currentDocuments.length) return `每則訊息最多 ${MAX_DOCUMENTS} 份文件`;
-  if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) return "只支援 PNG、JPEG 與 WebP 圖片";
-  if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) return "每張圖片不可超過 5 MiB";
-  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return "圖片總大小不可超過 10 MiB";
-  if (documentFiles.some((file) => !SUPPORTED_DOCUMENT_EXTENSIONS.has(fileExtension(file.name)))) return "只支援文字、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件";
-  if (documentFiles.some((file) => file.size > MAX_DOCUMENT_BYTES)) return "每份文件不可超過 10 MiB";
-  if (currentDocuments.reduce((sum, document) => sum + document.size, 0) + documentFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_DOCUMENT_BYTES) return "文件總大小不可超過 20 MiB";
+  if (imageFiles.length > MAX_IMAGES - currentImages.length) return t("每則訊息最多 {max} 張圖片", { max: MAX_IMAGES });
+  if (documentFiles.length > MAX_DOCUMENTS - currentDocuments.length) return t("每則訊息最多 {max} 份文件", { max: MAX_DOCUMENTS });
+  if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) return t("只支援 PNG、JPEG 與 WebP 圖片");
+  if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) return t("每張圖片不可超過 5 MiB");
+  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return t("圖片總大小不可超過 10 MiB");
+  if (documentFiles.some((file) => !SUPPORTED_DOCUMENT_EXTENSIONS.has(fileExtension(file.name)))) return t("只支援文字、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件");
+  if (documentFiles.some((file) => file.size > MAX_DOCUMENT_BYTES)) return t("每份文件不可超過 10 MiB");
+  if (currentDocuments.reduce((sum, document) => sum + document.size, 0) + documentFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_DOCUMENT_BYTES) return t("文件總大小不可超過 20 MiB");
   return null;
 }
 

@@ -3,6 +3,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
 import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
 import { protectFile } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 export type CommandDocument = {
   name: string;
@@ -24,11 +25,11 @@ function commandsRoot(workspacePath: string): string {
 function commandPath(workspacePath: string, name: string): string {
   const normalized = name.trim();
   if (!COMMAND_NAME.test(normalized) || normalized.length > 120) {
-    throw new Error("指令名稱只能使用英數、-、_、.，並可用 / 分類");
+    throw new Error(t("指令名稱只能使用英數、-、_、.，並可用 / 分類"));
   }
   const root = commandsRoot(workspacePath);
   const path = resolve(root, `${normalized}.md`);
-  if (path !== root && !path.startsWith(`${root}${sep}`)) throw new Error("指令路徑不合法");
+  if (path !== root && !path.startsWith(`${root}${sep}`)) throw new Error(t("指令路徑不合法"));
   return path;
 }
 
@@ -83,8 +84,8 @@ export async function saveProjectCommand(
   content: string,
   originalName?: string,
 ): Promise<CommandDocument> {
-  if (!content.trim()) throw new Error("指令內容不能是空白");
-  if (Buffer.byteLength(content, "utf8") > MAX_COMMAND_BYTES) throw new Error("指令內容不能超過 200 KB");
+  if (!content.trim()) throw new Error(t("指令內容不能是空白"));
+  if (Buffer.byteLength(content, "utf8") > MAX_COMMAND_BYTES) throw new Error(t("指令內容不能超過 200 KB"));
   commandMetadata(content);
   const path = commandPath(workspacePath, name);
   const oldPath = originalName ? commandPath(workspacePath, originalName) : null;
@@ -93,7 +94,7 @@ export async function saveProjectCommand(
   if (!oldPath || oldPath !== path) {
     try {
       await stat(path);
-      throw new Error(`/${name} 已經存在`);
+      throw new Error(t("/{name} 已經存在", { name }));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -106,7 +107,7 @@ export async function saveProjectCommand(
   await protectFile(path);
   if (oldPath && oldPath !== path) await rm(oldPath, { force: true });
   const [saved] = (await listProjectCommands(workspacePath)).filter((command) => command.name === name);
-  if (!saved) throw new Error("指令儲存後無法讀取");
+  if (!saved) throw new Error(t("指令儲存後無法讀取"));
   return saved;
 }
 

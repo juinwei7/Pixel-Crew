@@ -1,13 +1,20 @@
 import express, { type Response } from "express";
+import { PreparedTokenStore } from "./preparedTokens.js";
 import cors, { type CorsOptions } from "cors";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
+import { connect as netConnect } from "node:net";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
+import {
+  parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
+  warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
+} from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
 import { buildCodexMcpAddArgs, CodexCapabilityRegistry } from "./codexCapabilities.js";
@@ -24,6 +31,7 @@ import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skill
 import { isAllowedLocalRequest, isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
+import { captureWebShot, shutdownWebShot } from "./webShot.js";
 import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
 import { stageExportDirectory } from "./backupExport.js";
 import {
@@ -47,6 +55,15 @@ import {
   type Persona,
   type PersonaTemplate,
 } from "./persona.js";
+import {
+  addMemoryNote,
+  composeMemorySection,
+  composeOutboxSection,
+  deleteExtras,
+  getExtras,
+  removeMemoryNote,
+  setDailyBudget,
+} from "./workerExtras.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
 import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
@@ -134,6 +151,21 @@ import {
 } from "./departmentThread.js";
 import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
+import { buildDayReport, localDay, resolveReportDay } from "./dayReport.js";
+import { decideBrainSwap, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
+import { AppSettingsStore } from "./appSettings.js";
+import { setLang, t, tc } from "./i18n.js";
+import { parseLimitReset } from "./limitResume.js";
+import { composeConsultAsk, composeConsultDigest, composeConsultSection, selectConsultTargets } from "./consult.js";
+import {
+  deriveSquadIdentity,
+  normalizeSquadMember,
+  parseSquadLeadIndex,
+  parseSquadMembers,
+  parseSquadProvider,
+  validateSquadMembers,
+  validateSquadSize,
+} from "./squads.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -153,7 +185,9 @@ app.use(cors(loopbackCors));
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:");
+  // frame-src 放行本機轉接站(8790) 以便遠端存取設定精靈能內嵌在 App modal；
+  // 遠端經轉接站進來時精靈是同源('self')，不受此影響。
+  res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self' http://localhost:8790 http://127.0.0.1:8790");
   next();
 });
 // Four documents (20 MiB total) plus images (10 MiB total) expand by roughly
@@ -166,7 +200,7 @@ app.use(express.json({ limit: "44mb" }));
 // GETs stay served (harmless; lets the frontend keep polling system status).
 app.use((req, res, next) => {
   if (maintenanceMode && req.method !== "GET" && !req.path.startsWith("/api/backup/")) {
-    res.status(503).json({ error: "還原正在進行中" });
+    res.status(503).json({ error: t("還原正在進行中") });
     return;
   }
   next();
@@ -193,6 +227,8 @@ store.markDepartmentMissionsOrigin(
 );
 const avatarStore = new AvatarStore(config.avatarDir);
 const attachmentRepository = new AttachmentRepository(join(config.dataDirectory, "attachments"), store);
+const appSettings = new AppSettingsStore(config.dataDirectory);
+setLang(appSettings.get().lang);
 
 function persistAttachments(
   images: MessageImage[],
@@ -203,7 +239,7 @@ function persistAttachments(
     return attachmentRepository.persist(images, documents);
   } catch (error) {
     console.error("附件保存失敗", error);
-    res.status(500).json({ error: "附件保存失敗，請稍後重試" });
+    res.status(500).json({ error: t("附件保存失敗，請稍後重試") });
     return null;
   }
 }
@@ -306,6 +342,17 @@ type Worker = {
 };
 
 const workers = new Map<string, Worker>();
+
+// /api/workers/:id/* 路由開頭的共用樣板：查 worker、不存在回 404。
+// 呼叫端寫 `const worker = requireWorker(res, req.params.id); if (!worker) return;`
+function requireWorker(res: Response, id: string): Worker | null {
+  const worker = workers.get(id);
+  if (!worker) {
+    res.status(404).json({ error: "unknown worker" });
+    return null;
+  }
+  return worker;
+}
 const departments = new Map<string, Department>(store.listDepartments().map((department) => [department.id, department]));
 const activeCollaborations = new Map<string, CollaborationTask>();
 const collaborationActivities = new Map<string, MissionActivity>();
@@ -400,7 +447,7 @@ function ensureDepartmentThread(departmentId: string): DepartmentThread {
     createdAt: now,
     updatedAt: now,
   };
-  if (!store.saveDepartmentThread(thread)) throw new Error("無法建立部門對話");
+  if (!store.saveDepartmentThread(thread)) throw new Error(t("無法建立部門對話"));
   return thread;
 }
 
@@ -456,7 +503,7 @@ function appendDepartmentMessage(
     id: randomUUID(),
     createdAt: createdAt ?? new Date().toISOString(),
   };
-  if (!store.saveDepartmentMessage(message)) throw new Error("無法保存部門訊息");
+  if (!store.saveDepartmentMessage(message)) throw new Error(t("無法保存部門訊息"));
   broadcast({ type: "department_message_created", message });
   return message;
 }
@@ -615,7 +662,7 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
   const now = new Date().toISOString();
   const fail = (message: unknown) => {
     task.status = "failed";
-    task.error = collaborationText(message, 2_000) || "協作執行失敗";
+    task.error = collaborationText(message, 2_000) || t("協作執行失敗");
     task.completedAt = now;
     activeCollaborations.delete(task.id);
     collaborationActivities.delete(task.id);
@@ -626,7 +673,7 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
   if (task.status === "returning") {
     if (event.type === "error" || event.isError) {
       task.continuationResult = collaborationText(event.type === "error" ? event.message : event.resultText, 40_000) || null;
-      fail(event.type === "error" ? event.message : event.resultText || "來源 NPC 接續工作失敗");
+      fail(event.type === "error" ? event.message : event.resultText || t("來源 NPC 接續工作失敗"));
       return;
     }
     task.continuationResult = collaborationText(event.resultText, 40_000) || null;
@@ -641,32 +688,32 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
   }
 
   if (event.type === "error" || event.isError) {
-    fail(event.type === "error" ? event.message : event.resultText || "目標 NPC 協作失敗");
+    fail(event.type === "error" ? event.message : event.resultText || t("目標 NPC 協作失敗"));
     return;
   }
 
   const result = parseCollaborationResult(event.resultText || "");
   if (!result) {
-    fail("目標 NPC 沒有回傳協作結果");
+    fail(t("目標 NPC 沒有回傳協作結果"));
     return;
   }
   task.result = result;
   const source = workers.get(task.sourceWorkerId);
   const target = workers.get(task.targetWorkerId);
   if (!source || !target) {
-    fail("來源或目標 NPC 已不存在，無法自動交回結果");
+    fail(t("來源或目標 NPC 已不存在，無法自動交回結果"));
     return;
   }
   if (!sameWorkspacePath(source.runner.workspacePath, task.workspacePath) || !sameWorkspacePath(target.runner.workspacePath, task.workspacePath)) {
-    fail("NPC 工作位置已改變，無法自動交回結果");
+    fail(t("NPC 工作位置已改變，無法自動交回結果"));
     return;
   }
   if (source.runner.busy || handoffInProgress(source)) {
-    fail("來源 NPC 狀態已改變，無法自動接續工作");
+    fail(t("來源 NPC 狀態已改變，無法自動接續工作"));
     return;
   }
   if (!providerReady(source.runner.provider)) {
-    fail(`${providerLabel(source.runner.provider)} 尚未登入，無法自動接續工作`);
+    fail(t("{provider} 尚未登入，無法自動接續工作", { provider: providerLabel(source.runner.provider) }));
     return;
   }
   task.status = "returning";
@@ -680,7 +727,7 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
     source.runner.send(message);
     broadcast({ type: "worker_status", workerId: source.id, busy: true });
   } catch (error) {
-    record(source, { type: "error", message: (error as Error).message || "無法自動交回協作結果" });
+    record(source, { type: "error", message: (error as Error).message || t("無法自動交回協作結果") });
     // record(error) owns the failure transition while the task is returning.
   }
 }
@@ -700,7 +747,7 @@ function failMission(mission: DepartmentMission, message: unknown): void {
     step.completedAt = now;
   }
   mission.status = "failed";
-  mission.error = collaborationText(message, 2_000) || "Department Mission 執行失敗";
+  mission.error = collaborationText(message, 2_000) || t("Department Mission 執行失敗");
   mission.completedAt = now;
   activeMissions.delete(mission.id);
   missionActivities.delete(mission.id);
@@ -725,7 +772,7 @@ function pauseMission(
   }
   mission.status = "needs_attention";
   mission.attentionReason = reason;
-  mission.error = collaborationText(message, 2_000) || "Department Mission 需要你決定後續";
+  mission.error = collaborationText(message, 2_000) || t("Department Mission 需要你決定後續");
   missionActivities.delete(mission.id);
   store.saveDepartmentMission(mission);
   departmentAudit("mission_updated", mission.departmentId, mission.id, {
@@ -745,19 +792,19 @@ function dispatchMissionStep(
   const step = mission.steps[stepIndex];
   const assignee = step ? workers.get(step.assigneeWorkerId) : null;
   if (!step || !assignee) {
-    pauseMission(mission, "Mission 指派的 NPC 已不存在，請重新指派", "member_unavailable");
+    pauseMission(mission, t("Mission 指派的 NPC 已不存在，請重新指派"), "member_unavailable");
     return;
   }
   if (!sameWorkspacePath(assignee.runner.workspacePath, mission.workspacePath)) {
-    pauseMission(mission, "Mission 指派的 NPC 已離開原部門，請重新指派", "member_unavailable");
+    pauseMission(mission, t("Mission 指派的 NPC 已離開原部門，請重新指派"), "member_unavailable");
     return;
   }
   if (assignee.runner.busy || handoffInProgress(assignee) || collaborationInProgress(assignee.id)) {
-    pauseMission(mission, `${assignee.runner.name} 正在執行其他工作，請稍後重試或重新指派`, "member_unavailable");
+    pauseMission(mission, t("{name} 正在執行其他工作，請稍後重試或重新指派", { name: assignee.runner.name }), "member_unavailable");
     return;
   }
   if (!providerReady(assignee.runner.provider)) {
-    pauseMission(mission, `${providerLabel(assignee.runner.provider)} 尚未登入，請登入後重試或重新指派`, "member_unavailable");
+    pauseMission(mission, t("{provider} 尚未登入，請登入後重試或重新指派", { provider: providerLabel(assignee.runner.provider) }), "member_unavailable");
     return;
   }
   const now = new Date().toISOString();
@@ -798,14 +845,14 @@ function dispatchMissionStep(
       mission,
       assignee,
       message,
-      `部門工作 · ${step.title}（${stepIndex + 1}/${mission.steps.length}）`,
+      t("部門工作 · {title}（{n}/{total}）", { title: step.title, n: stepIndex + 1, total: mission.steps.length }),
       stepAttachments.images,
       stepAttachments.documents,
       executionOptions,
     );
     attachmentRepository.markDelivery(stepAttachmentIds, mission.id, assignee.id, "delivered");
   } catch (error) {
-    const message = (error as Error).message || "無法啟動 Mission 步驟";
+    const message = (error as Error).message || t("無法啟動 Mission 步驟");
     attachmentRepository.markDelivery(stepAttachmentIds, mission.id, assignee.id, "failed", message);
     appendMissionExecutionEvent(mission, assignee.id, step.id, { type: "error", message });
     pauseMission(mission, message);
@@ -819,7 +866,7 @@ function beginMissionReplan(
   const lead = workers.get(mission.bossWorkerId);
   const members = missionMembers(mission);
   if (!lead || members.length === 0) {
-    pauseMission(mission, "部門成員狀態已改變，無法重新規劃", "member_unavailable");
+    pauseMission(mission, t("部門成員狀態已改變，無法重新規劃"), "member_unavailable");
     return;
   }
   const completedContext = mission.steps
@@ -846,7 +893,11 @@ function beginMissionReplan(
   const prompt = missionPlanningPrompt({
     missionId: mission.id,
     bossWorkerId: mission.bossWorkerId,
-    objective: `${mission.objective}\n\n老闆要求調整：${update.message}\n\n已完成、不得默默丟棄的工作：${JSON.stringify(completedContext)}`.slice(0, 12_000),
+    objective: t("{objective}\n\n老闆要求調整：{message}\n\n已完成、不得默默丟棄的工作：{completed}", {
+      objective: mission.objective,
+      message: update.message,
+      completed: JSON.stringify(completedContext),
+    }).slice(0, 12_000),
     acceptanceCriteria: mission.acceptanceCriteria,
     workspacePath: mission.workspacePath,
     members: members.map((member) => ({
@@ -865,14 +916,14 @@ function beginMissionReplan(
       mission,
       lead,
       prompt,
-      `部門工作 · 依老闆修改重新規劃：${update.message}`,
+      t("部門工作 · 依老闆修改重新規劃：{message}", { message: update.message }),
       attachments.images,
       attachments.documents,
       { executionProfile: "read_only_collaboration" },
     );
     attachmentRepository.markDelivery(mission.attachmentIds ?? [], mission.id, lead.id, "delivered");
   } catch (error) {
-    const message = (error as Error).message || "無法啟動重新規劃";
+    const message = (error as Error).message || t("無法啟動重新規劃");
     attachmentRepository.markDelivery(mission.attachmentIds ?? [], mission.id, lead.id, "failed", message);
     pauseMission(mission, message);
   }
@@ -929,7 +980,7 @@ function finishMission(
   const worker = workers.get(workerId);
   if (!worker || missionActiveWorkerId(mission) !== workerId) return;
   if (event.type === "error" || event.isError) {
-    pauseMission(mission, event.type === "error" ? event.message : event.resultText || "Mission 步驟失敗");
+    pauseMission(mission, event.type === "error" ? event.message : event.resultText || t("Mission 步驟失敗"));
     return;
   }
   const output = collaborationText(event.resultText, 40_000);
@@ -945,7 +996,7 @@ function finishMission(
     if (!parsed.plan) {
       if ((mission.formatRepairCount ?? 0) < 1) {
         mission.formatRepairCount = 1;
-        mission.error = "計畫格式不完整，正在要求主管只修復輸出格式";
+        mission.error = t("計畫格式不完整，正在要求主管只修復輸出格式");
         store.saveDepartmentMission(mission);
         broadcastMission(mission);
         const repair = missionFormatRepairPrompt("plan", output);
@@ -954,20 +1005,20 @@ function finishMission(
             mission,
             worker,
             repair,
-            "部門工作 · 修復計畫輸出格式",
+            t("部門工作 · 修復計畫輸出格式"),
             [],
             [],
             { executionProfile: "read_only_collaboration" },
           );
         } catch (error) {
-          appendMissionExecutionEvent(mission, worker.id, null, { type: "error", message: (error as Error).message || "無法修復 Mission 計畫格式" });
-          pauseMission(mission, (error as Error).message || "無法修復 Mission 計畫格式");
+          appendMissionExecutionEvent(mission, worker.id, null, { type: "error", message: (error as Error).message || t("無法修復 Mission 計畫格式") });
+          pauseMission(mission, (error as Error).message || t("無法修復 Mission 計畫格式"));
         }
         return;
       }
       mission.status = "needs_attention";
       mission.attentionReason = "step_failed";
-      mission.error = parsed.error || "Mission 計畫格式仍然無效，請重試規劃或取消";
+      mission.error = parsed.error || t("Mission 計畫格式仍然無效，請重試規劃或取消");
       store.saveDepartmentMission(mission);
       broadcastMission(mission);
       return;
@@ -986,8 +1037,8 @@ function finishMission(
     }));
     if (mission.executionMode !== "research") mission.steps.push({
       id: randomUUID(),
-      title: "向老闆提交部門報告",
-      objective: "整合所有成員的執行、Consult 與 Review 結果，提交一份包含結論、驗收狀態、主要交付、驗證、風險與待決事項的最終報告",
+      title: t("向老闆提交部門報告"),
+      objective: t("整合所有成員的執行、Consult 與 Review 結果，提交一份包含結論、驗收狀態、主要交付、驗證、風險與待決事項的最終報告"),
       kind: "synthesize",
       assigneeWorkerId: mission.bossWorkerId,
       acceptanceCriteria: mission.acceptanceCriteria,
@@ -1021,7 +1072,7 @@ function finishMission(
   }
   const stepIndex = mission.currentStepIndex;
   if (stepIndex == null) {
-    failMission(mission, "Mission 找不到目前步驟");
+    failMission(mission, t("Mission 找不到目前步驟"));
     return;
   }
   const step = mission.steps[stepIndex];
@@ -1035,7 +1086,7 @@ function finishMission(
       if ((step.formatRepairCount ?? 0) < 1) {
         step.formatRepairCount = 1;
         step.result = output || null;
-        mission.error = "專家結果格式不完整，正在要求只修復輸出格式";
+        mission.error = t("專家結果格式不完整，正在要求只修復輸出格式");
         store.saveDepartmentMission(mission);
         broadcastMission(mission);
         const repair = missionFormatRepairPrompt(step.kind, output);
@@ -1044,21 +1095,21 @@ function finishMission(
             mission,
             worker,
             repair,
-            `部門工作 · 修復 ${step.kind === "consult" ? "Consult" : "Review"} 輸出格式`,
+            t("部門工作 · 修復 {kind} 輸出格式", { kind: step.kind === "consult" ? "Consult" : "Review" }),
             [],
             [],
             { executionProfile: "read_only_collaboration" },
           );
         } catch (error) {
-          appendMissionExecutionEvent(mission, worker.id, step.id, { type: "error", message: (error as Error).message || "無法修復專家結果格式" });
-          pauseMission(mission, (error as Error).message || "無法修復專家結果格式");
+          appendMissionExecutionEvent(mission, worker.id, step.id, { type: "error", message: (error as Error).message || t("無法修復專家結果格式") });
+          pauseMission(mission, (error as Error).message || t("無法修復專家結果格式"));
         }
         return;
       }
       step.status = "failed";
       mission.status = "needs_attention";
       mission.attentionReason = "step_failed";
-      mission.error = "專家 NPC 兩次都沒有回傳結構化 Consult／Review 結果";
+      mission.error = t("專家 NPC 兩次都沒有回傳結構化 Consult／Review 結果");
       store.saveDepartmentMission(mission);
       broadcastMission(mission);
       return;
@@ -1076,7 +1127,7 @@ function finishMission(
       } else {
         mission.status = "needs_attention";
         mission.attentionReason = "review_inconclusive";
-        mission.error = "快速 Review 無法確認結果，需要你補充資訊或重新檢查";
+        mission.error = t("快速 Review 無法確認結果，需要你補充資訊或重新檢查");
         store.saveDepartmentMission(mission);
         broadcastMission(mission);
       }
@@ -1086,14 +1137,14 @@ function finishMission(
       if (mission.correctionCount >= mission.maxCorrections) {
         mission.status = "needs_attention";
         mission.attentionReason = "correction_limit";
-        mission.error = `Review 已退回 ${mission.correctionCount + 1} 次，需要你決定後續`;
+        mission.error = t("Review 已退回 {n} 次，需要你決定後續", { n: mission.correctionCount + 1 });
         store.saveDepartmentMission(mission);
         broadcastMission(mission);
         return;
       }
       const executeIndex = precedingExecuteIndex(mission, stepIndex);
       if (executeIndex == null) {
-        failMission(mission, "Review 找不到可退回修正的 Execute 步驟");
+        failMission(mission, t("Review 找不到可退回修正的 Execute 步驟"));
         return;
       }
       mission.correctionCount += 1;
@@ -1110,7 +1161,7 @@ function finishMission(
     if (review.verdict !== "pass") {
       mission.status = "needs_attention";
       mission.attentionReason = "review_inconclusive";
-      mission.error = "Review 無法確認通過，需要你補充資訊或重新檢查";
+      mission.error = t("Review 無法確認通過，需要你補充資訊或重新檢查");
       store.saveDepartmentMission(mission);
       broadcastMission(mission);
       return;
@@ -1133,6 +1184,7 @@ function collaborationEventIsTerminal(worker: Worker, event: RunnerEvent): boole
 }
 
 function record(worker: Worker, event: RunnerEvent): void {
+  if (event.at == null) event.at = Date.now(); // 事件發生時間：這裡是唯一蓋章點，持久化＋廣播都帶著走
   // Output deltas can arrive many times per second. Keep a compact live copy
   // for reconnect snapshots without turning every chunk into a SQLite row.
   // The provider's final tool result is still persisted normally.
@@ -1169,11 +1221,182 @@ function record(worker: Worker, event: RunnerEvent): void {
       (costMicros > 0
         ? store.incrementCounter("total_cost_usd_micros", costMicros)
         : store.getCounter("total_cost_usd_micros")) / 1_000_000;
+    if (costMicros > 0) {
+      store.logDailyCost(localDay(), worker.id, worker.runner.name ?? "", costMicros);
+      // 每日預算：這一筆讓今日花費「跨過」上限時，往聊天串塞一則醒目提示。
+      // 之後的新訊息會被 /message 入口擋下，明天日期一換自動恢復。
+      const budget = getExtras(worker.id).dailyBudgetUsd;
+      if (budget != null) {
+        const spentUsd = todayCostUsd(worker.id);
+        if (spentUsd >= budget && spentUsd - costMicros / 1_000_000 < budget) {
+          record(worker, {
+            type: "error",
+            message: t("💸 已達今日預算上限：今天已花 ${spent}（上限 ${cap}）。今天不再接受新指示，明天自動恢復；可到 📊營運 調整上限。", {
+              spent: spentUsd.toFixed(2),
+              cap: budget.toFixed(2),
+            }),
+          });
+        }
+      }
+    }
     broadcast({ type: "stats_updated", stats: { completedTurns, totalCostUsd } });
   }
   const collaborationTerminal = collaborationEventIsTerminal(worker, event);
   broadcast({ type: "event", workerId: worker.id, event });
   if ((event.type === "turn_end" || event.type === "error") && collaborationTerminal) finishCollaboration(worker, event);
+  warroomRecordHook(worker, event);
+  brainSwapHook(worker, event);
+  limitResumeHook(worker, event);
+}
+
+function todayCostUsd(workerId: string): number {
+  const day = localDay();
+  return store.listDailyCosts(day)
+    .filter((row) => row.day === day && row.workerId === workerId)
+    .reduce((sum, row) => sum + row.costUsd, 0);
+}
+
+// ── CTX 高水位自動換腦 ──────────────────────────────────────────────────────
+// turn_end 的 contextTokens（最後一次 API 呼叫的真實 context 佔用）超過門檻時，
+// 先叫 NPC 把工作狀態寫成交接摘要，摘要回來後換一顆全新 session、把摘要餵進去。
+// 這樣不會等到 CLI 強制壓縮把細節壓丟。圓桌(🏛)/研究員(🔍)是短命工，不換。
+// 決策規則（門檻／冷卻／永久停用）抽在 brainSwap.ts 的 decideBrainSwap；
+// 這裡只維護狀態集合並執行 IO。
+const brainSwapPending = new Set<string>();
+const brainSwapLastAt = new Map<string, number>();
+const brainSwapCooldownNoted = new Set<string>();
+// 換完腦後「連續」數回合 context 都超標＝固定底盤本身快吃滿視窗，換幾次都一樣。
+// 這種 worker 直接停用自動換腦（交給 CLI 自己壓縮），重啟伺服器才重新評估。
+const brainSwapDisabled = new Set<string>();
+// 距上次換腦後連續超標的 turn_end 數（含本回合）；低於門檻或換腦完成時清零。
+// 只用一次尖峰不會停用，避免 host 一接手就被交辦超重工作時被誤判成底盤肥。
+const brainSwapOverflowStreak = new Map<string, number>();
+
+function brainSwapHook(worker: Worker, event: RunnerEvent): void {
+  if (!appSettings.get().brainSwapEnabled) {
+    // ⚙ 功能關掉自動換腦：清掉進行到一半的換腦流程，交給 CLI 自己壓縮。
+    brainSwapPending.delete(worker.id);
+    return;
+  }
+  const isTurnEnd = event.type === "turn_end";
+  if (isTurnEnd && event.type === "turn_end") {
+    const ctx = event.contextTokens;
+    const over = typeof ctx === "number" && ctx >= BRAIN_SWAP_THRESHOLD_TOKENS;
+    brainSwapOverflowStreak.set(worker.id, over ? (brainSwapOverflowStreak.get(worker.id) ?? 0) + 1 : 0);
+  }
+  const decision = decideBrainSwap({
+    event,
+    provider: worker.runner.provider,
+    workerName: worker.runner.name ?? "",
+    pending: brainSwapPending.has(worker.id),
+    disabled: brainSwapDisabled.has(worker.id),
+    // 原邏輯只在 turn_end 觸發路徑上才查這些進行中狀態；其餘事件不用查。
+    engaged: isTurnEnd && (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)),
+    sessionTurns: isTurnEnd ? worker.runner.getPersistenceState().completedTurns : 0,
+    lastSwapAt: brainSwapLastAt.get(worker.id) ?? null,
+    cooldownNoted: brainSwapCooldownNoted.has(worker.id),
+    overflowStreak: brainSwapOverflowStreak.get(worker.id) ?? 0,
+    now: Date.now(),
+  });
+  if (decision.action === "ignore") return;
+  if (decision.action === "clear_pending" || decision.action === "abort_swap") {
+    brainSwapPending.delete(worker.id);
+    return;
+  }
+  if (decision.action === "disable") {
+    brainSwapDisabled.add(worker.id);
+    record(worker, { type: "user_message", text: decision.message });
+    return;
+  }
+  if (decision.action === "cooldown") {
+    if (decision.message) {
+      brainSwapCooldownNoted.add(worker.id);
+      record(worker, { type: "user_message", text: decision.message });
+    }
+    return;
+  }
+  if (decision.action === "complete_swap") {
+    // 摘要回合結束 → 執行換腦
+    brainSwapPending.delete(worker.id);
+    const summary = decision.summary;
+    const provider = worker.runner.provider;
+    const workspacePath = worker.runner.workspacePath;
+    const model = worker.runner.getModel() ?? undefined;
+    const fresh = replaceWithFreshSession(
+      worker,
+      model,
+      () => createRunner(worker, provider, workspacePath),
+      () => persistWorker(worker),
+      (runner) => store.saveProviderCheckpoint(worker.id, provider, workspacePath, runner.getModel() ?? null, runner.getPersistenceState()),
+    );
+    if (!fresh) {
+      record(worker, { type: "error", message: t("自動換腦失敗：無法建立新工作階段，維持原 session") });
+      return;
+    }
+    brainSwapLastAt.set(worker.id, Date.now());
+    brainSwapCooldownNoted.delete(worker.id);
+    brainSwapOverflowStreak.delete(worker.id); // 全新 session＝重新起算連續超標
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+    setTimeout(() => {
+      if (worker.runner.busy) return;
+      record(worker, { type: "user_message", text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
+      try {
+        worker.runner.send(t("（系統自動換腦）你前一個工作階段的 context 已滿。以下是它留下的交接摘要，請讀完後簡短回覆「已接手」，之後依摘要繼續服務：\n\n{summary}", { summary }), [], []);
+        broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+      } catch { /* 送不進去就留著摘要在紀錄裡，使用者可手動接 */ }
+    }, 300);
+    return;
+  }
+
+  // decision.action === "start_swap"：先請 NPC 寫交接摘要
+  brainSwapPending.add(worker.id);
+  const announcement = decision.message;
+  setTimeout(() => {
+    if (!brainSwapPending.has(worker.id)) return;
+    if (worker.runner.busy) { brainSwapPending.delete(worker.id); return; } // 使用者搶先發話，等下個回合再觸發
+    record(worker, { type: "user_message", text: announcement });
+    try {
+      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。"), [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch {
+      brainSwapPending.delete(worker.id);
+    }
+  }, 400);
+}
+
+// ── 撞用量上限自動恢復 ──────────────────────────────────────────────────────
+// 回合因訂閱用量上限失敗（訊息帶 "resets 2:50pm"）→ 排一次性計時器，重置時刻
+// 過後叫 NPC 繼續被中斷的工作。單發 setTimeout、fire 前多重守門，無輪詢；
+// 伺服器重啟會遺失排程（提示訊息有講明）。⚙ 功能選單可整個關掉。
+const limitResumeTimers = new Map<string, NodeJS.Timeout>();
+
+function limitResumeHook(worker: Worker, event: RunnerEvent): void {
+  if (!appSettings.get().limitResumeEnabled) return;
+  const text = event.type === "turn_end" && event.isError ? event.resultText
+    : event.type === "error" ? event.message
+    : null;
+  if (!text) return;
+  const name = worker.runner.name ?? "";
+  if (name.startsWith("🏛") || name.startsWith("🔍")) return; // 短命工不排，任務由發起方重試
+  const resetAt = parseLimitReset(text, new Date());
+  if (!resetAt) return;
+  const fireAt = resetAt.getTime() + 3 * 60_000; // 過重置點 3 分鐘再戳，避免踩線又失敗
+  const existing = limitResumeTimers.get(worker.id);
+  if (existing) clearTimeout(existing);
+  const fireLabel = new Date(fireAt).toTimeString().slice(0, 5);
+  record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }) });
+  const timer = setTimeout(() => {
+    limitResumeTimers.delete(worker.id);
+    if (!workers.has(worker.id)) return;
+    if (!appSettings.get().limitResumeEnabled) return;
+    if (worker.runner.busy) return; // 已在忙＝使用者或其他機制已接手
+    record(worker, { type: "user_message", text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
+    try {
+      worker.runner.send(t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。請檢查上一回合做到哪裡，接著把被中斷的工作完成並回報。"), [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch { /* 送不進去就算了，聊天紀錄已有提示，使用者可手動接 */ }
+  }, Math.max(fireAt - Date.now(), 1000));
+  limitResumeTimers.set(worker.id, timer);
 }
 
 function createWorker(
@@ -1222,8 +1445,8 @@ function createWorker(
       worker.departmentId = departmentId;
       const department: Department = {
         id: departmentId,
-        name: `${basename(workerWorkspace) || "個人"}部門`,
-        purpose: "個人工作部門",
+        name: t("{name}部門", { name: basename(workerWorkspace) || t("個人") }),
+        purpose: t("個人工作部門"),
         workspacePath: workerWorkspace,
         leadWorkerId: worker.id,
         memberWorkerIds: [worker.id],
@@ -1242,10 +1465,29 @@ function createWorker(
     }
   }
   if (persisted && hasUnfinishedTurn(worker.history)) {
-    record(worker, { type: "error", message: "伺服器已重啟，上一個未完成的回合已中止" });
+    record(worker, { type: "error", message: t("伺服器已重啟，上一個未完成的回合已中止") });
   }
   if (!persisted && options.broadcast !== false) broadcast({ type: "worker_added", worker: workerSummary(worker) });
   return worker;
+}
+
+// Persona ＋ 長期記憶合成一份 system prompt。🏛/🔍 開頭的是短命工（圓桌、研究員），
+// 不給記憶區塊——它們活不到下一次 spawn，注入只是浪費 token 還可能誤存記憶。
+function composeWorkerPrompt(worker: Worker): string {
+  const name = worker.runner.name ?? "";
+  const ephemeral = name.startsWith("🏛") || name.startsWith("🔍");
+  return [
+    composePersonaPrompt(worker.persona),
+    ephemeral ? "" : composeMemorySection(worker.id),
+    ephemeral ? "" : composeOutboxSection(),
+    // 小隊商量：只注入給「有隊員的部門隊長」。隊長自助 curl 發起，隊員意見彙整後自動送回。
+    ephemeral ? "" : composeConsultSection({
+      workerId: worker.id,
+      port: config.port,
+      department: worker.departmentId ? departments.get(worker.departmentId) : null,
+      workerName: (id) => workers.get(id)?.runner.name,
+    }),
+  ].filter(Boolean).join("\n\n");
 }
 
 function createRunner(
@@ -1258,7 +1500,7 @@ function createRunner(
     ? new CodexSession(
         (event) => record(worker, event),
         workspacePath,
-        () => composePersonaPrompt(worker.persona),
+        () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         initialState,
       )
@@ -1266,7 +1508,7 @@ function createRunner(
         (event) => record(worker, event),
         workspacePath,
         () => claudeCapabilitiesFor(workspacePath).getAllowedTools(),
-        () => composePersonaPrompt(worker.persona),
+        () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         initialState,
       );
@@ -1296,7 +1538,7 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
   const result = cleanWorkerSession(worker, workerCleanDeps(worker));
   if (!result.ok) return result;
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
-  const announcement = "已清除工作階段，NPC 記憶重新開始。";
+  const announcement = t("已清除工作階段，NPC 記憶重新開始。");
   record(worker, { type: "text_delta", text: announcement });
   record(worker, {
     type: "turn_end",
@@ -1345,7 +1587,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
     ? new CodexSession(
         onEvent,
         mission.workspacePath,
-        () => composePersonaPrompt(worker.persona),
+        () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
       )
@@ -1353,7 +1595,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         onEvent,
         mission.workspacePath,
         () => claudeCapabilitiesFor(mission.workspacePath).getAllowedTools(),
-        () => composePersonaPrompt(worker.persona),
+        () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
       );
@@ -1484,7 +1726,7 @@ function resolveDecisionRuntime(
     ? requestedProvider
     : null;
   const explicitModel = collaborationText(requestedModel, 200);
-  if (explicitModel && !validModel(explicitProvider ?? "claude", explicitModel)) return { error: "決策模型格式無效" };
+  if (explicitModel && !validModel(explicitProvider ?? "claude", explicitModel)) return { error: t("決策模型格式無效") };
   const runtimeModels = (provider: ProviderId): string[] => {
     const capabilities = provider === "claude"
       ? claudeCapabilitiesFor(preferredWorkspace || config.targetRepoPath).getState()
@@ -1497,18 +1739,18 @@ function resolveDecisionRuntime(
     ])];
   };
   if (explicitProvider) {
-    if (!providerReady(explicitProvider)) return { error: `${providerLabel(explicitProvider)} 尚未登入，無法進行部門判斷` };
+    if (!providerReady(explicitProvider)) return { error: t("{provider} 尚未登入，無法進行部門判斷", { provider: providerLabel(explicitProvider) }) };
     if (explicitModel) return { provider: explicitProvider, model: explicitModel };
     const model = runtimeModels(explicitProvider)[0];
     return model
       ? { provider: explicitProvider, model }
-      : { error: `${providerLabel(explicitProvider)} 目前沒有可用的決策模型` };
+      : { error: t("{provider} 目前沒有可用的決策模型", { provider: providerLabel(explicitProvider) }) };
   }
   if (explicitModel) {
     for (const provider of ["claude", "codex"] as const) {
       if (providerReady(provider) && runtimeModels(provider).includes(explicitModel)) return { provider, model: explicitModel };
     }
-    return { error: "指定的決策模型目前不在任何已登入 provider 的可用清單中" };
+    return { error: t("指定的決策模型目前不在任何已登入 provider 的可用清單中") };
   }
   if (preferredWorkspace) {
     const recent = store.listBossTasks(preferredWorkspace).find((task) =>
@@ -1528,7 +1770,7 @@ function resolveDecisionRuntime(
     const model = runtimeModels(provider)[0];
     if (model) return { provider, model };
   }
-  return { error: "Claude 與 Codex 目前都無法進行部門判斷；請先登入至少一個 provider" };
+  return { error: t("Claude 與 Codex 目前都無法進行部門判斷；請先登入至少一個 provider") };
 }
 
 function normalizeWorkspacePath(input: unknown): string {
@@ -1539,7 +1781,7 @@ function normalizeManagedWorkspacePath(input: unknown): string {
   const canonical = normalizeWorkspacePath(input);
   const managedPaths = [config.targetRepoPath, ...[...workers.values()].map((worker) => worker.runner.workspacePath)];
   const managed = managedPaths.some((path) => sameWorkspace(path, canonical));
-  if (!managed) throw new Error("只能管理目前已加入 Pixel Crew 的工作資料夾");
+  if (!managed) throw new Error(t("只能管理目前已加入 Pixel Crew 的工作資料夾"));
   return canonical;
 }
 
@@ -1596,8 +1838,8 @@ function handoffActivityBlock(events: RunnerEvent[]): string | null {
       openAgents.clear();
     }
   }
-  if (pendingApprovals.size) return "仍有等待處理的權限確認，請先允許或拒絕";
-  if (openAgents.size) return "仍有背景 Agent 執行中，請等待完成或先中止任務";
+  if (pendingApprovals.size) return t("仍有等待處理的權限確認，請先允許或拒絕");
+  if (openAgents.size) return t("仍有背景 Agent 執行中，請等待完成或先中止任務");
   return null;
 }
 
@@ -1616,7 +1858,7 @@ async function workspaceGitState(workspacePath: string): Promise<string> {
     ]);
     return `branch: ${branch.stdout.trim()}\nHEAD: ${head.stdout.trim()}\n${status.stdout.trim()}`.trim();
   } catch {
-    return "目前工作位置不是可讀取的 Git repository，請接手後自行確認檔案狀態。";
+    return t("目前工作位置不是可讀取的 Git repository，請接手後自行確認檔案狀態。");
   }
 }
 
@@ -1668,20 +1910,20 @@ function runDetachedTurn(
       const state = runner?.getPersistenceState();
       runner?.stop();
       if (error) rejectPromise(error);
-      else if (!state) rejectPromise(new Error("無法建立 LLM 交接工作階段"));
+      else if (!state) rejectPromise(new Error(t("無法建立 LLM 交接工作階段")));
       else resolvePromise({ text, state, toolCalls: [...toolCalls.values()] });
     };
     runner = detachedRunner(provider, workspacePath, model, initialState, (event) => {
       if (event.type === "text_delta") streamedText += event.text;
       else if (event.type === "tool_call_start") {
         if (policy.kind === "no_tools") {
-          finish(new Error("這個模型回合不得使用工具"));
+          finish(new Error(t("這個模型回合不得使用工具")));
           return;
         }
         if (policy.kind === "read_only_query") {
           const decision = queryToolPolicy(event.name, allowedQueryTools);
           if (!decision.allowed) {
-            finish(new Error(`唯讀查詢已拒絕 ${event.name}：${decision.reason}`));
+            finish(new Error(t("唯讀查詢已拒絕 {name}：{reason}", { name: event.name, reason: decision.reason })));
             return;
           }
         }
@@ -1691,18 +1933,18 @@ function runDetachedTurn(
         const existing = toolCalls.get(event.id);
         if (existing) toolCalls.set(event.id, { ...existing, isError: event.isError });
       }
-      else if (event.type === "approval_requested" && policy.kind !== "read_only_query") finish(new Error("交接整理意外要求工具權限"));
+      else if (event.type === "approval_requested" && policy.kind !== "read_only_query") finish(new Error(t("交接整理意外要求工具權限")));
       else if (event.type === "error") finish(new Error(event.message));
       else if (event.type === "turn_end") {
-        if (event.isError) finish(new Error(event.resultText || "LLM 交接回合失敗"));
+        if (event.isError) finish(new Error(event.resultText || t("LLM 交接回合失敗")));
         else {
           const result = (event.resultText || streamedText).trim();
-          if (!result) finish(new Error("LLM 沒有回傳交接內容"));
+          if (!result) finish(new Error(t("LLM 沒有回傳交接內容")));
           else finish(undefined, result);
         }
       }
     }, persona);
-    timer = setTimeout(() => finish(new Error("LLM 交接逾時")), timeoutMs);
+    timer = setTimeout(() => finish(new Error(t("LLM 交接逾時"))), timeoutMs);
     try {
       runner.send(prompt, [], [], policy.kind === "read_only_query"
         ? { executionProfile: "read_only_query", queryAllowedTools: policy.allowedTools }
@@ -1731,7 +1973,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     // consuming an LLM turn or adding a synthetic task-log entry.
     if (!hasHistory) {
       if (!store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState)) {
-        throw new Error("無法保存原本的 LLM 工作階段");
+        throw new Error(t("無法保存原本的 LLM 工作階段"));
       }
       const targetModel = progress.toModel || null;
       const targetRunner = createRunner(worker, progress.toProvider, workspacePath);
@@ -1739,10 +1981,10 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       if (targetModel) targetRunner.setModel(targetModel);
       worker.runner = targetRunner;
       if (providerReady(progress.toProvider)) targetRunner.warmup();
-      const completed = { ...progress, stage: "completed" as const, message: `${providerLabel(progress.toProvider)} 已切換`, source: null, error: null };
+      const completed = { ...progress, stage: "completed" as const, message: t("{provider} 已切換", { provider: providerLabel(progress.toProvider) }), source: null, error: null };
       worker.handoff = completed;
-      if (!persistWorker(worker)) throw new Error("無法保存新的 LLM 工作階段");
-      if (!store.saveProviderHandoff(worker.id, completed, null)) throw new Error("無法保存 LLM 切換紀錄");
+      if (!persistWorker(worker)) throw new Error(t("無法保存新的 LLM 工作階段"));
+      if (!store.saveProviderHandoff(worker.id, completed, null)) throw new Error(t("無法保存 LLM 切換紀錄"));
       broadcast({ type: "worker_updated", worker: workerSummary(worker) });
       if (progress.toProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
       else void codexCapabilitiesFor(workspacePath).refresh();
@@ -1752,7 +1994,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     const gitState = await workspaceGitState(workspacePath);
     const localSummary = buildLocalHandoff(worker.history, gitState);
     source = "agent";
-    setHandoff(worker, { ...progress, stage: "summarizing", message: `請 ${providerLabel(sourceProvider)} 整理工作大綱`, source: null });
+    setHandoff(worker, { ...progress, stage: "summarizing", message: t("請 {provider} 整理工作大綱", { provider: providerLabel(sourceProvider) }), source: null });
     const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
     const sourceUsageError = usageBlockReason(sourceProvider, sourceUsage, sourceModel);
     try {
@@ -1767,17 +2009,17 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       );
       sourceState = result.state;
       summary = parseHandoffSummary(result.text);
-      if (!summary) throw new Error("來源 LLM 沒有回傳有效的交接格式");
+      if (!summary) throw new Error(t("來源 LLM 沒有回傳有效的交接格式"));
     } catch (error) {
       source = "local_fallback";
       summary = localSummary;
-      setHandoff(worker, { ...progress, stage: "fallback", message: `來源 LLM 無法整理，改用本機任務紀錄：${(error as Error).message}`, source });
+      setHandoff(worker, { ...progress, stage: "fallback", message: t("來源 LLM 無法整理，改用本機任務紀錄：{error}", { error: (error as Error).message }), source });
     }
 
     if (!store.saveProviderCheckpoint(worker.id, sourceProvider, workspacePath, sourceModel, sourceState)) {
-      throw new Error("無法保存原本的 LLM 工作階段");
+      throw new Error(t("無法保存原本的 LLM 工作階段"));
     }
-    setHandoff(worker, { ...progress, stage: "bootstrapping", message: `${providerLabel(progress.toProvider)} 正在讀取交接資料`, source });
+    setHandoff(worker, { ...progress, stage: "bootstrapping", message: t("{provider} 正在讀取交接資料", { provider: providerLabel(progress.toProvider) }), source });
     const checkpoint = store.loadProviderCheckpoint(worker.id, progress.toProvider, workspacePath);
     const targetModel = progress.toModel || checkpoint?.model || null;
     const targetResult = await runDetachedTurn(
@@ -1789,7 +2031,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       bootstrapPrompt(summary, recentConversation(worker.history), sourceProvider),
     );
     if (!store.saveProviderCheckpoint(worker.id, progress.toProvider, workspacePath, targetModel, targetResult.state)) {
-      throw new Error("無法保存目標 LLM 工作階段");
+      throw new Error(t("無法保存目標 LLM 工作階段"));
     }
 
     const targetRunner = createRunner(worker, progress.toProvider, workspacePath, targetResult.state);
@@ -1797,13 +2039,13 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     if (targetModel) targetRunner.setModel(targetModel);
     worker.runner = targetRunner;
     if (providerReady(progress.toProvider)) targetRunner.warmup();
-    const completed = { ...progress, stage: "completed" as const, message: `${providerLabel(progress.toProvider)} 已接手`, source, error: null };
+    const completed = { ...progress, stage: "completed" as const, message: t("{provider} 已接手", { provider: providerLabel(progress.toProvider) }), source, error: null };
     worker.handoff = completed;
-    if (!persistWorker(worker)) throw new Error("無法保存新的 LLM 工作階段");
-    if (!store.saveProviderHandoff(worker.id, completed, summary)) throw new Error("無法保存 LLM 交接紀錄");
-    record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
-    record(worker, { type: "text_delta", text: `${summaryMarkdown(summary)}\n\n**接手確認**\n${targetResult.text}` });
-    record(worker, { type: "turn_end", resultText: `${summaryMarkdown(summary)}\n\n接手確認：${targetResult.text}`, costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
+    if (!persistWorker(worker)) throw new Error(t("無法保存新的 LLM 工作階段"));
+    if (!store.saveProviderHandoff(worker.id, completed, summary)) throw new Error(t("無法保存 LLM 交接紀錄"));
+    record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+    record(worker, { type: "text_delta", text: t("{summary}\n\n**接手確認**\n{result}", { summary: summaryMarkdown(summary), result: targetResult.text }) });
+    record(worker, { type: "turn_end", resultText: t("{summary}\n\n接手確認：{result}", { summary: summaryMarkdown(summary), result: targetResult.text }), costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
     if (progress.toProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
@@ -1816,16 +2058,66 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     if (sourceModel) restored.setModel(sourceModel);
     worker.runner = restored;
     if (providerReady(sourceProvider)) restored.warmup();
-    const failed = { ...progress, stage: "failed" as const, message: "交接失敗，已恢復原本的 LLM", source, error: (error as Error).message };
+    const failed = { ...progress, stage: "failed" as const, message: t("交接失敗，已恢復原本的 LLM"), source, error: (error as Error).message };
     worker.handoff = failed;
     persistWorker(worker);
     store.saveProviderHandoff(worker.id, failed, summary);
     if (hasHistory) {
-      record(worker, { type: "user_message", text: `LLM 交接：${providerLabel(sourceProvider)} → ${providerLabel(progress.toProvider)}` });
-      record(worker, { type: "error", message: `交接失敗，已恢復 ${providerLabel(sourceProvider)}：${(error as Error).message}` });
+      record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+      record(worker, { type: "error", message: t("交接失敗，已恢復 {provider}：{error}", { provider: providerLabel(sourceProvider), error: (error as Error).message }) });
     }
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   }
+}
+
+// 初始 snapshot 瘦身：**保留完整訊息筆數**（日誌照樣看得到），只把單筆超大的工具
+// 輸出/輸入等內容截短。真正把歷史脹到十幾 MB 的是少數幾筆巨大的工具輸出（單筆可達
+// 200KB+ 的檔案內容/截圖等），不是訊息「數量」。截短後手機收得動，完整內容仍保存在
+// 本機 SQLite。另設一個很寬鬆的筆數上限當保險絲，避免極端情況整包無界成長。
+const SNAPSHOT_MAX_EVENTS = 800;        // 每 worker 最多送這麼多筆（對齊 turn 邊界）
+const SNAPSHOT_MAX_FIELD_CHARS = 6_000; // 單一欄位序列化長度上限，超過就截短
+
+function clampField(value: unknown): unknown {
+  let s: string;
+  try {
+    s = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    return value;
+  }
+  if (s == null || s.length <= SNAPSHOT_MAX_FIELD_CHARS) return value;
+  return s.slice(0, SNAPSHOT_MAX_FIELD_CHARS) + `…（省略 ${s.length - SNAPSHOT_MAX_FIELD_CHARS} 字；完整內容保存於本機）`;
+}
+
+// 只截「內容型」的大欄位，事件的結構與型別（type/id/name…）保持不變，前端照常渲染。
+function trimEventForSnapshot(ev: RunnerEvent): RunnerEvent {
+  switch (ev.type) {
+    case "tool_call_result":
+      return { ...ev, output: clampField(ev.output) };
+    case "tool_call_start":
+      return { ...ev, input: clampField(ev.input) };
+    case "tool_call_output_delta":
+      return ev.delta.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, delta: String(clampField(ev.delta)) } : ev;
+    case "text_delta":
+    case "thinking_delta":
+      return ev.text.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, text: String(clampField(ev.text)) } : ev;
+    default:
+      return ev;
+  }
+}
+
+function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
+  let events = history;
+  if (events.length > SNAPSHOT_MAX_EVENTS) {
+    const windowStart = events.length - SNAPSHOT_MAX_EVENTS;
+    // 從視窗起點往後找第一個 turn 開頭（user_message），讓前端重建完整的 turn，不會
+    // 拿到半截 turn；找不到（單一超長 turn）就用尾段，前端會安全略過孤兒事件。
+    let start = windowStart;
+    for (let i = windowStart; i < events.length; i++) {
+      if (events[i]?.type === "user_message") { start = i; break; }
+    }
+    events = events.slice(start);
+  }
+  return events.map(trimEventForSnapshot);
 }
 
 wss.on("connection", (socket) => {
@@ -1852,7 +2144,7 @@ wss.on("connection", (socket) => {
       departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
-        events: w.history,
+        events: snapshotHistory(w.history),
       })),
     }),
   );
@@ -1869,12 +2161,12 @@ app.get("/api/departments", (_req, res) => {
 app.patch("/api/departments/:departmentId", (req, res) => {
   const department = departments.get(req.params.departmentId);
   if (!department) {
-    res.status(404).json({ error: "找不到部門" });
+    res.status(404).json({ error: t("找不到部門") });
     return;
   }
   const name = normalizeDepartmentName(req.body?.name);
   if (!name) {
-    res.status(400).json({ error: "請輸入部門名稱" });
+    res.status(400).json({ error: t("請輸入部門名稱") });
     return;
   }
   const updated: Department = {
@@ -1883,7 +2175,7 @@ app.patch("/api/departments/:departmentId", (req, res) => {
     updatedAt: new Date().toISOString(),
   };
   if (!store.saveDepartment(updated)) {
-    res.status(500).json({ error: "無法儲存部門名稱" });
+    res.status(500).json({ error: t("無法儲存部門名稱") });
     return;
   }
   departments.set(updated.id, updated);
@@ -1919,7 +2211,7 @@ app.post("/api/workspaces/validate", (req, res) => {
   try {
     res.json({ ok: true, path: normalizeWorkspacePath(req.body?.path) });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
   }
 });
 
@@ -1933,7 +2225,7 @@ app.post("/api/workspaces/pick", async (_req, res) => {
     res.json({ path: normalizeWorkspacePath(result.path) });
   } catch (error: any) {
     res.status(process.platform === "darwin" || process.platform === "win32" ? 500 : 501)
-      .json({ error: "無法開啟系統資料夾選擇器，請改用絕對路徑" });
+      .json({ error: t("無法開啟系統資料夾選擇器，請改用絕對路徑") });
   }
 });
 
@@ -1948,7 +2240,7 @@ app.get("/api/capabilities", (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法讀取房間能力" });
+    res.status(400).json({ error: (error as Error).message || t("無法讀取房間能力") });
   }
 });
 
@@ -1957,7 +2249,7 @@ app.get("/api/commands", async (req, res) => {
     const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
     res.json({ commands: await listProjectCommands(workspacePath), workspacePath });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法讀取專案指令" });
+    res.status(400).json({ error: (error as Error).message || t("無法讀取專案指令") });
   }
 });
 
@@ -1981,7 +2273,7 @@ app.put("/api/commands", async (req, res) => {
     void workflowWatcher.scanNow();
     res.json({ command });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法儲存專案指令" });
+    res.status(400).json({ error: (error as Error).message || t("無法儲存專案指令") });
   }
 });
 
@@ -1996,7 +2288,7 @@ app.delete("/api/commands", async (req, res) => {
     void workflowWatcher.scanNow();
     res.json({ ok: true });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法刪除專案指令" });
+    res.status(400).json({ error: (error as Error).message || t("無法刪除專案指令") });
   }
 });
 
@@ -2005,7 +2297,7 @@ app.get("/api/skills", async (req, res) => {
     const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
     res.json({ skills: await listProjectSkills(workspacePath), workspacePath });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法讀取 Codex Skills" });
+    res.status(400).json({ error: (error as Error).message || t("無法讀取 Codex Skills") });
   }
 });
 
@@ -2027,7 +2319,7 @@ app.put("/api/skills", async (req, res) => {
     void workflowWatcher.scanNow();
     res.json({ skill });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法儲存 Codex Skill" });
+    res.status(400).json({ error: (error as Error).message || t("無法儲存 Codex Skill") });
   }
 });
 
@@ -2039,7 +2331,7 @@ app.delete("/api/skills", async (req, res) => {
     void workflowWatcher.scanNow();
     res.json({ ok: true });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法刪除 Codex Skill" });
+    res.status(400).json({ error: (error as Error).message || t("無法刪除 Codex Skill") });
   }
 });
 
@@ -2055,6 +2347,253 @@ app.post("/api/usage/refresh", async (_req, res) => {
   res.json({ usage: await usageRegistry.refreshAll(true) });
 });
 
+// ── 優雅重啟 ────────────────────────────────────────────────────────────────
+// NPC 都跑在本 process 底下，直接殺 8787 會把觸發者自己的回合砍斷（result
+// 還沒送到 UI 就死了）。所以改成掛旗標等空檔：每 5 秒檢查一次，等到沒有任何
+// NPC 在忙（含交接/協作/任務）才 spawn 一個脫離的 relauncher——延遲 2 秒後
+// 用 start-pixel-crew.cmd 開新的「可見」黑窗（窗=伺服器的命是刻意設計）——
+// 然後自行退出。舊黑窗因 node 正常結束而收掉，觸發者的回合完整落地。
+let restartPending = false;
+
+function performServerRestart(): void {
+  // 注意：不能把「含內層引號的整串指令」丟給 cmd /c——node spawn 會把引號轉義成
+  // \" ，cmd 解析不了，start 那段會無聲失敗（實測驗證過）。所以改成直接執行
+  // restart-pixel-crew.cmd：單一路徑參數不會被轉爛，start 的引號由 .cmd 內部
+  // 的 cmd 自己解析。該 script 等 3 秒、殺掉殘留的 8787、再開可見新黑窗。
+  const script = join(process.cwd(), "restart-pixel-crew.cmd");
+  if (!existsSync(script)) {
+    console.error(`[restart] 找不到 ${script}，取消重啟`);
+    restartPending = false;
+    return;
+  }
+  console.log("[restart] 所有 NPC 空檔，重啟中…");
+  // windowsHide 配 detached 在 Windows 會被忽略（node 已知問題），直接 spawn cmd
+  // 會讓 relauncher 黑窗在畫面上閃 3-4 秒。優先走 wscript+vbs（Run 視窗樣式 0 =
+  // 完全隱藏，與 dc-voice-bot run-bot-hidden.vbs 同招）；vbs 不在才退回舊路徑。
+  const hiddenLauncher = join(process.cwd(), "restart-pixel-crew-hidden.vbs");
+  if (existsSync(hiddenLauncher)) {
+    spawn("wscript.exe", [hiddenLauncher], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
+  } else {
+    spawn("cmd.exe", ["/c", script], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
+  }
+  setTimeout(() => process.exit(0), 800);
+}
+
+app.post("/api/restart-server", (_req, res) => {
+  if (restartPending) {
+    res.json({ ok: true, message: t("已在等待空檔重啟") });
+    return;
+  }
+  restartPending = true;
+  console.log("[restart] 已排程：等所有 NPC 空檔後重啟");
+  const timer = setInterval(() => {
+    const anyBusy = [...workers.values()].some((w) => workerSummary(w).busy);
+    if (anyBusy) return;
+    clearInterval(timer);
+    performServerRestart();
+  }, 5000);
+  res.json({ ok: true, message: t("將在所有 NPC 空檔時自動重啟並開新黑窗") });
+});
+
+// ── 遠端存取／手機控制（轉接站 sidecar）─────────────────────────────────────
+// 分工刻意：驗證/公開切換都在轉接站(_tsproxy.mjs, 8790)，本體只負責「把它拉起來」。
+const TSPROXY_PORT = 8790;
+function tsproxyRunning(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = netConnect({ host: "127.0.0.1", port: TSPROXY_PORT });
+    let settled = false;
+    const done = (v: boolean) => { if (settled) return; settled = true; try { sock.destroy(); } catch { /* noop */ } resolve(v); };
+    sock.setTimeout(1000);
+    sock.once("connect", () => done(true));
+    sock.once("timeout", () => done(false));
+    sock.once("error", () => done(false));
+  });
+}
+
+app.get("/api/remote-access/status", async (_req, res) => {
+  res.json({ running: await tsproxyRunning(), port: TSPROXY_PORT, platform: process.platform });
+});
+
+app.post("/api/remote-access/start", async (_req, res) => {
+  if (await tsproxyRunning()) { res.json({ ok: true, running: true, already: true }); return; }
+  if (process.platform !== "win32") {
+    res.status(400).json({ ok: false, error: t("一鍵啟動目前僅支援 Windows；其他系統請手動執行 node _tsproxy.mjs") });
+    return;
+  }
+  const vbs = join(process.cwd(), "_tsproxy_launch.vbs");
+  if (!existsSync(vbs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy_launch.vbs") }); return; }
+  try {
+    spawn("wscript.exe", [vbs], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err as Error).message });
+    return;
+  }
+  // 等它綁定連接埠（最多 ~4 秒）
+  let running = false;
+  for (let i = 0; i < 10 && !running; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    running = await tsproxyRunning();
+  }
+  res.json({ ok: true, running });
+});
+
+// 同源代理：把前端對 /api/remote-access/api/* 的呼叫轉發到轉接站 8790 的 /__gate/api/*。
+// 前端只碰本體同源 API（不受 CSP/cookie/登入頁影響）；8787→8790 是 127.0.0.1 直連，
+// 轉接站據此視為本機（等同 owner）放行，無需在瀏覽器端處理通行碼。
+function proxyToTsproxy(method: string, apiPath: string, body: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve) => {
+    const payload = Buffer.from(body || "");
+    const r = httpRequest(
+      {
+        host: "127.0.0.1", port: TSPROXY_PORT, method,
+        path: "/__gate/api/" + apiPath,
+        headers: { "Content-Type": "application/json", "Content-Length": payload.length },
+        timeout: 40000,
+      },
+      (up) => {
+        let b = ""; up.on("data", (c) => (b += c));
+        up.on("end", () => resolve({ status: up.statusCode || 502, text: b }));
+      },
+    );
+    r.on("error", (e) => resolve({ status: 502, text: JSON.stringify({ error: (e as Error).message }) }));
+    r.on("timeout", () => { r.destroy(); resolve({ status: 504, text: JSON.stringify({ error: "轉接站無回應" }) }); });
+    if (payload.length) r.write(payload);
+    r.end();
+  });
+}
+
+app.get("/api/remote-access/state", async (_req, res) => {
+  if (!(await tsproxyRunning())) { res.status(503).json({ error: "轉接站未啟動", running: false }); return; }
+  const up = await proxyToTsproxy("GET", "state", "");
+  res.status(up.status).type("application/json").send(up.text);
+});
+
+app.post("/api/remote-access/api/*", async (req, res) => {
+  const name = String((req.params as Record<string, string>)[0] || "").replace(/[^a-z/]/gi, "");
+  if (!name) { res.status(400).json({ error: "bad api path" }); return; }
+  if (!(await tsproxyRunning())) { res.status(503).json({ error: "轉接站未啟動" }); return; }
+  const up = await proxyToTsproxy("POST", name, JSON.stringify(req.body ?? {}));
+  res.status(up.status).type("application/json").send(up.text);
+});
+
+// ── 成本日報 ────────────────────────────────────────────────────────────────
+app.get("/api/costs", (req, res) => {
+  const days = Math.min(60, Math.max(1, Number(req.query.days ?? 14) || 14));
+  const since = new Date();
+  since.setDate(since.getDate() - (days - 1));
+  const budgets = [...workers.values()]
+    .map((worker) => ({ workerId: worker.id, dailyUsd: getExtras(worker.id).dailyBudgetUsd }))
+    .filter((entry) => entry.dailyUsd != null);
+  res.json({ costs: store.listDailyCosts(localDay(since)), today: localDay(), budgets });
+});
+
+// ── 下班報告＋一日回放 ──────────────────────────────────────────────────────
+// 彙整某天（預設今天）的花費、回合數、錯誤、完成的任務，加上事件時間軸給前端回放。
+app.get("/api/day-report", (req, res) => {
+  // 彙整邏輯抽在 dayReport.ts 的 buildDayReport（純函式）；這裡只做資料讀取。
+  const today = localDay();
+  const day = resolveReportDay(req.query.day, today);
+  res.json(buildDayReport({
+    day,
+    today,
+    dailyCosts: store.listDailyCosts(day),
+    dayEvents: store.listDayEvents(day),
+    bossTasks: store.listBossTasks(),
+    missions: store.listDepartmentMissions(),
+    workerName: (workerId) => workers.get(workerId)?.runner.name,
+    dailyBudget: (workerId) => getExtras(workerId).dailyBudgetUsd,
+  }));
+});
+
+// ── 排程任務 ────────────────────────────────────────────────────────────────
+app.get("/api/schedules", (_req, res) => {
+  res.json({ schedules: store.listSchedules() });
+});
+
+app.post("/api/schedules", (req, res) => {
+  const workerId = String(req.body?.workerId ?? "");
+  const time = String(req.body?.time ?? "");
+  const prompt = String(req.body?.prompt ?? "").trim();
+  if (!workers.has(workerId)) { res.status(400).json({ error: "unknown worker" }); return; }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
+  if (!prompt) { res.status(400).json({ error: t("請提供要執行的指示") }); return; }
+  store.addSchedule(randomUUID(), workerId, time, prompt);
+  res.json({ ok: true, schedules: store.listSchedules() });
+});
+
+app.patch("/api/schedules/:id", (req, res) => {
+  const fields: { time?: string; prompt?: string; enabled?: boolean } = {};
+  if (req.body?.time !== undefined) {
+    const time = String(req.body.time);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
+    fields.time = time;
+  }
+  if (req.body?.prompt !== undefined) {
+    const prompt = String(req.body.prompt).trim();
+    if (!prompt) { res.status(400).json({ error: t("指示不可為空") }); return; }
+    fields.prompt = prompt;
+  }
+  if (req.body?.enabled !== undefined) fields.enabled = Boolean(req.body.enabled);
+  store.updateSchedule(req.params.id, fields);
+  res.json({ ok: true, schedules: store.listSchedules() });
+});
+
+app.delete("/api/schedules/:id", (req, res) => {
+  store.deleteSchedule(req.params.id);
+  res.json({ ok: true, schedules: store.listSchedules() });
+});
+
+// ── 全域功能開關（⚙ 功能選單）────────────────────────────────────────────────
+app.get("/api/app-settings", (_req, res) => {
+  res.json({ settings: appSettings.get() });
+});
+
+app.post("/api/app-settings", (req, res) => {
+  const patch: Record<string, boolean | string> = {};
+  if (typeof req.body?.brainSwapEnabled === "boolean") patch.brainSwapEnabled = req.body.brainSwapEnabled;
+  if (typeof req.body?.limitResumeEnabled === "boolean") patch.limitResumeEnabled = req.body.limitResumeEnabled;
+  if (req.body?.lang === "zh" || req.body?.lang === "en") patch.lang = req.body.lang;
+  const settings = appSettings.update(patch);
+  setLang(settings.lang);
+  res.json({ settings });
+});
+
+// 每 30 秒掃一次：到點、今天沒跑過、NPC 空檔 → 送出排程指示。
+// NPC 在忙就先不標記，30 秒後再試（同一天內補跑）。
+setInterval(() => {
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const today = localDay(now);
+  for (const schedule of store.listSchedules()) {
+    if (!schedule.enabled || schedule.lastRunDay === today || schedule.time > hhmm) continue;
+    const worker = workers.get(schedule.workerId);
+    if (!worker) continue;
+    if (!providerReady(worker.runner.provider)) continue;
+    // 無人看管風險口（作戰室裁決 P1）：⚡無限制模式跳過所有審批，不給自動排程觸發。
+    // 標記為今天已處理＋留一則說明，避免每 30 秒重試洗版。
+    if (worker.autoApproveMode === "invincible") {
+      store.markScheduleRun(schedule.id, today);
+      record(worker, { type: "error", message: t("⏰ 排程（每日 {time}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後，明天起自動恢復。", { time: schedule.time }) });
+      continue;
+    }
+    if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
+    store.markScheduleRun(schedule.id, today);
+    record(worker, { type: "user_message", text: t("⏰ 排程任務（每日 {time}）：{prompt}", { time: schedule.time, prompt: schedule.prompt }) });
+    try {
+      worker.runner.send(t("【排程任務，每日 {time} 自動觸發】{prompt}", { time: schedule.time, prompt: schedule.prompt }), [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch { /* 送失敗就等明天；user_message 已留在紀錄裡可追查 */ }
+  }
+}, 30_000);
+
 app.post("/api/auth/refresh", async (req, res) => {
   const requested = String(req.body?.provider ?? "");
   const provider = requested === "claude" || requested === "codex" ? requested : undefined;
@@ -2069,7 +2608,7 @@ function requestedProvider(value: unknown): ProviderId | null {
 app.get("/api/providers/:provider/install", (req, res) => {
   const provider = requestedProvider(req.params.provider);
   if (!provider) {
-    res.status(400).json({ error: "不支援的 AI provider" });
+    res.status(400).json({ error: t("不支援的 AI provider") });
     return;
   }
   res.json({ install: providerInstaller.get(provider) });
@@ -2077,16 +2616,16 @@ app.get("/api/providers/:provider/install", (req, res) => {
 
 app.post("/api/providers/:provider/install", (req, res) => {
   if (!isAllowedLoopbackOrigin(req.headers.origin)) {
-    res.status(403).json({ error: "安裝只能從本機 Pixel Crew 介面啟動" });
+    res.status(403).json({ error: t("安裝只能從本機 Pixel Crew 介面啟動") });
     return;
   }
   const provider = requestedProvider(req.params.provider);
   if (!provider) {
-    res.status(400).json({ error: "不支援的 AI provider" });
+    res.status(400).json({ error: t("不支援的 AI provider") });
     return;
   }
   if (authStates[provider].status === "authenticated") {
-    res.status(409).json({ error: `${authStates[provider].displayName} 已經可以使用` });
+    res.status(409).json({ error: t("{provider} 已經可以使用", { provider: authStates[provider].displayName }) });
     return;
   }
   res.status(202).json({ install: providerInstaller.start(provider) });
@@ -2094,14 +2633,14 @@ app.post("/api/providers/:provider/install", (req, res) => {
 
 app.post("/api/workers", (req, res) => {
   if (workers.size >= MAX_WORKERS) {
-    res.status(409).json({ error: `NPC 已達上限（最多 ${MAX_WORKERS} 位）` });
+    res.status(409).json({ error: t("NPC 已達上限（最多 {max} 位）", { max: MAX_WORKERS }) });
     return;
   }
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
   try {
     const workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
     if (workspaceMission(workspacePath)) {
-      res.status(409).json({ error: "這個部門正在執行 Department Mission，暫時不能加入新 NPC" });
+      res.status(409).json({ error: t("這個部門正在執行 Department Mission，暫時不能加入新 NPC") });
       return;
     }
     const worker = createWorker(
@@ -2118,7 +2657,7 @@ app.post("/api/workers", (req, res) => {
     else void codexCapabilitiesFor(workspacePath).refresh();
     res.json(workerSummary(worker));
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
   }
 });
 
@@ -2128,30 +2667,29 @@ type PreparedDepartment = {
   purpose: string;
   plan: DepartmentPlan;
   workerCount: number;
-  expiresAt: number;
 };
-const preparedDepartments = new Map<string, PreparedDepartment>();
+const preparedDepartments = new PreparedTokenStore<PreparedDepartment>(5 * 60_000);
 
 app.post("/api/departments/plan", async (req, res) => {
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
   const purpose = normalizeDepartmentPurpose(req.body?.purpose);
   const count = Number(req.body?.count);
   if (!purpose) {
-    res.status(400).json({ error: "請輸入部門用途，例如：產品開發、QA 或資安稽核" });
+    res.status(400).json({ error: t("請輸入部門用途，例如：產品開發、QA 或資安稽核") });
     return;
   }
   if (!Number.isInteger(count) || count < 1 || count > MAX_WORKERS - workers.size) {
-    res.status(400).json({ error: `NPC 數量需為 1 到 ${Math.max(0, MAX_WORKERS - workers.size)} 位` });
+    res.status(400).json({ error: t("NPC 數量需為 1 到 {max} 位", { max: Math.max(0, MAX_WORKERS - workers.size) }) });
     return;
   }
   if (!providerReady(provider)) {
-    res.status(503).json({ error: `${providerLabel(provider)} 尚未登入，登入後才能規劃部門`, auth: authStates[provider] });
+    res.status(503).json({ error: t("{provider} 尚未登入，登入後才能規劃部門", { provider: providerLabel(provider) }), auth: authStates[provider] });
     return;
   }
   try {
     const workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
     if (workspaceMission(workspacePath)) {
-      res.status(409).json({ error: "這個工作位置正在執行部門工作，暫時不能建立新部門" });
+      res.status(409).json({ error: t("這個工作位置正在執行部門工作，暫時不能建立新部門") });
       return;
     }
     const existingMembers = [...workers.values()]
@@ -2169,46 +2707,40 @@ app.post("/api/departments/plan", async (req, res) => {
     const plan = parseDepartmentPlan(result.text, count);
     const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
     if (!plan || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) {
-      res.status(502).json({ error: "AI 回傳的部門名單不完整或名稱重複，請重新規劃" });
+      res.status(502).json({ error: t("AI 回傳的部門名單不完整或名稱重複，請重新規劃") });
       return;
     }
-    for (const [token, prepared] of preparedDepartments) {
-      if (prepared.expiresAt < Date.now()) preparedDepartments.delete(token);
-    }
-    const planToken = randomUUID();
-    preparedDepartments.set(planToken, {
+    const planToken = preparedDepartments.issue({
       provider,
       workspacePath,
       purpose,
       plan,
       workerCount: workers.size,
-      expiresAt: Date.now() + 5 * 60_000,
     });
     res.json({ planToken, provider, workspacePath, purpose, plan });
   } catch (error) {
-    res.status(502).json({ error: (error as Error).message || "AI 暫時無法規劃部門" });
+    res.status(502).json({ error: (error as Error).message || t("AI 暫時無法規劃部門") });
   }
 });
 
 app.post("/api/departments", (req, res) => {
   const token = String(req.body?.planToken ?? "");
-  const prepared = preparedDepartments.get(token);
-  if (!prepared || prepared.expiresAt < Date.now()) {
-    preparedDepartments.delete(token);
-    res.status(409).json({ error: "部門規劃已過期，請重新產生" });
+  const prepared = preparedDepartments.peek(token);
+  if (!prepared) {
+    res.status(409).json({ error: t("部門規劃已過期，請重新產生") });
     return;
   }
   if (workers.size !== prepared.workerCount || workers.size + prepared.plan.members.length > MAX_WORKERS) {
-    res.status(409).json({ error: "NPC 名單已變動，請重新規劃部門" });
+    res.status(409).json({ error: t("NPC 名單已變動，請重新規劃部門") });
     return;
   }
   if (workspaceMission(prepared.workspacePath)) {
-    res.status(409).json({ error: "這個工作位置正在執行部門工作" });
+    res.status(409).json({ error: t("這個工作位置正在執行部門工作") });
     return;
   }
   const requestedMembers: unknown[] = Array.isArray(req.body?.members) ? req.body.members as unknown[] : prepared.plan.members;
   if (requestedMembers.length !== prepared.plan.members.length) {
-    res.status(400).json({ error: "編輯後的 NPC 數量必須與 AI 規劃一致" });
+    res.status(400).json({ error: t("編輯後的 NPC 數量必須與 AI 規劃一致") });
     return;
   }
   const normalizedMembers = requestedMembers.map((candidate: unknown) => {
@@ -2224,17 +2756,17 @@ app.post("/api/departments", (req, res) => {
   const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
   if (normalizedMembers.some((member) => !member.name || !member.persona)
     || new Set(names).size !== names.length || names.some((name) => existingNames.has(name))) {
-    res.status(400).json({ error: "請確認每位 NPC 都有不重複的姓名、職位與個性" });
+    res.status(400).json({ error: t("請確認每位 NPC 都有不重複的姓名、職位與個性") });
     return;
   }
   const unavailableProvider = normalizedMembers.find((member) => !providerReady(member.provider))?.provider;
   if (unavailableProvider) {
-    res.status(503).json({ error: `${providerLabel(unavailableProvider)} 尚未登入` });
+    res.status(503).json({ error: t("{provider} 尚未登入", { provider: providerLabel(unavailableProvider) }) });
     return;
   }
   const leadIndex = Number(req.body?.leadIndex ?? 0);
   if (!Number.isInteger(leadIndex) || leadIndex < 0 || leadIndex >= normalizedMembers.length) {
-    res.status(400).json({ error: "請指定一位部門主管" });
+    res.status(400).json({ error: t("請指定一位部門主管") });
     return;
   }
   const departmentId = randomUUID();
@@ -2251,7 +2783,7 @@ app.post("/api/departments", (req, res) => {
   ));
   const department: Department = {
     id: departmentId,
-    name: normalizeDepartmentName(req.body?.name) || `${prepared.purpose.slice(0, 20)}部門`,
+    name: normalizeDepartmentName(req.body?.name) || t("{name}部門", { name: prepared.purpose.slice(0, 20) }),
     purpose: prepared.purpose,
     workspacePath: prepared.workspacePath,
     leadWorkerId: created[leadIndex].id,
@@ -2264,11 +2796,11 @@ app.post("/api/departments", (req, res) => {
       worker.runner.stop();
       workers.delete(worker.id);
     }
-    res.status(500).json({ error: "部門建立失敗，沒有新增任何 NPC" });
+    res.status(500).json({ error: t("部門建立失敗，沒有新增任何 NPC") });
     return;
   }
   departments.set(department.id, department);
-  preparedDepartments.delete(token);
+  preparedDepartments.discard(token);
   broadcast({ type: "department_created", department });
   for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
   if (prepared.provider === "claude") void claudeCapabilitiesFor(prepared.workspacePath).refresh();
@@ -2280,6 +2812,92 @@ app.post("/api/departments", (req, res) => {
   });
 });
 
+// ── 一鍵成軍（模板小隊）──────────────────────────────────────────────────
+// 與 /api/departments 相同的批次建立流程，但成員來自前端內建模板而非 AI 規
+// 劃，所以不需要 planToken。autoApprove 只開放 off/safe/full——invincible
+// 不能透過模板一鍵取得。
+app.post("/api/squads", (req, res) => {
+  // 請求驗證與成員 normalize 抽在 squads.ts（純函式）；這裡保留 IO 檢查與建立流程。
+  const provider: ProviderId = parseSquadProvider(req.body?.provider);
+  const rawMembers = parseSquadMembers(req.body?.members);
+  const sizeError = validateSquadSize(rawMembers);
+  if (sizeError) {
+    res.status(400).json({ error: sizeError });
+    return;
+  }
+  if (workers.size + rawMembers.length > MAX_WORKERS) {
+    res.status(409).json({ error: t("NPC 已達上限（最多 {max} 位），請先精簡人力", { max: MAX_WORKERS }) });
+    return;
+  }
+  if (!providerReady(provider)) {
+    res.status(503).json({ error: t("{provider} 尚未登入，登入後才能成軍", { provider: providerLabel(provider) }), auth: authStates[provider] });
+    return;
+  }
+  let workspacePath: string;
+  try {
+    workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
+    return;
+  }
+  if (workspaceMission(workspacePath)) {
+    res.status(409).json({ error: t("這個工作位置正在執行部門工作，暫時不能成軍") });
+    return;
+  }
+  const normalizedMembers = rawMembers.map((candidate) => normalizeSquadMember(candidate, provider, validModel));
+  const memberError = validateSquadMembers(normalizedMembers, [...workers.values()].map((member) => member.runner.name));
+  if (memberError) {
+    res.status(400).json({ error: memberError });
+    return;
+  }
+  const leadIndex = parseSquadLeadIndex(req.body?.leadIndex, normalizedMembers.length);
+  if (leadIndex === null) {
+    res.status(400).json({ error: t("請指定一位隊長") });
+    return;
+  }
+  const { purpose, departmentName } = deriveSquadIdentity(req.body?.name, req.body?.purpose);
+  const departmentId = randomUUID();
+  const now = new Date().toISOString();
+  const created = normalizedMembers.map((member) => {
+    const worker = createWorker(
+      member.name,
+      member.model,
+      provider,
+      workspacePath,
+      undefined,
+      member.persona,
+      departmentId,
+      { warmup: false, persist: false, broadcast: false },
+    );
+    worker.autoApproveMode = member.autoApprove;
+    return worker;
+  });
+  const department: Department = {
+    id: departmentId,
+    name: departmentName,
+    purpose,
+    workspacePath,
+    leadWorkerId: created[leadIndex].id,
+    memberWorkerIds: created.map((worker) => worker.id),
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
+    for (const worker of created) {
+      worker.runner.stop();
+      workers.delete(worker.id);
+    }
+    res.status(500).json({ error: t("小隊建立失敗，沒有新增任何 NPC") });
+    return;
+  }
+  departments.set(department.id, department);
+  broadcast({ type: "department_created", department });
+  for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
+  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+  else void codexCapabilitiesFor(workspacePath).refresh();
+  res.json({ department, workers: created.map(workerSummary) });
+});
+
 // Must be registered before /api/workers/:id or Express treats "order" as an id.
 app.patch("/api/workers/order", (req, res) => {
   const order = req.body?.order;
@@ -2288,11 +2906,11 @@ app.patch("/api/workers/order", (req, res) => {
     && new Set(order).size === order.length
     && order.every((id) => typeof id === "string" && workers.has(id));
   if (!valid) {
-    res.status(409).json({ error: "人員清單已變動，請重試" });
+    res.status(409).json({ error: t("人員清單已變動，請重試") });
     return;
   }
   if (!store.saveWorkerOrder(order as string[])) {
-    res.status(500).json({ error: "無法儲存人員順序" });
+    res.status(500).json({ error: t("無法儲存人員順序") });
     return;
   }
   const reordered = (order as string[]).map((id) => [id, workers.get(id)!] as const);
@@ -2303,26 +2921,23 @@ app.patch("/api/workers/order", (req, res) => {
 });
 
 app.patch("/api/workers/:id", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能改名" });
+    res.status(409).json({ error: t("NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能改名") });
     return;
   }
   const name = String(req.body?.name ?? "").trim();
   if (!name) {
-    res.status(400).json({ error: "名稱不能是空白" });
+    res.status(400).json({ error: t("名稱不能是空白") });
     return;
   }
   if (name.length > 24) {
-    res.status(400).json({ error: "名稱最多 24 個字元" });
+    res.status(400).json({ error: t("名稱最多 24 個字元") });
     return;
   }
   if (/[\u0000-\u001f\u007f]/.test(name)) {
-    res.status(400).json({ error: "名稱包含不支援的控制字元" });
+    res.status(400).json({ error: t("名稱包含不支援的控制字元") });
     return;
   }
   worker.runner.name = name;
@@ -2336,7 +2951,7 @@ app.get("/api/avatars/:id", async (req, res) => {
   try {
     const avatar = await avatarStore.read(req.params.id);
     if (!avatar) {
-      res.status(404).json({ error: "找不到角色圖片" });
+      res.status(404).json({ error: t("找不到角色圖片") });
       return;
     }
     res.set({
@@ -2347,16 +2962,86 @@ app.get("/api/avatars/:id", async (req, res) => {
     res.send(avatar.data);
   } catch (error) {
     console.warn("Read avatar failed:", (error as Error).message);
-    res.status(500).json({ error: "無法讀取角色圖片" });
+    res.status(500).json({ error: t("無法讀取角色圖片") });
+  }
+});
+
+// OUTBOX 成品匣：列出各 NPC 工作區 outbox/ 裡的完成品（交付物的前門，不用翻聊天記錄考古）。
+app.get("/api/outbox", (_req, res) => {
+  // 多個 NPC 可能共用同一工作區（部門）：以 outbox 目錄去重，擁有者名單合併顯示。
+  const byDir = new Map<string, { dir: string; workerId: string; owners: string[] }>();
+  for (const worker of workers.values()) {
+    const ws = worker.runner.workspacePath;
+    if (!ws) continue;
+    const dir = join(ws, "outbox");
+    const name = worker.runner.name ?? worker.id;
+    const hit = byDir.get(dir);
+    if (hit) { if (!hit.owners.includes(name)) hit.owners.push(name); continue; }
+    byDir.set(dir, { dir, workerId: worker.id, owners: [name] });
+  }
+  const items: Array<{ workerId: string; owners: string; name: string; size: number; mtime: number }> = [];
+  for (const { dir, workerId, owners } of byDir.values()) {
+    if (!existsSync(dir)) continue;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      try {
+        const st = statSync(join(dir, ent.name));
+        items.push({ workerId, owners: owners.join("、"), name: ent.name, size: st.size, mtime: st.mtimeMs });
+      } catch { /* 檔案可能剛被移走，跳過即可 */ }
+    }
+  }
+  items.sort((a, b) => b.mtime - a.mtime);
+  res.json({ items: items.slice(0, 300) });
+});
+
+// 成品匣單檔取用。檔名只允許純檔名（防路徑穿越）；html 一律附件下載避免同源 XSS。
+app.get("/api/outbox/file", (req, res) => {
+  const workerId = typeof req.query.worker === "string" ? req.query.worker : "";
+  const name = typeof req.query.name === "string" ? req.query.name : "";
+  const worker = workers.get(workerId);
+  if (!worker || !name || /[\\/]/.test(name) || name.includes("..")) { res.status(400).json({ error: t("無效請求") }); return; }
+  const full = join(worker.runner.workspacePath, "outbox", name);
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(full); } catch { res.status(404).json({ error: t("檔案不存在") }); return; }
+  if (!st.isFile()) { res.status(404).json({ error: t("檔案不存在") }); return; }
+  if (st.size > 100 * 1024 * 1024) { res.status(413).json({ error: t("檔案過大，請直接到工作區 outbox 資料夾開啟") }); return; }
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  const inlineTypes: Record<string, string> = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+    pdf: "application/pdf", txt: "text/plain; charset=utf-8", md: "text/plain; charset=utf-8",
+    log: "text/plain; charset=utf-8", csv: "text/plain; charset=utf-8", json: "text/plain; charset=utf-8",
+  };
+  const type = inlineTypes[ext];
+  const encodedName = encodeURIComponent(name);
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("Content-Type", type ?? "application/octet-stream");
+  res.set("Content-Disposition", `${type ? "inline" : "attachment"}; filename*=UTF-8''${encodedName}`);
+  res.send(readFileSync(full));
+});
+
+// 工作小窗 Tier 3：NPC 上網查時，小窗向這裡要真實瀏覽器截圖。純顯示、不回餵模型＝零 token。
+app.get("/api/webshot", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  if (!q.trim()) { res.status(400).json({ error: "缺少查詢字 q" }); return; }
+  try {
+    const buf = await captureWebShot(q);
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "public, max-age=300",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.send(buf);
+  } catch (error) {
+    console.warn("webshot failed:", (error as Error).message);
+    res.status(502).json({ error: "截圖失敗" });
   }
 });
 
 app.put("/api/workers/:id/avatar", async (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   try {
     const previousId = worker.avatarId;
     const previousKind = worker.avatarKind;
@@ -2367,7 +3052,7 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
       worker.avatarId = previousId;
       worker.avatarKind = previousKind;
       await avatarStore.delete(avatarId);
-      res.status(500).json({ error: "無法將角色圖片寫入本機資料庫" });
+      res.status(500).json({ error: t("無法將角色圖片寫入本機資料庫") });
       return;
     }
     const summary = workerSummary(worker);
@@ -2380,7 +3065,7 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
       return;
     }
     console.warn("Save avatar failed:", (error as Error).message);
-    res.status(500).json({ error: "無法儲存角色圖片" });
+    res.status(500).json({ error: t("無法儲存角色圖片") });
   }
 });
 
@@ -2408,7 +3093,7 @@ app.get("/api/backup/export", async (_req, res) => {
   } catch (error) {
     rmSync(stagingDir, { recursive: true, force: true });
     console.warn("Backup export failed:", (error as Error).message);
-    if (!res.headersSent) res.status(500).json({ error: "無法建立備份檔案" });
+    if (!res.headersSent) res.status(500).json({ error: t("無法建立備份檔案") });
     else res.destroy();
   }
 });
@@ -2431,7 +3116,7 @@ const uploadBackup = multer({
 
 app.post("/api/backup/import/validate", uploadBackup.single("backup"), async (req, res) => {
   if (!req.file) {
-    res.status(400).json({ error: "缺少備份檔案" });
+    res.status(400).json({ error: t("缺少備份檔案") });
     return;
   }
   const uploadDir = dirname(req.file.path);
@@ -2446,7 +3131,7 @@ app.post("/api/backup/import/validate", uploadBackup.single("backup"), async (re
     res.json({ importToken: token, ...result });
   } catch (error) {
     rmSync(stagingDir, { recursive: true, force: true });
-    const message = error instanceof BackupValidationError ? error.message : "備份檔案驗證失敗";
+    const message = error instanceof BackupValidationError ? error.message : t("備份檔案驗證失敗");
     res.status(400).json({ error: message });
   } finally {
     rmSync(uploadDir, { recursive: true, force: true });
@@ -2463,15 +3148,15 @@ app.post("/api/backup/import/commit", async (req, res) => {
   const confirmPhrase = req.body?.confirmPhrase;
   const pending = typeof importToken === "string" ? pendingImports.get(importToken) : undefined;
   if (!pending) {
-    res.status(410).json({ error: "備份檢查已過期，請重新上傳" });
+    res.status(410).json({ error: t("備份檢查已過期，請重新上傳") });
     return;
   }
   if (confirmPhrase !== "RESTORE") {
-    res.status(400).json({ error: "確認文字不正確" });
+    res.status(400).json({ error: t("確認文字不正確") });
     return;
   }
   if (maintenanceMode) {
-    res.status(409).json({ error: "已有還原正在進行" });
+    res.status(409).json({ error: t("已有還原正在進行") });
     return;
   }
 
@@ -2496,17 +3181,17 @@ app.post("/api/backup/import/commit", async (req, res) => {
       try {
         swapInRestoredData(paths, pending.stagingDir);
         writeRestoreMarker(config.dataDirectory, { success: true, at: new Date().toISOString(), snapshotDir });
-        responseBody = { ok: true, message: "還原完成，請重新啟動 Pixel Crew", preRestoreSnapshot: snapshotDir };
+        responseBody = { ok: true, message: t("還原完成，請重新啟動 Pixel Crew"), preRestoreSnapshot: snapshotDir };
       } catch (swapError) {
         restoreFromSnapshot(paths, snapshotDir);
         writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (swapError as Error).message, snapshotDir });
         exitCode = 1;
-        responseBody = { ok: false, message: "還原失敗，已還原成原本的資料，請重新啟動 Pixel Crew 後再試一次" };
+        responseBody = { ok: false, message: t("還原失敗，已還原成原本的資料，請重新啟動 Pixel Crew 後再試一次") };
       }
     } catch (error) {
       writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (error as Error).message, snapshotDir: null });
       exitCode = 1;
-      responseBody = { ok: false, message: "還原失敗，請重新啟動 Pixel Crew 後再試一次" };
+      responseBody = { ok: false, message: t("還原失敗，請重新啟動 Pixel Crew 後再試一次") };
     }
   } finally {
     discardPendingImport(importToken);
@@ -2526,14 +3211,11 @@ app.post("/api/backup/import/commit", async (req, res) => {
 });
 
 app.put("/api/workers/:id/avatar-preset", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const presetId = typeof req.body?.presetId === "string" ? req.body.presetId.trim() : "";
   if (!AVATAR_PRESET_IDS.has(presetId)) {
-    res.status(400).json({ error: "未知的官方角色" });
+    res.status(400).json({ error: t("未知的官方角色") });
     return;
   }
   const previousKind = worker.avatarKind;
@@ -2543,7 +3225,7 @@ app.put("/api/workers/:id/avatar-preset", (req, res) => {
   if (!persistWorker(worker)) {
     worker.avatarKind = previousKind;
     worker.avatarPresetId = previousPresetId;
-    res.status(500).json({ error: "無法更新本機角色設定" });
+    res.status(500).json({ error: t("無法更新本機角色設定") });
     return;
   }
   const summary = workerSummary(worker);
@@ -2552,20 +3234,17 @@ app.put("/api/workers/:id/avatar-preset", (req, res) => {
 });
 
 app.post("/api/workers/:id/avatar/custom", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (!worker.avatarId) {
-    res.status(409).json({ error: "尚未上傳自訂角色" });
+    res.status(409).json({ error: t("尚未上傳自訂角色") });
     return;
   }
   const previousKind = worker.avatarKind;
   worker.avatarKind = "custom";
   if (!persistWorker(worker)) {
     worker.avatarKind = previousKind;
-    res.status(500).json({ error: "無法更新本機角色設定" });
+    res.status(500).json({ error: t("無法更新本機角色設定") });
     return;
   }
   const summary = workerSummary(worker);
@@ -2574,11 +3253,8 @@ app.post("/api/workers/:id/avatar/custom", (req, res) => {
 });
 
 app.delete("/api/workers/:id/avatar", async (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const previousId = worker.avatarId;
   const previousKind = worker.avatarKind;
   const previousPresetId = worker.avatarPresetId;
@@ -2589,7 +3265,7 @@ app.delete("/api/workers/:id/avatar", async (req, res) => {
     worker.avatarId = previousId;
     worker.avatarKind = previousKind;
     worker.avatarPresetId = previousPresetId;
-    res.status(500).json({ error: "無法更新本機角色設定" });
+    res.status(500).json({ error: t("無法更新本機角色設定") });
     return;
   }
   const summary = workerSummary(worker);
@@ -2599,17 +3275,14 @@ app.delete("/api/workers/:id/avatar", async (req, res) => {
 });
 
 app.patch("/api/workers/:id/provider", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
   if (provider === worker.runner.provider) {
     res.json(workerSummary(worker));
     return;
   }
-  res.status(409).json({ error: "切換 LLM 必須先檢查工作能量並確認交接風險，請使用交接流程" });
+  res.status(409).json({ error: t("切換 LLM 必須先檢查工作能量並確認交接風險，請使用交接流程") });
 });
 
 type PreparedMission = {
@@ -2621,9 +3294,8 @@ type PreparedMission = {
   parentMissionId: string | null;
   sourceMessageId: string | null;
   memberStates: Array<{ id: string; sessionId: string; historyLength: number }>;
-  expiresAt: number;
 };
-const preparedMissions = new Map<string, PreparedMission>();
+const preparedMissions = new PreparedTokenStore<PreparedMission>(120_000);
 
 function launchDepartmentMission(
   boss: Worker,
@@ -2670,7 +3342,7 @@ function launchDepartmentMission(
   activeMissions.set(mission.id, mission);
   if (!store.saveDepartmentMission(mission)) {
     activeMissions.delete(mission.id);
-    return { error: "無法保存 Department Mission" };
+    return { error: t("無法保存 Department Mission") };
   }
   updateDepartmentThreadMission(mission.departmentId, mission.id);
   departmentAudit("mission_created", mission.departmentId, mission.id, {
@@ -2702,14 +3374,14 @@ function launchDepartmentMission(
       mission,
       boss,
       prompt,
-      `老闆交辦 · AI 依職務分工：${mission.objective}`,
+      t("老闆交辦 · AI 依職務分工：{objective}", { objective: mission.objective }),
       planningAttachments.images,
       planningAttachments.documents,
       { executionProfile: "read_only_collaboration" },
     );
     attachmentRepository.markDelivery(attachmentIds, mission.id, boss.id, "delivered");
   } catch (error) {
-    const message = (error as Error).message || "無法啟動 Mission 規劃";
+    const message = (error as Error).message || t("無法啟動 Mission 規劃");
     attachmentRepository.markDelivery(attachmentIds, mission.id, boss.id, "failed", message);
     appendMissionExecutionEvent(mission, boss.id, null, { type: "error", message });
     failMission(mission, message);
@@ -2719,14 +3391,14 @@ function launchDepartmentMission(
 }
 
 function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error?: string } {
-  if (workspaceMission(boss.runner.workspacePath, boss.departmentId)) return { error: "這個部門已有進行中或待決定的 Mission" };
+  if (workspaceMission(boss.runner.workspacePath, boss.departmentId)) return { error: t("這個部門已有進行中或待決定的 Mission") };
   const members = [...workers.values()].filter((worker) => boss.departmentId
     ? worker.departmentId === boss.departmentId
     : sameWorkspacePath(worker.runner.workspacePath, boss.runner.workspacePath));
-  if (members.length < 1) return { error: "部門目前沒有可執行工作的 NPC" };
-  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return { error: `${boss.runner.name} 正在工作、交接或協作中` };
-  if (handoffActivityBlock(boss.history)) return { error: `${boss.runner.name} 尚有待處理的權限或背景 Agent` };
-  if (!providerReady(boss.runner.provider)) return { error: `${providerLabel(boss.runner.provider)} 尚未登入` };
+  if (members.length < 1) return { error: t("部門目前沒有可執行工作的 NPC") };
+  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return { error: t("{name} 正在工作、交接或協作中", { name: boss.runner.name }) };
+  if (handoffActivityBlock(boss.history)) return { error: t("{name} 尚有待處理的權限或背景 Agent", { name: boss.runner.name }) };
+  if (!providerReady(boss.runner.provider)) return { error: t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) }) };
   return { members };
 }
 
@@ -2784,7 +3456,7 @@ async function classifyDepartmentMessage(input: {
         input.lead.runner.getModel() ?? null,
         undefined,
         input.lead.persona,
-        `${prompt}\n\n前次格式無效。只能回傳一個合法的 <department_intent> JSON 標記。`,
+        t("{prompt}\n\n前次格式無效。只能回傳一個合法的 <department_intent> JSON 標記。", { prompt }),
         60_000,
         { kind: "no_tools" },
       )).text;
@@ -2797,9 +3469,9 @@ async function classifyDepartmentMessage(input: {
   return {
     intent: "system",
     confidence: 0,
-    reason: "無法可靠判斷這則訊息要詢問、修改目前工作，或建立後續 Mission",
+    reason: t("無法可靠判斷這則訊息要詢問、修改目前工作，或建立後續 Mission"),
     changeImpact: "none",
-    clarificationQuestion: "請再說明這是要詢問目前結果、補充進行中的工作，還是建立一項新的交辦？",
+    clarificationQuestion: t("請再說明這是要詢問目前結果、補充進行中的工作，還是建立一項新的交辦？"),
   };
 }
 
@@ -2834,7 +3506,7 @@ async function answerDepartmentQuestion(input: {
     const totalMcpToolCount = capabilities.mcpServers.reduce((sum, server) => sum + (server.tools?.length ?? 0), 0);
     if (totalMcpToolCount > allowedTools.length) {
       return {
-        text: "此部門設定了非唯讀的 MCP 工具，Codex 目前無法在執行前攔截個別 MCP 呼叫，因此無法安全地進行唯讀查詢。請改用 Claude 主管回答，或移除非唯讀 MCP 工具後再試一次。",
+        text: t("此部門設定了非唯讀的 MCP 工具，Codex 目前無法在執行前攔截個別 MCP 呼叫，因此無法安全地進行唯讀查詢。請改用 Claude 主管回答，或移除非唯讀 MCP 工具後再試一次。"),
         toolsUsed: [],
       };
     }
@@ -2842,19 +3514,15 @@ async function answerDepartmentQuestion(input: {
   const context = boundedDepartmentContext({
     threadSummary: input.thread.summary,
     missionSummary: input.mission
-      ? `${input.mission.objective}\n${input.mission.planSummary ?? ""}\n狀態：${input.mission.status}`
-      : "目前沒有可供追問的 Mission。",
+      ? t("{objective}\n{planSummary}\n狀態：{status}", { objective: input.mission.objective, planSummary: input.mission.planSummary ?? "", status: input.mission.status })
+      : t("目前沒有可供追問的 Mission。"),
     recentMessages: visibleDepartmentMessages(input.thread, 24),
     workingContext: input.mission?.ownerGuidance ?? "",
   });
-  const queryContract = `\n\n唯讀查詢工具契約：
-- 必要時使用內建唯讀檢查或下列已驗證的 MCP 查詢工具取得即時資料：${JSON.stringify(allowedTools)}
-- 不可使用清單以外的 MCP 工具，不可修改檔案、repository、外部服務或任何系統狀態。
-- 不要聲稱部門角色不能使用工具。若缺少合適的唯讀工具，直接說明目前沒有可安全查詢該資料來源的工具。
-- 不可把對話、Mission 報告或記憶中的舊資料冒充即時查詢結果。`;
+  const queryContract = t("\n\n唯讀查詢工具契約：\n- 必要時使用內建唯讀檢查或下列已驗證的 MCP 查詢工具取得即時資料：{tools}\n- 不可使用清單以外的 MCP 工具，不可修改檔案、repository、外部服務或任何系統狀態。\n- 不要聲稱部門角色不能使用工具。若缺少合適的唯讀工具，直接說明目前沒有可安全查詢該資料來源的工具。\n- 不可把對話、Mission 報告或記憶中的舊資料冒充即時查詢結果。", { tools: JSON.stringify(allowedTools) });
   const prompt = input.mission
-    ? `${missionFollowUpPrompt(input.mission, input.question)}\n\n以下是有界限的部門對話脈絡：\n${context}`
-    : `你是 ${input.department.name} 的部門主管。回答老闆的問題；需要即時資料時執行必要的唯讀查詢，不可修改任何狀態。\n${context}\n\n老闆問題：${input.question}`;
+    ? t("{followUp}\n\n以下是有界限的部門對話脈絡：\n{context}", { followUp: missionFollowUpPrompt(input.mission, input.question), context })
+    : t("你是 {department} 的部門主管。回答老闆的問題；需要即時資料時執行必要的唯讀查詢，不可修改任何狀態。\n{context}\n\n老闆問題：{question}", { department: input.department.name, context, question: input.question });
   const result = await runDetachedTurn(
     input.lead.runner.provider,
     input.department.workspacePath,
@@ -2873,7 +3541,7 @@ async function answerDepartmentQuestion(input: {
 
 app.get("/api/departments/:departmentId/thread", (req, res) => {
   const department = departments.get(req.params.departmentId);
-  if (!department) { res.status(404).json({ error: "找不到部門" }); return; }
+  if (!department) { res.status(404).json({ error: t("找不到部門") }); return; }
   res.json({
     ...departmentThreadPayload(department.id),
     missions: departmentMissions(department),
@@ -2884,7 +3552,7 @@ app.get("/api/departments/:departmentId/thread", (req, res) => {
 app.post("/api/departments/:departmentId/messages", async (req, res) => {
   const department = departments.get(req.params.departmentId);
   const lead = department ? workers.get(department.leadWorkerId) : null;
-  if (!department || !lead) { res.status(404).json({ error: "找不到部門或部門主管" }); return; }
+  if (!department || !lead) { res.status(404).json({ error: t("找不到部門或部門主管") }); return; }
   const thread = ensureDepartmentThread(department.id);
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || randomUUID();
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200) || clientMessageId;
@@ -2908,13 +3576,13 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
     throw error;
   }
   if (!text && images.length === 0 && documents.length === 0) {
-    res.status(400).json({ error: "請輸入訊息或附加檔案" });
+    res.status(400).json({ error: t("請輸入訊息或附加檔案") });
     return;
   }
   if (matchNativeCommand(text) === "clean") {
     const activeMission = workspaceMission(department.workspacePath, department.id);
     if (activeMission) {
-      res.status(409).json({ error: "部門仍有進行中或待決定的 Mission，不能重建工作階段", mission: activeMission });
+      res.status(409).json({ error: t("部門仍有進行中或待決定的 Mission，不能重建工作階段"), mission: activeMission });
       return;
     }
     const members = department.memberWorkerIds.flatMap((id) => {
@@ -2922,7 +3590,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
       return worker ? [worker] : [];
     });
     if (members.length === 0) {
-      res.status(400).json({ error: "沒有可重建工作階段的部門成員" });
+      res.status(400).json({ error: t("沒有可重建工作階段的部門成員") });
       return;
     }
     const preflightError = await departmentCleanPreflightError(members);
@@ -2937,8 +3605,8 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
       role: "system",
       intent: "system",
       text: failed.length > 0
-        ? `部門工作階段部分重建失敗：${failed.map((result) => result.name).join("、")}`
-        : "已清除部門工作階段，所有成員記憶重新開始。",
+        ? t("部門工作階段部分重建失敗：{names}", { names: failed.map((result) => result.name).join("、") })
+        : t("已清除部門工作階段，所有成員記憶重新開始。"),
       attachmentIds: [],
       missionId: null,
       deliveryStatus: "delivered",
@@ -2969,7 +3637,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
   const allMissions = departmentMissions(department);
   const activeMission = workspaceMission(department.workspacePath, department.id);
   const latestCompletedMission = allMissions.find((mission) => mission.status === "completed") ?? null;
-  const userText = text || `請依附件處理：${attachmentRecords.map((attachment) => attachment.name).join("、")}`;
+  const userText = text || t("請依附件處理：{names}", { names: attachmentRecords.map((attachment) => attachment.name).join("、") });
   const classification = await classifyDepartmentMessage({
     department,
     lead,
@@ -2999,7 +3667,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
       res.json({ duplicate: true, message: raced, ...departmentThreadPayload(department.id) });
       return;
     }
-    res.status(500).json({ error: "無法保存部門訊息" });
+    res.status(500).json({ error: t("無法保存部門訊息") });
     return;
   }
 
@@ -3019,7 +3687,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
 
   if (classification.confidence < 0.7 || classification.clarificationQuestion) {
     const responseMessage = reply(
-      classification.clarificationQuestion || "這項指示仍有歧義，請說明你希望詢問、修改目前工作，或建立新交辦。",
+      classification.clarificationQuestion || t("這項指示仍有歧義，請說明你希望詢問、修改目前工作，或建立新交辦。"),
     );
     res.json({ message: ownerMessage, responseMessage, classification, ...departmentThreadPayload(department.id) });
     return;
@@ -3034,7 +3702,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
         departmentAudit("question_answered", department.id, activeMission.id, { toolsUsed: answer.toolsUsed });
         res.json({ message: ownerMessage, responseMessage, classification, mission: activeMission, ...departmentThreadPayload(department.id) });
       } catch (error) {
-        const responseMessage = reply(`目前無法整理回答：${(error as Error).message}`, "system", activeMission.id);
+        const responseMessage = reply(t("目前無法整理回答：{error}", { error: (error as Error).message }), "system", activeMission.id);
         res.json({ message: ownerMessage, responseMessage, classification, mission: activeMission, ...departmentThreadPayload(department.id) });
       }
       return;
@@ -3043,7 +3711,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
       pendingMissionReplans.set(activeMission.id, { message: userText, attachmentIds, sourceMessageId: ownerMessage.id });
       store.updateDepartmentMessageMission(ownerMessage.id, activeMission.id);
       departmentAudit("mission_updated", department.id, activeMission.id, { action: "major_change_queued", message: userText });
-      const responseMessage = reply("重大修改已保留；目前步驟完成後會在安全檢查點重新規劃，不會丟棄正在執行的成果。", "mission_update", activeMission.id);
+      const responseMessage = reply(t("重大修改已保留；目前步驟完成後會在安全檢查點重新規劃，不會丟棄正在執行的成果。"), "mission_update", activeMission.id);
       res.json({ message: ownerMessage, responseMessage, classification, mission: activeMission, ...departmentThreadPayload(department.id) });
       return;
     }
@@ -3059,8 +3727,8 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
     });
     const responseMessage = reply(
       classification.intent === "follow_up_mission"
-        ? "目前 Mission 尚在執行；這項新工作已保存在部門對話。請先讓目前工作完成，或明確說明要把它改成目前 Mission 的調整。"
-        : "補充內容已加入目前 Mission，會在下一個安全步驟交給相關成員。",
+        ? t("目前 Mission 尚在執行；這項新工作已保存在部門對話。請先讓目前工作完成，或明確說明要把它改成目前 Mission 的調整。")
+        : t("補充內容已加入目前 Mission，會在下一個安全步驟交給相關成員。"),
       classification.intent,
       activeMission.id,
     );
@@ -3077,7 +3745,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
       departmentAudit("question_answered", department.id, latestCompletedMission?.id ?? null, { toolsUsed: answer.toolsUsed });
       res.json({ message: ownerMessage, responseMessage, classification, mission: latestCompletedMission, ...departmentThreadPayload(department.id) });
     } catch (error) {
-      const responseMessage = reply(`目前無法整理回答：${(error as Error).message}`);
+      const responseMessage = reply(t("目前無法整理回答：{error}", { error: (error as Error).message }));
       res.json({ message: ownerMessage, responseMessage, classification, ...departmentThreadPayload(department.id) });
     }
     return;
@@ -3085,26 +3753,26 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
 
   const eligibility = missionDepartmentEligibility(lead);
   if (!eligibility.members) {
-    const responseMessage = reply(`目前無法開始新 Mission：${eligibility.error || "部門不可用"}`);
+    const responseMessage = reply(t("目前無法開始新 Mission：{error}", { error: eligibility.error || t("部門不可用") }));
     res.status(409).json({ error: responseMessage.text, message: ownerMessage, responseMessage, ...departmentThreadPayload(department.id) });
     return;
   }
   const criteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
   const acceptanceCriteria = criteria.length > 0
     ? criteria
-    : ["完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險"];
+    : [t("完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險")];
   const launched = launchDepartmentMission(lead, eligibility.members, userText, acceptanceCriteria, {
     attachmentIds,
     parentMissionId: latestCompletedMission?.id ?? null,
     sourceMessageId: ownerMessage.id,
   });
   if (!launched.mission || launched.error) {
-    const responseMessage = reply(launched.error || "無法啟動 Department Mission");
+    const responseMessage = reply(launched.error || t("無法啟動 Department Mission"));
     res.status(500).json({ error: responseMessage.text, message: ownerMessage, responseMessage, ...departmentThreadPayload(department.id) });
     return;
   }
   store.updateDepartmentMessageMission(ownerMessage.id, launched.mission.id);
-  const responseMessage = reply(`已建立 Mission 並交由 ${lead.runner.name} 依部門職務規劃執行。`, "follow_up_mission", launched.mission.id);
+  const responseMessage = reply(t("已建立 Mission 並交由 {name} 依部門職務規劃執行。", { name: lead.runner.name }), "follow_up_mission", launched.mission.id);
   res.status(202).json({
     message: { ...ownerMessage, missionId: launched.mission.id, deliveryStatus: "delivered" },
     responseMessage,
@@ -3117,7 +3785,7 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
 app.post("/api/assignments", async (req, res) => {
   const objective = collaborationText(req.body?.objective, 4_000);
   if (!objective) {
-    res.status(400).json({ error: "請輸入要交辦的工作" });
+    res.status(400).json({ error: t("請輸入要交辦的工作") });
     return;
   }
   const preferredWorkspace = collaborationText(req.body?.preferredWorkspace, 1_000) || null;
@@ -3131,9 +3799,9 @@ app.post("/api/assignments", async (req, res) => {
   const requestedCriteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
   const acceptanceCriteria = requestedCriteria.length > 0
     ? requestedCriteria
-    : ["完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險"];
+    : [t("完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險")];
   if (Array.isArray(req.body?.clarifications) && req.body.clarifications.length > 3) {
-    res.status(400).json({ error: "部門判斷最多接受三輪澄清；請重新整理交辦目標後再試" });
+    res.status(400).json({ error: t("部門判斷最多接受三輪澄清；請重新整理交辦目標後再試") });
     return;
   }
   const clarifications = normalizeAssignmentClarifications(req.body?.clarifications);
@@ -3162,13 +3830,13 @@ app.post("/api/assignments", async (req, res) => {
     });
   }
   if (candidates.length === 0) {
-    res.status(409).json({ error: "目前沒有可接單的部門；請先處理進行中的 Mission、登入 provider，或解除等待中的權限" });
+    res.status(409).json({ error: t("目前沒有可接單的部門；請先處理進行中的 Mission、登入 provider，或解除等待中的權限") });
     return;
   }
   const decisionUsage = await usageRegistry.refresh(decisionProvider, true);
   const decisionUsageError = usageBlockReason(decisionProvider, decisionUsage, decisionModel);
   if (decisionUsageError) {
-    res.status(409).json({ error: `${providerLabel(decisionProvider)} 無法進行部門判斷：${decisionUsageError}`, usage: decisionUsage });
+    res.status(409).json({ error: t("{provider} 無法進行部門判斷：{error}", { provider: providerLabel(decisionProvider), error: decisionUsageError }), usage: decisionUsage });
     return;
   }
   const prompt = assignmentDecisionPrompt({ objective, acceptanceCriteria, preferredWorkspace, candidates, clarifications });
@@ -3178,7 +3846,7 @@ app.post("/api/assignments", async (req, res) => {
   try {
     decisionText = (await runDetachedTurn(decisionProvider, decisionWorkspace, decisionModel, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
   } catch (error) {
-    res.status(502).json({ error: `決策模型無法完成部門判斷：${(error as Error).message}` });
+    res.status(502).json({ error: t("決策模型無法完成部門判斷：{error}", { error: (error as Error).message }) });
     return;
   }
   let decision = parseAssignmentDecision(decisionText, candidates);
@@ -3192,17 +3860,17 @@ app.post("/api/assignments", async (req, res) => {
     }
   }
   if (!decision) {
-    res.status(502).json({ error: "決策模型未回傳有效的部門判斷格式，未派出任何工作" });
+    res.status(502).json({ error: t("決策模型未回傳有效的部門判斷格式，未派出任何工作") });
     return;
   }
   if (decision.confidence < 0.7 || decision.clarificationQuestion) {
     if (clarifications.length >= 3) {
-      res.status(409).json({ error: "決策模型在三輪澄清後仍無法可靠選擇部門，未派出任何工作" });
+      res.status(409).json({ error: t("決策模型在三輪澄清後仍無法可靠選擇部門，未派出任何工作") });
       return;
     }
     res.status(200).json({
       clarification: {
-        question: decision.clarificationQuestion || "請再補充這項工作應涵蓋的對象、範圍或預期成果。",
+        question: decision.clarificationQuestion || t("請再補充這項工作應涵蓋的對象、範圍或預期成果。"),
         confidence: decision.confidence,
         reasons: decision.reasons,
       },
@@ -3222,23 +3890,23 @@ app.post("/api/assignments", async (req, res) => {
   };
   const selected = eligible.get(route.departmentId);
   if (!selected) {
-    res.status(409).json({ error: "路由完成後部門狀態已改變，請重新交辦" });
+    res.status(409).json({ error: t("路由完成後部門狀態已改變，請重新交辦") });
     return;
   }
   const usage = await usageRegistry.refresh(selected.coordinator.runner.provider, true);
   const usageError = usageBlockReason(selected.coordinator.runner.provider, usage, null);
   if (usageError) {
-    res.status(409).json({ error: `${providerLabel(selected.coordinator.runner.provider)} 無法開始工作：${usageError}`, route, usage });
+    res.status(409).json({ error: t("{provider} 無法開始工作：{error}", { provider: providerLabel(selected.coordinator.runner.provider), error: usageError }), route, usage });
     return;
   }
   const finalEligibility = missionDepartmentEligibility(selected.coordinator);
   if (!finalEligibility.members) {
-    res.status(409).json({ error: finalEligibility.error || "路由完成後部門狀態已改變，請重新交辦", route });
+    res.status(409).json({ error: finalEligibility.error || t("路由完成後部門狀態已改變，請重新交辦"), route });
     return;
   }
   const launched = launchDepartmentMission(selected.coordinator, finalEligibility.members, objective, acceptanceCriteria);
   if (!launched.mission || launched.error) {
-    res.status(500).json({ error: launched.error || "無法啟動部門工作", route, mission: launched.mission });
+    res.status(500).json({ error: launched.error || t("無法啟動部門工作"), route, mission: launched.mission });
     return;
   }
   res.status(202).json({ route, mission: launched.mission });
@@ -3297,7 +3965,7 @@ async function decideBossTask(task: BossTask): Promise<void> {
   const candidates = bossTaskCandidates();
   if (candidates.length === 0) {
     task.status = "needs_attention";
-    task.error = "目前沒有可用的部門；請先建立具有職務的部門";
+    task.error = t("目前沒有可用的部門；請先建立具有職務的部門");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3306,7 +3974,7 @@ async function decideBossTask(task: BossTask): Promise<void> {
   const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
   if (usageError) {
     task.status = "needs_attention";
-    task.error = `${providerLabel(task.decisionProvider)} 無法進行任務判斷：${usageError}`;
+    task.error = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3329,7 +3997,7 @@ async function decideBossTask(task: BossTask): Promise<void> {
       decision = parseBossTaskDecision(output, candidates);
     }
     if (!decision || (decision.status === "clarification" && clarificationBudget.remaining === 0)) {
-      throw new Error("決策模型無法依現有資訊建立有效的跨部門計畫");
+      throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
     }
     task.error = null;
     if (decision.status === "clarification") {
@@ -3352,14 +4020,17 @@ async function decideBossTask(task: BossTask): Promise<void> {
     task.messages.push(bossTaskMessage(
       "system",
       decision.executionMode === "research"
-        ? `已選擇快速研究路徑：${decision.summary}\n\n${task.stages[0].departmentName} · ${task.stages[0].title}`
-        : `已完成探索並建立跨部門計畫：${decision.summary}\n\n${task.stages.map((stage, index) => `${index + 1}. ${stage.departmentName} · ${stage.title}`).join("\n")}`,
+        ? t("已選擇快速研究路徑：{summary}\n\n{department} · {title}", { summary: decision.summary, department: task.stages[0].departmentName, title: task.stages[0].title })
+        : t("已完成探索並建立跨部門計畫：{summary}\n\n{stages}", {
+            summary: decision.summary,
+            stages: task.stages.map((stage, index) => `${index + 1}. ${stage.departmentName} · ${stage.title}`).join("\n"),
+          }),
     ));
     persistBossTask(task);
     advanceBossTask(task);
   } catch (error) {
     task.status = "failed";
-    task.error = (error as Error).message || "無法完成 Boss Task 判斷";
+    task.error = (error as Error).message || t("無法完成 Boss Task 判斷");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
   }
@@ -3370,7 +4041,7 @@ function missionReport(mission: DepartmentMission): string {
     const result = mission.steps[index]?.result;
     if (result) return result;
   }
-  return mission.planSummary || "部門 Mission 已完成，但沒有可用的文字報告。";
+  return mission.planSummary || t("部門 Mission 已完成，但沒有可用的文字報告。");
 }
 
 function advanceBossTask(task: BossTask): void {
@@ -3381,19 +4052,24 @@ function advanceBossTask(task: BossTask): void {
     if (mission.status === "completed") {
       stage.status = "completed";
       stage.report = collaborationText(missionReport(mission), 12_000);
-      task.messages.push(bossTaskMessage("system", `${stage.departmentName} 已完成「${stage.title}」，交付內容已傳給後續部門。`));
+      task.messages.push(bossTaskMessage("system", t("{department} 已完成「{title}」，交付內容已傳給後續部門。", { department: stage.departmentName, title: stage.title })));
     } else if (mission.status === "needs_attention") {
       const newlyBlocked = stage.status !== "needs_attention";
       stage.status = "needs_attention";
       task.status = "needs_attention";
-      task.error = `${stage.departmentName} 的「${stage.title}」需要你處理：${mission.error || "等待決定"}`;
+      task.error = t("{department} 的「{title}」需要你處理：{error}", { department: stage.departmentName, title: stage.title, error: mission.error || t("等待決定") });
       if (newlyBlocked) task.messages.push(bossTaskMessage("system", task.error));
       persistBossTask(task);
       return;
     } else if (mission.status === "failed" || mission.status === "cancelled") {
       stage.status = mission.status;
       task.status = mission.status === "cancelled" ? "cancelled" : "failed";
-      task.error = `${stage.departmentName} 的「${stage.title}」${mission.status === "cancelled" ? "已取消" : "失敗"}：${mission.error || ""}`.trim();
+      task.error = t("{department} 的「{title}」{status}：{error}", {
+        department: stage.departmentName,
+        title: stage.title,
+        status: mission.status === "cancelled" ? t("已取消") : t("失敗"),
+        error: mission.error || "",
+      }).trim();
       task.messages.push(bossTaskMessage("system", task.error));
       persistBossTask(task);
       return;
@@ -3420,7 +4096,7 @@ function advanceBossTask(task: BossTask): void {
   const next = task.stages.find((stage) => stage.status === "pending" && stage.dependsOn.every((id) => completedIds.has(id)));
   if (!next) {
     task.status = "failed";
-    task.error = "跨部門計畫沒有可執行的下一階段";
+    task.error = t("跨部門計畫沒有可執行的下一階段");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3429,7 +4105,7 @@ function advanceBossTask(task: BossTask): void {
   const lead = department ? workers.get(department.leadWorkerId) : null;
   if (!department || !lead) {
     task.status = "needs_attention";
-    task.error = `找不到「${next.departmentName}」的部門主管`;
+    task.error = t("找不到「{department}」的部門主管", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3437,7 +4113,7 @@ function advanceBossTask(task: BossTask): void {
   const eligibility = missionDepartmentEligibility(lead);
   if (!eligibility.members) {
     task.status = "needs_attention";
-    task.error = `${next.departmentName} 暫時無法開始：${eligibility.error || "部門不可用"}`;
+    task.error = t("{department} 暫時無法開始：{error}", { department: next.departmentName, error: eligibility.error || t("部門不可用") });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3447,7 +4123,11 @@ function advanceBossTask(task: BossTask): void {
     .map((stage) => `## ${stage.departmentName} · ${stage.title}\n${stage.report}`)
     .join("\n\n")
     .slice(0, 24_000);
-  const objective = `${next.objective}\n\nBoss Task：${task.objective}${upstream ? `\n\n上游部門交付：\n${upstream}` : ""}`.slice(0, 30_000);
+  const objective = t("{objective}\n\nBoss Task：{taskObjective}{upstream}", {
+    objective: next.objective,
+    taskObjective: task.objective,
+    upstream: upstream ? t("\n\n上游部門交付：\n{upstream}", { upstream }) : "",
+  }).slice(0, 30_000);
   const launched = launchDepartmentMission(lead, eligibility.members, objective, next.acceptanceCriteria, {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
@@ -3455,7 +4135,7 @@ function advanceBossTask(task: BossTask): void {
   });
   if (!launched.mission || launched.error) {
     task.status = "needs_attention";
-    task.error = launched.error || `無法啟動 ${next.departmentName}`;
+    task.error = launched.error || t("無法啟動 {department}", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -3464,7 +4144,7 @@ function advanceBossTask(task: BossTask): void {
   next.missionId = launched.mission.id;
   task.status = "running";
   task.error = null;
-  task.messages.push(bossTaskMessage("system", `已交給 ${next.departmentName}：${next.title}`));
+  task.messages.push(bossTaskMessage("system", t("已交給 {department}：{title}", { department: next.departmentName, title: next.title })));
   persistBossTask(task);
 }
 
@@ -3486,13 +4166,13 @@ app.get("/api/boss-tasks", (req, res) => {
 
 app.get("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
-  if (!task) { res.status(404).json({ error: "找不到 Boss Task" }); return; }
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   res.json({ bossTask: bossTaskForDisplay(task) });
 });
 
 app.post("/api/boss-tasks", async (req, res) => {
   const objective = collaborationText(req.body?.message, 4_000);
-  if (!objective) { res.status(400).json({ error: "請輸入要交辦的工作" }); return; }
+  if (!objective) { res.status(400).json({ error: t("請輸入要交辦的工作") }); return; }
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || null;
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200) || clientMessageId;
   if (idempotencyKey) {
@@ -3549,7 +4229,7 @@ app.post("/api/boss-tasks", async (req, res) => {
     updatedAt: now,
     completedAt: null,
   };
-  if (!store.saveBossTask(task)) { res.status(500).json({ error: "無法保存 Boss Task" }); return; }
+  if (!store.saveBossTask(task)) { res.status(500).json({ error: t("無法保存 Boss Task") }); return; }
   broadcastBossTask(task, true);
   await decideBossTask(task);
   res.status(201).json({ bossTask: bossTaskForDisplay(task) });
@@ -3557,7 +4237,7 @@ app.post("/api/boss-tasks", async (req, res) => {
 
 app.patch("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
-  if (!task) { res.status(404).json({ error: "找不到 Boss Task" }); return; }
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   const patchError = applyBossTaskRecordPatch(task, req.body ?? {});
   if (patchError) {
     res.status(patchError.includes("不能封存") ? 409 : 400).json({ error: patchError });
@@ -3569,13 +4249,13 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
 
 app.delete("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
-  if (!task) { res.status(404).json({ error: "找不到 Boss Task" }); return; }
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   if (!["completed", "failed", "cancelled"].includes(task.status)) {
-    res.status(409).json({ error: "進行中或等待處理的 Boss Task 不能刪除" });
+    res.status(409).json({ error: t("進行中或等待處理的 Boss Task 不能刪除") });
     return;
   }
   if (!store.deleteBossTask(task.id)) {
-    res.status(500).json({ error: "無法刪除 Boss Task" });
+    res.status(500).json({ error: t("無法刪除 Boss Task") });
     return;
   }
   broadcast({ type: "boss_task_deleted", bossTaskId: task.id });
@@ -3584,7 +4264,7 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
 
 app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   const task = store.getBossTask(req.params.id);
-  if (!task) { res.status(404).json({ error: "找不到 Boss Task" }); return; }
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200)
     || collaborationText(req.body?.clientMessageId, 200)
     || null;
@@ -3607,13 +4287,13 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     throw error;
   }
   if (!message && images.length === 0 && documents.length === 0) {
-    res.status(400).json({ error: "請輸入回覆內容或加入附件" });
+    res.status(400).json({ error: t("請輸入回覆內容或加入附件") });
     return;
   }
   if (matchNativeCommand(message) === "clean") {
     const bossDepartments = bossTaskDepartments(task);
     if (bossDepartments.length === 0) {
-      res.status(400).json({ error: "這個 Boss Task 沒有可重建工作階段的部門" });
+      res.status(400).json({ error: t("這個 Boss Task 沒有可重建工作階段的部門") });
       return;
     }
     const preflightError = await cleanBossTaskPreflightError(bossDepartments);
@@ -3626,8 +4306,8 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     task.messages.push(bossTaskMessage(
       "system",
       failed.length > 0
-        ? `工作階段部分重建失敗：${failed.map((result) => result.name).join("、")}`
-        : "已清除 Boss Task 與所屬部門的工作階段，所有成員記憶重新開始。",
+        ? t("工作階段部分重建失敗：{names}", { names: failed.map((result) => result.name).join("、") })
+        : t("已清除 Boss Task 與所屬部門的工作階段，所有成員記憶重新開始。"),
       [],
       null,
       null,
@@ -3638,7 +4318,7 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     return;
   }
   if (task.status !== "needs_input" && task.status !== "needs_attention" && task.status !== "completed" && task.status !== "failed") {
-    res.status(409).json({ error: "目前階段正在執行；完成或需要補充時才能送出新指示" });
+    res.status(409).json({ error: t("目前階段正在執行；完成或需要補充時才能送出新指示") });
     return;
   }
   const attachmentRecordsForPersist = persistAttachments(images, documents, res);
@@ -3647,7 +4327,7 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   task.attachmentIds = [...new Set([...(task.attachmentIds ?? []), ...attachmentIds])];
   task.messages.push(bossTaskMessage(
     "boss",
-    message || "請依附加檔案處理後續工作",
+    message || t("請依附加檔案處理後續工作"),
     attachmentIds,
     clientMessageId,
     idempotencyKey,
@@ -3658,7 +4338,7 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
       .map((stage) => store.getDepartmentMission(stage.missionId!))
       .find((mission) => mission?.status === "needs_attention");
     if (blockedMission) {
-      task.messages.push(bossTaskMessage("system", "指示已保存在 Boss Task；此中斷屬於進行中的部門 Mission，請從跨部門階段開啟該 Mission 後選擇重試、重新指派或接受風險。"));
+      task.messages.push(bossTaskMessage("system", t("指示已保存在 Boss Task；此中斷屬於進行中的部門 Mission，請從跨部門階段開啟該 Mission 後選擇重試、重新指派或接受風險。")));
       persistBossTask(task);
       res.json({ bossTask: bossTaskForDisplay(task) });
       return;
@@ -3685,16 +4365,16 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
 app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
   const boss = workers.get(req.params.bossId);
   if (!boss) {
-    res.status(404).json({ error: "找不到部門主管 NPC" });
+    res.status(404).json({ error: t("找不到部門主管 NPC") });
     return;
   }
   const objective = collaborationText(req.body?.objective, 4_000);
   const requestedCriteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
   const acceptanceCriteria = requestedCriteria.length > 0
     ? requestedCriteria
-    : ["完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險"];
+    : [t("完成交辦目標、進行合理驗證，並在部門最終報告中說明結果與剩餘風險")];
   if (!objective) {
-    res.status(400).json({ error: "請填寫 Department Mission 目標" });
+    res.status(400).json({ error: t("請填寫 Department Mission 目標") });
     return;
   }
   let images;
@@ -3732,7 +4412,7 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
       classification: {
         intent: "follow_up_mission",
         confidence: 1,
-        reason: "由相容的舊版 prepare API 明確交辦新工作",
+        reason: t("由相容的舊版 prepare API 明確交辦新工作"),
         changeImpact: "none",
         clarificationQuestion: null,
       },
@@ -3748,15 +4428,11 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
     const usage = await usageRegistry.refresh(provider, true);
     const usageError = usageBlockReason(provider, usage, null);
     if (usageError) {
-      res.status(409).json({ error: `${providerLabel(provider)} 無法開始 Mission：${usageError}`, usage });
+      res.status(409).json({ error: t("{provider} 無法開始 Mission：{error}", { provider: providerLabel(provider), error: usageError }), usage });
       return;
     }
   }
-  for (const [token, prepared] of preparedMissions) {
-    if (prepared.expiresAt < Date.now()) preparedMissions.delete(token);
-  }
-  const missionToken = randomUUID();
-  preparedMissions.set(missionToken, {
+  const missionToken = preparedMissions.issue({
     bossWorkerId: boss.id,
     workspacePath: boss.runner.workspacePath,
     objective,
@@ -3769,7 +4445,6 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
       sessionId: member.runner.getPersistenceState().sessionId,
       historyLength: member.history.length,
     })),
-    expiresAt: Date.now() + 120_000,
   });
   res.json({
     missionToken,
@@ -3779,11 +4454,11 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
     acceptanceCriteria,
     maxCorrections: 2,
     warnings: [
-      "這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。",
-      "NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。",
-      "Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。",
-      "Review 最多自動退回修正兩輪，超過後會停下來請你決定。",
-      "Mission 不會自動 commit、push、merge、tag、publish 或 release。",
+      t("這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。"),
+      t("NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。"),
+      t("Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。"),
+      t("Review 最多自動退回修正兩輪，超過後會停下來請你決定。"),
+      t("Mission 不會自動 commit、push、merge、tag、publish 或 release。"),
     ],
   });
 });
@@ -3791,19 +4466,18 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
 app.post("/api/workers/:bossId/missions", async (req, res) => {
   const boss = workers.get(req.params.bossId);
   const token = String(req.body?.missionToken ?? "");
-  const prepared = preparedMissions.get(token);
-  preparedMissions.delete(token);
-  if (!boss || !prepared || prepared.bossWorkerId !== boss.id || prepared.expiresAt < Date.now()) {
-    res.status(409).json({ error: "Mission 確認已過期，請重新檢查" });
+  const prepared = preparedMissions.take(token);
+  if (!boss || !prepared || prepared.bossWorkerId !== boss.id) {
+    res.status(409).json({ error: t("Mission 確認已過期，請重新檢查") });
     return;
   }
   if (req.body?.warningAcknowledged !== true) {
-    res.status(400).json({ error: "必須先確認 Mission 權限與 Git 邊界" });
+    res.status(400).json({ error: t("必須先確認 Mission 權限與 Git 邊界") });
     return;
   }
   const eligibility = missionDepartmentEligibility(boss);
   if (!eligibility.members || !sameWorkspacePath(boss.runner.workspacePath, prepared.workspacePath)) {
-    res.status(409).json({ error: eligibility.error || "部門主管已離開原部門" });
+    res.status(409).json({ error: eligibility.error || t("部門主管已離開原部門") });
     return;
   }
   const stateChanged = prepared.memberStates.some((snapshot) => {
@@ -3811,7 +4485,7 @@ app.post("/api/workers/:bossId/missions", async (req, res) => {
     return !member || member.runner.getPersistenceState().sessionId !== snapshot.sessionId || member.history.length !== snapshot.historyLength;
   });
   if (stateChanged) {
-    res.status(409).json({ error: "檢查後部門 NPC 狀態已改變，請重新確認" });
+    res.status(409).json({ error: t("檢查後部門 NPC 狀態已改變，請重新確認") });
     return;
   }
   const launched = launchDepartmentMission(boss, eligibility.members, prepared.objective, prepared.acceptanceCriteria, {
@@ -3820,7 +4494,7 @@ app.post("/api/workers/:bossId/missions", async (req, res) => {
     sourceMessageId: prepared.sourceMessageId,
   });
   if (!launched.mission || launched.error) {
-    res.status(500).json({ error: launched.error || "無法啟動 Department Mission", mission: launched.mission });
+    res.status(500).json({ error: launched.error || t("無法啟動 Department Mission"), mission: launched.mission });
     return;
   }
   if (prepared.sourceMessageId) store.updateDepartmentMessageMission(prepared.sourceMessageId, launched.mission.id);
@@ -3839,32 +4513,32 @@ app.get("/api/missions", (req, res) => {
 
 app.get("/api/missions/:id", (req, res) => {
   const mission = store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
   res.json({ mission });
 });
 
 app.post("/api/missions/:id/follow-up", async (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
   if (missionLocksWorkspace(mission)) {
-    res.status(409).json({ error: "Mission 尚未結束，請先在目前步驟或決策卡繼續處理" });
+    res.status(409).json({ error: t("Mission 尚未結束，請先在目前步驟或決策卡繼續處理") });
     return;
   }
   const question = collaborationText(req.body?.question, 4_000);
-  if (!question) { res.status(400).json({ error: "請輸入要追問部門的內容" }); return; }
+  if (!question) { res.status(400).json({ error: t("請輸入要追問部門的內容") }); return; }
   const department = mission.departmentId ? departments.get(mission.departmentId) : undefined;
   const lead = workers.get(department?.leadWorkerId ?? mission.bossWorkerId);
   if (!lead || (mission.departmentId && lead.departmentId !== mission.departmentId)) {
-    res.status(409).json({ error: "部門主管已不存在或已離開部門" });
+    res.status(409).json({ error: t("部門主管已不存在或已離開部門") });
     return;
   }
   const running = workspaceMission(mission.workspacePath, mission.departmentId);
   if (running && running.id !== mission.id) {
-    res.status(409).json({ error: "部門正在執行新的 Mission，完成後才能追問舊報告" });
+    res.status(409).json({ error: t("部門正在執行新的 Mission，完成後才能追問舊報告") });
     return;
   }
   if (!providerReady(lead.runner.provider)) {
-    res.status(503).json({ error: `${providerLabel(lead.runner.provider)} 尚未登入`, auth: authStates[lead.runner.provider] });
+    res.status(503).json({ error: t("{provider} 尚未登入", { provider: providerLabel(lead.runner.provider) }), auth: authStates[lead.runner.provider] });
     return;
   }
   try {
@@ -3897,30 +4571,28 @@ app.post("/api/missions/:id/follow-up", async (req, res) => {
       lead.runner.getModel() ?? null,
       undefined,
       lead.persona,
-      `${missionFollowUpPrompt(mission, question)}
-
-可使用的已驗證唯讀 MCP 工具：${JSON.stringify(allowedTools)}`,
+      t("{prompt}\n\n可使用的已驗證唯讀 MCP 工具：{tools}", { prompt: missionFollowUpPrompt(mission, question), tools: JSON.stringify(allowedTools) }),
       60_000,
       { kind: "read_only_query", allowedTools },
     );
     res.json({ ok: true, answer: answer.text });
   } catch (error) {
-    const message = (error as Error).message || "無法送出部門追問";
+    const message = (error as Error).message || t("無法送出部門追問");
     res.status(500).json({ error: message });
   }
 });
 
 app.post("/api/missions/:id/approve-plan", (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
   if (mission.status !== "needs_attention" || mission.attentionReason !== "plan_approval" || mission.steps.length === 0) {
-    res.status(409).json({ error: "這個 Mission 沒有等待核准的計畫" });
+    res.status(409).json({ error: t("這個 Mission 沒有等待核准的計畫") });
     return;
   }
   const first = mission.steps[0];
   const assignee = workers.get(first.assigneeWorkerId);
   if (!assignee || assignee.runner.busy || !providerReady(assignee.runner.provider)) {
-    res.status(409).json({ error: "第一位執行 NPC 目前無法開始，請稍後再核准" });
+    res.status(409).json({ error: t("第一位執行 NPC 目前無法開始，請稍後再核准") });
     return;
   }
   mission.planApprovedAt = new Date().toISOString();
@@ -3935,9 +4607,9 @@ app.post("/api/missions/:id/approve-plan", (req, res) => {
 
 function retryMissionPlanning(mission: DepartmentMission): string | null {
   const boss = workers.get(mission.bossWorkerId);
-  if (!boss) return "部門主管 NPC 已不存在";
-  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return "部門主管正在執行其他工作";
-  if (!providerReady(boss.runner.provider)) return `${providerLabel(boss.runner.provider)} 尚未登入`;
+  if (!boss) return t("部門主管 NPC 已不存在");
+  if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return t("部門主管正在執行其他工作");
+  if (!providerReady(boss.runner.provider)) return t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) });
   const members = missionMembers(mission);
   mission.status = "planning";
   mission.attentionReason = null;
@@ -3969,28 +4641,28 @@ function retryMissionPlanning(mission: DepartmentMission): string | null {
       mission,
       boss,
       prompt,
-      `交給部門 · 重新規劃：${mission.objective}`,
+      t("交給部門 · 重新規劃：{objective}", { objective: mission.objective }),
       attachments.images,
       attachments.documents,
       { executionProfile: "read_only_collaboration" },
     );
     return null;
   } catch (error) {
-    pauseMission(mission, (error as Error).message || "無法重新啟動 Mission 規劃");
+    pauseMission(mission, (error as Error).message || t("無法重新啟動 Mission 規劃"));
     return mission.error;
   }
 }
 
 app.post("/api/missions/:id/resolve", (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
   if (!(["needs_attention", "failed"] as DepartmentMission["status"][]).includes(mission.status) || mission.attentionReason === "plan_approval") {
-    res.status(409).json({ error: "這個 Mission 目前沒有可處理的中斷" });
+    res.status(409).json({ error: t("這個 Mission 目前沒有可處理的中斷") });
     return;
   }
   const reserved = workspaceMission(mission.workspacePath, mission.departmentId);
   if (mission.status === "failed" && reserved && reserved.id !== mission.id) {
-    res.status(409).json({ error: "同一工作位置已有進行中的 Department Mission" });
+    res.status(409).json({ error: t("同一工作位置已有進行中的 Department Mission") });
     return;
   }
   const action = String(req.body?.action ?? "");
@@ -4005,17 +4677,17 @@ app.post("/api/missions/:id/resolve", (req, res) => {
   const currentIndex = mission.currentStepIndex;
   const current = currentIndex == null ? null : mission.steps[currentIndex];
   if (!current || currentIndex == null) {
-    res.status(409).json({ error: "Mission 找不到可恢復的步驟" });
+    res.status(409).json({ error: t("Mission 找不到可恢復的步驟") });
     return;
   }
   if (action === "accept_risk") {
     if (current.kind !== "review" || !current.reviewResult) {
-      res.status(409).json({ error: "只有已有結果的 Review 才能接受風險繼續" });
+      res.status(409).json({ error: t("只有已有結果的 Review 才能接受風險繼續") });
       return;
     }
     current.status = "completed";
     mission.attentionReason = null;
-    mission.error = guidance ? `老闆接受風險：${guidance}` : "老闆已接受目前 Review 風險";
+    mission.error = guidance ? t("老闆接受風險：{guidance}", { guidance }) : t("老闆已接受目前 Review 風險");
     store.saveDepartmentMission(mission);
     broadcastMission(mission);
     completeMissionStep(mission, currentIndex);
@@ -4026,29 +4698,29 @@ app.post("/api/missions/:id/resolve", (req, res) => {
   if (action === "retry_execute" || action === "guide") {
     if (current.kind === "review") {
       const executeIndex = precedingExecuteIndex(mission, currentIndex);
-      if (executeIndex == null) { res.status(409).json({ error: "找不到可重試的 Execute 步驟" }); return; }
+      if (executeIndex == null) { res.status(409).json({ error: t("找不到可重試的 Execute 步驟") }); return; }
       targetIndex = executeIndex;
       current.status = "pending";
       current.completedAt = null;
     } else if (current.kind !== "execute") {
-      res.status(409).json({ error: "目前步驟不能退回 Execute" });
+      res.status(409).json({ error: t("目前步驟不能退回 Execute") });
       return;
     }
   } else if (action === "reassign") {
     const workerId = String(req.body?.workerId ?? "");
     const replacement = workers.get(workerId);
     if (!replacement || !sameWorkspacePath(replacement.runner.workspacePath, mission.workspacePath)) {
-      res.status(409).json({ error: "只能重新指派給同部門 NPC" });
+      res.status(409).json({ error: t("只能重新指派給同部門 NPC") });
       return;
     }
     const preceding = current.kind === "review" ? precedingExecuteIndex(mission, currentIndex) : null;
     if (preceding != null && mission.steps[preceding]?.assigneeWorkerId === workerId) {
-      res.status(409).json({ error: "Review 必須由與 Execute 不同的 NPC 負責" });
+      res.status(409).json({ error: t("Review 必須由與 Execute 不同的 NPC 負責") });
       return;
     }
     current.assigneeWorkerId = workerId;
   } else if (action !== "retry") {
-    res.status(400).json({ error: "不支援的 Mission 處理方式" });
+    res.status(400).json({ error: t("不支援的 Mission 處理方式") });
     return;
   }
   const target = mission.steps[targetIndex];
@@ -4067,8 +4739,8 @@ app.post("/api/missions/:id/resolve", (req, res) => {
 
 app.post("/api/missions/:id/cancel", (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
-  if (!missionLocksWorkspace(mission)) { res.status(409).json({ error: "Mission 已經結束" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
+  if (!missionLocksWorkspace(mission)) { res.status(409).json({ error: t("Mission 已經結束") }); return; }
   activeMissions.delete(mission.id);
   missionActivities.delete(mission.id);
   stopMissionRunners(mission.id, true);
@@ -4086,14 +4758,14 @@ app.post("/api/missions/:id/cancel", (req, res) => {
 
 app.post("/api/missions/:id/retry-review", (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: "找不到 Department Mission" }); return; }
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
   const stepIndex = mission.currentStepIndex;
   const step = stepIndex == null ? null : mission.steps[stepIndex];
   if (mission.status !== "needs_attention" || !step || step.kind !== "review") {
-    res.status(409).json({ error: "只有等待決定的 Review 可以重新檢查" });
+    res.status(409).json({ error: t("只有等待決定的 Review 可以重新檢查") });
     return;
   }
-  if (stepIndex == null) { res.status(409).json({ error: "Mission 找不到 Review 步驟" }); return; }
+  if (stepIndex == null) { res.status(409).json({ error: t("Mission 找不到 Review 步驟") }); return; }
   activeMissions.set(mission.id, mission);
   mission.correctionCount = 0;
   mission.error = null;
@@ -4112,20 +4784,19 @@ type PreparedCollaboration = {
   mode: "consult" | "review";
   objective: string;
   acceptanceCriteria: string[];
-  expiresAt: number;
 };
-const preparedCollaborations = new Map<string, PreparedCollaboration>();
+const preparedCollaborations = new PreparedTokenStore<PreparedCollaboration>(120_000);
 
 function collaborationEligibility(source: Worker, target: Worker): string | null {
-  if (source.id === target.id) return "來源與目標 NPC 必須不同";
-  if (!sameWorkspacePath(source.runner.workspacePath, target.runner.workspacePath)) return "Phase 1 只支援相同工作位置的 NPC 協作";
-  if (workspaceMission(source.runner.workspacePath, source.departmentId)) return "部門正在執行 Department Mission，暫時不能開始單次協作";
-  if (source.runner.busy || handoffInProgress(source) || collaborationInProgress(source.id)) return "來源 NPC 正在工作、交接或協作中";
-  if (target.runner.busy || handoffInProgress(target) || collaborationInProgress(target.id)) return "目標 NPC 正在工作、交接或協作中";
-  if (handoffActivityBlock(source.history)) return "來源 NPC 尚有待處理的權限或背景 Agent";
-  if (handoffActivityBlock(target.history)) return "目標 NPC 尚有待處理的權限或背景 Agent";
-  if (!providerReady(target.runner.provider)) return `${providerLabel(target.runner.provider)} 尚未登入`;
-  if (activeCollaborations.size >= MAX_ACTIVE_COLLABORATIONS) return "目前協作工作已達上限";
+  if (source.id === target.id) return t("來源與目標 NPC 必須不同");
+  if (!sameWorkspacePath(source.runner.workspacePath, target.runner.workspacePath)) return t("Phase 1 只支援相同工作位置的 NPC 協作");
+  if (workspaceMission(source.runner.workspacePath, source.departmentId)) return t("部門正在執行 Department Mission，暫時不能開始單次協作");
+  if (source.runner.busy || handoffInProgress(source) || collaborationInProgress(source.id)) return t("來源 NPC 正在工作、交接或協作中");
+  if (target.runner.busy || handoffInProgress(target) || collaborationInProgress(target.id)) return t("目標 NPC 正在工作、交接或協作中");
+  if (handoffActivityBlock(source.history)) return t("來源 NPC 尚有待處理的權限或背景 Agent");
+  if (handoffActivityBlock(target.history)) return t("目標 NPC 尚有待處理的權限或背景 Agent");
+  if (!providerReady(target.runner.provider)) return t("{provider} 尚未登入", { provider: providerLabel(target.runner.provider) });
+  if (activeCollaborations.size >= MAX_ACTIVE_COLLABORATIONS) return t("目前協作工作已達上限");
   return null;
 }
 
@@ -4133,14 +4804,14 @@ app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
   const source = workers.get(req.params.sourceId);
   const target = workers.get(String(req.body?.targetWorkerId ?? ""));
   if (!source || !target) {
-    res.status(404).json({ error: "找不到來源或目標 NPC" });
+    res.status(404).json({ error: t("找不到來源或目標 NPC") });
     return;
   }
   const mode = normalizeCollaborationMode(req.body?.mode);
   const objective = collaborationText(req.body?.objective, 4_000);
   const acceptanceCriteria = normalizeAcceptanceCriteria(req.body?.acceptanceCriteria);
   if (!mode || !objective) {
-    res.status(400).json({ error: "請選擇協作模式並填寫目標" });
+    res.status(400).json({ error: t("請選擇協作模式並填寫目標") });
     return;
   }
   const eligibilityError = collaborationEligibility(source, target);
@@ -4151,14 +4822,10 @@ app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
   const usage = await usageRegistry.refresh(target.runner.provider, true);
   const usageError = usageBlockReason(target.runner.provider, usage, target.runner.getModel() ?? null);
   if (usageError) {
-    res.status(409).json({ error: `目標 NPC 無法開始協作：${usageError}`, usage });
+    res.status(409).json({ error: t("目標 NPC 無法開始協作：{error}", { error: usageError }), usage });
     return;
   }
-  for (const [token, prepared] of preparedCollaborations) {
-    if (prepared.expiresAt < Date.now()) preparedCollaborations.delete(token);
-  }
-  const collaborationToken = randomUUID();
-  preparedCollaborations.set(collaborationToken, {
+  const collaborationToken = preparedCollaborations.issue({
     sourceWorkerId: source.id,
     targetWorkerId: target.id,
     sourceSessionId: source.runner.getPersistenceState().sessionId,
@@ -4168,7 +4835,6 @@ app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
     mode,
     objective,
     acceptanceCriteria,
-    expiresAt: Date.now() + 120_000,
   });
   res.json({
     collaborationToken,
@@ -4179,10 +4845,10 @@ app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
     acceptanceCriteria,
     usage,
     warnings: [
-      "目標 NPC 會以 provider 原生唯讀模式執行，不能修改 repository。",
-      "目標完成後，結果會自動交回來源 NPC，並以來源 NPC 的正常權限繼續原始任務。",
-      "需要指令、檔案或登入核准時，仍會透過現有介面停下來詢問你；不會自動 commit、push 或提高權限。",
-      "Repository 與對話內容視為不受信任資料，結果仍需人工確認。",
+      t("目標 NPC 會以 provider 原生唯讀模式執行，不能修改 repository。"),
+      t("目標完成後，結果會自動交回來源 NPC，並以來源 NPC 的正常權限繼續原始任務。"),
+      t("需要指令、檔案或登入核准時，仍會透過現有介面停下來詢問你；不會自動 commit、push 或提高權限。"),
+      t("Repository 與對話內容視為不受信任資料，結果仍需人工確認。"),
     ],
   });
 });
@@ -4190,15 +4856,14 @@ app.post("/api/workers/:sourceId/collaborations/prepare", async (req, res) => {
 app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
   const source = workers.get(req.params.sourceId);
   const token = String(req.body?.collaborationToken ?? "");
-  const prepared = preparedCollaborations.get(token);
-  preparedCollaborations.delete(token);
-  if (!source || !prepared || prepared.sourceWorkerId !== source.id || prepared.expiresAt < Date.now()) {
-    res.status(409).json({ error: "協作確認已過期，請重新檢查" });
+  const prepared = preparedCollaborations.take(token);
+  if (!source || !prepared || prepared.sourceWorkerId !== source.id) {
+    res.status(409).json({ error: t("協作確認已過期，請重新檢查") });
     return;
   }
   const target = workers.get(prepared.targetWorkerId);
   if (!target) {
-    res.status(404).json({ error: "目標 NPC 已不存在" });
+    res.status(404).json({ error: t("目標 NPC 已不存在") });
     return;
   }
   if (
@@ -4207,7 +4872,7 @@ app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
     source.history.length !== prepared.sourceHistoryLength ||
     target.history.length !== prepared.targetHistoryLength
   ) {
-    res.status(409).json({ error: "檢查後 NPC 狀態已改變，請重新確認" });
+    res.status(409).json({ error: t("檢查後 NPC 狀態已改變，請重新確認") });
     return;
   }
   const eligibilityError = collaborationEligibility(source, target);
@@ -4216,13 +4881,13 @@ app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
     return;
   }
   if (req.body?.warningAcknowledged !== true) {
-    res.status(400).json({ error: "必須先確認唯讀協作限制" });
+    res.status(400).json({ error: t("必須先確認唯讀協作限制") });
     return;
   }
   const usage = await usageRegistry.refresh(target.runner.provider, true);
   const usageError = usageBlockReason(target.runner.provider, usage, target.runner.getModel() ?? null);
   if (usageError) {
-    res.status(409).json({ error: `目標 NPC 無法開始協作：${usageError}`, usage });
+    res.status(409).json({ error: t("目標 NPC 無法開始協作：{error}", { error: usageError }), usage });
     return;
   }
   const now = new Date().toISOString();
@@ -4234,7 +4899,7 @@ app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
     source.history.length !== prepared.sourceHistoryLength ||
     target.history.length !== prepared.targetHistoryLength;
   if (finalEligibilityError || preparedStateChanged) {
-    res.status(409).json({ error: finalEligibilityError || "啟動協作前 NPC 狀態已改變，請重新確認" });
+    res.status(409).json({ error: finalEligibilityError || t("啟動協作前 NPC 狀態已改變，請重新確認") });
     return;
   }
   const task: CollaborationTask = {
@@ -4265,7 +4930,7 @@ app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
   activeCollaborations.set(task.id, task);
   if (!store.saveCollaborationTask(task)) {
     activeCollaborations.delete(task.id);
-    res.status(500).json({ error: "無法保存協作任務" });
+    res.status(500).json({ error: t("無法保存協作任務") });
     return;
   }
   broadcastCollaboration(task, true);
@@ -4279,12 +4944,12 @@ app.post("/api/workers/:sourceId/collaborations", async (req, res) => {
     recentConversation: String(task.sourceContext.recentConversation ?? ""),
     gitState,
   });
-  record(target, { type: "user_message", text: `NPC 協作 · ${task.mode === "review" ? "Review" : "Consult"}：${task.objective}` });
+  record(target, { type: "user_message", text: t("NPC 協作 · {kind}：{objective}", { kind: task.mode === "review" ? "Review" : "Consult", objective: task.objective }) });
   try {
     target.runner.send(prompt, [], [], { executionProfile: "read_only_collaboration" });
   } catch (error) {
-    finishCollaboration(target, { type: "error", message: (error as Error).message || "無法啟動協作" });
-    res.status(500).json({ error: (error as Error).message || "無法啟動協作", collaboration: task });
+    finishCollaboration(target, { type: "error", message: (error as Error).message || t("無法啟動協作") });
+    res.status(500).json({ error: (error as Error).message || t("無法啟動協作"), collaboration: task });
     return;
   }
   broadcast({ type: "worker_status", workerId: target.id, busy: true });
@@ -4303,7 +4968,7 @@ app.get("/api/collaborations", (req, res) => {
 app.get("/api/collaborations/:id", (req, res) => {
   const task = activeCollaborations.get(req.params.id) ?? store.getCollaborationTask(req.params.id);
   if (!task) {
-    res.status(404).json({ error: "找不到協作任務" });
+    res.status(404).json({ error: t("找不到協作任務") });
     return;
   }
   res.json({ collaboration: task });
@@ -4312,7 +4977,7 @@ app.get("/api/collaborations/:id", (req, res) => {
 app.post("/api/collaborations/:id/cancel", (req, res) => {
   const task = activeCollaborations.get(req.params.id);
   if (!task) {
-    res.status(409).json({ error: "協作任務已結束或不存在" });
+    res.status(409).json({ error: t("協作任務已結束或不存在") });
     return;
   }
   const activeWorkerId = collaborationActiveWorkerId(task);
@@ -4329,7 +4994,7 @@ app.post("/api/collaborations/:id/cancel", (req, res) => {
 app.post("/api/collaborations/:id/adopt", (req, res) => {
   const task = store.getCollaborationTask(req.params.id);
   if (!task) {
-    res.status(404).json({ error: "找不到協作任務" });
+    res.status(404).json({ error: t("找不到協作任務") });
     return;
   }
   if (task.adoptedAt) {
@@ -4337,17 +5002,17 @@ app.post("/api/collaborations/:id/adopt", (req, res) => {
     return;
   }
   if (task.status !== "completed" || !task.result) {
-    res.status(409).json({ error: "只有舊版已完成但尚未交回的協作結果可以手動交回" });
+    res.status(409).json({ error: t("只有舊版已完成但尚未交回的協作結果可以手動交回") });
     return;
   }
   const source = workers.get(task.sourceWorkerId);
   const target = workers.get(task.targetWorkerId);
   if (!source || !target) {
-    res.status(409).json({ error: "來源或目標 NPC 已不存在" });
+    res.status(409).json({ error: t("來源或目標 NPC 已不存在") });
     return;
   }
   if (source.runner.busy || handoffInProgress(source) || collaborationInProgress(source.id) || missionInProgress(source.id)) {
-    res.status(409).json({ error: "來源 NPC 正在工作，暫時無法交回結果" });
+    res.status(409).json({ error: t("來源 NPC 正在工作，暫時無法交回結果") });
     return;
   }
   if (!providerReady(source.runner.provider)) {
@@ -4359,8 +5024,8 @@ app.post("/api/collaborations/:id/adopt", (req, res) => {
   try {
     source.runner.send(message);
   } catch (error) {
-    record(source, { type: "error", message: (error as Error).message || "無法交回協作結果" });
-    res.status(500).json({ error: (error as Error).message || "無法交回協作結果" });
+    record(source, { type: "error", message: (error as Error).message || t("無法交回協作結果") });
+    res.status(500).json({ error: (error as Error).message || t("無法交回協作結果") });
     return;
   }
   task.adoptedAt = new Date().toISOString();
@@ -4373,7 +5038,7 @@ app.post("/api/collaborations/:id/adopt", (req, res) => {
 app.post("/api/collaborations/:id/handled", (req, res) => {
   const task = store.getCollaborationTask(req.params.id);
   if (!task || !["completed", "failed", "cancelled"].includes(task.status)) {
-    res.status(409).json({ error: "協作任務尚未結束或不存在" });
+    res.status(409).json({ error: t("協作任務尚未結束或不存在") });
     return;
   }
   task.handledAt ??= new Date().toISOString();
@@ -4389,28 +5054,24 @@ type PreparedHandoff = {
   historyLength: number;
   toProvider: ProviderId;
   toModel: string | null;
-  expiresAt: number;
 };
-const preparedHandoffs = new Map<string, PreparedHandoff>();
+const preparedHandoffs = new PreparedTokenStore<PreparedHandoff>(120_000);
 
 app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const toProvider: ProviderId = req.body?.toProvider === "codex" ? "codex" : "claude";
   const toModel = typeof req.body?.toModel === "string" && req.body.toModel.trim() ? req.body.toModel.trim() : null;
   if (toModel && !validModel(toProvider, toModel)) {
-    res.status(400).json({ error: "目標模型名稱格式無效" });
+    res.status(400).json({ error: t("目標模型名稱格式無效") });
     return;
   }
   if (toProvider === worker.runner.provider) {
-    res.status(400).json({ error: "已經是目前的 LLM" });
+    res.status(400).json({ error: t("已經是目前的 LLM") });
     return;
   }
   if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 正在工作或交接中，請完成後再切換" });
+    res.status(409).json({ error: t("NPC 正在工作或交接中，請完成後再切換") });
     return;
   }
   const activityBlock = handoffActivityBlock(worker.history);
@@ -4419,27 +5080,22 @@ app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
     return;
   }
   if (!providerReady(toProvider)) {
-    res.status(409).json({ error: `無法切換至 ${providerLabel(toProvider)}：尚未登入`, auth: authStates[toProvider] });
+    res.status(409).json({ error: t("無法切換至 {provider}：尚未登入", { provider: providerLabel(toProvider) }), auth: authStates[toProvider] });
     return;
   }
   const usage = await usageRegistry.refresh(toProvider, true);
   const usageError = usageBlockReason(toProvider, usage, toModel);
   if (usageError) {
-    res.status(409).json({ error: `無法切換至 ${providerLabel(toProvider)}：${usageError}`, usage });
+    res.status(409).json({ error: t("無法切換至 {provider}：{error}", { provider: providerLabel(toProvider), error: usageError }), usage });
     return;
   }
-  const handoffToken = randomUUID();
-  for (const [existingToken, existing] of preparedHandoffs) {
-    if (existing.expiresAt < Date.now()) preparedHandoffs.delete(existingToken);
-  }
-  preparedHandoffs.set(handoffToken, {
+  const handoffToken = preparedHandoffs.issue({
     workerId: worker.id,
     fromProvider: worker.runner.provider,
     sourceSessionId: worker.runner.getPersistenceState().sessionId,
     historyLength: worker.history.length,
     toProvider,
     toModel,
-    expiresAt: Date.now() + 120_000,
   });
   res.json({
     handoffToken,
@@ -4449,37 +5105,33 @@ app.post("/api/workers/:id/handoff/prepare", async (req, res) => {
     usage,
     hasHistory: worker.history.some((event) => event.type === "user_message"),
     warnings: [
-      "這會建立新的目標 LLM session，不是搬移原生 session。",
-      "MCP、工具進度、背景 Agent 與待核准操作不會直接繼承。",
-      "交接摘要可能遺漏或誤解細節，重要決策請再次確認。",
-      "整理與接手都會消耗 LLM 工作能量。",
+      t("這會建立新的目標 LLM session，不是搬移原生 session。"),
+      t("MCP、工具進度、背景 Agent 與待核准操作不會直接繼承。"),
+      t("交接摘要可能遺漏或誤解細節，重要決策請再次確認。"),
+      t("整理與接手都會消耗 LLM 工作能量。"),
     ],
   });
 });
 
 app.post("/api/workers/:id/handoff", async (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const token = String(req.body?.handoffToken ?? "");
-  const prepared = preparedHandoffs.get(token);
-  preparedHandoffs.delete(token);
-  if (!prepared || prepared.workerId !== worker.id || prepared.expiresAt < Date.now()) {
-    res.status(409).json({ error: "切換確認已過期，請重新檢查工作能量" });
+  const prepared = preparedHandoffs.take(token);
+  if (!prepared || prepared.workerId !== worker.id) {
+    res.status(409).json({ error: t("切換確認已過期，請重新檢查工作能量") });
     return;
   }
   if (worker.runner.provider !== prepared.fromProvider || worker.runner.getPersistenceState().sessionId !== prepared.sourceSessionId || worker.history.length !== prepared.historyLength) {
-    res.status(409).json({ error: "準備完成後工作狀態已改變，請重新檢查並確認交接" });
+    res.status(409).json({ error: t("準備完成後工作狀態已改變，請重新檢查並確認交接") });
     return;
   }
   if (req.body?.warningAcknowledged !== true) {
-    res.status(400).json({ error: "必須先確認跨 LLM 交接風險" });
+    res.status(400).json({ error: t("必須先確認跨 LLM 交接風險") });
     return;
   }
   if (worker.runner.busy || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 正在工作，不能開始交接" });
+    res.status(409).json({ error: t("NPC 正在工作，不能開始交接") });
     return;
   }
   const id = randomUUID();
@@ -4489,7 +5141,7 @@ app.post("/api/workers/:id/handoff", async (req, res) => {
     toProvider: prepared.toProvider,
     toModel: prepared.toModel,
     stage: "checking",
-    message: "正在確認工作狀態",
+    message: t("正在確認工作狀態"),
     source: null,
     error: null,
   };
@@ -4497,7 +5149,7 @@ app.post("/api/workers/:id/handoff", async (req, res) => {
   if (!worker.history.some((event) => event.type === "user_message")) {
     await performProviderHandoff(worker, progress);
     if (worker.handoff?.stage === "failed") {
-      res.status(500).json({ error: worker.handoff.error || "無法切換 LLM", handoff: worker.handoff });
+      res.status(500).json({ error: worker.handoff.error || t("無法切換 LLM"), handoff: worker.handoff });
       return;
     }
     res.json({ handoff: worker.handoff, worker: workerSummary(worker) });
@@ -4516,13 +5168,10 @@ app.get("/api/workers/:id/handoffs", (req, res) => {
 });
 
 app.patch("/api/workers/:id/workspace", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 執行中，不能切換工作位置" });
+    res.status(409).json({ error: t("NPC 執行中，不能切換工作位置") });
     return;
   }
 
@@ -4547,11 +5196,11 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     if (providerReady(provider)) worker.runner.warmup();
     const now = new Date().toISOString();
     const newDepartment: Department = {
-      id: randomUUID(), name: `${basename(workspacePath) || "個人"}部門`, purpose: "個人工作部門",
+      id: randomUUID(), name: t("{name}部門", { name: basename(workspacePath) || t("個人") }), purpose: t("個人工作部門"),
       workspacePath, leadWorkerId: worker.id, memberWorkerIds: [worker.id], createdAt: now, updatedAt: now,
     };
     worker.departmentId = newDepartment.id;
-    if (!store.saveDepartment(newDepartment) || !persistWorker(worker)) throw new Error("無法保存新的部門位置");
+    if (!store.saveDepartment(newDepartment) || !persistWorker(worker)) throw new Error(t("無法保存新的部門位置"));
     departments.set(newDepartment.id, newDepartment);
     repairDepartmentAfterMemberLeaves(previousDepartmentId, worker.id);
     broadcast({ type: "department_created", department: newDepartment });
@@ -4561,16 +5210,13 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     broadcast({ type: "worker_updated", worker: summary, reset: true });
     res.json({ ...summary, conversationReset });
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
   }
 });
 
 app.post("/api/workers/:id/activate", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (worker.runner.provider === "claude") {
     void claudeCapabilitiesFor(worker.runner.workspacePath).refresh();
   } else {
@@ -4581,13 +5227,10 @@ app.post("/api/workers/:id/activate", (req, res) => {
 });
 
 app.delete("/api/workers/:id", async (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能移除" });
+    res.status(409).json({ error: t("NPC 正在進行 LLM 交接、協作或部門 Mission，暫時不能移除") });
     return;
   }
   worker.runner.stop();
@@ -4595,18 +5238,405 @@ app.delete("/api/workers/:id", async (req, res) => {
   const departmentId = worker.departmentId;
   workers.delete(worker.id);
   store.deleteWorker(worker.id);
+  deleteExtras(worker.id);
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
   if (avatarId) await deleteAvatarIfUnused(avatarId);
 });
 
-app.post("/api/workers/:id/message", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
+// ============ War Room（作戰室）orchestrator ============
+// 一場「真辯論（表態→反駁 2 輪）＋依難度配模型＋主持裁決」的顧問議會。peers 是可見的臨時 worker
+// （名字以 🏛 U+1F3DB 開頭，前端會把它們拉到會議桌圍坐；persist:false 所以 server 重啟不會殘留），
+// 跑完寬限期自動刪除。turn_end 透過 record() 裡的 warroomRecordHook 接回，用來 await 各成員發言完成。
+const WARROOM_GRACE_MS = 45_000;
+const warroomWaiters = new Map<string, (event: RunnerEvent) => void>();
+
+function warroomRecordHook(worker: Worker, event: RunnerEvent): void {
+  if (event.type !== "turn_end" && event.type !== "error") return;
+  const waiter = warroomWaiters.get(worker.id);
+  if (waiter) { warroomWaiters.delete(worker.id); waiter(event); }
+}
+
+function awaitWorkerTurn(workerId: string, timeoutMs: number): Promise<RunnerEvent> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      warroomWaiters.delete(workerId);
+      resolve({ type: "error", message: t("作戰室成員逾時") });
+    }, timeoutMs);
+    warroomWaiters.set(workerId, (event) => { clearTimeout(timer); resolve(event); });
+  });
+}
+
+function warroomSend(worker: Worker, prompt: string, timeoutMs: number): Promise<RunnerEvent> {
+  record(worker, { type: "user_message", text: prompt });
+  const waited = awaitWorkerTurn(worker.id, timeoutMs);
+  try {
+    worker.runner.send(prompt, [], []);
+  } catch (error) {
+    warroomWaiters.delete(worker.id);
+    return Promise.resolve({ type: "error", message: error instanceof Error ? error.message : t("傳送失敗") });
+  }
+  broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+  return waited;
+}
+
+function warroomEventText(event: RunnerEvent): string {
+  // isError 的 turn_end（額度已滿、供應商故障…）不算發言——否則錯誤訊息會被當成「裁決」
+  // 存進報告、回報 host（實際發生過：整份裁決只有一句 "You've hit your session limit"）。
+  if (event.type !== "turn_end" || event.isError) return "";
+  return event.resultText || "";
+}
+
+// 累加成本用：從一個 turn_end 事件取出這回合花的錢（micro-USD），沿用既有的計價函式。
+function warroomEventCost(event: RunnerEvent): number {
+  return event.type === "turn_end" ? costMicrosForTurnEnd("claude", event) : 0;
+}
+
+function deleteWarroomPeer(id: string): void {
+  const worker = workers.get(id);
+  if (!worker) return;
+  try { worker.runner.stop(); } catch { /* ignore */ }
+  const departmentId = worker.departmentId;
+  workers.delete(id);
+  store.deleteWorker(id);
+  repairDepartmentAfterMemberLeaves(departmentId, id);
+  broadcast({ type: "worker_removed", workerId: id });
+}
+
+async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
+  const { peer: peerModel, lead: leadModel } = warroomModels(difficulty);
+  const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
+  const created: Worker[] = [];
+  let costMicros = 0;
+  // 上桌人數與輪數隨難度伸縮：簡單 2 人 1 輪（快又省）、中等 3 人 2 輪、困難 4 人（含查證方）2 輪。
+  // 使用者有自訂角色（⚙ 面板）就用自訂的，輪數仍照難度。
+  const stances = customStances.length >= 2 ? customStances : warroomStances(difficulty);
+  const rounds = difficulty === "simple" ? 1 : 2;
+  try {
+    for (const stance of stances) {
+      if (workers.size >= MAX_WORKERS) break;
+      const peer = createWorker(`\u{1F3DB}${stance.name}`, peerModel, "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+      // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
+      // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
+      peer.autoApproveMode = "safe";
+      created.push(peer);
+    }
+    if (created.length === 0) throw new Error(t("無法建立作戰室成員（可能已達 NPC 上限）"));
+    const peers = created.slice();
+    await new Promise((resolve) => setTimeout(resolve, 1_500)); // 讓 peers 暖機到位再開講
+    // 第 1 輪：各自鮮明表態
+    const r1 = await Promise.allSettled(peers.map((worker, i) =>
+      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), timeoutMs)));
+    const r1texts = r1.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
+    for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
+    // 全員第一輪都沒能發言（額度滿、供應商掛…）→ 整場中止，別拿空辯論去「裁決」。
+    // 丟錯誤會讓外層 500 回報、不存檔、不回報 host，前端会看到明確錯誤而不是垃圾結論。
+    if (r1texts.every((text) => !text.trim())) {
+      throw new Error(t("作戰室成員全數未能發言（可能是使用額度已滿或供應商故障），本場中止。請稍後再試。"));
+    }
+    // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決。
+    let r2texts: string[] = peers.map(() => "");
+    if (rounds >= 2) {
+      const others = peers.map((_, i) => t("【{name}】\n{text}", { name: stances[i].name, text: r1texts[i] || t("(無)") })).join("\n\n");
+      const r2 = await Promise.allSettled(peers.map((worker, i) =>
+        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), timeoutMs)));
+      r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
+      for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
+    }
+    const debate = peers.map((_, i) => t("## {name}\n【立場】{r1}{rebuttal}", {
+      name: stances[i].name,
+      r1: r1texts[i],
+      rebuttal: r2texts[i] ? t("\n【反駁】{r2}", { r2: r2texts[i] }) : "",
+    })).join("\n\n");
+    // 主持裁決（可見的臨時 lead，用較強模型）
+    let result: WarRoomResult | null = null;
+    if (workers.size < MAX_WORKERS) {
+      const lead = createWorker("\u{1F3DB}主持", leadModel, "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+      lead.autoApproveMode = "safe";
+      created.push(lead);
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), timeoutMs);
+      costMicros += warroomEventCost(ev);
+      result = parseWarroomResult(warroomEventText(ev));
+      if (result && !result.structured) { // 議會裁決：格式重試一次就好、有上限
+        const retry = await warroomSend(lead, t("上一則沒有照 <warroom_result>{...}</warroom_result> 的 JSON 格式輸出。請只重輸出那段結構化 JSON，不要多寫任何字。"), timeoutMs);
+        costMicros += warroomEventCost(retry);
+        const retried = parseWarroomResult(warroomEventText(retry));
+        if (retried?.structured) result = retried;
+      }
+    }
+    if (!result) result = parseWarroomResult(debate) ?? { verdict: debate, consensus: [], disputes: [], actions: [], metrics: [], charts: [], structured: false };
+    result.costUsd = costMicros / 1_000_000;
+    return result;
+  } finally {
+    // 寬限期後把整批臨時成員刪掉（讓使用者有時間看畫面）。persist:false，server 重啟也不會殘留。
+    const ids = created.map((worker) => worker.id);
+    setTimeout(() => { for (const id of ids) deleteWarroomPeer(id); }, WARROOM_GRACE_MS);
+  }
+}
+
+// 把裁決整理成「回報給 host（召集者／最終大腦）」的訊息，讓它接手執行。
+// 刻意走「精簡版」：host（常駐 NPC）的對話史往往很長，每貼一次全文裁決都要讓它重讀整段
+// 歷史來處理，非常燒 token（實際發生過：一個上午就吃掉半個 5 小時窗）。完整裁決本來就
+// 自動存檔（.warroom/ 的 md+json、結果卡、📜歷史都有），這裡只給摘要＋檔案路徑，
+// host 判斷需要細節時再自己讀檔——把「全文進對話」改成「指針進對話」。
+function formatWarroomVerdictForHost(topic: string, result: WarRoomResult, hostName: string, reportPath: string | null): string {
+  const p1 = result.actions.filter((a) => a.priority === "P1").map((a) => `- [P1] ${a.title}`).join("\n");
+  return t("【作戰室裁決回報・精簡版】主題：{topic}\n\n", { topic }) +
+    t("最終裁決（摘要）：{verdict}{ellipsis}\n\n", {
+      verdict: result.verdict.slice(0, 600),
+      ellipsis: result.verdict.length > 600 ? "…" : "",
+    }) +
+    (p1 ? t("P1 行動：\n{p1}\n\n", { p1 }) : "") +
+    t("完整內容（共識/分歧/數據/圖表）不貼進對話以節省 token——已存檔：{reportPath}，", { reportPath: reportPath ?? t("（工作區 .warroom/）") }) +
+    t("結果卡與 📜 歷史也看得到。請你（{hostName}）接手：可執行的就讀檔細看再動工（高風險先確認），純諮詢的就簡短總結重點給使用者。", { hostName });
+}
+
+function warroomReportMarkdown(topic: string, difficulty: WarRoomDifficulty, result: WarRoomResult): string {
+  const charts = result.charts.map((c) =>
+    `- **${c.title}**（${c.type}${c.unit ? `，${c.unit}` : ""}）：${c.labels.map((l, i) => `${l}=${c.values[i]}`).join("、")}`
+  ).join("\n");
+  const metrics = result.metrics.map((m) => `- **${m.label}**：${m.value}${m.note ? `（${m.note}）` : ""}`).join("\n");
+  const consensus = result.consensus.map((c) => `- ${c}`).join("\n");
+  const disputes = result.disputes.map((d) => `- **${d.point}** → ${d.ruling}`).join("\n");
+  const actions = result.actions.map((a) => `- **[${a.priority}]** ${a.title}${a.how ? `\n  - ${a.how}` : ""}`).join("\n");
+  return t("# 作戰室裁決\n\n**主題**：{topic}\n**難度／模型**：{difficulty}\n**時間**：{time}\n\n", { topic, difficulty, time: new Date().toISOString() }) +
+    t("## 最終裁決\n{verdict}\n\n", { verdict: result.verdict }) +
+    (metrics ? t("## 關鍵數字\n{metrics}\n\n", { metrics }) : "") +
+    (charts ? t("## 圖表數據\n{charts}\n\n", { charts }) : "") +
+    (consensus ? t("## 共識\n{consensus}\n\n", { consensus }) : "") +
+    (disputes ? t("## 分歧與裁決\n{disputes}\n\n", { disputes }) : "") +
+    (actions ? t("## 可執行下一步\n{actions}\n", { actions }) : "");
+}
+
+// 自動存檔：把裁決寫到工作區底下 .warroom/（工作區相對路徑，任何專案通用，不寫死桌面）。
+// 只保留最近 WARROOM_KEEP 份，其餘自動刪除——問完不需要的舊報告會自然被清掉，不會無限累積。
+const WARROOM_KEEP = 30;
+function saveWarroomReport(topic: string, difficulty: WarRoomDifficulty, result: WarRoomResult, workspacePath: string): string | null {
+  try {
+    const dir = join(workspacePath, ".warroom");
+    mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = join(dir, `warroom-${stamp}.md`);
+    writeFileSync(file, warroomReportMarkdown(topic, difficulty, result), "utf-8");
+    // 同名 .json 存結構化裁決：歷史面板讀它就能用「跟結束彈窗同一套卡片」渲染，保證兩邊長一樣。
+    writeFileSync(file.replace(/\.md$/, ".json"), JSON.stringify({ topic, difficulty, result }), "utf-8");
+    // 檔名是 warroom-<ISO時間>.md，字典排序＝時間排序；砍掉最舊的（連同 .json），只留最近 N 份。
+    const files = readdirSync(dir).filter((f) => f.startsWith("warroom-") && f.endsWith(".md")).sort();
+    for (const old of files.slice(0, Math.max(0, files.length - WARROOM_KEEP))) {
+      try { rmSync(join(dir, old)); } catch { /* ignore */ }
+      try { rmSync(join(dir, old.replace(/\.md$/, ".json"))); } catch { /* ignore */ }
+    }
+    return file;
+  } catch { return null; }
+}
+
+// 難度自動分級：用便宜模型快速判斷 simple/medium/hard，讓簡單題別浪費強模型（省 token）。
+async function triageDifficulty(topic: string, workspacePath: string): Promise<WarRoomDifficulty> {
+  try {
+    const { text } = await runDetachedTurn("claude", workspacePath, "haiku", undefined, null,
+      t("判斷這個討論主題的難度，只回一個英文單詞：simple（常識/簡單）、medium（需要一些分析）、hard（架構/專業/多方權衡）。規則：只要主題涉及「即時資訊」（今日行情、天氣、新聞、現價…需要上網查證的），至少回 medium，不可回 simple——因為查證需要較可靠的模型執行。不要多寫。\n主題：{topic}", { topic }),
+      30_000, { kind: "no_tools" });
+    const lowered = text.toLowerCase();
+    if (lowered.includes("hard")) return "hard";
+    if (lowered.includes("simple")) return "simple";
+    return "medium";
+  } catch { return "medium"; }
+}
+
+function postToHost(hostWorkerId: string | null, message: string): void {
+  if (!hostWorkerId) return;
+  const host = workers.get(hostWorkerId);
+  if (!host || host.runner.busy) return;
+  record(host, { type: "user_message", text: message });
+  try {
+    host.runner.send(message, [], []);
+    broadcast({ type: "worker_status", workerId: host.id, busy: true });
+  } catch { /* host 忙碌或送失敗就略過 */ }
+}
+
+app.post("/api/warroom", async (req, res) => {
+  if (!providerReady("claude")) {
+    res.status(503).json({ error: "claude_not_authenticated", auth: authStates.claude });
     return;
   }
+  const topic = String(req.body?.topic ?? "").trim();
+  if (!topic) { res.status(400).json({ error: t("請提供討論主題") }); return; }
+  const requested = String(req.body?.difficulty);
+  const hostWorkerId = typeof req.body?.hostWorkerId === "string" ? req.body.hostWorkerId : null;
+  let workspacePath: string;
+  try { workspacePath = normalizeWorkspacePath(req.body?.workspacePath ?? config.targetRepoPath); }
+  catch { workspacePath = config.targetRepoPath; }
+  // "auto"（或沒指定）→ 自動分級；指定 simple/medium/hard 就照指定。
+  const difficulty: WarRoomDifficulty = ["simple", "medium", "hard"].includes(requested)
+    ? (requested as WarRoomDifficulty)
+    : await triageDifficulty(topic, workspacePath);
+  const customStances = sanitizeCustomStances(req.body?.stances);
+  try {
+    const result = await runWarroom(topic, difficulty, workspacePath, customStances);
+    const reportPath = saveWarroomReport(topic, difficulty, result, workspacePath); // 自動存檔（人不在也拿得到）
+    // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
+    postToHost(hostWorkerId, formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath));
+    res.json({ ok: true, result, difficulty });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : t("作戰室執行失敗") });
+  }
+});
+
+// ===== 作戰室歷史：列出／讀取／刪除 .warroom/ 裡的報告（讓使用者在 app 內回看過往裁決） =====
+// 檔名嚴格白名單（warroom-<時間戳>.md），杜絕路徑穿越。
+const WARROOM_FILE_PATTERN = /^warroom-[\w.-]+\.md$/;
+
+function warroomDir(rawWorkspacePath: unknown): string {
+  let workspacePath: string;
+  try { workspacePath = normalizeWorkspacePath(rawWorkspacePath ?? config.targetRepoPath); }
+  catch { workspacePath = config.targetRepoPath; }
+  return join(workspacePath, ".warroom");
+}
+
+app.get("/api/warroom/history", (req, res) => {
+  const dir = warroomDir(req.query.workspacePath);
+  try {
+    if (!existsSync(dir)) { res.json({ ok: true, reports: [] }); return; }
+    const reports = readdirSync(dir)
+      .filter((f) => WARROOM_FILE_PATTERN.test(f))
+      .sort()
+      .reverse() // 新的在前
+      .map((file) => {
+        let topic = ""; let difficulty = "";
+        try {
+          const head = readFileSync(join(dir, file), "utf-8").slice(0, 600);
+          // Reports may have been saved under either language (t() renders the
+          // header at write time), so the parser must accept both labels.
+          topic = head.match(/\*\*(?:主題|Topic)\*\*[：:]\s*(.+)/)?.[1]?.trim() ?? "";
+          difficulty = head.match(/\*\*(?:難度／模型|Difficulty\/Model)\*\*[：:]\s*(.+)/)?.[1]?.trim() ?? "";
+        } catch { /* 讀不到就留空 */ }
+        return { file, topic, difficulty };
+      });
+    res.json({ ok: true, reports });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : t("讀取歷史失敗") });
+  }
+});
+
+app.get("/api/warroom/history/:file", (req, res) => {
+  const file = String(req.params.file);
+  if (!WARROOM_FILE_PATTERN.test(file)) { res.status(400).json({ error: t("無效的報告檔名") }); return; }
+  const path = join(warroomDir(req.query.workspacePath), file);
+  try {
+    const content = readFileSync(path, "utf-8");
+    // 有同名 .json 就一併回傳結構化裁決，讓前端用結果卡渲染；沒有（舊報告）就退回純文字。
+    let report: unknown = null;
+    try { report = JSON.parse(readFileSync(path.replace(/\.md$/, ".json"), "utf-8")); } catch { /* 舊報告沒有 json */ }
+    res.json({ ok: true, content, report });
+  }
+  catch { res.status(404).json({ error: t("找不到這份報告") }); }
+});
+
+app.delete("/api/warroom/history/:file", (req, res) => {
+  const file = String(req.params.file);
+  if (!WARROOM_FILE_PATTERN.test(file)) { res.status(400).json({ error: t("無效的報告檔名") }); return; }
+  const path = join(warroomDir(req.query.workspacePath), file);
+  try {
+    rmSync(path);
+    try { rmSync(path.replace(/\.md$/, ".json")); } catch { /* ignore */ }
+    res.json({ ok: true });
+  }
+  catch { res.status(404).json({ error: t("刪除失敗或檔案不存在") }); }
+});
+
+// ===== 委派（Delegate）：派工給一個「可見的臨時 NPC」查/分析，結果回傳給 host、NPC 用完即刪。 =====
+// 跟作戰室同一套精神：工作在委派對象的 context 做，只有結果回到 host，省 host 的 context。
+async function runDelegate(task: string, workspacePath: string): Promise<string> {
+  if (workers.size >= MAX_WORKERS) throw new Error(t("已達 NPC 上限，無法派工"));
+  const worker = createWorker("\u{1F50D}研究員", "sonnet", "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+  worker.autoApproveMode = "safe"; // 研究員可自行跑唯讀工具（WebSearch/Read）查證，不彈確認窗
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const ev = await warroomSend(worker, t("【委派任務】{task}\n\n請用你的知識完成後，精簡回報結果與理由（3-6 點）。", { task }), 240_000);
+    return warroomEventText(ev) || t("(逾時或無結果)");
+  } finally {
+    const id = worker.id;
+    setTimeout(() => deleteWarroomPeer(id), 30_000);
+  }
+}
+
+app.post("/api/delegate", async (req, res) => {
+  if (!providerReady("claude")) {
+    res.status(503).json({ error: "claude_not_authenticated", auth: authStates.claude });
+    return;
+  }
+  const task = String(req.body?.task ?? "").trim();
+  if (!task) { res.status(400).json({ error: t("請提供委派任務") }); return; }
+  const hostWorkerId = typeof req.body?.hostWorkerId === "string" ? req.body.hostWorkerId : null;
+  let workspacePath: string;
+  try { workspacePath = normalizeWorkspacePath(req.body?.workspacePath ?? config.targetRepoPath); }
+  catch { workspacePath = config.targetRepoPath; }
+  try {
+    const result = await runDelegate(task, workspacePath);
+    postToHost(hostWorkerId, t("【委派結果回報】任務：{task}\n\n{result}\n\n以上是你派出的研究員回報的結果（它已下班）。請你據此接手。", { task, result }));
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : t("委派執行失敗") });
+  }
+});
+
+// ===== 小隊商量（Consult）：隊長自助發問，隊員各自作答後彙整回隊長。 =====
+// 防迴圈：題目明講「只給意見、不要再發起商量」；每個部門同時只跑一場（進行中一律 409）。
+const consultPending = new Set<string>();
+
+async function runConsult(dept: Department, lead: Worker, question: string): Promise<void> {
+  // 隊員篩選（忙碌／⚡無限制模式／今日預算已滿的不參戰）抽在 consult.ts；
+  // 這裡負責實際送訊息與回投。
+  const { targetIds, skipped } = selectConsultTargets(lead.id, dept.memberWorkerIds, (id) => {
+    const mate = workers.get(id);
+    if (!mate) return null;
+    return {
+      name: mate.runner.name,
+      busy: mate.runner.busy,
+      autoApproveMode: mate.autoApproveMode,
+      dailyBudgetUsd: () => getExtras(mate.id).dailyBudgetUsd,
+      todayCostUsd: () => todayCostUsd(mate.id),
+    };
+  });
+  const targets = targetIds.flatMap((id) => {
+    const mate = workers.get(id);
+    return mate ? [mate] : [];
+  });
+  const ask = composeConsultAsk(lead.runner.name, question);
+  const results = await Promise.allSettled(targets.map((mate) => warroomSend(mate, ask, 240_000)));
+  const replies = targets.map((mate, i) => {
+    const settled = results[i];
+    return {
+      name: mate.runner.name,
+      text: settled.status === "fulfilled" ? warroomEventText(settled.value) : "",
+    };
+  });
+  const digest = composeConsultDigest(question, replies, skipped);
+  // 隊長可能正在跟使用者講話：等它這回合結束再送，回報才不會被丟掉
+  if (workers.get(lead.id)?.runner.busy) await awaitWorkerTurn(lead.id, 120_000);
+  postToHost(lead.id, digest);
+}
+
+app.post("/api/workers/:id/consult", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: "worker not found" }); return; }
+  const dept = worker.departmentId ? departments.get(worker.departmentId) : null;
+  if (!dept || dept.leadWorkerId !== worker.id) { res.status(403).json({ error: t("只有部門/小隊的隊長可以發起商量") }); return; }
+  const question = String(req.body?.question ?? "").trim();
+  if (!question) { res.status(400).json({ error: t("請提供要商量的問題") }); return; }
+  if (consultPending.has(dept.id)) { res.status(409).json({ error: t("這個小隊已有一場商量進行中，等回報送達後再發起") }); return; }
+  consultPending.add(dept.id);
+  runConsult(dept, worker, question)
+    .catch(() => { /* 個別失敗已反映在 digest；這裡只保底不讓 unhandled rejection 炸掉 */ })
+    .finally(() => consultPending.delete(dept.id));
+  res.json({ ok: true, note: t("已把問題發給隊員，回覆彙整後會以【隊員商量回報】訊息送回給你。請先結束這回合等回報。") });
+});
+
+app.post("/api/workers/:id/message", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (!providerReady(worker.runner.provider)) {
     const provider = worker.runner.provider;
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
@@ -4617,12 +5647,28 @@ app.post("/api/workers/:id/message", (req, res) => {
     return;
   }
   if (handoffInProgress(worker)) {
-    res.status(409).json({ error: "NPC 正在進行 LLM 交接，請等待完成" });
+    res.status(409).json({ error: t("NPC 正在進行 LLM 交接，請等待完成") });
     return;
   }
   if (collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: "NPC 正在進行協作或部門 Mission，請等待完成" });
+    res.status(409).json({ error: t("NPC 正在進行協作或部門 Mission，請等待完成") });
     return;
+  }
+  {
+    const budget = getExtras(worker.id).dailyBudgetUsd;
+    if (budget != null) {
+      const spentUsd = todayCostUsd(worker.id);
+      if (spentUsd >= budget) {
+        res.status(409).json({
+          error: t("💸 {name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。", {
+            name: worker.runner.name,
+            spent: spentUsd.toFixed(2),
+            cap: budget.toFixed(2),
+          }),
+        });
+        return;
+      }
+    }
   }
   const message = String(req.body?.message ?? "").trim();
   let images: ReturnType<typeof parseMessageImages>;
@@ -4633,7 +5679,7 @@ app.post("/api/workers/:id/message", (req, res) => {
   } catch (error) {
     const detail = error instanceof MessageImageValidationError || error instanceof MessageDocumentValidationError
       ? error.message
-      : "附件無效";
+      : t("附件無效");
     res.status(400).json({ error: detail });
     return;
   }
@@ -4656,7 +5702,7 @@ app.post("/api/workers/:id/message", (req, res) => {
   try {
     worker.runner.send(message, images, documents);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "無法傳送附件訊息";
+    const detail = error instanceof Error ? error.message : t("無法傳送附件訊息");
     record(worker, { type: "error", message: detail });
     res.status(500).json({ error: detail });
     return;
@@ -4666,11 +5712,8 @@ app.post("/api/workers/:id/message", (req, res) => {
 });
 
 app.post("/api/workers/:id/approvals/:approvalId", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const requested = String(req.body?.decision ?? "");
   const decision = requested === "allow_once" || requested === "allow_session" || requested === "deny"
     ? requested
@@ -4680,7 +5723,7 @@ app.post("/api/workers/:id/approvals/:approvalId", (req, res) => {
     return;
   }
   if (!worker.runner.resolveApproval(req.params.approvalId, decision)) {
-    res.status(409).json({ error: "核准要求已失效或已處理" });
+    res.status(409).json({ error: t("核准要求已失效或已處理") });
     return;
   }
   res.json({ ok: true });
@@ -4689,7 +5732,7 @@ app.post("/api/workers/:id/approvals/:approvalId", (req, res) => {
 app.post("/api/missions/:id/approvals/:approvalId", (req, res) => {
   const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
   if (!mission) {
-    res.status(404).json({ error: "找不到 Department Mission" });
+    res.status(404).json({ error: t("找不到 Department Mission") });
     return;
   }
   const requested = String(req.body?.decision ?? "");
@@ -4706,7 +5749,7 @@ app.post("/api/missions/:id/approvals/:approvalId", (req, res) => {
     res.json({ ok: true });
     return;
   }
-  res.status(409).json({ error: "核准要求已失效、已處理，或任務 session 已中止" });
+  res.status(409).json({ error: t("核准要求已失效、已處理，或任務 session 已中止") });
 });
 
 app.post("/internal/claude-approval", async (req, res) => {
@@ -4740,11 +5783,8 @@ app.post("/internal/claude-approval", async (req, res) => {
 });
 
 app.post("/api/workers/:id/model", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (!providerReady(worker.runner.provider)) {
     const provider = worker.runner.provider;
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
@@ -4771,15 +5811,15 @@ async function departmentCleanPreflightError(members: Worker[]): Promise<string 
     worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id),
   );
   if (blocked.length > 0) {
-    return `以下 NPC 正在工作，不能重建：${blocked.map((worker) => worker.runner.name).join("、")}`;
+    return t("以下 NPC 正在工作，不能重建：{names}", { names: blocked.map((worker) => worker.runner.name).join("、") });
   }
   const providerErrors: string[] = [];
   for (const provider of new Set(members.map((member) => member.runner.provider))) {
-    if (!providerReady(provider)) providerErrors.push(`${providerLabel(provider)} 尚未登入`);
+    if (!providerReady(provider)) providerErrors.push(t("{provider} 尚未登入", { provider: providerLabel(provider) }));
     else {
       const usage = await usageRegistry.refresh(provider, true);
       const usageError = usageBlockReason(provider, usage, null);
-      if (usageError) providerErrors.push(`${providerLabel(provider)}：${usageError}`);
+      if (usageError) providerErrors.push(t("{provider}：{error}", { provider: providerLabel(provider), error: usageError }));
     }
   }
   return providerErrors.length > 0 ? providerErrors.join("；") : null;
@@ -4833,10 +5873,10 @@ function departmentMembers(department: Department): Worker[] {
 async function cleanBossTaskPreflightError(bossDepartments: Department[]): Promise<string | null> {
   for (const department of bossDepartments) {
     const activeMission = workspaceMission(department.workspacePath, department.id);
-    if (activeMission) return `${department.name} 仍有進行中或待決定的 Mission，不能重建工作階段`;
+    if (activeMission) return t("{department} 仍有進行中或待決定的 Mission，不能重建工作階段", { department: department.name });
   }
   const members = bossDepartments.flatMap((department) => departmentMembers(department));
-  if (members.length === 0) return "這個 Boss Task 沒有可重建工作階段的部門成員";
+  if (members.length === 0) return t("這個 Boss Task 沒有可重建工作階段的部門成員");
   return departmentCleanPreflightError(members);
 }
 
@@ -4860,10 +5900,10 @@ function cleanBossTask(task: BossTask, bossDepartments: Department[]): BossTaskC
 
 app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
   const department = departments.get(req.params.departmentId);
-  if (!department) { res.status(404).json({ error: "找不到部門" }); return; }
+  if (!department) { res.status(404).json({ error: t("找不到部門") }); return; }
   const activeMission = workspaceMission(department.workspacePath, department.id);
   if (activeMission) {
-    res.status(409).json({ error: "部門仍有進行中或待決定的 Mission，不能重建工作階段", mission: activeMission });
+    res.status(409).json({ error: t("部門仍有進行中或待決定的 Mission，不能重建工作階段"), mission: activeMission });
     return;
   }
   const requestedIds = Array.isArray(req.body?.workerIds)
@@ -4875,7 +5915,7 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
       const worker = workers.get(id);
       return worker ? [worker] : [];
     });
-  if (members.length === 0) { res.status(400).json({ error: "沒有可重建工作階段的部門成員" }); return; }
+  if (members.length === 0) { res.status(400).json({ error: t("沒有可重建工作階段的部門成員") }); return; }
   const preflightError = await departmentCleanPreflightError(members);
   if (preflightError) {
     res.status(409).json({ error: preflightError });
@@ -4891,8 +5931,8 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
     res.json({
       requiresConfirmation: true,
       members: preview,
-      preserved: ["Boss 任務與其 Mission 詳情", "附件", "稽核紀錄"],
-      discarded: ["部門畫面上的舊對話與 Mission", "每位 NPC 的原生 LLM 對話上下文"],
+      preserved: [t("Boss 任務與其 Mission 詳情"), t("附件"), t("稽核紀錄")],
+      discarded: [t("部門畫面上的舊對話與 Mission"), t("每位 NPC 的原生 LLM 對話上下文")],
     });
     return;
   }
@@ -4907,11 +5947,8 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
 });
 
 app.post("/api/workers/:id/model/fresh", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const provider = worker.runner.provider;
   if (!providerReady(provider)) {
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
@@ -4942,7 +5979,7 @@ app.post("/api/workers/:id/model/fresh", (req, res) => {
     ),
   );
   if (!fresh) {
-    res.status(500).json({ error: "無法儲存新的模型工作階段，已保留原工作階段" });
+    res.status(500).json({ error: t("無法儲存新的模型工作階段，已保留原工作階段") });
     return;
   }
 
@@ -4952,11 +5989,8 @@ app.post("/api/workers/:id/model/fresh", (req, res) => {
 });
 
 app.post("/api/workers/:id/provider/fresh", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const sourceProvider = worker.runner.provider;
   const targetProvider = req.body?.provider === "claude" || req.body?.provider === "codex"
     ? req.body.provider as ProviderId
@@ -4999,7 +6033,7 @@ app.post("/api/workers/:id/provider/fresh", (req, res) => {
   if (!fresh) {
     worker.handoff = previousHandoff;
     persistWorker(worker);
-    res.status(500).json({ error: "無法切換新的 LLM 工作階段，已保留原工作階段" });
+    res.status(500).json({ error: t("無法切換新的 LLM 工作階段，已保留原工作階段") });
     return;
   }
 
@@ -5015,16 +6049,16 @@ const personaSuggestionsInProgress = new Set<string>();
 app.post("/api/workers/:id/persona/suggest", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) {
-    res.status(404).json({ error: "找不到這位 NPC" });
+    res.status(404).json({ error: t("找不到這位 NPC") });
     return;
   }
   const provider = worker.runner.provider;
   if (!providerReady(provider)) {
-    res.status(503).json({ error: `${providerLabel(provider)} 尚未登入，登入後才能由 AI 產生人設`, auth: authStates[provider] });
+    res.status(503).json({ error: t("{provider} 尚未登入，登入後才能由 AI 產生人設", { provider: providerLabel(provider) }), auth: authStates[provider] });
     return;
   }
   if (personaSuggestionsInProgress.has(worker.id)) {
-    res.status(409).json({ error: "這位 NPC 的 AI 人設正在產生中" });
+    res.status(409).json({ error: t("這位 NPC 的 AI 人設正在產生中") });
     return;
   }
 
@@ -5050,23 +6084,20 @@ app.post("/api/workers/:id/persona/suggest", async (req, res) => {
     );
     const persona = parsePersonaSuggestion(result.text);
     if (!persona) {
-      res.status(502).json({ error: "AI 回傳的人設格式不完整，請再產生一次" });
+      res.status(502).json({ error: t("AI 回傳的人設格式不完整，請再產生一次") });
       return;
     }
     res.json({ persona });
   } catch (error) {
-    res.status(502).json({ error: (error as Error).message || "AI 暫時無法產生人設" });
+    res.status(502).json({ error: (error as Error).message || t("AI 暫時無法產生人設") });
   } finally {
     personaSuggestionsInProgress.delete(worker.id);
   }
 });
 
 app.post("/api/workers/:id/persona", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
     res.status(409).json({ error: "worker busy" });
     return;
@@ -5083,14 +6114,11 @@ app.post("/api/workers/:id/persona", (req, res) => {
 });
 
 app.post("/api/workers/:id/auto-approve", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   const mode = req.body?.mode;
-  if (mode !== "off" && mode !== "safe" && mode !== "full") {
-    res.status(400).json({ error: "mode 必須是 off、safe 或 full" });
+  if (mode !== "off" && mode !== "safe" && mode !== "full" && mode !== "invincible") {
+    res.status(400).json({ error: t("mode 必須是 off、safe、full 或 invincible") });
     return;
   }
   worker.autoApproveMode = mode;
@@ -5102,6 +6130,56 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
   res.json({ ok: true, autoApproveMode: worker.autoApproveMode });
 });
 
+// ── NPC 長期記憶＋每日預算（npc-extras，檔案儲存）───────────────────────────
+// 記憶由兩邊寫入：使用者在人設面板手動增刪，或 NPC 依 system prompt 指示自己
+// curl 進來。改動不重啟 session——新記憶在下一次 spawn 時進 system prompt，
+// 本回合的對話上下文裡本來就有。
+app.get("/api/workers/:id/extras", (req, res) => {
+  if (!workers.has(req.params.id)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  res.json(getExtras(req.params.id));
+});
+
+app.post("/api/workers/:id/memory", (req, res) => {
+  if (!workers.has(req.params.id)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const result = addMemoryNote(req.params.id, req.body?.note);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true, ...getExtras(req.params.id) });
+});
+
+app.delete("/api/workers/:id/memory/:index", (req, res) => {
+  if (!workers.has(req.params.id)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  if (!removeMemoryNote(req.params.id, Number(req.params.index))) {
+    res.status(400).json({ error: t("沒有這則記憶") });
+    return;
+  }
+  res.json({ ok: true, ...getExtras(req.params.id) });
+});
+
+app.post("/api/workers/:id/budget", (req, res) => {
+  if (!workers.has(req.params.id)) {
+    res.status(404).json({ error: "unknown worker" });
+    return;
+  }
+  const result = setDailyBudget(req.params.id, req.body?.dailyUsd);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true, dailyBudgetUsd: result.dailyBudgetUsd });
+});
+
 app.get("/api/persona-templates", (_req, res) => {
   res.json({ templates: store.listPersonaTemplates() });
 });
@@ -5109,7 +6187,7 @@ app.get("/api/persona-templates", (_req, res) => {
 app.post("/api/persona-templates", (req, res) => {
   const normalized = normalizePersonaTemplate(req.body);
   if (!normalized) {
-    res.status(400).json({ error: "範本需要名稱，且至少要有職務或指示" });
+    res.status(400).json({ error: t("範本需要名稱，且至少要有職務或指示") });
     return;
   }
   const template: PersonaTemplate = {
@@ -5281,12 +6359,12 @@ app.post("/api/mcp", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const name = String(req.body?.name ?? "").trim();
   if (!/^[\w.-]+$/.test(name)) {
-    res.status(400).json({ error: "名稱只能用英數、-、_、." });
+    res.status(400).json({ error: t("名稱只能用英數、-、_、.") });
     return;
   }
   const scope: "local" | "project" | "user" =
@@ -5295,18 +6373,18 @@ app.post("/api/mcp", async (req, res) => {
 
   if (mode === "json") {
     if (provider === "codex") {
-      res.status(400).json({ error: "Codex 不支援用 JSON 新增 MCP server" });
+      res.status(400).json({ error: t("Codex 不支援用 JSON 新增 MCP server") });
       return;
     }
     const json = String(req.body?.json ?? "").trim();
     if (!json) {
-      res.status(400).json({ error: "缺少 JSON 內容" });
+      res.status(400).json({ error: t("缺少 JSON 內容") });
       return;
     }
     try {
       JSON.parse(json);
     } catch {
-      res.status(400).json({ error: "JSON 格式不正確" });
+      res.status(400).json({ error: t("JSON 格式不正確") });
       return;
     }
     try {
@@ -5337,25 +6415,25 @@ app.post("/api/mcp", async (req, res) => {
 
   if (transport === "stdio") {
     if (headers.length > 0) {
-      res.status(400).json({ error: "stdio 伺服器不支援 header" });
+      res.status(400).json({ error: t("stdio 伺服器不支援 header") });
       return;
     }
     if (!env.every((entry) => /^[\w.]+=.*/.test(entry))) {
-      res.status(400).json({ error: "環境變數格式需為 KEY=VALUE" });
+      res.status(400).json({ error: t("環境變數格式需為 KEY=VALUE") });
       return;
     }
   } else {
     if (env.length > 0) {
-      res.status(400).json({ error: "http/sse 伺服器不支援環境變數" });
+      res.status(400).json({ error: t("http/sse 伺服器不支援環境變數") });
       return;
     }
     if (!headers.every((entry) => /^[^:\r\n]+:\s*.+/.test(entry))) {
-      res.status(400).json({ error: "Header 格式需為 Name: value" });
+      res.status(400).json({ error: t("Header 格式需為 Name: value") });
       return;
     }
   }
   if (!target) {
-    res.status(400).json({ error: "缺少 URL 或指令" });
+    res.status(400).json({ error: t("缺少 URL 或指令") });
     return;
   }
 
@@ -5364,22 +6442,22 @@ app.post("/api/mcp", async (req, res) => {
     try {
       localArgv = parseCommandLine(target);
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message || "MCP 指令格式不正確" });
+      res.status(400).json({ error: (error as Error).message || t("MCP 指令格式不正確") });
       return;
     }
   } else if (!/^https?:\/\//.test(target)) {
-    res.status(400).json({ error: "URL 需以 http:// 或 https:// 開頭" });
+    res.status(400).json({ error: t("URL 需以 http:// 或 https:// 開頭") });
     return;
   }
 
   let args: string[];
   if (provider === "codex") {
     if (headers.length > 0) {
-      res.status(400).json({ error: "Codex 遠端 MCP 請使用 OAuth 或 bearer-token-env-var，介面不保存 token" });
+      res.status(400).json({ error: t("Codex 遠端 MCP 請使用 OAuth 或 bearer-token-env-var，介面不保存 token") });
       return;
     }
     if (transport === "sse") {
-      res.status(400).json({ error: "Codex 不支援 SSE transport" });
+      res.status(400).json({ error: t("Codex 不支援 SSE transport") });
       return;
     }
     args = buildCodexMcpAddArgs({
@@ -5425,7 +6503,7 @@ app.post("/api/mcp/refresh", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   if (provider === "codex") await codexCapabilitiesFor(workspacePath).refresh();
@@ -5450,7 +6528,7 @@ app.post("/api/mcp/tools", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   if (provider !== "codex") {
@@ -5477,12 +6555,12 @@ app.delete("/api/mcp/:name", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const name = req.params.name;
   if (!/^[\w.-]+$/.test(name)) {
-    res.status(400).json({ error: "這個 server 不能從這裡移除（可能是 claude.ai 帳號層級的連接器）" });
+    res.status(400).json({ error: t("這個 server 不能從這裡移除（可能是 claude.ai 帳號層級的連接器）") });
     return;
   }
   const scope = req.query.scope === "local" || req.query.scope === "project" || req.query.scope === "user"
@@ -5512,7 +6590,7 @@ app.post("/api/mcp/login", (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   // Unlike remove, login is a safe/reversible auth-only action — and
@@ -5522,7 +6600,7 @@ app.post("/api/mcp/login", (req, res) => {
   // changes.
   const name = String(req.body?.name ?? "").trim();
   if (!name) {
-    res.status(400).json({ error: "缺少 server 名稱" });
+    res.status(400).json({ error: t("缺少 server 名稱") });
     return;
   }
   const { state, alreadyRunning } = mcpLoginTracker.start(provider, workspacePath, name);
@@ -5535,7 +6613,7 @@ app.post("/api/mcp/login/cancel", (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const name = String(req.body?.name ?? "").trim();
@@ -5551,7 +6629,7 @@ app.get("/api/mcp/login", (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const name = String(req.query.name ?? "").trim();
@@ -5564,12 +6642,12 @@ app.post("/api/mcp/logout", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const name = String(req.body?.name ?? "").trim();
   if (!name) {
-    res.status(400).json({ error: "缺少 server 名稱" });
+    res.status(400).json({ error: t("缺少 server 名稱") });
     return;
   }
   try {
@@ -5594,7 +6672,7 @@ app.post("/api/mcp/reset-project-choices", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   try {
@@ -5603,7 +6681,7 @@ app.post("/api/mcp/reset-project-choices", async (req, res) => {
       timeout: 15000,
     });
     await claudeCapabilitiesFor(workspacePath).refresh();
-    res.json({ ok: true, message: stdout.trim() || "已清除本專案核准記憶，下次互動式 session 會重新詢問" });
+    res.json({ ok: true, message: stdout.trim() || t("已清除本專案核准記憶，下次互動式 session 會重新詢問") });
   } catch (err: any) {
     res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
   }
@@ -5618,7 +6696,7 @@ app.post("/api/mcp/import-from-claude-desktop", async (req, res) => {
   try {
     workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
   } catch (error) {
-    res.status(400).json({ error: (error as Error).message || "無法使用這個工作位置" });
+    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
     return;
   }
   const scope: "local" | "project" | "user" =
@@ -5630,24 +6708,21 @@ app.post("/api/mcp/import-from-claude-desktop", async (req, res) => {
     });
     await claudeCapabilitiesFor(workspacePath).refresh();
     const reload = await reloadMcpWorkers("claude", workspacePath);
-    res.json({ ok: true, message: stdout.trim() || "已從 Claude Desktop 匯入 MCP servers", reload });
+    res.json({ ok: true, message: stdout.trim() || t("已從 Claude Desktop 匯入 MCP servers"), reload });
   } catch (err: any) {
     res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
   }
 });
 
 app.post("/api/workers/:id/interrupt", (req, res) => {
-  const worker = workers.get(req.params.id);
-  if (!worker) {
-    res.status(404).json({ error: "unknown worker" });
-    return;
-  }
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
   if (handoffInProgress(worker)) {
-    res.status(409).json({ error: "LLM 交接不能從一般中止按鈕取消，請等待交接完成或回滾" });
+    res.status(409).json({ error: t("LLM 交接不能從一般中止按鈕取消，請等待交接完成或回滾") });
     return;
   }
   if (collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
-    res.status(409).json({ error: missionInProgress(worker.id) ? "Department Mission 請從 Mission 面板取消" : "協作任務請從協作面板取消" });
+    res.status(409).json({ error: missionInProgress(worker.id) ? t("Department Mission 請從 Mission 面板取消") : t("協作任務請從協作面板取消") });
     return;
   }
   worker.runner.interrupt();
@@ -5725,18 +6800,25 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(usageRefreshTimer);
   workflowWatcher.stop();
   mcpConfigWatcher.stop();
+  void shutdownWebShot();
   for (const worker of workers.values()) worker.runner.stop();
   for (const handle of missionRunners.values()) handle.runner.stop();
   missionRunners.clear();
   for (const client of wss.clients) client.terminate();
   await new Promise<void>((resolveClose) => wss.close(() => resolveClose()));
+  // server.close() 只是不收新連線，會一直等瀏覽器的 keep-alive 連線自己斷——
+  // 頁面開著就永遠等不完（Ctrl+C 曾因此完全沒反應）。先把現有連線全部切掉。
+  server.closeAllConnections();
   await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   store.close();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    void shutdown(signal).then(() => { process.exitCode = 0; });
+    // 收尾後明確退出，不賭事件迴圈能自己排乾（子行程 pipe 等 handle 會撐著它）；
+    // 再保底 3 秒強制退出，收尾途中任何一步卡住都不會讓 Ctrl+C 變成沒反應。
+    setTimeout(() => process.exit(0), 3000).unref();
+    void shutdown(signal).then(() => process.exit(0));
   });
 }
 

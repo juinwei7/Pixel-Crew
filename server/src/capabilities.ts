@@ -4,63 +4,18 @@ import { join, relative, sep } from "node:path";
 import { config } from "./config.js";
 import type { LocalStore } from "./store.js";
 import { execCli } from "./platform/processes.js";
+import { t } from "./i18n.js";
 
-export type McpScope = "local" | "project" | "user" | "account";
-export type McpTransport = "stdio" | "sse" | "http";
+import type {
+  CapabilityState,
+  McpScope,
+  McpServerState,
+  McpToolInfo,
+  McpTransport,
+  ModelOption,
+} from "./protocol.js";
 
-export type McpToolInfo = {
-  name: string;
-  description?: string;
-  readOnlyHint?: boolean;
-  destructiveHint?: boolean;
-};
-
-export type McpServerState = {
-  name: string;
-  status: string;
-  scope?: McpScope;
-  transport?: McpTransport;
-  command?: string;
-  args?: string[];
-  url?: string;
-  // Only the names of env vars / headers are ever kept — the values (which
-  // `claude mcp get` prints in plaintext, e.g. bearer tokens) are dropped
-  // during parsing and never reach the API response or the frontend.
-  envKeys?: string[];
-  headerNames?: string[];
-  detail?: string;
-  // Codex only — see the comment in codexCapabilities.ts's parseCodexMcpList
-  // for why the frontend gates login/logout on this rather than `status`.
-  authStatus?: string;
-  // Full tool catalog, when the provider's CLI can supply one. Currently
-  // Codex-only, via the experimental mcpServerStatus/list app-server method.
-  tools?: McpToolInfo[];
-  // "available": `tools` is a complete, live catalog (Codex, once fetched).
-  // "unsupported": no API exists to list tools proactively — Claude, always.
-  // "error": Codex's call failed/unavailable this time (older CLI, method
-  // renamed/removed, no active worker yet). undefined: not checked yet.
-  toolsStatus?: "available" | "unsupported" | "error";
-  // Codex's own internal codex_apps server — real and connected, but not
-  // user-configured/removable the way `codex mcp add`'d servers are.
-  builtin?: boolean;
-};
-export type ModelOption = { id: string; label: string; description?: string };
-
-export type CapabilityState = {
-  slashCommands: string[];
-  mcpServers: McpServerState[];
-  models: ModelOption[];
-  toolCount: number | null;
-  // Built-in tools available in the most recent Claude session at init time
-  // (Bash, Read, Edit, …). NOT an MCP server's tool list — see the RunnerEvent
-  // "meta" comment in claudeRunner.ts. null = never observed yet, distinct
-  // from an empty array (observed and genuinely empty).
-  builtinTools: string[] | null;
-  loading: boolean;
-  source: "empty" | "cache" | "live";
-  updatedAt: string | null;
-  error: string | null;
-};
+export type { CapabilityState, McpScope, McpServerState, McpToolInfo, McpTransport, ModelOption };
 
 const EMPTY_STATE: CapabilityState = {
   slashCommands: [],
@@ -425,7 +380,7 @@ export class CapabilityRegistry {
         });
         return { ...server, ...parseMcpGetOutput(getResult.stdout) };
       } catch {
-        return { ...server, detail: "無法取得詳細資訊" };
+        return { ...server, detail: t("無法取得詳細資訊") };
       }
     });
     if (generation !== this.refreshGeneration) return;
