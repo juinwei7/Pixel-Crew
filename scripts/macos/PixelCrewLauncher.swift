@@ -12,6 +12,9 @@ final class PixelCrewAppDelegate: NSObject, NSApplicationDelegate {
     private var healthTimer: Timer?
     private var healthAttempts = 0
     private var healthCheckInFlight = false
+    private var isQuitting = false
+    private var lastServerStart = Date.distantPast
+    private var rapidExitCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -29,6 +32,7 @@ final class PixelCrewAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isQuitting = true
         healthTimer?.invalidate()
         if let server, server.isRunning {
             server.terminate()
@@ -78,12 +82,16 @@ final class PixelCrewAppDelegate: NSObject, NSApplicationDelegate {
             }
             let handle = try FileHandle(forWritingTo: logURL)
             try handle.seekToEnd()
+            logHandle?.closeFile()
             logHandle = handle
 
             var environment = ProcessInfo.processInfo.environment
             environment["NODE_ENV"] = "production"
             environment["WEB_DIST_PATH"] = appRoot.appendingPathComponent("web/dist").path
             environment["PATH"] = providerPath(existing: environment["PATH"])
+            // Tells the server it can simply exit on /api/restart-server; this
+            // launcher notices the exit and relaunches it.
+            environment["PIXEL_CREW_SUPERVISED"] = "1"
 
             let process = Process()
             process.executableURL = runtime
@@ -95,11 +103,31 @@ final class PixelCrewAppDelegate: NSObject, NSApplicationDelegate {
             process.terminationHandler = { [weak self, weak process] _ in
                 DispatchQueue.main.async {
                     guard let self, let process, self.server === process else { return }
+                    self.server = nil
                     self.statusItem.button?.title = "PC!"
+                    guard !self.isQuitting else { return }
+                    // Crashes and the deliberate /api/restart-server exit both
+                    // land here; relaunch, but stop after repeated immediate
+                    // exits so a broken install doesn't loop forever.
+                    if Date().timeIntervalSince(self.lastServerStart) < 10 {
+                        self.rapidExitCount += 1
+                    } else {
+                        self.rapidExitCount = 0
+                    }
+                    if self.rapidExitCount >= 3 {
+                        self.showFatalError("Pixel Crew keeps exiting right after launch. Open the log for details.")
+                        return
+                    }
+                    self.statusItem.button?.title = "PC…"
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        guard let self, !self.isQuitting, self.server == nil else { return }
+                        self.startServer()
+                    }
                 }
             }
             try process.run()
             server = process
+            lastServerStart = Date()
             statusItem.button?.title = "PC…"
             waitForHealth()
         } catch {
@@ -185,6 +213,7 @@ final class PixelCrewAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quitPixelCrew() {
+        isQuitting = true
         NSApp.terminate(nil)
     }
 

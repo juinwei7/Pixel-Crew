@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkerState, Department } from "../types";
 import { t } from "../i18n";
 import type { OfficeSceneController, WorkerLite } from "../three/officeScene";
+import { stripMarkdown } from "../speechText";
+import { STATION_THEME } from "../stationTheme";
+import { nightFactorNow } from "../dayNight";
 import { WebShotImg } from "./WebShotImg";
 
 // 現代主題 = 模擬人生風 3D 娃娃屋，但**只當背景場景層**：頂欄 / 任務日誌 / 對話框 / 圓桌 / 各種
@@ -30,14 +33,6 @@ function toLite(w: WorkerState, deptName?: Map<string, string>): WorkerLite {
   };
 }
 
-// 背景日夜一致：跟 officeScene 同一套關鍵影格算 night 係數（0~1），把背景底色一起漸變。
-const DAY_NIGHT: Array<[number, number]> = [[0, 1], [5, 1], [6.5, 0], [9, 0], [17, 0], [18.5, 0], [20, 1], [24, 1]];
-function nightFactorNow(): number {
-  const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
-  let p = DAY_NIGHT[0];
-  for (const k of DAY_NIGHT) { if (h <= k[0]) { const t = k[0] === p[0] ? 0 : (h - p[0]) / (k[0] - p[0]); return p[1] + (k[1] - p[1]) * t; } p = k; }
-  return 1;
-}
 function lerpHex(a: string, b: string, t: number): string {
   const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
   const r = Math.round(((pa >> 16) & 255) + (((pb >> 16) & 255) - ((pa >> 16) & 255)) * t);
@@ -48,17 +43,7 @@ function lerpHex(a: string, b: string, t: number): string {
 
 // 焦點大螢幕：選取「忙碌中」NPC 時，左側浮出一塊大面板顯示他即時在做的事——上網查＝放大的真實
 // 瀏覽器截圖（大到讀得清楚，如同 SAMS 參考影片的中央大螢幕），寫程式/終端＝放大的任務文字。
-// 站點對照沿用工作小窗那套（GameCanvas WORKWINDOW_THEME），標籤/配色一致。
-// label＝工作站名稱（終端機…）；plain＝大白話一句話，讓非工程背景的人也一看就懂 NPC 在幹嘛。
-const WORKSCREEN_THEME: Record<string, { label: string; accent: string; kind: string; plain: string }> = {
-  terminal: { label: t("終端機"), accent: "#58f08a", kind: "term",  plain: t("正在執行指令") },
-  code:     { label: t("編輯器"), accent: "#7aa2ff", kind: "code",  plain: t("正在寫程式") },
-  web:      { label: t("瀏覽器"), accent: "#3f8cff", kind: "web",   plain: t("正在上網查資料") },
-  books:    { label: t("知識庫"), accent: "#e0b060", kind: "docs",  plain: t("正在查閱文件資料") },
-  check:    { label: t("驗證"),   accent: "#35d0b0", kind: "check", plain: t("正在驗證測試") },
-  board:    { label: t("看板"),   accent: "#b98cff", kind: "board", plain: t("正在更新工作看板") },
-  meeting:  { label: t("白板"),   accent: "#8fd0ff", kind: "board", plain: t("正在開會討論") },
-};
+// 站點主題（標籤/配色/大白話標題）與工作小窗、3D 頭頂小窗共用 stationTheme 那張表。
 
 export function Office3D({ workers, departments, active, onSelect }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -154,15 +139,15 @@ export function Office3D({ workers, departments, active, onSelect }: Props) {
   const focus = (() => {
     const demoN = Number(new URLSearchParams(location.search).get("demo"));
     if (demoN > 0) {
-      const dw = lite.find((w) => w.station === "web") ?? lite.find((w) => w.station && WORKSCREEN_THEME[w.station]);
+      const dw = lite.find((w) => w.station === "web") ?? lite.find((w) => w.station && STATION_THEME[w.station]);
       if (dw?.station) {
-        const th = WORKSCREEN_THEME[dw.station];
+        const th = STATION_THEME[dw.station];
         if (th) return { id: dw.id, theme: th, name: dw.name, speech: dw.speech?.trim() || "", webQuery: dw.webQuery?.trim() || "" };
       }
     }
     if (active && active.busy) {
       const st = active.character?.station;
-      const th = st ? WORKSCREEN_THEME[st] : undefined;
+      const th = st ? STATION_THEME[st] : undefined;
       if (th) return { id: active.id, theme: th, name: active.name, speech: active.character?.speech?.trim() || "", webQuery: active.character?.webQuery?.trim() || "" };
     }
     return null;
@@ -187,7 +172,7 @@ export function Office3D({ workers, departments, active, onSelect }: Props) {
   const edge = isMobile ? 12 : 250;   // 面板左緣：桌機避開 CREW 側欄，手機貼邊
 
   // 焦點大螢幕「上一位／下一位」：在忙碌且有工作站的隊員之間切換（點箭頭直接看別人在忙什麼）。
-  const busyList = lite.filter((w) => w.busy && w.station && WORKSCREEN_THEME[w.station]);
+  const busyList = lite.filter((w) => w.busy && w.station && STATION_THEME[w.station]);
   const nav = (dir: number) => {
     if (!focus || busyList.length < 2) return;
     const i = busyList.findIndex((w) => w.id === focus.id);
@@ -236,7 +221,7 @@ export function Office3D({ workers, departments, active, onSelect }: Props) {
             </div>
           ) : (
             <div style={{ ...S.screenBody, fontFamily: (focus.theme.kind === "term" || focus.theme.kind === "code") ? "var(--mono, monospace)" : "var(--sans, sans-serif)" }}>
-              {focus.theme.kind === "term" ? "$ " : focus.theme.kind === "check" ? "☑ " : focus.theme.kind === "board" ? "• " : ""}{focus.speech || t("執行中…")}
+              {focus.theme.kind === "term" ? "$ " : focus.theme.kind === "check" ? "☑ " : focus.theme.kind === "board" ? "• " : ""}{stripMarkdown(focus.speech) || t("執行中…")}
             </div>
           )}
         </div>

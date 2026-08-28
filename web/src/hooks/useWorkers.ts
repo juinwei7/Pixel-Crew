@@ -18,6 +18,8 @@ type SystemStatus = {
   folderPicker: boolean;
   workspaceSetupRequired: boolean;
   codexWindowsBestEffort: boolean;
+  /** server 換腦門檻（tokens）；CTX 量條的 100% 基準。舊 server 沒帶就用 web 後備值。 */
+  brainSwapThresholdTokens?: number;
 };
 
 type ServerMessage =

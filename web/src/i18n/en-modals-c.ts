@@ -44,7 +44,7 @@ export const enModalsC: Record<string, string> = {
   "待命": "Standby",
   "預設模型": "Default model",
   "完成 {count}": "Completed {count}",
-  "context 約 {current}k（底盤 {baseline}k 不計）；條滿 = 換腦門檻 170k": "Context ~{current}k (baseline {baseline}k excluded); full bar = 170k reset threshold",
+  "context 約 {current}k（底盤 {baseline}k 不計）；條滿 = 換腦門檻 {limit}k": "Context ~{current}k (baseline {baseline}k excluded); full bar = {limit}k reset threshold",
   "拒絕": "Deny",
   "本次皆允許": "Allow all this time",
   "允許": "Allow",

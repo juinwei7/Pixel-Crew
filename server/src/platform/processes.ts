@@ -126,12 +126,49 @@ export function processTreeInvocation(pid: number, platform: NodeJS.Platform = p
     : null;
 }
 
+// POSIX 沒有 taskkill /T 的對應物；SIGTERM 只送到直屬子行程，CLI 底下的
+// MCP 孫行程會變孤兒繼續佔資源。這裡用 pgrep -P 逐層列出後代（macOS 與
+// Linux 都內建），在殺掉父行程「之前」收集完（父死後子會被 init 收養，
+// pgrep -P 就找不到了），再逐一送 SIGTERM。
+export async function listPosixDescendants(
+  pid: number,
+  listChildren: (parent: number) => Promise<number[]> = pgrepChildren,
+): Promise<number[]> {
+  const collected: number[] = [];
+  const seen = new Set<number>([pid]);
+  const queue = [pid];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const child of await listChildren(current)) {
+      if (!Number.isInteger(child) || child <= 0 || seen.has(child)) continue;
+      seen.add(child);
+      collected.push(child);
+      queue.push(child);
+    }
+  }
+  return collected;
+}
+
+function pgrepChildren(parent: number): Promise<number[]> {
+  return new Promise((resolve) => {
+    const pgrep = spawn("pgrep", ["-P", String(parent)], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    pgrep.stdout?.on("data", (chunk) => { out += chunk.toString(); });
+    pgrep.once("error", () => resolve([]));
+    pgrep.once("close", () => resolve(out.split("\n").map((line) => Number(line.trim())).filter((n) => Number.isInteger(n) && n > 0)));
+  });
+}
+
 export async function terminateProcessTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.killed) return;
   try { child.stdin?.end(); } catch { /* already closed */ }
   const tree = processTreeInvocation(child.pid);
   if (!tree) {
+    const descendants = await listPosixDescendants(child.pid).catch(() => [] as number[]);
     child.kill("SIGTERM");
+    for (const pid of descendants) {
+      try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+    }
     return;
   }
   await new Promise<void>((resolve) => {

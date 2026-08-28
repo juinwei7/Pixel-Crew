@@ -155,7 +155,7 @@ import { buildDayReport, localDay, resolveReportDay } from "./dayReport.js";
 import { decideBrainSwap, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
-import { parseLimitReset } from "./limitResume.js";
+import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
 import { composeConsultAsk, composeConsultDigest, composeConsultSection, selectConsultTargets } from "./consult.js";
 import {
   deriveSquadIdentity,
@@ -319,6 +319,8 @@ function systemStatus() {
     workspaceSetupRequired: workers.size === 0 && !config.targetRepoConfigured,
     codexWindowsBestEffort: process.platform === "win32" && Number.isFinite(windowsBuild) && (windowsBuild ?? 0) < 22_000,
     lastRestoreResult,
+    // 前端 CTX 量條的 100% 基準；單一事實來源在 brainSwap.ts，避免 web 端硬編漂移。
+    brainSwapThresholdTokens: BRAIN_SWAP_THRESHOLD_TOKENS,
   };
 }
 
@@ -1229,12 +1231,14 @@ function record(worker: Worker, event: RunnerEvent): void {
       if (budget != null) {
         const spentUsd = todayCostUsd(worker.id);
         if (spentUsd >= budget && spentUsd - costMicros / 1_000_000 < budget) {
-          record(worker, {
-            type: "error",
-            message: t("💸 已達今日預算上限：今天已花 ${spent}（上限 ${cap}）。今天不再接受新指示，明天自動恢復；可到 📊營運 調整上限。", {
-              spent: spentUsd.toFixed(2),
-              cap: budget.toFixed(2),
-            }),
+          // 延到本回合的 hook（協作/作戰室裁決、warroom 等待者）跑完再記這則預算提示，
+          // 否則這筆合成 error 會在遞迴 record 裡先觸發 finishCollaboration，用預算訊息蓋掉真正結果。
+          const noticeText = t("💸 已達今日預算上限：今天已花 ${spent}（上限 ${cap}）。今天不再接受新指示，明天自動恢復；可到 📊營運 調整上限。", {
+            spent: spentUsd.toFixed(2),
+            cap: budget.toFixed(2),
+          });
+          queueMicrotask(() => {
+            if (workers.has(worker.id)) record(worker, { type: "error", message: noticeText });
           });
         }
       }
@@ -1369,17 +1373,38 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
 // 過後叫 NPC 繼續被中斷的工作。單發 setTimeout、fire 前多重守門，無輪詢；
 // 伺服器重啟會遺失排程（提示訊息有講明）。⚙ 功能選單可整個關掉。
 const limitResumeTimers = new Map<string, NodeJS.Timeout>();
+// 前端排隊訊息撞上限會被吞：/message 送出時記下「開啟這回合的聊天指示」，回合
+// 正常結束就清掉；撞上限失敗則累積進 limitSwallowedTexts，重置後連同原文重新
+// 交付（只叫 NPC「繼續」時，CLI 可能根本沒把失敗回合的訊息留進 session）。
+const limitTurnText = new Map<string, string>();
+const limitSwallowedTexts = new Map<string, string[]>();
 
 function limitResumeHook(worker: Worker, event: RunnerEvent): void {
-  if (!appSettings.get().limitResumeEnabled) return;
   const text = event.type === "turn_end" && event.isError ? event.resultText
     : event.type === "error" ? event.message
     : null;
+  if (event.type === "turn_end" && !event.isError) {
+    // 成功回合＝先前被中斷的工作已交付（含 resume 重送成功、或使用者接手後完成），
+    // 連同累積清單一起清掉，才不會之後又被重送一次。
+    limitTurnText.delete(worker.id);
+    limitSwallowedTexts.delete(worker.id);
+  }
   if (!text) return;
+  if (!appSettings.get().limitResumeEnabled) { limitTurnText.delete(worker.id); return; }
   const name = worker.runner.name ?? "";
   if (name.startsWith("🏛") || name.startsWith("🔍")) return; // 短命工不排，任務由發起方重試
   const resetAt = parseLimitReset(text, new Date());
-  if (!resetAt) return;
+  if (!resetAt) {
+    // 非上限的失敗才丟掉開場指示，且只在「回合真的以錯誤收場」時；中途的 error 事件
+    // （預算通知、協作自動返回失敗等）不能把還沒累積的開場指示提前抹掉。
+    if (event.type === "turn_end") limitTurnText.delete(worker.id);
+    return;
+  }
+  const opening = limitTurnText.get(worker.id);
+  if (opening) {
+    limitSwallowedTexts.set(worker.id, accumulateSwallowedText(limitSwallowedTexts.get(worker.id) ?? [], opening));
+    limitTurnText.delete(worker.id);
+  }
   const fireAt = resetAt.getTime() + 3 * 60_000; // 過重置點 3 分鐘再戳，避免踩線又失敗
   const existing = limitResumeTimers.get(worker.id);
   if (existing) clearTimeout(existing);
@@ -1387,16 +1412,38 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
   record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }) });
   const timer = setTimeout(() => {
     limitResumeTimers.delete(worker.id);
-    if (!workers.has(worker.id)) return;
+    // 累積清單不在守門前銷毀：worker 沒了才清，其餘早退情形（功能關閉／使用者接手）保留，
+    // 待成功回合（含使用者接手完成、或下次重送成功）在 hook 開頭統一清除，才不會遺失指示。
+    if (!workers.has(worker.id)) { limitSwallowedTexts.delete(worker.id); return; }
     if (!appSettings.get().limitResumeEnabled) return;
-    if (worker.runner.busy) return; // 已在忙＝使用者或其他機制已接手
+    if (worker.runner.busy) return; // 已在忙＝使用者或其他機制已接手，成功回合會清掉累積
+    const swallowed = limitSwallowedTexts.get(worker.id) ?? [];
     record(worker, { type: "user_message", text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
+    const prompt = swallowed.length > 0
+      ? t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。中斷期間收到的下列指示可能沒有被處理（依先後排序），請逐一檢查、把沒完成的完成並回報：\n{list}", {
+          list: swallowed.map((item, index) => `${index + 1}. ${item}`).join("\n"),
+        })
+      : t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。請檢查上一回合做到哪裡，接著把被中斷的工作完成並回報。");
     try {
-      worker.runner.send(t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。請檢查上一回合做到哪裡，接著把被中斷的工作完成並回報。"), [], []);
+      worker.runner.send(prompt, [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch { /* 送不進去就算了，聊天紀錄已有提示，使用者可手動接 */ }
   }, Math.max(fireAt - Date.now(), 1000));
   limitResumeTimers.set(worker.id, timer);
+}
+
+// 移除 worker（或 /clean 重置 session）時，清掉所有 per-worker 的 hook 狀態與待觸發計時器，
+// 避免 Map 隨建立/刪除累積、以及清除後的舊指示被排程注入乾淨 session。
+function clearWorkerHookState(workerId: string): void {
+  const timer = limitResumeTimers.get(workerId);
+  if (timer) { clearTimeout(timer); limitResumeTimers.delete(workerId); }
+  limitTurnText.delete(workerId);
+  limitSwallowedTexts.delete(workerId);
+  brainSwapPending.delete(workerId);
+  brainSwapLastAt.delete(workerId);
+  brainSwapCooldownNoted.delete(workerId);
+  brainSwapDisabled.delete(workerId);
+  brainSwapOverflowStreak.delete(workerId);
 }
 
 function createWorker(
@@ -1537,6 +1584,7 @@ function workerCleanDeps(worker: Worker): WorkerCleanDeps {
 function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; error: string } {
   const result = cleanWorkerSession(worker, workerCleanDeps(worker));
   if (!result.ok) return result;
+  clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
   const announcement = t("已清除工作階段，NPC 記憶重新開始。");
   record(worker, { type: "text_delta", text: announcement });
@@ -2076,6 +2124,10 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
 // 本機 SQLite。另設一個很寬鬆的筆數上限當保險絲，避免極端情況整包無界成長。
 const SNAPSHOT_MAX_EVENTS = 800;        // 每 worker 最多送這麼多筆（對齊 turn 邊界）
 const SNAPSHOT_MAX_FIELD_CHARS = 6_000; // 單一欄位序列化長度上限，超過就截短
+// 預算守門：初始 snapshot 曾肥到 18.7MB 讓手機卡死在「尋找AI隊員」，瘦身到 4.85MB
+// 才勉強打平。之後任何改動把它推回 5MB 以上，就在這裡大聲告警抓回歸。
+const SNAPSHOT_BUDGET_BYTES = 5 * 1024 * 1024;
+let snapshotBudgetWarnedAt = 0;
 
 function clampField(value: unknown): unknown {
   let s: string;
@@ -2124,7 +2176,7 @@ wss.on("connection", (socket) => {
   for (const task of store.listBossTasksByStatus(["ready", "running"])) {
     advanceBossTask(task);
   }
-  socket.send(
+  const snapshotPayload =
     JSON.stringify({
       type: "snapshot",
       targetRepoPath: config.targetRepoPath,
@@ -2146,8 +2198,13 @@ wss.on("connection", (socket) => {
         ...workerSummary(w),
         events: snapshotHistory(w.history),
       })),
-    }),
-  );
+    });
+  const snapshotBytes = Buffer.byteLength(snapshotPayload);
+  if (snapshotBytes > SNAPSHOT_BUDGET_BYTES && Date.now() - snapshotBudgetWarnedAt > 60_000) {
+    snapshotBudgetWarnedAt = Date.now(); // 重連風暴時最多每分鐘喊一次，避免洗版
+    console.warn(`[snapshot] 初始 snapshot ${(snapshotBytes / 1024 / 1024).toFixed(2)}MB 超過 ${SNAPSHOT_BUDGET_BYTES / 1024 / 1024}MB 預算——手機連線會卡，請回頭瘦身（參考上次 18.7→4.85MB 的作法）`);
+  }
+  socket.send(snapshotPayload);
 });
 
 app.get("/api/workers", (_req, res) => {
@@ -2356,6 +2413,25 @@ app.post("/api/usage/refresh", async (_req, res) => {
 let restartPending = false;
 
 function performServerRestart(): void {
+  if (process.platform !== "win32") {
+    console.log("[restart] 所有 NPC 空檔，重啟中…");
+    if (process.env.PIXEL_CREW_SUPERVISED === "1") {
+      // macOS 的 menu bar launcher 監督中：直接退出，由它偵測結束後重生。
+      setTimeout(() => process.exit(0), 800);
+      return;
+    }
+    // 無監督（手動 node 啟動）：detached shell 等 3 秒（讓觸發者的回合落地、
+    // 連接埠釋放）後用同一組 argv/cwd 重啟自己。
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const relaunch = [process.execPath, ...process.argv.slice(1)].map(quote).join(" ");
+    spawn("/bin/sh", ["-c", `sleep 3; exec ${relaunch}`], {
+      detached: true,
+      stdio: "ignore",
+      cwd: process.cwd(),
+    }).unref();
+    setTimeout(() => process.exit(0), 800);
+    return;
+  }
   // 注意：不能把「含內層引號的整串指令」丟給 cmd /c——node spawn 會把引號轉義成
   // \" ，cmd 解析不了，start 那段會無聲失敗（實測驗證過）。所以改成直接執行
   // restart-pixel-crew.cmd：單一路徑參數不會被轉爛，start 的引號由 .cmd 內部
@@ -2424,14 +2500,18 @@ app.get("/api/remote-access/status", async (_req, res) => {
 
 app.post("/api/remote-access/start", async (_req, res) => {
   if (await tsproxyRunning()) { res.json({ ok: true, running: true, already: true }); return; }
-  if (process.platform !== "win32") {
-    res.status(400).json({ ok: false, error: t("一鍵啟動目前僅支援 Windows；其他系統請手動執行 node _tsproxy.mjs") });
-    return;
-  }
-  const vbs = join(process.cwd(), "_tsproxy_launch.vbs");
-  if (!existsSync(vbs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy_launch.vbs") }); return; }
   try {
-    spawn("wscript.exe", [vbs], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    if (process.platform === "win32") {
+      // Windows：用隱藏視窗的 vbs 拉起（不彈黑窗）。
+      const vbs = join(process.cwd(), "_tsproxy_launch.vbs");
+      if (!existsSync(vbs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy_launch.vbs") }); return; }
+      spawn("wscript.exe", [vbs], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    } else {
+      // macOS / Linux：直接用當前 node 執行檔跑 _tsproxy.mjs，detached 讓它獨立存活。
+      const mjs = join(process.cwd(), "_tsproxy.mjs");
+      if (!existsSync(mjs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy.mjs") }); return; }
+      spawn(process.execPath, [mjs], { detached: true, stdio: "ignore", cwd: process.cwd() }).unref();
+    }
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
     return;
@@ -5239,6 +5319,7 @@ app.delete("/api/workers/:id", async (req, res) => {
   workers.delete(worker.id);
   store.deleteWorker(worker.id);
   deleteExtras(worker.id);
+  clearWorkerHookState(worker.id);
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
@@ -5707,6 +5788,7 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(500).json({ error: detail });
     return;
   }
+  limitTurnText.set(worker.id, [message, imageLabels, documentLabels].filter(Boolean).join("\n"));
   broadcast({ type: "worker_status", workerId: worker.id, busy: true });
   res.json({ ok: true });
 });
@@ -6121,10 +6203,16 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
     res.status(400).json({ error: t("mode 必須是 off、safe、full 或 invincible") });
     return;
   }
+  const prevMode = worker.autoApproveMode;
   worker.autoApproveMode = mode;
-  // No restart needed — both ClaudeSession and CodexSession read this live
-  // on the next approval request, so switching modes takes effect on the
-  // worker's very next tool call.
+  // off/safe/full 之間切換不必重啟——核准橋在每次核准請求當下即時讀 mode。但無敵模式是在
+  // spawn 時就以 --dangerously-skip-permissions 啟動且「不掛核准橋」，所以從無敵降級時，正在跑的
+  // session 會繼續無條件放行到下一個 session 為止。降級＝收緊權限，必須立即生效：中斷當前回合
+  // 並重生（CLI 以 --resume 續接同一對話，不遺失上下文），讓新模式的核准橋掛回來。
+  if (prevMode === "invincible" && mode !== "invincible") {
+    if (worker.runner.busy) worker.runner.interrupt(); else worker.runner.stop();
+    if (providerReady(worker.runner.provider)) worker.runner.warmup();
+  }
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, autoApproveMode: worker.autoApproveMode });

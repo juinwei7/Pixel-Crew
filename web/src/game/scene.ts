@@ -18,6 +18,7 @@ import type { DepartmentPhase, DepartmentSeat } from "./personalDesks";
 import { OfficeDecor } from "./officeDecor";
 import { Cat } from "./cat";
 import { apiAssetUrl } from "../api";
+import { nightFactor } from "../dayNight";
 import { responsiveOfficeFitScale } from "./camera";
 
 const GREEN = 0x37d6a3;
@@ -195,15 +196,16 @@ export async function createScene(
 
   // 日夜循環只作用在窗外：天空顏色照真實時間依關鍵影格連續漸變（白天亮藍、
   // 黃昏燒橘、入夜深藍），星星/太陽/月亮跟著切。室內不蓋色紗，場景維持原色。
-  const DAYLIGHT_KEYS: Array<{ h: number; night: number; sky: number }> = [
-    { h: 0, night: 1, sky: 0x080c1a },    // 深夜
-    { h: 5, night: 1, sky: 0x080c1a },    // 黎明前最暗
-    { h: 6.5, night: 0, sky: 0xd98a5a },  // 清晨暖橘
-    { h: 9, night: 0, sky: 0x6fb7e8 },    // 白天亮藍
-    { h: 17, night: 0, sky: 0x6fb7e8 },   // 白天撐到 17:00 才開始轉黃昏
-    { h: 18.5, night: 0, sky: 0xe8845a }, // 黃昏燒橘
-    { h: 20, night: 1, sky: 0x080c1a },   // 入夜
-    { h: 24, night: 1, sky: 0x080c1a },
+  // night 係數走 dayNight.ts 共用曲線（與 3D 主題同一條）；天空色是像素風專屬關鍵影格。
+  const DAYLIGHT_KEYS: Array<{ h: number; sky: number }> = [
+    { h: 0, sky: 0x080c1a },    // 深夜
+    { h: 5, sky: 0x080c1a },    // 黎明前最暗
+    { h: 6.5, sky: 0xd98a5a },  // 清晨暖橘
+    { h: 9, sky: 0x6fb7e8 },    // 白天亮藍
+    { h: 17, sky: 0x6fb7e8 },   // 白天撐到 17:00 才開始轉黃昏
+    { h: 18.5, sky: 0xe8845a }, // 黃昏燒橘
+    { h: 20, sky: 0x080c1a },   // 入夜
+    { h: 24, sky: 0x080c1a },
   ];
 
   function lerpColor(a: number, b: number, t: number): number {
@@ -214,26 +216,23 @@ export async function createScene(
     return ch(16) | ch(8) | ch(0);
   }
 
-  function daylightPhase(hourFloat: number): { night: number; sky: number } {
+  function daylightSky(hourFloat: number): number {
     let prev = DAYLIGHT_KEYS[0];
     for (const key of DAYLIGHT_KEYS) {
       if (hourFloat <= key.h) {
         const t = key.h === prev.h ? 0 : (hourFloat - prev.h) / (key.h - prev.h);
-        return {
-          night: prev.night + (key.night - prev.night) * t,
-          sky: lerpColor(prev.sky, key.sky, t),
-        };
+        return lerpColor(prev.sky, key.sky, t);
       }
       prev = key;
     }
-    return { ...DAYLIGHT_KEYS[DAYLIGHT_KEYS.length - 1] };
+    return DAYLIGHT_KEYS[DAYLIGHT_KEYS.length - 1].sky;
   }
 
   function applyDaylight(): void {
     const now = new Date();
-    const phase = daylightPhase(now.getHours() + now.getMinutes() / 60);
-    room.setSky(phase.sky);
-    room.setNight(phase.night >= 0.5);
+    const hourFloat = now.getHours() + now.getMinutes() / 60;
+    room.setSky(daylightSky(hourFloat));
+    room.setNight(nightFactor(hourFloat) >= 0.5);
     room.setClock(now);
   }
   applyDaylight();

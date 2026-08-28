@@ -13,6 +13,9 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { HorizontalBlurShader } from "three/examples/jsm/shaders/HorizontalBlurShader.js";
 import { VerticalBlurShader } from "three/examples/jsm/shaders/VerticalBlurShader.js";
+import { stripMarkdown } from "../speechText";
+import { STATION_THEME } from "../stationTheme";
+import { nightFactor } from "../dayNight";
 
 export type WorkerLite = {
   id: string;
@@ -187,14 +190,8 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
   const daySkyTop = new THREE.Color(0x8fbce8), ngtSkyTop = new THREE.Color(0x0d1430);
   const daySkyBot = new THREE.Color(0xdfeaf3), ngtSkyBot = new THREE.Color(0x2a3654);
 
-  // 日夜光影：沿用像素風的真實時鐘關鍵影格（night 0~1），連續調光強/色溫/曝光，
+  // 日夜光影：沿用像素風的真實時鐘關鍵影格（dayNight.ts 的 night 0~1），連續調光強/色溫/曝光，
   // 讓 3D 現代主題和像素風同一個白天/黃昏/夜晚。室內不打死黑，夜晚只轉冷變暗維持可讀。
-  const DAY_NIGHT: Array<[number, number]> = [[0, 1], [5, 1], [6.5, 0], [9, 0], [17, 0], [18.5, 0], [20, 1], [24, 1]];
-  function nightFactor(h: number): number {
-    let p = DAY_NIGHT[0];
-    for (const k of DAY_NIGHT) { if (h <= k[0]) { const t = k[0] === p[0] ? 0 : (h - p[0]) / (k[0] - p[0]); return p[1] + (k[1] - p[1]) * t; } p = k; }
-    return 1;
-  }
   // 夜燈（落地燈＋外圍路燈）：夜晚才亮，佈局重建時重掛，intensity 依 userData.max 縮放。
   const lampLights: THREE.PointLight[] = [];
   let clockHour: THREE.Object3D | null = null, clockMin: THREE.Object3D | null = null; // 牆上時鐘指針樞紐（跟真實時間）
@@ -1241,9 +1238,11 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
   // ---- 角色 ----
   const SCALE = 1.0;
   const PB_Y = 2.05 * SCALE;
+  // plumbob / nameSprite / makePanel 造出的是「每個 actor 專屬」資源，不走 track()（那是給整場
+  // 共用資源的），改由 clearActors 在每次 roster 重建時逐一 dispose，避免 disposables 陣列與 VRAM 無邊界累積。
   function plumbob() {
-    const geo = track(new THREE.OctahedronGeometry(0.14));
-    const pb = new THREE.Mesh(geo, track(new THREE.MeshStandardMaterial({ color: 0x39ff14, emissive: 0x1fbf2a, emissiveIntensity: 0.7, roughness: 0.25, transparent: true, opacity: 0.9 })));
+    const geo = new THREE.OctahedronGeometry(0.14);
+    const pb = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x39ff14, emissive: 0x1fbf2a, emissiveIntensity: 0.7, roughness: 0.25, transparent: true, opacity: 0.9 }));
     pb.scale.set(0.7, 1.4, 0.7); noCast(pb); return pb;
   }
   function nameSprite(text: string) {
@@ -1253,8 +1252,8 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
     ctx.font = font; ctx.textBaseline = "middle";
     ctx.fillStyle = "rgba(28,36,52,.72)"; roundRect(ctx, 0, 8, w, 56, 14); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.fillText(text, 18, 38);
-    const tex = track(new THREE.CanvasTexture(c)); tex.anisotropy = 4;
-    const spr = new THREE.Sprite(track(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false })));
+    const tex = new THREE.CanvasTexture(c); tex.anisotropy = 4;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
     spr.scale.set(w / 72 * 0.5, 0.5, 1); spr.renderOrder = 5; noCast(spr); return spr;
   }
   function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -1283,22 +1282,30 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
   selRing.rotation.x = -Math.PI / 2; selRing.position.y = 0.12; selRing.visible = false; selRing.renderOrder = 20; noCast(selRing); world.add(selRing);
 
   function clearActors() {
-    for (const a of actors) { a.mixer.stopAllAction(); charGroup.remove(a.root); charGroup.remove(a.pb); charGroup.remove(a.label); charGroup.remove(a.shadow); charGroup.remove(a.bubble); (a.bubble.material as THREE.SpriteMaterial).dispose(); charGroup.remove(a.panel); (a.panel.material as THREE.SpriteMaterial).dispose(); }
+    for (const a of actors) {
+      a.mixer.stopAllAction();
+      charGroup.remove(a.root); charGroup.remove(a.pb); charGroup.remove(a.label);
+      charGroup.remove(a.shadow); charGroup.remove(a.bubble); charGroup.remove(a.panel);
+      // 每個 actor 專屬的 GPU 資源逐一釋放；rig(a.root) 與 shadow 用的是整場共用幾何/材質，只移除不 dispose。
+      (a.pb.geometry as THREE.BufferGeometry).dispose();
+      (a.pb.material as THREE.Material).dispose();
+      const labelMat = a.label.material as THREE.SpriteMaterial;
+      labelMat.map?.dispose(); labelMat.dispose();                 // 名牌：專屬貼圖＋材質
+      (a.bubble.material as THREE.SpriteMaterial).dispose();        // 泡泡：貼圖共用，只釋放材質
+      (a.panel.material as THREE.SpriteMaterial).dispose();         // 小窗：專屬材質
+      a.panelTex.dispose();                                        // 小窗：專屬 canvas 貼圖
+    }
+    for (const p of pickTargets) {                                 // 隱形點擊代理 box：專屬幾何＋材質
+      const m = p as THREE.Mesh;
+      (m.geometry as THREE.BufferGeometry).dispose();
+      (m.material as THREE.Material).dispose();
+    }
     actors.length = 0;
     pickTargets.length = 0;
   }
 
   // ---- 工作小窗（SAMS 風）：NPC 忙碌站定工作時頭上浮出的螢幕面板，顯示站點主題＋即時任務文字 ----
-  // label＝工作站名稱；plain＝大白話標題（頭頂小窗直接顯示這句，一看就懂 NPC 在幹嘛）。
-  const STATION_THEME: Record<string, { label: string; plain: string; bg: string; fg: string; accent: string; kind: string }> = {
-    terminal: { label: "終端機", plain: "正在執行指令",   bg: "#0c1220", fg: "#bfe6cf", accent: "#58f08a", kind: "term" },
-    code:     { label: "編輯器", plain: "正在寫程式",     bg: "#12151f", fg: "#d6def0", accent: "#7aa2ff", kind: "code" },
-    web:      { label: "瀏覽器", plain: "正在上網查資料", bg: "#f3f6fb", fg: "#28323f", accent: "#3f8cff", kind: "web" },
-    books:    { label: "知識庫", plain: "正在查閱文件",   bg: "#1c1710", fg: "#ead9c0", accent: "#e0b060", kind: "docs" },
-    check:    { label: "驗證",   plain: "正在驗證測試",   bg: "#0f1719", fg: "#cfeae2", accent: "#35d0b0", kind: "check" },
-    board:    { label: "看板",   plain: "正在更新看板",   bg: "#171226", fg: "#e4dcf3", accent: "#b98cff", kind: "board" },
-    meeting:  { label: "白板",   plain: "正在開會討論",   bg: "#161a24", fg: "#dde4f0", accent: "#8fd0ff", kind: "board" },
-  };
+  // 主題表（label/plain/bg/fg/accent/kind）與像素小窗、焦點大螢幕共用 stationTheme.ts 那張。
   const PANW = 400, PANH = 340;   // 加大＝瀏覽器截圖區更大、字讀得出來（web 站點最需要）
   // Tier 3：真實瀏覽器截圖快取（查詢字 → <img>）。載到才畫進小窗；快取上限 40 筆避免無邊界成長。
   const shotCache = new Map<string, { img: HTMLImageElement; ready: boolean; failed: boolean }>();
@@ -1320,7 +1327,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
   function makePanel(): { sprite: THREE.Sprite; tex: THREE.CanvasTexture; ctx: CanvasRenderingContext2D } {
     const c = document.createElement("canvas"); c.width = PANW; c.height = PANH;
     const ctx = c.getContext("2d")!;
-    const tex = track(new THREE.CanvasTexture(c)); tex.anisotropy = 4;
+    const tex = new THREE.CanvasTexture(c); tex.anisotropy = 4;  // 專屬貼圖，由 clearActors dispose
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, opacity: 0 }));
     spr.scale.set(2.3, 2.3 * PANH / PANW, 1); spr.renderOrder = 7; spr.visible = false; noCast(spr);
     return { sprite: spr, tex, ctx };
@@ -1366,7 +1373,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
     ctx.beginPath(); ctx.arc(PANW - 28, 27, 9, 0, Math.PI * 2);
     ctx.fillStyle = done ? "#0a7e37" : (a.mood === "error" ? "#c0392b" : a.mood === "success" ? "#0a7e37" : "#0b0f16"); ctx.fill();
     // 內文
-    const body = done ? "✓ 完成，走去回報…" : (a.speech || "執行中…");
+    const body = done ? "✓ 完成，走去回報…" : (stripMarkdown(a.speech || "") || "執行中…");
     ctx.fillStyle = th.fg;
     let bodyY = 74, bodyX = 22, bodyW = PANW - 44;
     if (th.kind === "web" && !done) {   // 瀏覽器：網址列 ＋ 真實截圖視窗（Tier 3）
@@ -1462,9 +1469,8 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
       a.stationKey = key;
       a.home = { x: spot.x, z: spot.z };
       a.homeRy = spot.ry;
-      // 沒在忙著走/情緒動作時就起身走過去；已在返程則直接改目標＝平順轉向
-      if (a.state === "home" || a.state === "atWander") { a.emoting = false; startWalk(a, spot.x, spot.z, true); }
-      else if (a.state === "toHome") { a.emoting = false; startWalk(a, spot.x, spot.z, true); } // 返程中改站位＝重新路由
+      // 沒在忙著走/情緒動作（home/atWander）或已在返程（toHome）＝直接起身走過去/重新路由到新站位（平順轉向）。
+      if (a.state === "home" || a.state === "atWander" || a.state === "toHome") { a.emoting = false; startWalk(a, spot.x, spot.z, true); }
     }
   }
 
@@ -1608,12 +1614,13 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
     }
     drag = true; lx = e.clientX; dragMoved = false;
   }
+  const panRight = new THREE.Vector3(), panUp = new THREE.Vector3();   // 平移用暫存（pointermove 高頻，不每次配置）
   function onMove(e: PointerEvent) {
     if (panning) {
       const mdx = e.clientX - lx, mdy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
       const wpp = (2 * D) / (canvas.clientHeight || 640);   // 正交相機每像素對應的 world 距離
-      const r = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0); r.y = 0; r.normalize();  // 螢幕右＝地面右
-      const u = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1); u.y = 0; u.normalize();  // 螢幕上＝地面前（含俯角壓縮，除以 sin(EL) 還原）
+      const r = panRight.setFromMatrixColumn(cam.matrixWorld, 0); r.y = 0; r.normalize();  // 螢幕右＝地面右
+      const u = panUp.setFromMatrixColumn(cam.matrixWorld, 1); u.y = 0; u.normalize();  // 螢幕上＝地面前（含俯角壓縮，除以 sin(EL) 還原）
       panX += (-r.x * mdx + u.x * mdy / Math.sin(EL)) * wpp;
       panZ += (-r.z * mdx + u.z * mdy / Math.sin(EL)) * wpp;
       panX = THREE.MathUtils.clamp(panX, -PAN_LIMIT, PAN_LIMIT);
@@ -1700,6 +1707,11 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
   document.addEventListener("visibilitychange", onVisible);
   let csTick = 0;                // 接地陰影更新計數（每兩幀一次）
   let shTick = 0;                // 方向光陰影更新計數（每兩幀一次）
+  // 陰影髒旗標：兩種陰影（接地 render target＋方向光 shadow map）都只在「畫面真的會變」時
+  // 才重算——有人在走/比手勢、牆面透明度在變、鏡頭在動、或場景結構剛重建。
+  // 靜止畫面陰影不變，重算純浪費（弱 GPU 上這兩項是 render loop 的大頭）。
+  let shadowStale = true;        // 結構性變化（重建名冊/context 復原）＝下一幀無條件重算一次
+  let shadowLingerUntil = 0;     // 動靜停止後仍多算一小段（見 animate 內註解）
   function animate() {
     if (disposed) return;
     raf = requestAnimationFrame(animate);
@@ -1720,6 +1732,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
     TARGET.y += (targetY - TARGET.y) * 0.1;
     placeCam();
     if (Math.abs(D - Dtarget) > 0.002) { D += (Dtarget - D) * 0.15; updateProj(); }
+    let wallsChanging = false;
     for (const w of walls) {
       toCam.copy(cam.position).sub(w.position).normalize();
       const near = (w.userData as WallUser).normal.dot(toCam) > 0.2;
@@ -1727,6 +1740,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
       // 實牆：近側淡到 0.06、遠側全實心。玻璃帷幕：近側全穿透(0)＝看進室內、遠側維持半透明玻璃(0.42)＝透出城市與塔身。
       const target = isGlass ? (near ? 0 : 0.42) : (near ? 0.06 : 1);
       const wmat = w.material as THREE.MeshStandardMaterial;
+      if (Math.abs(target - wmat.opacity) > 0.004) wallsChanging = true;   // 還在淡入/淡出＝投影會變
       wmat.opacity += (target - wmat.opacity) * 0.15;
       const wantTrans = isGlass ? true : wmat.opacity < 0.985;   // 玻璃恆半透明；實牆只有淡出中才走半透明，遠側維持實體避免排序翻轉閃
       // 淡出中的近牆同時關掉 depthWrite：近乎透明牆若仍寫深度，會遮擋它後方的桌椅地板＝破圖。玻璃恆不寫深度（外殼看穿室內）。
@@ -1828,20 +1842,28 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
       dustPos[i * 3] += Math.sin(tt * 0.3 + i) * 0.0015;
     }
     dustGeo.attributes.position.needsUpdate = true;
-    if (updateContactShadow && (csTick++ & 1) === 0) updateContactShadow();  // 每兩幀更新（~15fps），軟陰影肉眼無感
-    if (!low) renderer.shadowMap.needsUpdate = (shTick++ & 1) === 0;          // 每兩幀重算一次方向光陰影（放在接地陰影之後，避免在黑色 override 那次誤更新）
+    const camMoving = panning || drag || Math.abs(az - azTarget) > 1e-3 || Math.abs(D - Dtarget) > 1e-3;
+    // 兩種陰影都只在畫面會變時重算（見 shadowStale 註解）；有變時仍維持每兩幀節流（~15fps 陰影）。
+    // 動靜停止後再多算 0.7 秒（linger）＝收掉到站定格、手勢淡出等尾巴，不會凍住走路姿勢的殘影。
+    const actorsMoving = actors.some((a) => a.emoting || ((a.state === "toWander" || a.state === "toHome") && a.target));
+    if (shadowStale || actorsMoving || camMoving || wallsChanging) shadowLingerUntil = tt + 0.7;
+    const shadowsActive = tt < shadowLingerUntil;
+    if (updateContactShadow && (shadowStale || (shadowsActive && (csTick++ & 1) === 0))) updateContactShadow();
+    if (!low && (shadowStale || (shadowsActive && (shTick++ & 1) === 0))) {
+      renderer.shadowMap.needsUpdate = true;   // autoUpdate=false：renderer 畫完這次會自動歸位
+    }
+    shadowStale = false;
     if (composer) composer.render(dt); else renderer.render(scene, cam);
     // 無人值守偵測：沒操作、沒 NPC 在移動/比手勢、鏡頭已停 → 停掉迴圈完全不渲染（GPU~0），等 wake() 喚醒。
     // 保守條件避免 stale frame：只要還有人在走或鏡頭還在滑就不凍；喚醒源已涵蓋互動/可見性/setWorkers/setActive/resize。
     // 只要鏡頭已停 + 逾 DORMANT_AFTER 沒真互動就凍結；不看 NPC 是否在走（環境閒逛純裝飾，凍在原地也無妨，
     // 任務驅動的走動會經 setWorkers→wake() 讓 lastActive 保持新鮮、幾秒內走完，不會被凍到）。
-    const camMoving = panning || drag || Math.abs(az - azTarget) > 1e-3 || Math.abs(D - Dtarget) > 1e-3;
     if (!camMoving && performance.now() - lastActive > DORMANT_AFTER) { cancelAnimationFrame(raf); raf = 0; idleFrozen = true; }
   }
   // WebGL context 復原：瀏覽器在背景/顯卡吃緊時可能丟掉 context。preventDefault 讓它之後能還原（否則永久遺失＝黑屏且要重整）；
   // 還原時重建 composer render target（resize）、重畫陰影、重啟迴圈，避免黑屏或殘影。
   function onCtxLost(e: Event) { if (disposed) return; e.preventDefault(); cancelAnimationFrame(raf); raf = 0; }
-  function onCtxRestored() { if (disposed) return; csTick = 0; shTick = 0; resize(); renderer.shadowMap.needsUpdate = true; frameAcc = 0; clock.getDelta(); idleFrozen = false; raf = requestAnimationFrame(animate); }
+  function onCtxRestored() { if (disposed) return; csTick = 0; shTick = 0; shadowStale = true; resize(); renderer.shadowMap.needsUpdate = true; frameAcc = 0; clock.getDelta(); idleFrozen = false; raf = requestAnimationFrame(animate); }
   canvas.addEventListener("webglcontextlost", onCtxLost, false);
   canvas.addEventListener("webglcontextrestored", onCtxRestored, false);
   animate();
@@ -1854,6 +1876,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
       const rosterKey = (list: WorkerLite[]) => list.map((w) => `${w.id}:${w.colorIndex}:${w.name}:${w.departmentId ?? ""}`).join("|");
       if (rosterKey(workers) !== rosterKey(currentWorkers)) {
         wake();
+        shadowStale = true;   // 名冊/佈局重建＝陰影下一幀無條件重算
         currentWorkers = workers.slice();
         buildLayout(workers);
         buildActors(workers);
@@ -1877,7 +1900,7 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
           a.busy = w.busy;
           if (justDone) {
             a.doneUntil = clock.elapsedTime + 8;   // 小窗切「✓完成，走去回報」顯示一段時間＝報告可見
-            pushLog(a.name, `✓ ${(w.speech || "完成").slice(0, 22)}`, w.colorIndex);
+            pushLog(a.name, `✓ ${(stripMarkdown(w.speech || "") || "完成").slice(0, 22)}`, w.colorIndex);
           }
           if (a.state === "home" || a.state === "atWander") playBase(a, w.busy ? BUSY_CLIPS : IDLE_CLIPS);
           // 臨時 NPC（🔍研究員/🏛圓桌）查完＝走去老闆桌揮手回報，再讓 server 到點把它移除（＝走過來報告完才消失）。

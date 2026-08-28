@@ -7,7 +7,9 @@ import { FURNITURE_DEFS } from "../game/furniture";
 import { roomName } from "../workspace";
 import { milestoneLevel } from "../milestones";
 import { stationForTool, type StationKey } from "../stations";
-import { computeCtxGauge } from "../ctxGauge";
+import { STATION_THEME } from "../stationTheme";
+import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
+import { stripMarkdown } from "../speechText";
 import { t } from "../i18n";
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
@@ -28,17 +30,6 @@ const STATION_DESCRIPTIONS: Record<string, string> = {
   meeting: t("作戰室會議桌——圓桌辯論在這開"),
 };
 
-// 工作小窗（SAMS 風）站點主題：對齊 3D officeScene 的一套，讓像素版也有「頭上浮螢幕」。
-// kind=web 的小窗會放真實瀏覽器截圖(/api/webshot)；其餘顯示站點主題＋即時任務文字。
-const WORKWINDOW_THEME: Record<string, { label: string; accent: string; kind: string }> = {
-  terminal: { label: t("終端機"), accent: "#58f08a", kind: "term" },
-  code:     { label: t("編輯器"), accent: "#7aa2ff", kind: "code" },
-  web:      { label: t("瀏覽器"), accent: "#3f8cff", kind: "web" },
-  books:    { label: t("知識庫"), accent: "#e0b060", kind: "docs" },
-  check:    { label: t("驗證"),   accent: "#35d0b0", kind: "check" },
-  board:    { label: t("看板"),   accent: "#b98cff", kind: "board" },
-  meeting:  { label: t("白板"),   accent: "#8fd0ff", kind: "board" },
-};
 
 type VisualWorker = {
   id: string;
@@ -194,6 +185,8 @@ type Props = {
   missions?: DepartmentMission[];
   departments?: Department[];
   roundtableIds?: ReadonlySet<string>;
+  /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
+  swapThresholdTokens?: number;
   /** 點擊作戰室會議桌時觸發（App 用它開圓桌模式並聚焦輸入框）。 */
   onMeetingTableClick?(): void;
   /** Tap on empty office floor — App uses it to dismiss the task log. */
@@ -217,7 +210,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -253,7 +246,7 @@ export function GameCanvas({
       const log = speechLogRef.current.get(w.id) ?? { last: "", lines: [], cmds: 0 };
       speechLogRef.current.set(w.id, log);
       if (!w.busy) { log.last = ""; log.lines.length = 0; log.cmds = 0; continue; }
-      const sp = w.character.speech.trim();
+      const sp = stripMarkdown(w.character.speech);
       if (sp && sp !== log.last) {
         log.last = sp;
         // 時間戳用 server 蓋章的事件時間（speechAt），不用 render 當下——重整/重連重播歷史時才不會全變成「現在」
@@ -624,7 +617,7 @@ export function GameCanvas({
         const missionStep = mission?.currentStepIndex == null ? null : mission.steps[mission.currentStepIndex];
         const collaboratorId = collaboration?.sourceWorkerId === w.id ? collaboration.targetWorkerId : collaboration?.sourceWorkerId;
         const collaborator = collaboratorId ? workersById.get(collaboratorId) : undefined;
-        const speech = w.character.speech.trim();
+        const speech = stripMarkdown(w.character.speech);
         const isActive = w.id === activeId;
         const compact = !isActive;
         const compactSpeech = speech || (w.busy ? t("執行中…") : "");
@@ -637,7 +630,7 @@ export function GameCanvas({
         const elapsedSec = w.busy && startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : null;
         // 工作小窗：忙碌且站點有主題才浮出；web 站點放真實瀏覽器截圖。開窗時就不再另外顯示 speech 泡（避免重複）。
         const winStation = w.character.station;
-        const winTheme = w.busy && winStation ? WORKWINDOW_THEME[winStation] : undefined;
+        const winTheme = w.busy && winStation ? STATION_THEME[winStation] : undefined;
         const winQuery = w.character.webQuery?.trim() || "";
         const showWindow = !!winTheme;
         const bubbleShown = showWindow ? "" : shown;
@@ -715,7 +708,7 @@ export function GameCanvas({
                   <div className="npc-workwindow__body npc-workwindow__body--lines">
                     {(() => {
                       const raw = speechLogRef.current.get(w.id)?.lines.slice(-7) ?? [];
-                      const src = raw.length ? raw : [{ text: w.character.speech.trim() || t("執行中…"), at: w.character.speechAt ?? Date.now() }];
+                      const src = raw.length ? raw : [{ text: stripMarkdown(w.character.speech) || t("執行中…"), at: w.character.speechAt ?? Date.now() }];
                       // 真指令行才給 $ 提示符＋指令名高亮（其他動作用 ›）；連續重複行收合成一行 ×n；
                       // 過長行改中段省略，結尾的檔名/參數比開頭的路徑更有資訊量
                       const rows: Array<{ text: string; cmd: boolean; n: number; at: number }> = [];
@@ -746,7 +739,7 @@ export function GameCanvas({
                 ) : (
                   <div className="npc-workwindow__body">
                     {winTheme.kind === "check" ? "☑ " : winTheme.kind === "board" ? "• " : ""}
-                    {(w.character.speech.trim() || t("執行中…")).slice(0, 90)}
+                    {(stripMarkdown(w.character.speech) || t("執行中…")).slice(0, 90)}
                   </div>
                 )}
               </div>
@@ -759,9 +752,9 @@ export function GameCanvas({
               const autoLabel = autoMode === "invincible" ? t("⚡ 無限制") : autoMode === "full" ? t("完全自動") : autoMode === "safe" ? t("安全自動") : t("手動核准");
               const dept = full?.departmentId ? departments.find((candidate) => candidate.id === full.departmentId) : undefined;
               // 各回合 contextTokens 序列丟給 ctxGauge：扣掉出生底盤後換算「可用量」，
-              // 條滿 100% = 換腦門檻 170k（觸發仍在 server 端，這裡純顯示）。
+              // 條滿 100% = server 換腦門檻（snapshot 帶下來；觸發仍在 server 端，這裡純顯示）。
               const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
-              const ctxGauge = computeCtxGauge(ctxSeries);
+              const ctxGauge = computeCtxGauge(ctxSeries, swapThresholdTokens);
               const ctxPct = ctxGauge?.pct ?? null;
               const ctxLevel = ctxPct === null ? null : ctxPct >= 85 ? "danger" : ctxPct >= 60 ? "warn" : "ok";
               return (
@@ -780,7 +773,7 @@ export function GameCanvas({
                   <span className={`npc-identity-card__stat npc-identity-card__auto npc-identity-card__auto--${autoMode}`}>{autoLabel}</span>
                 </div>
                 {ctxPct !== null && (
-                  <div className={`npc-identity-card__ctx npc-identity-card__ctx--${ctxLevel}`} title={t("context 約 {current}k（底盤 {baseline}k 不計）；條滿 = 換腦門檻 170k", { current: Math.round((ctxGauge?.currentTokens ?? 0) / 1000), baseline: Math.round((ctxGauge?.baselineTokens ?? 0) / 1000) })}>
+                  <div className={`npc-identity-card__ctx npc-identity-card__ctx--${ctxLevel}`} title={t("context 約 {current}k（底盤 {baseline}k 不計）；條滿 = 換腦門檻 {limit}k", { current: Math.round((ctxGauge?.currentTokens ?? 0) / 1000), baseline: Math.round((ctxGauge?.baselineTokens ?? 0) / 1000), limit: Math.round((swapThresholdTokens ?? SWAP_THRESHOLD_TOKENS) / 1000) })}>
                     <span className="npc-identity-card__ctx-label">CTX</span>
                     <span className="npc-identity-card__ctx-track"><span className="npc-identity-card__ctx-fill" style={{ width: `${ctxPct}%` }} /></span>
                     <span className="npc-identity-card__ctx-pct">{ctxPct}%</span>

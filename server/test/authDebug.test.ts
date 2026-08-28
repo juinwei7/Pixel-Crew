@@ -12,7 +12,8 @@ test("includes the resolved executable, exit code, and raw output", () => {
     error: null,
   });
   assert.match(debug, /resolved executable:/);
-  assert.match(debug, /command: .*claude auth status --json/);
+  // Windows（WinGet）會把 claude 解析成 claude.exe；容忍平台副檔名，別把測試綁死在 POSIX 名稱。
+  assert.match(debug, /command: .*claude(\.\w+)? auth status --json/);
   assert.match(debug, /duration: 42ms/);
   assert.match(debug, /exit: 0/);
   assert.match(debug, /stdout: Checking for updates/);

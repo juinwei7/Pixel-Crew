@@ -59,7 +59,8 @@ const SHELL_META = /[\r\n;&|<>`]|\$[({]/;
 const SAFE_BASH_COMMANDS = [
   /^(pwd|ls|cat|head|tail|wc|echo|printf)(?:\s|$)/,
   /^(rg|grep)(?:\s|$)/,
-  /^sed\s+-n(?:\s|$)/,
+  // 刻意不放行 sed：即使 `sed -n` 也能透過 w/W 指令與 s///w 旗標寫檔、用 e 指令執行外部命令
+  // （例：`echo x | sed -n "w /path"`），無法用前綴白名單安全判定，改回退到手動核准。
   /^git\s+(status|diff|log|show)(?:\s|$)/,
   /^(npm|pnpm)\s+test(?:\s|$)/,
   /^(npm|pnpm)\s+run\s+(test|build|check|lint|typecheck)(?:\s|$)/,

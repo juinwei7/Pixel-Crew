@@ -49,6 +49,7 @@ export const enServerA: Record<string, string> = {
   "⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）": "⏰ Hit the usage cap, scheduled to auto-resume at {time} (can be turned off in ⚙ Features; a server restart cancels this schedule)",
   "⏰ 用量上限已重置，自動繼續先前被中斷的工作": "⏰ Usage cap has reset, auto-resuming the previously interrupted work",
   "【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。請檢查上一回合做到哪裡，接著把被中斷的工作完成並回報。": "[System notice] Your last turn was interrupted by the subscription usage cap, which has now reset. Check where the last turn left off, then finish the interrupted work and report back.",
+  "【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。中斷期間收到的下列指示可能沒有被處理（依先後排序），請逐一檢查、把沒完成的完成並回報：\n{list}": "[System notice] Your last turn was interrupted by the subscription usage cap, which has now reset. The following instructions received during the interruption may not have been handled (in order); check each one, finish what's incomplete, and report back:\n{list}",
   "已清除工作階段，NPC 記憶重新開始。": "Session cleared, NPC memory has restarted.",
   "伺服器已重啟，上一個未完成的回合已中止": "The server restarted, the previous unfinished turn was aborted",
   "決策模型格式無效": "Decision model format is invalid",

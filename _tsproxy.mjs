@@ -236,9 +236,7 @@ function parseToken(tok) {
   if (!exp || Date.now() > exp) return null;
   if (aud !== 'own' && aud !== 'shr' && aud !== 'grd') return null;
   const expected = mac(payloadParts.join('.'));
-  if (m.length !== expected.length) return null;
-  try { return crypto.timingSafeEqual(Buffer.from(m), Buffer.from(expected)) ? { aud, exp, sid: payloadParts[2] } : null; }
-  catch { return null; }
+  return timingEq(m, expected) ? { aud, exp, sid: payloadParts[2] } : null; // 用本檔統一的定時比較助手
 }
 function parseCookies(header) {
   const out = {};
@@ -339,6 +337,10 @@ const SHARE_FORBIDDEN = [
   ['POST',   /^\/api\/providers\/[^/]+\/install$/],           // 安裝 provider CLI
   ['POST',   /^\/api\/mcp\/import-from-claude-desktop$/],     // 拉 host 上的 MCP 設定
   ['GET',    /^\/api\/webshot$/],                             // 伺服器抓任意 URL（SSRF）→ 訪客一律不可直接觸發
+  // 轉接站自身管理：本體 /api/remote-access/* 會以 8787→8790 的 127.0.0.1 直連（isLocalDirect＝owner）
+  // 呼叫 /__gate/api/*，等於讓分享訪客越權改主通行碼／開關 tunnel。整個子樹一律 owner 專屬。
+  ['GET',    /^\/api\/remote-access(\/|$)/],
+  ['POST',   /^\/api\/remote-access(\/|$)/],
 ];
 function shrForbidden(method, path) {
   const m = String(method || 'GET').toUpperCase();
