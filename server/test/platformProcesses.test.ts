@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { commandInvocation, execCli, processTreeInvocation, quoteWindowsCmdArgument, resolveExecutable } from "../src/platform/processes.js";
+import { commandInvocation, execCli, listPosixDescendants, processTreeInvocation, quoteWindowsCmdArgument, resolveExecutable } from "../src/platform/processes.js";
 
 test("resolves Windows npm shims using PATHEXT", () => {
   const found = new Set(["C:\\tools\\claude.cmd"]);
@@ -36,6 +36,30 @@ test("uses taskkill for a Windows process tree", () => {
     args: ["/PID", "123", "/T", "/F"],
   });
   assert.equal(processTreeInvocation(123, "darwin"), null);
+});
+
+test("collects POSIX descendants breadth-first before killing", async () => {
+  const tree = new Map<number, number[]>([
+    [100, [200, 201]],
+    [200, [300]],
+    [300, [400]],
+  ]);
+  const listed: number[] = [];
+  const descendants = await listPosixDescendants(100, async (parent) => {
+    listed.push(parent);
+    return tree.get(parent) ?? [];
+  });
+  assert.deepEqual(descendants, [200, 201, 300, 400]);
+  assert.deepEqual(listed, [100, 200, 201, 300, 400]);
+});
+
+test("POSIX descendant walk tolerates cycles and bad pids", async () => {
+  const tree = new Map<number, number[]>([
+    [100, [200, 0, -5, Number.NaN]],
+    [200, [100, 300]],
+  ]);
+  const descendants = await listPosixDescendants(100, async (parent) => tree.get(parent) ?? []);
+  assert.deepEqual(descendants, [200, 300]);
 });
 
 test("executes an npm-style cmd shim with spaced arguments on Windows", { skip: process.platform !== "win32" }, async () => {

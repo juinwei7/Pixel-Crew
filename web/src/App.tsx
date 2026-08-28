@@ -30,6 +30,7 @@ import { ModelSwitchCard } from "./components/ModelSwitchCard";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { OnboardingTour, hasSeenTour } from "./components/OnboardingTour";
 import { Office3D } from "./components/Office3D";
+import { RichText } from "./components/RichText";
 import { theme } from "./theme";
 import { parseMcpToolName } from "./mcpToolName";
 import { roundtablePrompt } from "./roundtablePrompt";
@@ -736,6 +737,7 @@ export function App() {
         missions={missionList}
         departments={departmentList}
         roundtableIds={roundtableIdSet}
+        swapThresholdTokens={system?.brainSwapThresholdTokens}
         onMeetingTableClick={() => {
           setRoundtableMode(true);
           setComposerFocusRequest((request) => request + 1);
@@ -1161,17 +1163,11 @@ export function App() {
                       {warroomHistoryContent.report.topic && <p className="warroom-history__topic">{t("主題：")}{warroomHistoryContent.report.topic}{warroomHistoryContent.report.difficulty ? ` · ${warroomHistoryContent.report.difficulty}` : ""}</p>}
                       <WarroomVerdictBody result={warroomHistoryContent.report.result} />
                     </>
-                  : <div className="warroom-history__content">{warroomHistoryContent.content.split("\n").map((line, i) => {
-                  // 輕量 Markdown 排版：報告是我們自己產的格式（#/##/-/**），照樣式渲染即可，
-                  // 不引整套 Markdown 引擎。這樣歷史看起來跟結果卡同一家人，不再是滿版原始符號。
-                  if (line.startsWith("# ")) return <h2 key={i}>{line.slice(2)}</h2>;
-                  if (line.startsWith("## ")) return <h3 key={i}>{line.slice(3)}</h3>;
-                  const clean = line.replace(/\*\*/g, "");
-                  if (clean.startsWith("- ")) return <p key={i} className="warroom-history__li">{clean.slice(2)}</p>;
-                  if (clean.startsWith("  - ")) return <p key={i} className="warroom-history__li warroom-history__li--sub">{clean.slice(4)}</p>;
-                  if (!clean.trim()) return null;
-                  return <p key={i}>{clean}</p>;
-                })}</div>}
+                  : <div className="warroom-history__content">
+                      {/* 完整 Markdown 渲染（RichText 已在主包）：巢狀清單/表格/粗體都吃得下，
+                          不再用手刻的逐行 #/##/- 解析。 */}
+                      <RichText text={warroomHistoryContent.content} compact />
+                    </div>}
               </>
             : warroomHistory.length === 0
               ? <p className="warroom-result__note">{t("還沒有任何報告——開一場圓桌就會自動存檔到這裡。")}</p>

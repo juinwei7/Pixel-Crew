@@ -193,6 +193,20 @@ export const enRoot: Record<string, string> = {
   "其他工具": "Other Tools",
   "作戰室": "War Room",
 
+  // stationTheme.ts（工作小窗／焦點大螢幕／3D 頭頂小窗共用主題表）
+  "編輯器": "Editor",
+  "瀏覽器": "Browser",
+  "知識庫": "Docs",
+  "看板": "Board",
+  "白板": "Whiteboard",
+  "正在執行指令": "Running commands",
+  "正在寫程式": "Writing code",
+  "正在上網查資料": "Browsing the web",
+  "正在查閱文件": "Reading docs",
+  "正在驗證測試": "Verifying tests",
+  "正在更新看板": "Updating the board",
+  "正在開會討論": "In a meeting",
+
   // game/personalDesks.ts
   "{count}人": "{count} people",
   "個人工作站": "Personal Desk",

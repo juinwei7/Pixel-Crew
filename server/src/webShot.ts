@@ -6,19 +6,45 @@
 //   - 同查詢 CACHE_TTL_MS 內複用截圖，重畫小窗不重截。
 //   - 低解析度 JPEG，小窗根本不需要高清。
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import net from "node:net";
 import { lookup } from "node:dns/promises";
 import { WebSocket } from "ws";
 
-const CHROME_CANDIDATES = [
-  process.env.WEBSHOT_CHROME ?? "",
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-].filter(Boolean);
+// 依平台列出常見的 Chromium 系瀏覽器路徑（Windows/macOS/Linux 都要能找到，否則「上網查」在
+// 非 Windows 上永遠開不起來）。實際採用哪一個由 ensureChrome 挑「第一個真的存在」的，而非死用第一項。
+function chromeCandidates(): string[] {
+  const p = process.platform;
+  if (p === "win32") {
+    const pf = process.env.PROGRAMFILES || "C:\\Program Files";
+    const pfx86 = process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
+    const local = process.env.LOCALAPPDATA || "";
+    return [
+      `${pf}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${pfx86}\\Google\\Chrome\\Application\\chrome.exe`,
+      local && `${local}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${pf}\\Microsoft\\Edge\\Application\\msedge.exe`,
+      `${pfx86}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    ].filter(Boolean) as string[];
+  }
+  if (p === "darwin") {
+    const home = homedir();
+    return ["", home].flatMap((base) => [
+      `${base}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+      `${base}/Applications/Chromium.app/Contents/MacOS/Chromium`,
+      `${base}/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge`,
+      `${base}/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`,
+    ]);
+  }
+  return [
+    "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium", "/usr/bin/chromium-browser",
+    "/snap/bin/chromium", "/usr/bin/microsoft-edge",
+  ];
+}
 
 const DEBUG_PORT = Number(process.env.WEBSHOT_CDP_PORT ?? 9333);
 const IDLE_MS = 90_000;            // 閒置 90 秒 → 自動關閉 Chrome 省資源
@@ -43,6 +69,19 @@ let idleTimer: NodeJS.Timeout | null = null;
 
 function log(msg: string) { console.log(`[webshot] ${msg}`); }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// 截圖 buffer 佔記憶體（每筆 60–200KB）；插入前先清掉過期項，再對總量設上限（丟最舊），
+// 避免長命伺服器上 NPC 累月瀏覽把 heap 塞爆。
+const CACHE_MAX = 60;
+function pruneCache() {
+  const now = Date.now();
+  for (const [k, v] of cache) if (now - v.ts >= CACHE_TTL_MS) cache.delete(k);
+  while (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 function bumpIdle() {
   if (idleTimer) clearTimeout(idleTimer);
@@ -82,8 +121,10 @@ function cdpHttp(path: string, method: "GET" | "PUT" = "GET"): Promise<any> {
 
 async function ensureChrome() {
   if (chrome && chromePid) return;
-  const bin = CHROME_CANDIDATES[0];
-  if (!bin) throw new Error("找不到 Chrome 執行檔（設 WEBSHOT_CHROME 指定路徑）");
+  // 環境變數優先（使用者明確指定，可能在 PATH 上而非絕對路徑，照用不檢查存在）；否則挑第一個實際存在的。
+  const envBin = process.env.WEBSHOT_CHROME?.trim();
+  const bin = envBin || chromeCandidates().find((path) => existsSync(path));
+  if (!bin) throw new Error("找不到可用的 Chrome/Chromium/Edge 瀏覽器（可設環境變數 WEBSHOT_CHROME 指定執行檔路徑）");
   profileDir = mkdtempSync(join(tmpdir(), "pc-webshot-"));
   const args = [
     "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
@@ -104,7 +145,7 @@ async function ensureChrome() {
   for (;;) {
     try { await cdpHttp("/json/version"); break; } catch {
       if (Date.now() > deadline) throw new Error("Chrome DevTools 未在時限內就緒");
-      await new Promise((r) => setTimeout(r, 250));
+      await sleep(250);
     }
   }
 }
@@ -266,7 +307,7 @@ export function captureWebShot(query: string): Promise<Buffer> {
     try {
       const { buf, ready } = await doCapture(query);
       // 只有「確定抓到內容」才進快取；轉場空白/沒讀到內容就不快取，下次請求會重截＝不會把純白卡 5 分鐘。
-      if (ready) cache.set(key, { buf, ts: Date.now() });
+      if (ready) { pruneCache(); cache.set(key, { buf, ts: Date.now() }); }
       bumpIdle();
       return buf;
     } catch (e) {

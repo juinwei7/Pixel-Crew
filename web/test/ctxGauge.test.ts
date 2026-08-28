@@ -38,3 +38,9 @@ test("小幅回落（雜訊）不當成換腦", () => {
 test("底盤本身高於門檻：直接 100%", () => {
   assert.equal(computeCtxGauge([180_000])?.pct, 100);
 });
+
+test("server 帶下來的門檻覆蓋預設值", () => {
+  // (60k − 20k) / (100k − 20k) = 50%
+  assert.equal(computeCtxGauge([20_000, 60_000], 100_000)?.pct, 50);
+  assert.equal(computeCtxGauge([20_000, 100_000], 100_000)?.pct, 100);
+});
