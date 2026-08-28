@@ -224,7 +224,28 @@ pixel-crew server listening on http://127.0.0.1:8787
 ```
 
 Pixel Crew 刻意只接受 localhost／loopback 連線，不能把 `HOST` 改成區域網路
-位址。若需遠端使用，必須先另外設計認證、TLS 與來源限制。
+位址。遠端／手機使用請走內建的「手機連線」轉接站（見下節），它自帶登入關卡，
+不會把無認證的本體直接暴露到網路上。
+
+## 手機連線（遠端存取）
+
+macOS 版與 Windows 版功能相同：在 Pixel Crew 介面開啟「手機連線」面板，
+啟動轉接站後可選兩種對外通道：
+
+- **免安裝通道（Cloudflare Tunnel）**：點「下載」會自動抓對應 CPU 架構的
+  `cloudflared`（Apple Silicon／Intel 皆支援；若已用 `brew install cloudflared`
+  安裝也會自動偵測）。啟動後拿到一組 `https://…trycloudflare.com` 網址，
+  手機免裝任何東西，開網址輸入通行碼即可。網址每次重啟會變。
+- **Tailscale（固定網址・較私密）**：安裝
+  [Tailscale](https://tailscale.com/download) 並登入即可，官方 App 內建的
+  CLI（`/Applications/Tailscale.app` 內）會被自動偵測，不需手動設定 PATH。
+
+「開機自動啟動轉接站」在 macOS 透過 `~/Library/LaunchAgents` 的 launchd
+設定實現，開關都在同一個面板，下次登入起生效。
+
+首次啟動轉接站時，需在**這台 Mac 本機**開啟設定精靈設定主通行碼；遠端
+一律要求登入，通行碼與密鑰存在安裝目錄的 `_tsproxy.secret.json`，不會進
+版本控制。
 
 ## 移除
 

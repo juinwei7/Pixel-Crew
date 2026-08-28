@@ -12,6 +12,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,6 +68,8 @@ const TS_CANDIDATES = [
   'C:\\Program Files\\Tailscale\\tailscale.exe',
   'C:\\Program Files (x86)\\Tailscale\\tailscale.exe',
   '/usr/bin/tailscale', '/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale',
+  // macOS 官方 App（App Store / standalone）不會把 CLI 放進 PATH，藏在 .app 裡
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
 ].filter(Boolean);
 function tsExec(args) {
   return new Promise((resolve) => {
@@ -111,9 +114,12 @@ async function tsSetMode(mode) {
   return tsExec(['serve', '--https=443', 'off']);
 }
 
-// --- 開機自啟（Windows 排程：登入時自動把轉接站跑起來，預設關，由精靈開關）---
+// --- 開機自啟（登入時自動把轉接站跑起來，預設關，由精靈開關）---
+// Windows：工作排程器 onlogon；macOS：~/Library/LaunchAgents 的 launchd plist（下次登入生效，
+// 與 Windows onlogon 一致——當下這顆行程已經在跑，不需要立刻再起一份）。
 const AUTOSTART_TASK = process.env.PC_TSPROXY_TASK || 'PixelCrew ts proxy';
 const LAUNCH_VBS = path.join(__dirname, '_tsproxy_launch.vbs');
+const LAUNCH_PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.pixelcrew.tsproxy.plist');
 function schtasks(args) {
   return new Promise((resolve) => {
     execFile('schtasks', args, { timeout: 15000, windowsHide: true }, (err, stdout, stderr) => {
@@ -121,13 +127,49 @@ function schtasks(args) {
     });
   });
 }
+const xmlEsc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function launchdPlist() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.pixelcrew.tsproxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEsc(process.execPath)}</string>
+    <string>${xmlEsc(path.join(__dirname, '_tsproxy.mjs'))}</string>
+  </array>
+  <key>WorkingDirectory</key><string>${xmlEsc(__dirname)}</string>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+`;
+}
 async function autostartStatus() {
-  if (process.platform !== 'win32') return { supported: false, enabled: false };
-  const r = await schtasks(['/query', '/tn', AUTOSTART_TASK]);
-  return { supported: true, enabled: r.ok };
+  if (process.platform === 'win32') {
+    const r = await schtasks(['/query', '/tn', AUTOSTART_TASK]);
+    return { supported: true, enabled: r.ok };
+  }
+  if (process.platform === 'darwin') return { supported: true, enabled: fs.existsSync(LAUNCH_PLIST) };
+  return { supported: false, enabled: false };
 }
 async function autostartSet(on) {
-  if (process.platform !== 'win32') return { ok: false, stderr: '開機自啟目前僅支援 Windows' };
+  if (process.platform === 'darwin') {
+    try {
+      if (on) {
+        fs.mkdirSync(path.dirname(LAUNCH_PLIST), { recursive: true });
+        fs.writeFileSync(LAUNCH_PLIST, launchdPlist());
+      } else {
+        // 先 unload 讓 launchd 忘掉它（若本來就沒載入會失敗，無妨），再刪檔。
+        await new Promise((r) => execFile('launchctl', ['unload', LAUNCH_PLIST], { timeout: 10000 }, () => r()));
+        fs.rmSync(LAUNCH_PLIST, { force: true });
+      }
+      return { ok: true, stdout: '', stderr: '' };
+    } catch (e) {
+      return { ok: false, stderr: String((e && e.message) || e) };
+    }
+  }
+  if (process.platform !== 'win32') return { ok: false, stderr: '開機自啟僅支援 Windows / macOS' };
   if (on) {
     if (!fs.existsSync(LAUNCH_VBS)) return { ok: false, stderr: '找不到 _tsproxy_launch.vbs' };
     return schtasks(['/create', '/sc', 'onlogon', '/tn', AUTOSTART_TASK, '/tr', `wscript.exe "${LAUNCH_VBS}"`, '/f']);
@@ -138,29 +180,37 @@ async function autostartSet(on) {
 // --- Cloudflare Tunnel（cloudflared）：免安裝對外通道，給別人零門檻用 ---
 // 單一 exe，可打包或首次自動下載；quick tunnel 給 https://xxx.trycloudflare.com，
 // 網址每次重啟會變，安全靠登入關卡。狀態存記憶體（proc/url），偏好存 config.channel。
-const CF_BIN = process.env.PC_CLOUDFLARED_EXE
-  || path.join(__dirname, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+// 執行檔尋找順序：環境變數 → 本目錄（自動下載目的地）→ 系統常見安裝位置（brew 等）。
+const CF_LOCAL = path.join(__dirname, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+const CF_SYSTEM = process.platform === 'win32' ? [] : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'];
+function cfBin() {
+  if (process.env.PC_CLOUDFLARED_EXE) return process.env.PC_CLOUDFLARED_EXE;
+  for (const candidate of [CF_LOCAL, ...CF_SYSTEM]) {
+    try { if (fs.existsSync(candidate)) return candidate; } catch {}
+  }
+  return CF_LOCAL;   // 都沒有＝之後下載到這
+}
+const CF_ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
 const CF_DOWNLOAD = process.platform === 'win32'
   ? 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
   : (process.platform === 'darwin'
-    ? 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz'
-    : 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64');
+    ? `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${CF_ARCH}.tgz`
+    : `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}`);
 let cfProc = null;      // 執行中的 cloudflared 子行程
 let cfUrl = '';         // 目前分配到的 trycloudflare 公開網址
 let cfDownloading = false;
 
-function cfInstalled() { return fs.existsSync(CF_BIN); }
+function cfInstalled() { return fs.existsSync(cfBin()); }
 function cfInfo() { return { installed: cfInstalled(), running: !!cfProc, url: cfUrl, downloading: cfDownloading }; }
 
-// 下載 cloudflared exe（跟隨 GitHub redirect）。Windows/Linux 是裸執行檔，直接存檔。
+// 下載 cloudflared（跟隨 GitHub redirect）。Windows/Linux 是裸執行檔直接存檔；
+// macOS 官方只出 tgz（內含單一 cloudflared 執行檔），下載後用系統 tar 解到本目錄。
 function cfDownload() {
-  if (process.platform === 'darwin') {
-    return Promise.resolve({ ok: false, error: 'macOS 需自行安裝 cloudflared（brew install cloudflared）' });
-  }
   if (cfDownloading) return Promise.resolve({ ok: false, error: '下載進行中' });
   cfDownloading = true;
+  const isTgz = CF_DOWNLOAD.endsWith('.tgz');
   return new Promise((resolve) => {
-    const tmp = CF_BIN + '.download';
+    const tmp = CF_LOCAL + '.download';
     const file = fs.createWriteStream(tmp);
     const get = (u, depth) => {
       if (depth > 6) { cleanup('太多重導向'); return; }
@@ -172,8 +222,17 @@ function cfDownload() {
         res.pipe(file);
         file.on('finish', () => file.close(() => {
           try {
-            fs.renameSync(tmp, CF_BIN);
-            if (process.platform !== 'win32') fs.chmodSync(CF_BIN, 0o755);
+            if (isTgz) {
+              execFile('tar', ['-xzf', tmp, '-C', __dirname, 'cloudflared'], (err) => {
+                try { fs.unlinkSync(tmp); } catch {}
+                if (err) { cfDownloading = false; resolve({ ok: false, error: 'tar 解壓失敗：' + String((err && err.message) || err) }); return; }
+                try { fs.chmodSync(CF_LOCAL, 0o755); } catch {}
+                cfDownloading = false; resolve({ ok: true });
+              });
+              return;
+            }
+            fs.renameSync(tmp, CF_LOCAL);
+            if (process.platform !== 'win32') fs.chmodSync(CF_LOCAL, 0o755);
             cfDownloading = false; resolve({ ok: true });
           } catch (e) { cleanup(String(e && e.message || e)); }
         }));
@@ -196,7 +255,7 @@ function cfStart() {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (r) => { if (!settled) { settled = true; resolve(r); } };
-    const proc = spawn(CF_BIN, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${LISTEN_PORT}`], { windowsHide: true });
+    const proc = spawn(cfBin(), ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${LISTEN_PORT}`], { windowsHide: true });
     cfProc = proc;
     const onData = (buf) => {
       const m = String(buf).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
