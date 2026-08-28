@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { apiRequest } from "../api";
 import { buildProviderWorkflowEntries } from "../commandInteraction";
+import { t } from "../i18n";
 import type { ProviderId } from "../types";
 
 export type PaletteItem = { key: string; label: string; description: string; value: string; kind: "recent" | "project" };
@@ -56,14 +57,14 @@ export function useComposerPalette(config: {
     const project = buildProviderWorkflowEntries(provider, library, slashCommands).map((entry) => ({
       key: `project-${entry.key}`,
       label: entry.label,
-      description: entry.description || (provider === "claude" ? "Claude 專案指令" : "Codex Repo Skill"),
+      description: entry.description || (provider === "claude" ? t("Claude 專案指令") : "Codex Repo Skill"),
       value: entry.value,
       kind: "project" as const,
     })).filter((entry) => !invocation || entry.label.startsWith(invocation));
     const recent = history.map((command, index) => ({
       key: `recent-${index}-${command}`,
       label: command,
-      description: `最近使用 · ${provider === "claude" ? "Claude" : "Codex"}`,
+      description: t("最近使用 · {provider}", { provider: provider === "claude" ? "Claude" : "Codex" }),
       value: command,
       kind: "recent" as const,
     }));

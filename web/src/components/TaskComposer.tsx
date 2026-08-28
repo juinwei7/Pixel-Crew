@@ -21,6 +21,10 @@ import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalett
 import { useComposerSessionExtras } from "../hooks/useComposerSessionExtras";
 import { useGlobalFileDrop } from "../hooks/useGlobalFileDrop";
 import type { CapabilityState, CommandSubmission, ProviderId, WorkerState } from "../types";
+import { t } from "../i18n";
+
+// 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
+const INTERRUPT_GUARD_MS = 1000;
 
 type PaletteConfig = {
   workspacePath: string;
@@ -61,7 +65,7 @@ type Props = {
 };
 
 export function TaskComposer({
-  draftKey, placeholder, submitLabel, busyLabel = "處理中…", disabled = false, working = false, toolbar, leading, onSubmit,
+  draftKey, placeholder, submitLabel, busyLabel = t("處理中…"), disabled = false, working = false, toolbar, leading, onSubmit,
   layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
   persistExtras = false, globalDrop = false, dropTargetLabel,
 }: Props) {
@@ -94,6 +98,7 @@ export function TaskComposer({
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const submittingRef = useRef(false);
+  const lastSubmitAtRef = useRef(0);
   const wasBusyRef = useRef(busy);
   const dispatchingSessionsRef = useRef(new Set<string>());
   const [dispatchTick, setDispatchTick] = useState(0);
@@ -150,7 +155,7 @@ export function TaskComposer({
         }
       })
       .catch((cause: unknown) => {
-        const message = cause instanceof Error ? cause.message : "排隊訊息送出失敗";
+        const message = cause instanceof Error ? cause.message : t("排隊訊息送出失敗");
         if (ownerRef.current !== owner) {
           writeComposerDraft(owner, next.text);
           updateCachedSession(owner, (session) => ({
@@ -198,11 +203,11 @@ export function TaskComposer({
       requestAnimationFrame(() => textareaRef.current?.focus());
     } catch {
       if (persistExtras && ownerRef.current !== owner) {
-        updateCachedSession(owner, (session) => ({ ...session, error: "附件讀取失敗，可重試" }));
+        updateCachedSession(owner, (session) => ({ ...session, error: t("附件讀取失敗，可重試") }));
         return;
       }
       setFailedFiles(files);
-      setError("附件讀取失敗，可重試");
+      setError(t("附件讀取失敗，可重試"));
     }
   }
 
@@ -220,13 +225,18 @@ export function TaskComposer({
     const text = draftValue.trim();
     if (queueEnabled && busy) {
       if (!text && images.length === 0 && documents.length === 0) {
+        // 防呆：剛送出訊息後 INTERRUPT_GUARD_MS 內的空白 Enter 視為誤觸（例如太快連按兩下
+        // Enter：第一下送出、清空輸入框，第二下就落到這個「空送出＝中止任務」的分支），
+        // 不要把剛派出去的任務直接砍掉。真的要中止請按「中止」鈕，或停頓一下再按 Enter。
+        if (Date.now() - lastSubmitAtRef.current < INTERRUPT_GUARD_MS) return;
         onInterrupt?.();
         return;
       }
       if (queued.length >= MAX_QUEUED_COMMANDS) {
-        setError(`等待佇列最多 ${MAX_QUEUED_COMMANDS} 項`);
+        setError(t("等待佇列最多 {max} 項", { max: MAX_QUEUED_COMMANDS }));
         return;
       }
+      lastSubmitAtRef.current = Date.now();
       const command: QueuedCommand = { id: newQueueId(), text, images, documents, ...newClientMessageIdentity() };
       setDraftValue("");
       setImages([]);
@@ -239,6 +249,7 @@ export function TaskComposer({
     if (working) return;
     if (!text && images.length === 0 && documents.length === 0) return;
     submittingRef.current = true;
+    lastSubmitAtRef.current = Date.now();
     const owner = ownerRef.current;
     const identity = newClientMessageIdentity();
     const submission: CommandSubmission = { text, images: images.map(imagePayload), documents: documents.map(documentPayload), ...identity };
@@ -248,7 +259,7 @@ export function TaskComposer({
     setError(null);
     palette?.onOpenChange(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
-    const result = await onSubmit(submission).catch((cause: unknown) => cause instanceof Error ? cause.message : "訊息送出失敗");
+    const result = await onSubmit(submission).catch((cause: unknown) => cause instanceof Error ? cause.message : t("訊息送出失敗"));
     submittingRef.current = false;
     const message = typeof result === "string" && result ? result : null;
     if (persistExtras && ownerRef.current !== owner) {
@@ -285,12 +296,9 @@ export function TaskComposer({
         return;
       }
     }
-    if (history && !palette?.open && (event.key === "ArrowUp" || event.key === "ArrowDown") && historyHook.history.length > 0 && !draftValue.includes("\n")) {
-      event.preventDefault();
-      const next = historyHook.step(event.key === "ArrowUp" ? "up" : "down");
-      setDraftValue(next ?? "");
-      return;
-    }
+    // 已移除「↑/↓ 叫回上一句指令」的功能：它在單行草稿時會直接用歷史紀錄蓋掉你正在打、
+    // 還沒送出的內容，導致辛苦打的字瞬間消失、得重打（使用者回報的痛點）。歷史指令仍可從
+    // 指令面板（⌘/Ctrl K）的「最近」區塊取用，不會誤觸。現在 ↑/↓ 回歸單純的游標移動。
     if (event.key === "Enter") {
       if (event.repeat) {
         event.preventDefault();
@@ -315,24 +323,24 @@ export function TaskComposer({
   const hasAttachments = images.length > 0 || documents.length > 0;
   const canInterrupt = queueEnabled && busy && !hasContent;
   const submitDisabled = disabled || (working && !queueEnabled) || (!hasContent && !canInterrupt);
-  const submitLabelToShow = canInterrupt ? "中止" : queueEnabled && busy && hasContent ? "排隊" : working ? busyLabel : submitLabel;
+  const submitLabelToShow = canInterrupt ? t("中止") : queueEnabled && busy && hasContent ? t("排隊") : working ? busyLabel : submitLabel;
 
   const attachmentsBlock = hasAttachments && (
-    dock ? <div className="command-composer__attachments" aria-label="待傳送附件">
+    dock ? <div className="command-composer__attachments" aria-label={t("待傳送附件")}>
       {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
-        <img src={image.previewUrl} alt={`圖片 ${index + 1}：${image.name}`} />
+        <img src={image.previewUrl} alt={t("圖片 {n}：{name}", { n: index + 1, name: image.name })} />
         <span>IMG {index + 1}</span>
-        <button type="button" aria-label={`移除圖片 ${index + 1}`} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button>
+        <button type="button" aria-label={t("移除圖片 {n}", { n: index + 1 })} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button>
       </div>)}
       {documents.map((document, index) => <div className="command-composer__attachment command-composer__attachment--document" key={document.id} title={document.name}>
         <strong>{documentBadge(document.name)}</strong>
         <em>{document.name}</em>
         <span>FILE {index + 1}</span>
-        <button type="button" aria-label={`移除文件 ${index + 1}`} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button>
+        <button type="button" aria-label={t("移除文件 {n}", { n: index + 1 })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button>
       </div>)}
     </div> : <div className="task-composer__attachments">
-      {images.map((image) => <div key={image.id} className="task-composer__attachment"><img src={image.previewUrl} alt={image.name} /><span>{image.name}</span><button type="button" aria-label={`移除 ${image.name}`} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button></div>)}
-      {documents.map((document) => <div key={document.id} className="task-composer__attachment task-composer__attachment--file"><strong>{documentBadge(document.name)}</strong><span>{document.name}</span><button type="button" aria-label={`移除 ${document.name}`} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button></div>)}
+      {images.map((image) => <div key={image.id} className="task-composer__attachment"><img src={image.previewUrl} alt={image.name} /><span>{image.name}</span><button type="button" aria-label={t("移除 {name}", { name: image.name })} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button></div>)}
+      {documents.map((document) => <div key={document.id} className="task-composer__attachment task-composer__attachment--file"><strong>{documentBadge(document.name)}</strong><span>{document.name}</span><button type="button" aria-label={t("移除 {name}", { name: document.name })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button></div>)}
     </div>
   );
 
@@ -378,17 +386,17 @@ export function TaskComposer({
         <div className="file-drop-overlay" role="status" aria-live="polite">
           <div className="file-drop-overlay__card">
             <span className="file-drop-overlay__icon" aria-hidden="true">＋</span>
-            <strong>{globalDrop ? "放開即可附加" : "目前視窗不接收附件"}</strong>
-            <small>{globalDrop ? `圖片與文件會加入 ${dropTargetLabel ?? "目前 NPC"} 的這則訊息` : "請先關閉目前的編輯或設定視窗"}</small>
+            <strong>{globalDrop ? t("放開即可附加") : t("目前視窗不接收附件")}</strong>
+            <small>{globalDrop ? t("圖片與文件會加入 {target} 的這則訊息", { target: dropTargetLabel ?? t("目前 NPC") }) : t("請先關閉目前的編輯或設定視窗")}</small>
           </div>
         </div>,
         document.body,
       )}
-      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? "專注模式指令輸入" : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專注模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {attachmentsBlock}
         {toolbar && <div className="command-composer__toolbar">{toolbar}</div>}
         {palette?.open && (
-          <div className="command-palette" role="listbox" aria-label={`${palette.provider} 指令面板`}>
+          <div className="command-palette" role="listbox" aria-label={t("{provider} 指令面板", { provider: palette.provider })}>
             <div className="command-palette__head"><span>{palette.provider === "claude" ? "CLAUDE COMMANDS" : "CODEX COMMANDS + SKILLS"}</span><kbd>Esc</kbd></div>
             <div className="command-palette__items">
               {paletteHook.libraryLoading && <div className="command-palette__skeleton"><i /><i /><i /></div>}
@@ -397,17 +405,17 @@ export function TaskComposer({
                   <strong>{item.label}</strong><small>{item.description}</small><span>{item.kind === "recent" ? "↺" : "↵"}</span>
                 </button>
               ))}
-              {!paletteHook.libraryLoading && paletteHook.items.length === 0 && <div className="command-palette__empty">找不到相符指令</div>}
+              {!paletteHook.libraryLoading && paletteHook.items.length === 0 && <div className="command-palette__empty">{t("找不到相符指令")}</div>}
             </div>
-            <button className="command-palette__manage" type="button" onClick={palette.onManage}>管理 {palette.provider === "claude" ? "Claude 指令" : "Codex 工作流"}…</button>
+            <button className="command-palette__manage" type="button" onClick={palette.onManage}>{t("管理 {label}…", { label: palette.provider === "claude" ? t("Claude 指令") : t("Codex 工作流") })}</button>
           </div>
         )}
-        {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title="指令面板（⌘/Ctrl K）">
+        {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title={t("指令面板（⌘/Ctrl K）")}>
           ⌘ <span>{palette.provider === "claude" ? "CLAUDE" : "CODEX"}</span>
         </button>}
         {leading}
         {fileInput}
-        <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title="附加圖片或文件" aria-label="附加圖片或文件">＋</button>
+        <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title={t("附加圖片或文件")} aria-label={t("附加圖片或文件")}>＋</button>
         <span className="command-composer__prompt">›</span>
         {textareaField}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
@@ -447,12 +455,12 @@ export function TaskComposer({
     <div className="task-composer__row">
       {leading}
       {fileInput}
-      <button className="task-composer__attach" type="button" aria-label="附加圖片或文件" title="附加圖片或文件" onClick={() => fileRef.current?.click()}>＋</button>
+      <button className="task-composer__attach" type="button" aria-label={t("附加圖片或文件")} title={t("附加圖片或文件")} onClick={() => fileRef.current?.click()}>＋</button>
       <span className="task-composer__prompt" aria-hidden="true">›</span>
       {textareaField}
       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
     </div>
-    {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>重試附件</button>}</div>}
+    {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
   </form>;
 }
 
@@ -468,27 +476,27 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
   const [open, setOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   return <>
-    <button type="button" className="command-composer__queue" aria-expanded={open} onClick={() => setOpen((value) => !value)}>等待 {queued.length}</button>
-    {open && <div className="command-queue" aria-label="待送訊息佇列">
-      <header><div><span>UP NEXT</span><strong>待送訊息 {restoringExtras ? "· 復原中…" : extrasSaved ? "· 已保存" : "· 保存中…"}</strong></div><button type="button" aria-label="關閉待送訊息" onClick={() => setOpen(false)}>×</button></header>
+    <button type="button" className="command-composer__queue" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{t("等待 {count}", { count: queued.length })}</button>
+    {open && <div className="command-queue" aria-label={t("待送訊息佇列")}>
+      <header><div><span>UP NEXT</span><strong>{t("待送訊息")} {restoringExtras ? t("· 復原中…") : extrasSaved ? t("· 已保存") : t("· 保存中…")}</strong></div><button type="button" aria-label={t("關閉待送訊息")} onClick={() => setOpen(false)}>×</button></header>
       <ol>{queued.map((command, index) => <li key={command.id} className={dragIndex === index ? "command-queue__item--dragging" : ""} onDragOver={(event) => { if (dragIndex !== null) event.preventDefault(); }} onDrop={(event) => {
         if (dragIndex === null) return;
         event.preventDefault();
         onReorder(dragIndex, index);
         setDragIndex(null);
       }}>
-        <span className="command-queue__drag" draggable title="拖曳調整順序" aria-hidden="true" onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDragIndex(index); }} onDragEnd={() => setDragIndex(null)}>⠿</span>
-        <button type="button" className="command-queue__edit" onClick={() => { onEdit(index); setOpen(false); }} title="載入編輯">
-          <strong>{command.text || "只有附件的訊息"}</strong>
-          <small>{command.images.length > 0 ? `${command.images.length} 張圖片` : ""}{command.images.length > 0 && command.documents.length > 0 ? " · " : ""}{command.documents.length > 0 ? `${command.documents.length} 份文件` : ""}</small>
+        <span className="command-queue__drag" draggable title={t("拖曳調整順序")} aria-hidden="true" onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDragIndex(index); }} onDragEnd={() => setDragIndex(null)}>⠿</span>
+        <button type="button" className="command-queue__edit" onClick={() => { onEdit(index); setOpen(false); }} title={t("載入編輯")}>
+          <strong>{command.text || t("只有附件的訊息")}</strong>
+          <small>{command.images.length > 0 ? t("{n} 張圖片", { n: command.images.length }) : ""}{command.images.length > 0 && command.documents.length > 0 ? " · " : ""}{command.documents.length > 0 ? t("{n} 份文件", { n: command.documents.length }) : ""}</small>
         </button>
         <div className="command-queue__actions">
-          <button type="button" disabled={index === 0} aria-label="往前移" onClick={() => onMove(index, -1)}>↑</button>
-          <button type="button" disabled={index === queued.length - 1} aria-label="往後移" onClick={() => onMove(index, 1)}>↓</button>
-          <button type="button" aria-label="取消待送訊息" onClick={() => onCancel(command.id)}>×</button>
+          <button type="button" disabled={index === 0} aria-label={t("往前移")} onClick={() => onMove(index, -1)}>↑</button>
+          <button type="button" disabled={index === queued.length - 1} aria-label={t("往後移")} onClick={() => onMove(index, 1)}>↓</button>
+          <button type="button" aria-label={t("取消待送訊息")} onClick={() => onCancel(command.id)}>×</button>
         </div>
       </li>)}</ol>
-      <footer>點選內容可載入編輯；目前草稿會與該項目交換。</footer>
+      <footer>{t("點選內容可載入編輯；目前草稿會與該項目交換。")}</footer>
     </div>}
   </>;
 }

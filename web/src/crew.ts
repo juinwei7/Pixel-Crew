@@ -1,6 +1,7 @@
 import type { WorkerState } from "./types";
 import type { CrewFilter } from "./uiPreferences";
 import { roomName } from "./workspace";
+import { t } from "./i18n";
 
 export type WorkerAttention = "approval" | "error" | "working" | "done" | "idle";
 
@@ -13,12 +14,12 @@ export function workerAttention(worker: WorkerState): WorkerAttention {
   return "idle";
 }
 
-export function workerFocusStatus(worker: WorkerState): "等待核准" | "執行中" | "需注意" | "待命" {
+export function workerFocusStatus(worker: WorkerState): string {
   const attention = workerAttention(worker);
-  if (attention === "approval") return "等待核准";
-  if (attention === "working") return "執行中";
-  if (attention === "error") return "需注意";
-  return "待命";
+  if (attention === "approval") return t("等待核准");
+  if (attention === "working") return t("執行中");
+  if (attention === "error") return t("需注意");
+  return t("待命");
 }
 
 export function latestReadableTurnKey(worker: WorkerState): string | null {

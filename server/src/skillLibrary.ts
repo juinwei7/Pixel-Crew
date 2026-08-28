@@ -3,6 +3,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { assertSafeLocalPath } from "./safeLocalPath.js";
 import { frontmatterText, workflowFrontmatter } from "./workflowDocument.js";
 import { protectFile } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 export type SkillDocument = {
   name: string;
@@ -21,11 +22,11 @@ function skillsRoot(workspacePath: string): string {
 function skillDirectory(workspacePath: string, name: string): string {
   const normalized = name.trim();
   if (!SKILL_NAME.test(normalized)) {
-    throw new Error("Skill 名稱只能使用小寫英數、-、_，最多 64 個字元");
+    throw new Error(t("Skill 名稱只能使用小寫英數、-、_，最多 64 個字元"));
   }
   const root = skillsRoot(workspacePath);
   const path = resolve(root, normalized);
-  if (!path.startsWith(`${root}${sep}`)) throw new Error("Skill 路徑不合法");
+  if (!path.startsWith(`${root}${sep}`)) throw new Error(t("Skill 路徑不合法"));
   return path;
 }
 
@@ -85,11 +86,11 @@ export async function saveProjectSkill(
   content: string,
   originalName?: string,
 ): Promise<SkillDocument> {
-  if (!content.trim()) throw new Error("Skill 內容不能是空白");
-  if (Buffer.byteLength(content, "utf8") > MAX_SKILL_BYTES) throw new Error("Skill 內容不能超過 300 KB");
+  if (!content.trim()) throw new Error(t("Skill 內容不能是空白"));
+  if (Buffer.byteLength(content, "utf8") > MAX_SKILL_BYTES) throw new Error(t("Skill 內容不能超過 300 KB"));
   const metadata = skillMetadata(content);
-  if (metadata.name !== name.trim()) throw new Error("SKILL.md frontmatter 的 name 必須和資料夾名稱相同");
-  if (!metadata.description) throw new Error("SKILL.md 必須提供 description");
+  if (metadata.name !== name.trim()) throw new Error(t("SKILL.md frontmatter 的 name 必須和資料夾名稱相同"));
+  if (!metadata.description) throw new Error(t("SKILL.md 必須提供 description"));
 
   const path = skillDirectory(workspacePath, name);
   const oldPath = originalName ? skillDirectory(workspacePath, originalName) : null;
@@ -98,9 +99,9 @@ export async function saveProjectSkill(
     await assertSafeLocalPath(workspacePath, oldPath);
     await assertSafeLocalPath(workspacePath, join(oldPath, "SKILL.md"));
   }
-  if (!oldPath && await exists(path)) throw new Error(`Skill ${name} 已經存在`);
+  if (!oldPath && await exists(path)) throw new Error(t("Skill {name} 已經存在", { name }));
   if (oldPath && oldPath !== path) {
-    if (await exists(path)) throw new Error(`Skill ${name} 已經存在`);
+    if (await exists(path)) throw new Error(t("Skill {name} 已經存在", { name }));
     const root = dirname(path);
     await mkdir(root, { recursive: true, mode: 0o700 });
     await assertSafeLocalPath(workspacePath, root);
@@ -118,7 +119,7 @@ export async function saveProjectSkill(
         throw error;
       }
       const saved = (await listProjectSkills(workspacePath)).find((skill) => skill.name === name);
-      if (!saved) throw new Error("Skill 儲存後無法讀取");
+      if (!saved) throw new Error(t("Skill 儲存後無法讀取"));
       return saved;
     } catch (error) {
       await rm(staging, { recursive: true, force: true });

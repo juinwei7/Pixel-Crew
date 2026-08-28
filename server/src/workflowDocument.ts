@@ -1,4 +1,5 @@
 import { parseDocument } from "yaml";
+import { t } from "./i18n.js";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
@@ -7,11 +8,11 @@ export function workflowFrontmatter(content: string): Record<string, unknown> {
   if (!match) return {};
   const document = parseDocument(match[1]);
   if (document.errors.length > 0) {
-    throw new Error(`Frontmatter YAML 無效：${document.errors[0].message}`);
+    throw new Error(t("Frontmatter YAML 無效：{message}", { message: document.errors[0].message }));
   }
   const value = document.toJS();
   if (value == null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) throw new Error("Frontmatter 必須是 YAML object");
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error(t("Frontmatter 必須是 YAML object"));
   return value as Record<string, unknown>;
 }
 

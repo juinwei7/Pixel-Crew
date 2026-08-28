@@ -3,7 +3,9 @@ import { Container, Graphics } from "pixi.js";
 // A multiple of 32 (the wall-panel seam spacing) and 16 (the floor-tile
 // spacing) so the rightmost panel/tile isn't a truncated partial segment.
 export const ART_W = 448;
-export const ART_H = 288;
+// 加高地板：桌子帶（BAND_BOTTOM=282）不變，底部 282~336 多出一塊空地當「作戰室會議區」，
+// 讓大會議桌不會撞到任何個人桌。視野會因應變高而稍微拉遠。
+export const ART_H = 336;
 export const WALL_H = 52;
 
 const WALL = 0x18213a;
@@ -20,7 +22,11 @@ type Star = { x: number; y: number; phase: number };
 
 export class Room {
   readonly container = new Container();
+  private readonly sky = new Graphics();
   private readonly stars = new Graphics();
+  private readonly sun = new Graphics();
+  private readonly moon = new Graphics();
+  private readonly clockHands = new Graphics();
   private starSeeds: Star[] = [];
 
   constructor() {
@@ -46,10 +52,13 @@ export class Room {
     g.rect(131, 14, 8, 5).fill(0x7c5cff);
     g.rect(131, 21, 8, 2).fill(0xff4dd8);
     g.rect(133, 25, 4, 2).fill(0x4de3ff);
-    g.rect(74, 12, 9, 9).fill(0x2a3a60);
-    g.rect(75, 13, 7, 7).fill(0x0e1526);
-    g.rect(78, 14, 1, 3).fill(0xbfd9ff);
-    g.rect(78, 16, 3, 1).fill(0x4de3ff);
+    // 圓形掛鐘：外框＋面盤＋12/3/6/9 刻度；指針在 clockHands 圖層跟真實時間走
+    g.circle(79, 20, 10).fill(0x2a3a60);
+    g.circle(79, 20, 8.5).fill(0x0e1526);
+    g.rect(78.5, 12, 1, 2).fill(0x3f5680);
+    g.rect(78.5, 26, 1, 2).fill(0x3f5680);
+    g.rect(85.5, 19.5, 2, 1).fill(0x3f5680);
+    g.rect(71.5, 19.5, 2, 1).fill(0x3f5680);
 
     // Floor tiles
     for (let y = WALL_H; y < ART_H; y += 16) {
@@ -69,13 +78,53 @@ export class Room {
       .fill({ color: 0x0b1425, alpha: 0.2 })
       .stroke({ width: 1, color: 0x243654, alpha: 0.18 });
 
-    this.starSeeds = Array.from({ length: 14 }, () => ({
+    this.starSeeds = Array.from({ length: 28 }, () => ({
       x: 249 + Math.random() * 86,
       y: 8 + Math.random() * 32,
       phase: Math.random() * Math.PI * 2,
     }));
 
-    this.container.addChild(g, this.stars);
+    // 窗外天體：白天掛太陽、夜晚換月亮（帶兩個隕石坑的像素月）。
+    this.sun.circle(268, 18, 4).fill(0xffd66b);
+    this.sun.circle(268, 18, 6).fill({ color: 0xffd66b, alpha: 0.25 });
+    this.moon.circle(316, 18, 4).fill(0xf3eccb);
+    this.moon.circle(314.5, 16.8, 1.2).fill(0xd9d2a8);
+    this.moon.circle(317.6, 19.4, 0.9).fill(0xd9d2a8);
+    this.moon.visible = false;
+
+    this.setSky(WINDOW_SKY);
+    this.setClock(new Date());
+    this.container.addChild(g, this.sky, this.stars, this.sun, this.moon, this.clockHands);
+  }
+
+  /** 牆上時鐘走真實時間：時針＋分針，由 scene 對時（每 30 秒）呼叫重畫。 */
+  setClock(date: Date): void {
+    const cx = 79;
+    const cy = 20;
+    const minutes = date.getMinutes();
+    const hourAngle = (((date.getHours() % 12) + minutes / 60) / 12) * Math.PI * 2;
+    const minuteAngle = (minutes / 60) * Math.PI * 2;
+    const hands = this.clockHands;
+    hands.clear();
+    hands.moveTo(cx, cy).lineTo(cx + Math.sin(hourAngle) * 4.5, cy - Math.cos(hourAngle) * 4.5)
+      .stroke({ width: 1.4, color: 0xbfd9ff });
+    hands.moveTo(cx, cy).lineTo(cx + Math.sin(minuteAngle) * 7, cy - Math.cos(minuteAngle) * 7)
+      .stroke({ width: 1, color: 0x4de3ff });
+    hands.circle(cx, cy, 1).fill(0xffd166);
+  }
+
+  /** 窗外天空顏色跟著日夜漸變（scene 的 applyDaylight 依關鍵影格算好顏色丟進來重畫）。 */
+  setSky(color: number): void {
+    this.sky.clear();
+    this.sky.rect(248, 6, 88, 38).fill(color);
+    this.sky.rect(290, 6, 2, 38).fill(WINDOW_FRAME); // 中間窗框蓋回天空上
+  }
+
+  /** 日夜循環：白天窗外掛太陽、星星關掉；夜晚換月亮、星星亮回來。由 scene 依真實時間呼叫。 */
+  setNight(night: boolean): void {
+    this.stars.visible = night;
+    this.moon.visible = night;
+    this.sun.visible = !night;
   }
 
   update(tMs: number): void {

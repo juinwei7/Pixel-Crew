@@ -1,4 +1,5 @@
 import type { CapabilityState } from "./capabilities.js";
+import { t } from "./i18n.js";
 
 export type ToolEffect = "read" | "write" | "unknown";
 
@@ -17,15 +18,15 @@ export function readOnlyBuiltinToolNames(): string[] {
 
 export function queryToolPolicy(toolName: string, allowedMcpTools: ReadonlySet<string>): ToolPolicyDecision {
   if (READ_ONLY_BUILTINS.has(toolName)) {
-    return { effect: "read", allowed: true, reason: "內建唯讀工具", source: "builtin" };
+    return { effect: "read", allowed: true, reason: t("內建唯讀工具"), source: "builtin" };
   }
   if (allowedMcpTools.has(toolName)) {
-    return { effect: "read", allowed: true, reason: "MCP 工具標示為唯讀", source: "mcp_annotation" };
+    return { effect: "read", allowed: true, reason: t("MCP 工具標示為唯讀"), source: "mcp_annotation" };
   }
   return {
     effect: toolName.startsWith("mcp__") ? "unknown" : "write",
     allowed: false,
-    reason: toolName.startsWith("mcp__") ? "MCP 工具未提供可信的唯讀標記" : "工具可能修改本機或系統狀態",
+    reason: toolName.startsWith("mcp__") ? t("MCP 工具未提供可信的唯讀標記") : t("工具可能修改本機或系統狀態"),
     source: "unknown",
   };
 }

@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import type { CapabilityState, McpServerState, McpToolInfo, ModelOption } from "./capabilities.js";
 import { execCli } from "./platform/processes.js";
 import type { LocalStore } from "./store.js";
+import { t } from "./i18n.js";
 
 const FALLBACK_MODELS: ModelOption[] = [
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
@@ -206,7 +207,7 @@ export class CodexCapabilityRegistry {
         errors.push(`MCP: ${(error as Error).message}`);
       }
     } else {
-      errors.push(`MCP: ${mcpResult.reason?.message ?? "讀取失敗"}`);
+      errors.push(`MCP: ${mcpResult.reason?.message ?? t("讀取失敗")}`);
     }
     if (modelResult.status === "fulfilled") {
       try {
@@ -216,7 +217,7 @@ export class CodexCapabilityRegistry {
         errors.push(`Models: ${(error as Error).message}`);
       }
     } else {
-      errors.push(`Models: ${modelResult.reason?.message ?? "讀取失敗"}`);
+      errors.push(`Models: ${modelResult.reason?.message ?? t("讀取失敗")}`);
     }
 
     this.publish({

@@ -16,8 +16,16 @@ export class CodexAuthProvider implements AgentAuthProvider {
   readonly displayName = "Codex";
   readonly loginCommand = `${shellCommand(config.codexBin)} login`;
   private activeCheck: Promise<ProviderAuthState> | null = null;
+  private cliMissingState: ProviderAuthState | null = null;
+  private cliMissingAt = 0;
+  private lastLoggedStatus: ProviderAuthState["status"] | null = null;
 
   checkAuth(): Promise<ProviderAuthState> {
+    // CLI 不在 PATH 時,前端對未登入 provider 每 3 秒輪詢一次,會不停 spawn
+    // ENOENT。60 秒內直接回快取;之後裝好 CLI 最多一分鐘就會被偵測到。
+    if (this.cliMissingState && Date.now() - this.cliMissingAt < 60_000) {
+      return Promise.resolve(this.cliMissingState);
+    }
     if (this.activeCheck) return this.activeCheck;
     this.activeCheck = this.runCheck().finally(() => {
       this.activeCheck = null;
@@ -43,8 +51,18 @@ export class CodexAuthProvider implements AgentAuthProvider {
     const debug = result.status === "authenticated"
       ? null
       : buildAuthDebug({ command: config.codexBin, args, durationMs: Date.now() - startedAt, stdout, stderr, error });
-    if (debug) console.error(`[codex-auth] status=${result.status}\n${debug}`);
-    return this.state(result.status, checkedAt, result.error, debug);
+    if (debug && result.status !== this.lastLoggedStatus) {
+      console.error(`[codex-auth] status=${result.status}\n${debug}`);
+    }
+    this.lastLoggedStatus = result.status;
+    const state = this.state(result.status, checkedAt, result.error, debug);
+    if (result.status === "cli_missing") {
+      this.cliMissingState = state;
+      this.cliMissingAt = Date.now();
+    } else {
+      this.cliMissingState = null;
+    }
+    return state;
   }
 
   private state(

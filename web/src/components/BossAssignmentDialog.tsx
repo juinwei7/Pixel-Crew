@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { t } from "../i18n";
 import type { BossAssignmentResponse, BossAssignmentResult, ProviderId } from "../types";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { Modal } from "./Modal";
 
 type ClarificationTurn = { question: string; answer: string };
 
@@ -38,22 +39,22 @@ export function BossClarificationConversation({
   return <section className="boss-clarification" aria-labelledby="boss-clarification-title" aria-live="polite">
     <header>
       <span>DECISION CLARIFICATION</span>
-      <h3 id="boss-clarification-title">決策模型需要你補充</h3>
-      <p>直接回答即可；原始交辦目標與驗收條件會保持不變。</p>
+      <h3 id="boss-clarification-title">{t("決策模型需要你補充")}</h3>
+      <p>{t("直接回答即可；原始交辦目標與驗收條件會保持不變。")}</p>
     </header>
     <div className="boss-clarification__thread">
       {turns.map((turn, index) => <div className="boss-clarification__exchange" key={`${index}:${turn.question}`}>
-        <p className="boss-clarification__question"><span>決策模型</span>{turn.question}</p>
-        <p className="boss-clarification__answer"><span>老闆</span>{turn.answer}</p>
+        <p className="boss-clarification__question"><span>{t("決策模型")}</span>{turn.question}</p>
+        <p className="boss-clarification__answer"><span>{t("老闆")}</span>{turn.answer}</p>
       </div>)}
-      <p className="boss-clarification__question boss-clarification__question--pending"><span>決策模型</span>{question}</p>
+      <p className="boss-clarification__question boss-clarification__question--pending"><span>{t("決策模型")}</span>{question}</p>
     </div>
-    <label>回覆決策模型<textarea
+    <label>{t("回覆決策模型")}<textarea
       autoFocus
       value={reply}
       maxLength={2000}
       rows={3}
-      placeholder="例如：是整間公司的所有同事。"
+      placeholder={t("例如：是整間公司的所有同事。")}
       disabled={working}
       onChange={(event) => onReplyChange(event.target.value)}
       onKeyDown={(event) => {
@@ -65,7 +66,7 @@ export function BossClarificationConversation({
     /></label>
     <div className="collaboration-dialog__actions boss-clarification__actions">
       <button type="button" className="collaboration-dialog__primary" disabled={working || !reply.trim()} onClick={onSubmit}>
-        {working ? "決策模型正在重新判斷…" : "送出回覆"}
+        {working ? t("決策模型正在重新判斷…") : t("送出回覆")}
       </button>
     </div>
   </section>;
@@ -80,16 +81,8 @@ export function BossAssignmentDialog({ preferredWorkspace, decisionModels = [], 
   const [reply, setReply] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const embeddedRef = useRef<HTMLElement>(null);
-  useFocusTrap(dialogRef, !embedded);
-
-  useEffect(() => {
-    if (embedded) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !working) onClose(); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [embedded, onClose, working]);
+  // ×／Esc 共用同一個關閉入口：處理中不准關（僅非 embedded 模式會用到，embedded 不提供關閉）。
+  function closeIfIdle() { if (!working) onClose(); }
 
   useEffect(() => {
     let saved = "";
@@ -116,7 +109,7 @@ export function BossAssignmentDialog({ preferredWorkspace, decisionModels = [], 
     });
     setWorking(false);
     if (result.error || !result.data) {
-      setError(result.error || "無法交辦工作");
+      setError(result.error || t("無法交辦工作"));
       return;
     }
     if ("clarification" in result.data) {
@@ -138,15 +131,14 @@ export function BossAssignmentDialog({ preferredWorkspace, decisionModels = [], 
   }
 
   const clarificationActive = pendingQuestion !== null;
-  const content = <div className={`handoff-dialog__card boss-assignment__card ${embedded ? "mission-dialog__card--embedded" : ""}`}>
-      <button type="button" className="handoff-dialog__close" onClick={onClose} disabled={working} aria-label="關閉老闆交辦">×</button>
+  const inner = <>
       <header className="handoff-dialog__header">
         <span>BOSS DESK · SINGLE ENTRY</span>
-        <h2 id="boss-assignment-title">交辦一件工作</h2>
-        <p>只要描述目標。Pixel Crew 會依部門職責與 NPC 職務找到最合適的團隊、直接開始，最後帶回一份部門報告。</p>
+        <h2>{t("交辦一件工作")}</h2>
+        <p>{t("只要描述目標。Pixel Crew 會依部門職責與 NPC 職務找到最合適的團隊、直接開始，最後帶回一份部門報告。")}</p>
       </header>
       <div className="collaboration-dialog__form boss-assignment__form">
-        <details className="boss-assignment__advanced"><summary>進階設定 <span>選填</span></summary><label>決策模型 <small>預設會自動選擇可用的 Claude 或 Codex；這裡只用來覆寫</small><select value={decisionKey} disabled={working || clarificationActive} onChange={(event) => {
+        <details className="boss-assignment__advanced"><summary>{t("進階設定")} <span>{t("選填")}</span></summary><label>{t("決策模型")} <small>{t("預設會自動選擇可用的 Claude 或 Codex；這裡只用來覆寫")}</small><select value={decisionKey} disabled={working || clarificationActive} onChange={(event) => {
           const value = event.target.value;
           setDecisionKey(value);
           try {
@@ -156,13 +148,13 @@ export function BossAssignmentDialog({ preferredWorkspace, decisionModels = [], 
             // Local storage can be unavailable in hardened browser contexts.
           }
         }}>
-          <option value="">自動選擇</option>
+          <option value="">{t("自動選擇")}</option>
           {decisionModels.map((option) => <option key={`${option.provider}:${option.model}`} value={`${option.provider}:${option.model}`}>{option.label}</option>)}
         </select></label></details>
-        <label>交辦目標<textarea autoFocus={!clarificationActive} value={objective} disabled={working || clarificationActive} maxLength={4000} rows={4} placeholder="例如：完成會員權限 API，包含實作、測試與文件" onChange={(event) => { setObjective(event.target.value); setError(null); }} onKeyDown={(event) => {
+        <label>{t("交辦目標")}<textarea autoFocus={!clarificationActive} value={objective} disabled={working || clarificationActive} maxLength={4000} rows={4} placeholder={t("例如：完成會員權限 API，包含實作、測試與文件")} onChange={(event) => { setObjective(event.target.value); setError(null); }} onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); submit(); }
         }} /></label>
-        <label>驗收條件 <small>選填，每行一項，最多 8 項</small><textarea value={criteria} disabled={working || clarificationActive} rows={4} placeholder={"留空時，部門會以「完成目標、合理驗證、回報風險」為準\n或自行列出：\n完整測試通過\n最後提交一份部門報告"} onChange={(event) => setCriteria(event.target.value)} /></label>
+        <label>{t("驗收條件")} <small>{t("選填，每行一項，最多 8 項")}</small><textarea value={criteria} disabled={working || clarificationActive} rows={4} placeholder={t("留空時，部門會以「完成目標、合理驗證、回報風險」為準\n或自行列出：\n完整測試通過\n最後提交一份部門報告")} onChange={(event) => setCriteria(event.target.value)} /></label>
       </div>
       {clarificationActive && <BossClarificationConversation
         turns={clarifications}
@@ -174,11 +166,13 @@ export function BossAssignmentDialog({ preferredWorkspace, decisionModels = [], 
       />}
       {error && <div className="handoff-dialog__error" role="alert">{error}</div>}
       {!clarificationActive && <div className="collaboration-dialog__actions boss-assignment__actions">
-        <button type="button" className="collaboration-dialog__primary" disabled={working || !objective.trim()} onClick={submit}>{working ? "正在理解並選擇部門…" : "交辦給部門"}</button>
+        <button type="button" className="collaboration-dialog__primary" disabled={working || !objective.trim()} onClick={submit}>{working ? t("正在理解並選擇部門…") : t("交辦給部門")}</button>
       </div>}
-      <small className="boss-assignment__policy">依部門職責與 NPC 職務自動分工；權限、認證與重大決定仍會回來找你。</small>
-    </div>;
+      <small className="boss-assignment__policy">{t("依部門職責與 NPC 職務自動分工；權限、認證與重大決定仍會回來找你。")}</small>
+    </>;
 
-  if (embedded) return <section ref={embeddedRef} className="boss-assignment boss-assignment--embedded" aria-labelledby="boss-assignment-title">{content}</section>;
-  return <div ref={dialogRef} className="handoff-dialog boss-assignment" role="dialog" aria-modal="true" aria-labelledby="boss-assignment-title">{content}</div>;
+  if (embedded) return <section className="boss-assignment boss-assignment--embedded" aria-label={t("交辦一件工作")}>
+    <div className="handoff-dialog__card boss-assignment__card mission-dialog__card--embedded">{inner}</div>
+  </section>;
+  return <Modal label={t("交辦一件工作")} overlayClassName="handoff-dialog boss-assignment" cardClassName="handoff-dialog__card boss-assignment__card" closeClassName="handoff-dialog__close" closeLabel={t("關閉老闆交辦")} onClose={closeIfIdle}>{inner}</Modal>;
 }

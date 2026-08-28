@@ -6,18 +6,30 @@ import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import type { ApprovalDecision, ApprovalRequest, RunnerEvent } from "./claudeRunner.js";
 import type { AgentSession, ExecutionProfile, MessageDocument, MessageImage, SendOptions } from "./providers/session.js";
-import { documentPrompt, stageMessageDocuments } from "./messageDocuments.js";
+import { stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 import { parseCodexMcpServerStatus, type CodexMcpServerToolsEntry } from "./codexCapabilities.js";
+import { t } from "./i18n.js";
+import {
+  ABORTED_MESSAGE,
+  autoApproveConfirmReason,
+  autoApproveEnabledReason,
+  boundedValue,
+  composeMessageText,
+  isReadOnlyExecutionProfile,
+  messageDocumentsDirectory,
+  riskReasonFor,
+  truncateCommand,
+} from "./runnerShared.js";
 
 type RpcId = string | number;
 type PendingRpc = { resolve(value: any): void; reject(error: Error): void };
 type PendingApproval = { rpcId: RpcId; method: string; params: any; request: ApprovalRequest };
 
 export function codexSandbox(profile: ExecutionProfile, normalSandbox: string): string {
-  return profile === "read_only_collaboration" || profile === "read_only_query" ? "read-only" : normalSandbox;
+  return isReadOnlyExecutionProfile(profile) ? "read-only" : normalSandbox;
 }
 
 export type CodexNativeCommand =
@@ -142,7 +154,7 @@ export class CodexSession implements AgentSession {
         }
         return this.request("turn/start", {
           threadId,
-          input: codexTurnInput([text, documentPrompt(documentFiles)].filter(Boolean).join("\n\n"), imagePaths),
+          input: codexTurnInput(composeMessageText(text, documentFiles), imagePaths),
           cwd: this.workspacePath,
           approvalPolicy: "on-request",
           approvalsReviewer: "user",
@@ -183,7 +195,7 @@ export class CodexSession implements AgentSession {
         // turn/completed handler owns the final state and persisted output.
         return;
       }
-      this.finishNativeCommand("已建立新的 Codex 對話；後續工作不會沿用先前上下文。", false);
+      this.finishNativeCommand(t("已建立新的 Codex 對話；後續工作不會沿用先前上下文。"), false);
     }).catch((error) => this.finishWithError((error as Error).message));
   }
 
@@ -210,7 +222,7 @@ export class CodexSession implements AgentSession {
         .catch((error) => this.finishWithError(error.message));
     } else {
       this.stop();
-      this.onEvent({ type: "error", message: "已中止" });
+      this.onEvent({ type: "error", message: t(ABORTED_MESSAGE) });
     }
   }
 
@@ -393,7 +405,7 @@ export class CodexSession implements AgentSession {
         this.currentTurnId = String(params.turn?.id ?? "");
         break;
       case "thread/compacted":
-        this.finishNativeCommand("Codex 對話內容已壓縮。", false);
+        this.finishNativeCommand(t("Codex 對話內容已壓縮。"), false);
         break;
       case "turn/completed": {
         const status = String(params.turn?.status ?? "completed");
@@ -484,7 +496,7 @@ export class CodexSession implements AgentSession {
       return;
     }
     if (item.type === "plan" && item.text) {
-      this.onEvent({ type: "thinking_delta", text: `計畫\n${String(item.text)}` });
+      this.onEvent({ type: "thinking_delta", text: t("計畫\n{text}", { text: String(item.text) }) });
       return;
     }
     const tool = codexAppTool(item);
@@ -503,28 +515,29 @@ export class CodexSession implements AgentSession {
       return;
     }
     const category = method.includes("commandExecution") ? "command" : method.includes("fileChange") ? "file_change" : "permissions";
-    if (this.executionProfile === "read_only_collaboration" || this.executionProfile === "read_only_query") {
+    if (isReadOnlyExecutionProfile(this.executionProfile)) {
       const id = randomUUID();
-      const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
+      const command = category === "command" && params.command ? truncateCommand(params.command) : undefined;
       this.onEvent({ type: "approval_requested", request: {
         id,
         activityId: params.itemId ? String(params.itemId) : null,
         category,
-        title: category === "command" ? "唯讀模式已拒絕指令" : category === "file_change" ? "唯讀模式已拒絕檔案變更" : "唯讀模式已拒絕提高權限",
+        title: category === "command" ? t("唯讀模式已拒絕指令") : category === "file_change" ? t("唯讀模式已拒絕檔案變更") : t("唯讀模式已拒絕提高權限"),
         input: boundedValue(category === "command" ? { command: params.command ?? "", actions: params.commandActions ?? [] } : params),
         command,
         cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
         reason: this.executionProfile === "read_only_query"
-          ? "唯讀查詢不允許需要額外權限的操作"
-          : "唯讀 NPC 協作不允許需要額外權限的操作",
+          ? t("唯讀查詢不允許需要額外權限的操作")
+          : t("唯讀 NPC 協作不允許需要額外權限的操作"),
         decisions: [],
+        riskReason: riskReasonFor(command),
       } });
       if (method === "item/permissions/requestApproval") this.sendRpcError(message.id, -32000, "Read-only mode declined permissions");
       else this.sendRpcResult(message.id, { decision: "decline" });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return;
     }
-    const command = category === "command" && params.command ? String(params.command).slice(0, 20_000) : undefined;
+    const command = category === "command" && params.command ? truncateCommand(params.command) : undefined;
     // Under "safe" mode, file changes and permission escalations are never in
     // autoApprovalPolicy's allowlist, so only commandExecution can auto
     // -approve. Under "full" mode, evaluateAutoApproval treats any non-Bash
@@ -541,12 +554,13 @@ export class CodexSession implements AgentSession {
           id,
           activityId: params.itemId ? String(params.itemId) : null,
           category,
-          title: "Codex 執行了這個指令",
+          title: t("Codex 執行了這個指令"),
           input: boundedValue({ command: params.command ?? "", actions: params.commandActions ?? [] }),
           command,
           cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
-          reason: mode === "full" ? "完全自動核准已開啟" : "安全自動核准已開啟",
+          reason: autoApproveEnabledReason(mode),
           decisions: [],
+          riskReason: riskReasonFor(command),
         },
       });
       this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
@@ -566,14 +580,15 @@ export class CodexSession implements AgentSession {
       id,
       activityId: params.itemId ? String(params.itemId) : null,
       category,
-      title: category === "command" ? "允許執行這個指令？" : category === "file_change" ? "允許套用檔案變更？" : "允許提高工作權限？",
+      title: category === "command" ? t("允許執行這個指令？") : category === "file_change" ? t("允許套用檔案變更？") : t("允許提高工作權限？"),
       input: boundedValue(category === "command" ? { command: params.command ?? "", actions: params.commandActions ?? [] } : params),
       command,
       cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
       reason: mode !== "off"
-        ? `${mode === "full" ? "完全" : "安全"}自動核准已開啟，但此操作仍需確認（${autoApproval.reason}）`
+        ? autoApproveConfirmReason(mode, autoApproval.reason)
         : params.reason ? String(params.reason).slice(0, 4_000) : undefined,
       decisions: ["allow_once", "allow_session", "deny"],
+      riskReason: riskReasonFor(command),
     };
     this.approvals.set(id, { rpcId: message.id, method, params, request });
     this.onEvent({ type: "approval_requested", request });
@@ -656,7 +671,7 @@ export class CodexSession implements AgentSession {
   }
 
   private stageInputDocuments(documents: MessageDocument[]): Array<{ name: string; path: string }> {
-    const files = stageMessageDocuments(documents, join(dirname(config.dbPath), "message-documents"));
+    const files = stageMessageDocuments(documents, messageDocumentsDirectory());
     for (const file of files) this.stagedInputDocuments.add(file.path);
     return files;
   }
@@ -737,15 +752,5 @@ export function codexTool(item: any): { name: string; input: unknown; output: un
     case "web_search": return { name: "WebSearch", input: item.query ?? {}, output: item.result ?? "", isError: failed };
     case "file_change": return { name: "Edit", input: item.changes ?? item, output: item.status ?? "completed", isError: failed };
     default: return null;
-  }
-}
-
-function boundedValue(value: unknown, maxLength = 20_000): unknown {
-  try {
-    const serialized = JSON.stringify(value);
-    if (serialized.length <= maxLength) return value;
-    return `${serialized.slice(0, maxLength)}\n…[內容已截斷]`;
-  } catch {
-    return String(value).slice(0, maxLength);
   }
 }

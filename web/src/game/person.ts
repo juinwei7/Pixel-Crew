@@ -3,6 +3,7 @@ import { GifSprite, type GifSource } from "pixi.js/gif";
 import type { CharacterActivity } from "../types";
 import { texFromMap } from "./pixels";
 import { avatarPresetPalette, avatarPresetRows } from "./avatarPresets";
+import { t } from "../i18n";
 
 // ---------- Front (facing camera) ----------
 
@@ -250,7 +251,7 @@ export const SHIRT_COLORS: Array<[number, number]> = [
   [0xf29e4c, 0xb56f2f], // orange
 ];
 
-export type EmoteKind = "question" | "cloud" | "chat" | "coffee";
+export type EmoteKind = "question" | "cloud" | "chat" | "coffee" | "spark";
 
 export class Person {
   readonly container = new Container();
@@ -406,7 +407,7 @@ export class Person {
       if (!this.destroyed && version === this.avatarLoadVersion) {
         this.customTexture = null;
         this.sprite.visible = true;
-        return `無法載入自訂角色：${(error as Error).message || "圖片解碼失敗"}`;
+        return t("無法載入自訂角色：{detail}", { detail: (error as Error).message || t("圖片解碼失敗") });
       }
       return null;
     }
@@ -590,6 +591,16 @@ export class Person {
       const s = Math.floor(tMs / 260) % 2;
       g.rect(-1.4, top + s * 0.6, 0.9, 1.2).fill({ color: 0xcfe3f7, alpha: 0.8 });
       g.rect(0.6, top + 1 - s * 0.6, 0.9, 1.2).fill({ color: 0xcfe3f7, alpha: 0.8 });
+    } else if (this.emoteKind === "spark") {
+      // Green success check with a couple of twinkling sparkles — the happy
+      // counterpart to the "cloud" shown on a failed turn.
+      const check: Array<[number, number]> = [
+        [-2, 2.6], [-1, 3.6], [0, 4.4], [1, 3.2], [2, 1.8], [3, 0.6],
+      ];
+      for (const [cx, cy] of check) g.rect(cx - 0.7, top + cy, 1.5, 1.5).fill(0x37d6a3);
+      const tw = Math.floor(tMs / 200) % 2;
+      g.rect(-3.6, top + (tw ? 0 : 0.8), 1, 1).fill({ color: 0x9effd4, alpha: tw ? 1 : 0.4 });
+      g.rect(3.4, top + 4 + (tw ? 0.6 : 0), 1, 1).fill({ color: 0x9effd4, alpha: tw ? 0.4 : 1 });
     }
   }
 

@@ -3,6 +3,8 @@ import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } fro
 import type { TaskLogView } from "../uiPreferences";
 import { extractMarkdownHeadings, RichText } from "./RichText";
 import { parseMcpToolName as toolMeta } from "../mcpToolName";
+import { describeApproval } from "../approvalPlain";
+import { t } from "../i18n";
 
 const focusScrollPositions = new Map<string, number>();
 const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
@@ -63,7 +65,7 @@ function ReportActions({ markdown }: { markdown: string }) {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);
       });
-    }}>{copied ? "已複製" : "複製整份"}</button>
+    }}>{copied ? t("已複製") : t("複製整份")}</button>
     <button type="button" disabled={!markdown} onClick={() => {
       const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
       const link = document.createElement("a");
@@ -71,7 +73,7 @@ function ReportActions({ markdown }: { markdown: string }) {
       link.download = `pixel-crew-report-${new Date().toISOString().slice(0, 10)}.md`;
       link.click();
       URL.revokeObjectURL(url);
-    }}>匯出 .md</button>
+    }}>{t("匯出 .md")}</button>
   </div>;
 }
 
@@ -108,7 +110,7 @@ export function formatValue(value: unknown): string {
   }
 }
 
-function CopyButton({ value, label = "複製" }: { value: string; label?: string }) {
+function CopyButton({ value, label = t("複製") }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return <button type="button" className="copy-button" title={label} aria-label={label} onClick={() => {
     void navigator.clipboard?.writeText(value).then(() => {
@@ -144,11 +146,11 @@ export function ToolRow({ item }: { item: ToolCallItem }) {
       </button>
       {open && (
         <div className="tool-row__detail">
-          <div className="tool-row__label">INPUT <CopyButton value={formatValue(item.input)} label="複製 INPUT" /></div>
+          <div className="tool-row__label">INPUT <CopyButton value={formatValue(item.input)} label={t("複製 INPUT")} /></div>
           <pre>{formatValue(item.input)}</pre>
           {item.output !== undefined && (
             <>
-              <div className="tool-row__label">OUTPUT {item.status === "running" && <span>· LIVE</span>} <CopyButton value={formatValue(item.output)} label="複製 OUTPUT" /></div>
+              <div className="tool-row__label">OUTPUT {item.status === "running" && <span>· LIVE</span>} <CopyButton value={formatValue(item.output)} label={t("複製 OUTPUT")} /></div>
               <pre>{formatValue(item.output)}</pre>
             </>
           )}
@@ -178,30 +180,44 @@ function ApprovalCard({ item, onApprove }: {
   }
 
   const decisionLabel = item.decision === "allow_once"
-    ? "已允許一次"
+    ? t("已允許一次")
     : item.decision === "allow_session"
-      ? "本次工作階段已允許"
+      ? t("本次工作階段已允許")
       : item.decision === "auto_allow"
-        ? "已自動核准"
-        : "已拒絕";
+        ? t("已自動核准")
+        : t("已拒絕");
 
   return (
     <div className={`approval-card ${pending ? "approval-card--pending" : "approval-card--resolved"}`}>
       <div className="approval-card__head">
         <span className="approval-card__icon">!</span>
-        <div><strong>{item.request.title}</strong><small>{item.request.reason || "Agent 需要你的核准才能繼續"}</small></div>
+        <div><strong>{item.request.title}</strong><small>{item.request.reason || t("Agent 需要你的核准才能繼續")}</small></div>
       </div>
-      {item.request.command && <pre className="approval-card__command">{item.request.command}</pre>}
-      {item.request.cwd && <div className="approval-card__cwd">工作目錄 · {item.request.cwd}</div>}
-      {!item.request.command && <pre className="approval-card__command">{formatValue(item.request.input)}</pre>}
+      {(() => {
+        const plain = describeApproval(item.request);
+        return (
+          <div className={`approval-plain approval-plain--${plain.level}`}>
+            <div className="approval-plain__action">{t("它想：{action}", { action: plain.action })}</div>
+            {plain.target && <div className="approval-plain__target">{plain.target}</div>}
+            <div className="approval-plain__risk">{plain.level === "safe" ? "✓" : "⚠"} {plain.risk}</div>
+          </div>
+        );
+      })()}
+      <details className="approval-card__details">
+        <summary>{t("技術細節")}</summary>
+        {item.request.command
+          ? <pre className="approval-card__command">{item.request.command}</pre>
+          : <pre className="approval-card__command">{formatValue(item.request.input)}</pre>}
+        {item.request.cwd && <div className="approval-card__cwd">{t("工作目錄 · {cwd}", { cwd: item.request.cwd })}</div>}
+      </details>
       {pending ? (
         <div className="approval-card__actions">
-          <button type="button" disabled={!onApprove || Boolean(submitting)} onClick={() => void decide("deny")}>拒絕</button>
+          <button type="button" disabled={!onApprove || Boolean(submitting)} onClick={() => void decide("deny")}>{t("拒絕")}</button>
           {item.request.decisions.includes("allow_session") && (
-            <button type="button" disabled={!onApprove || Boolean(submitting)} onClick={() => void decide("allow_session")}>本次皆允許</button>
+            <button type="button" disabled={!onApprove || Boolean(submitting)} onClick={() => void decide("allow_session")}>{t("本次皆允許")}</button>
           )}
           <button className="approval-card__allow" type="button" disabled={!onApprove || Boolean(submitting)} onClick={() => void decide("allow_once")}>
-            {submitting === "allow_once" ? "處理中…" : "允許這一次"}
+            {submitting === "allow_once" ? t("處理中…") : t("允許這一次")}
           </button>
         </div>
       ) : <div className={`approval-card__decision approval-card__decision--${item.decision}`}>{decisionLabel}</div>}
@@ -224,9 +240,9 @@ export function ToolGroup({ items, summary }: { items: ToolCallItem[]; summary: 
     <div className={`tool-group ${failed ? "tool-group--error" : ""}`}>
       <button className="tool-group__head" onClick={() => setOpen((value) => !value)}>
         <span className="tool-group__mark">{running ? <span className="spinner" /> : "⌘"}</span>
-        <span className="tool-group__title">工具活動</span>
+        <span className="tool-group__title">{t("工具活動")}</span>
         <span className="tool-group__summary">
-          {items.length} 項{failed ? ` · ${failed} 失敗` : ""}
+          {t("{count} 項", { count: items.length })}{failed ? t(" · {failed} 失敗", { failed }) : ""}
         </span>
         <span className="tool-group__chevron">{open ? "▾" : "▸"}</span>
       </button>
@@ -244,7 +260,7 @@ function ThinkingRow({ text }: { text: string }) {
   return (
     <div className="thinking-row">
       <button className="thinking-row__head" onClick={() => setOpen((v) => !v)}>
-        💭 思考{open ? "" : "…"}
+        💭 {t("思考")}{open ? "" : "…"}
       </button>
       {open && (
         <div className="thinking-row__body">
@@ -295,7 +311,7 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
       {focusMode && status === "running" && grouped.length === 0 && (
         <div className="focus-turn-pending" role="status" aria-live="polite">
           <span className="focus-turn-pending__dot" aria-hidden="true" />
-          <span><strong>指令已送出</strong>，NPC 正在處理中…</span>
+          <span><strong>{t("指令已送出")}</strong>{t("，NPC 正在處理中…")}</span>
         </div>
       )}
       {grouped.map((item) => {
@@ -318,7 +334,7 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
         const isFinal = sourceIndex === finalTextIndex;
         return (
           <div key={item.key} className={`turn-text ${isFinal ? "turn-text--final" : ""}`}>
-            {isFinal && <div className="turn-text__label">FINAL RESPONSE <CopyButton value={item.text} label="複製最終回覆" /></div>}
+            {isFinal && <div className="turn-text__label">FINAL RESPONSE <CopyButton value={item.text} label={t("複製最終回覆")} /></div>}
             <RichText text={item.text} headingPrefix={focusMode ? focusTurnId(turnKey) : undefined} highlight={highlight} />
           </div>
         );
@@ -328,10 +344,10 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
 }
 
 function statusChip(status: Turn["status"], waitingForApproval: boolean) {
-  if (waitingForApproval) return <span className="turn-chip turn-chip--waiting">等待核准</span>;
-  if (status === "running") return <span className="turn-chip turn-chip--running">進行中</span>;
-  if (status === "error") return <span className="turn-chip turn-chip--error">失敗</span>;
-  return <span className="turn-chip turn-chip--done">完成</span>;
+  if (waitingForApproval) return <span className="turn-chip turn-chip--waiting">{t("等待核准")}</span>;
+  if (status === "running") return <span className="turn-chip turn-chip--running">{t("進行中")}</span>;
+  if (status === "error") return <span className="turn-chip turn-chip--error">{t("失敗")}</span>;
+  return <span className="turn-chip turn-chip--done">{t("完成")}</span>;
 }
 
 function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
@@ -349,8 +365,8 @@ function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, o
           <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
           {statusChip(turn.status, waitingForApproval)}
         </button>}
-        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? "取消釘選這份報告" : "釘選這份報告"} title={pinned ? "取消釘選" : "釘選報告"} onClick={onPin}>{pinned ? "★" : "☆"}</button>}
-        <CopyButton value={turn.command} label="複製指令" />
+        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("取消釘選這份報告") : t("釘選這份報告")} title={pinned ? t("取消釘選") : t("釘選報告")} onClick={onPin}>{pinned ? "★" : "☆"}</button>}
+        <CopyButton value={turn.command} label={t("複製指令")} />
       </div>
       {open && (
         <>
@@ -367,10 +383,10 @@ function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, o
 }
 
 function navStatus(turn: Turn): string {
-  if (turn.items.some((item) => item.kind === "approval" && item.status === "pending")) return "等待核准";
-  if (turn.status === "running") return "執行中";
-  if (turn.status === "error") return "失敗";
-  return "完成";
+  if (turn.items.some((item) => item.kind === "approval" && item.status === "pending")) return t("等待核准");
+  if (turn.status === "running") return t("執行中");
+  if (turn.status === "error") return t("失敗");
+  return t("完成");
 }
 
 export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
@@ -468,23 +484,23 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       }
     }}>
       {needle && <div className="quest-log__search-results" role="status">
-        <span><strong>{searchOccurrences}</strong> 處 · {visibleTurns.length} 筆任務</span>
-        <div><button type="button" disabled={visibleTurns.length === 0} aria-label="上一筆搜尋結果" onClick={() => goToSearchResult(searchResultIndex - 1)}>↑</button><small>{visibleTurns.length > 0 ? `${searchResultIndex + 1}/${visibleTurns.length}` : "0/0"}</small><button type="button" disabled={visibleTurns.length === 0} aria-label="下一筆搜尋結果" onClick={() => goToSearchResult(searchResultIndex + 1)}>↓</button></div>
+        <span><strong>{searchOccurrences}</strong> {t("處 · {total} 筆任務", { total: visibleTurns.length })}</span>
+        <div><button type="button" disabled={visibleTurns.length === 0} aria-label={t("上一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex - 1)}>↑</button><small>{visibleTurns.length > 0 ? `${searchResultIndex + 1}/${visibleTurns.length}` : "0/0"}</small><button type="button" disabled={visibleTurns.length === 0} aria-label={t("下一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex + 1)}>↓</button></div>
       </div>}
-      {pending.length > 0 && <div className="approval-shelf" role="alert" aria-live="assertive"><div className="approval-shelf__label">需要你的核准</div>{pending.map((item) => <ApprovalCard key={item.key} item={item} onApprove={onApprove} />)}</div>}
+      {pending.length > 0 && <div className="approval-shelf" role="alert" aria-live="assertive"><div className="approval-shelf__label">{t("需要你的核准")}</div>{pending.map((item) => <ApprovalCard key={item.key} item={item} onApprove={onApprove} />)}</div>}
       {turns.length === 0 && (
         <div className="quest-log__empty">
-          在下面下指令,例如「幫我完成工作」——小人會去任務板查還沒做完的事。
+          {t("在下面下指令,例如「幫我完成工作」——小人會去任務板查還沒做完的事。")}
           <br />
-          輸入 <code>/</code> 可以看可用的斜線指令。
+          {t("輸入 ")}<code>/</code>{t(" 可以看可用的斜線指令。")}
         </div>
       )}
       {turns.length > 0 && visibleTurns.length === 0 && (
-        <div className="quest-log__no-results">找不到符合「{searchQuery.trim()}」的任務內容</div>
+        <div className="quest-log__no-results">{t("找不到符合「{query}」的任務內容", { query: searchQuery.trim() })}</div>
       )}
       {hiddenOlderCount > 0 && (
         <button type="button" className="quest-log__load-earlier" onClick={() => setRenderLimit((limit) => limit + RENDER_CHUNK)}>
-          顯示更早的任務（還有 {hiddenOlderCount} 筆）
+          {t("顯示更早的任務（還有 {count} 筆）", { count: hiddenOlderCount })}
         </button>
       )}
       {renderedTurns.map((turn, i) => (
@@ -494,7 +510,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         const el = logRef.current;
         el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
         setAtBottom(true);
-      }}>↓ 最新內容</button>}
+      }}>{t("↓ 最新內容")}</button>}
     </div>
   );
 
@@ -506,16 +522,16 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       event.stopPropagation();
       setNavigationOpen(false);
     }}>
-      <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>報告導覽 <span>{renderedTurns.length}</span></button>
-      <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label="報告章節導覽">
-        <header><span>REPORT INDEX</span><strong>報告導覽</strong><ReportActions markdown={reportMarkdown(completeReportTurns)} /></header>
+      <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>{t("報告導覽")} <span>{renderedTurns.length}</span></button>
+      <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label={t("報告章節導覽")}>
+        <header><span>REPORT INDEX</span><strong>{t("報告導覽")}</strong><ReportActions markdown={reportMarkdown(completeReportTurns)} /></header>
         <div className="focus-report-nav__items">
           {navigationEntries.map((entry) => <button type="button" key={entry.id} className={`${entry.level > 0 ? `focus-report-nav__heading focus-report-nav__heading--${entry.level}` : ""} ${activeSection === entry.id ? "active" : ""}`} aria-current={activeSection === entry.id ? "location" : undefined} onClick={() => {
             document.getElementById(entry.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
             setActiveSection(entry.id);
             setNavigationOpen(false);
           }}><i>{entry.level === 0 && pinnedTurns.has(entry.turnKey) ? "★" : entry.number || "·"}</i><span><strong>{entry.label}</strong>{entry.status && <small>{entry.status}</small>}</span></button>)}
-          {visibleTurns.length === 0 && <p>目前沒有可導覽的報告</p>}
+          {visibleTurns.length === 0 && <p>{t("目前沒有可導覽的報告")}</p>}
         </div>
       </nav>
       {log}

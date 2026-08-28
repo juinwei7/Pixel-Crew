@@ -1,4 +1,5 @@
 import { parseDocument } from "yaml";
+import { t } from "./i18n";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
 
@@ -17,7 +18,7 @@ export function parseWorkflowDocument(content: string): ParsedWorkflowDocument {
   }
   const value = document.toJS();
   if (value != null && (typeof value !== "object" || Array.isArray(value))) {
-    return { attributes: {}, body: match[2].replace(/^\r?\n/, ""), error: "Frontmatter 必須是 YAML object" };
+    return { attributes: {}, body: match[2].replace(/^\r?\n/, ""), error: t("Frontmatter 必須是 YAML object") };
   }
   return {
     attributes: (value ?? {}) as Record<string, unknown>,

@@ -1,38 +1,39 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { CapabilityState, McpLoginResult, McpScope, McpServerState, ProviderId } from "../types";
 import { apiRequest } from "../api";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { t } from "../i18n";
+import { Modal } from "./Modal";
 
 function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
 }
 
 const SCOPE_LABEL: Record<McpScope, string> = {
-  local: "本機（此專案私有）",
-  project: "專案共享（.mcp.json）",
-  user: "全域（所有專案）",
-  account: "claude.ai 帳號",
+  local: t("本機（此專案私有）"),
+  project: t("專案共享（.mcp.json）"),
+  user: t("全域（所有專案）"),
+  account: t("claude.ai 帳號"),
 };
 
 function statusLabel(status: string): string {
   switch (status) {
     case "connected":
     case "enabled":
-      return "已連線";
+      return t("已連線");
     case "connected_tools_failed":
-      return "已連線·工具清單讀取失敗";
+      return t("已連線·工具清單讀取失敗");
     case "needs_auth":
-      return "需授權";
+      return t("需授權");
     case "failed":
-      return "連線失敗";
+      return t("連線失敗");
     case "pending":
-      return "連線中…";
+      return t("連線中…");
     case "pending_approval":
-      return "待核准";
+      return t("待核准");
     case "disabled":
-      return "已停用";
+      return t("已停用");
     default:
-      return status || "未知";
+      return status || t("未知");
   }
 }
 
@@ -54,12 +55,12 @@ type McpReloadSummary = { reloaded: number; deferred: number; failed: number };
 export function reloadNotice(action: string, reload?: McpReloadSummary): { ok: boolean; text: string } {
   if (!reload) return { ok: true, text: action };
   if (reload.failed > 0) {
-    return { ok: false, text: `${action}；${reload.failed} 個 NPC 重連失敗` };
+    return { ok: false, text: t("{action}；{failed} 個 NPC 重連失敗", { action, failed: reload.failed }) };
   }
   if (reload.deferred > 0) {
-    return { ok: true, text: `${action}；${reload.reloaded} 個 NPC 已重連，${reload.deferred} 個執行中的 NPC 會在下一回合前自動重載` };
+    return { ok: true, text: t("{action}；{reloaded} 個 NPC 已重連，{deferred} 個執行中的 NPC 會在下一回合前自動重載", { action, reloaded: reload.reloaded, deferred: reload.deferred }) };
   }
-  return { ok: true, text: `${action}；目前 session 已重連 MCP` };
+  return { ok: true, text: t("{action}；目前 session 已重連 MCP", { action }) };
 }
 
 type Props = {
@@ -100,14 +101,6 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
   const [clientId, setClientId] = useState("");
   const [oauthClientId, setOauthClientId] = useState("");
   const [oauthResource, setOauthResource] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Codex has neither `add-json` nor SSE transport — clamp the form back to
   // something valid if the user switched provider mid-edit.
@@ -134,9 +127,11 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
       delete next[mcpLoginResult.name];
       return next;
     });
-    const label = { succeeded: "登入成功", failed: "登入失敗", timeout: "登入逾時", cancelled: "已取消登入" }[mcpLoginResult.status];
+    const label = { succeeded: t("登入成功"), failed: t("登入失敗"), timeout: t("登入逾時"), cancelled: t("已取消登入") }[mcpLoginResult.status];
     notify(
-      `${mcpLoginResult.name}：${label}${mcpLoginResult.message ? ` — ${mcpLoginResult.message}` : ""}`,
+      mcpLoginResult.message
+        ? t("{name}：{label} — {message}", { name: mcpLoginResult.name, label, message: mcpLoginResult.message })
+        : t("{name}：{label}", { name: mcpLoginResult.name, label }),
       mcpLoginResult.ok ? "ok" : "error",
     );
     // Only re-run when a new event actually arrives (seq bump), not on every
@@ -149,7 +144,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
     setNotice(null);
     try {
       const data = await apiRequest<{ reload?: McpReloadSummary }>("/api/mcp/refresh", { method: "POST", body: { provider, workspacePath }, timeoutMs: 65000 });
-      setNotice(reloadNotice("MCP 狀態與工具已更新", data.reload));
+      setNotice(reloadNotice(t("MCP 狀態與工具已更新"), data.reload));
     } catch (error) {
       setNotice({ ok: false, text: (error as Error).message });
     } finally {
@@ -166,7 +161,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
         method: "DELETE",
         timeoutMs: 65000,
       });
-      setNotice(reloadNotice(`已移除 ${server.name}`, data.reload));
+      setNotice(reloadNotice(t("已移除 {name}", { name: server.name }), data.reload));
     } catch (error) {
       setNotice({ ok: false, text: (error as Error).message });
     } finally {
@@ -205,7 +200,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
     setNotice(null);
     try {
       await apiRequest("/api/mcp/logout", { method: "POST", body: { provider, workspacePath, name: serverName }, timeoutMs: 35000 });
-      setNotice({ ok: true, text: `已登出 ${serverName}` });
+      setNotice({ ok: true, text: t("已登出 {name}", { name: serverName }) });
     } catch (error) {
       setNotice({ ok: false, text: (error as Error).message });
     } finally {
@@ -267,7 +262,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
         }
       }
       const data = await apiRequest<{ reload?: McpReloadSummary }>("/api/mcp", { method: "POST", timeoutMs: 65000, body });
-      setNotice(reloadNotice(`已加入 ${name.trim()}`, data.reload));
+      setNotice(reloadNotice(t("已加入 {name}", { name: name.trim() }), data.reload));
       setName("");
       setTarget("");
       setEnvRows([]);
@@ -288,41 +283,39 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
   const canSubmitAdd = Boolean(name.trim()) && (addMode === "json" ? Boolean(json.trim()) : Boolean(target.trim()));
 
   return (
-    <div ref={dialogRef} className="mcp-modal" role="dialog" aria-modal="true" aria-labelledby="mcp-modal-title">
-      <div className="mcp-modal__card">
-        <button type="button" className="mcp-modal__close" onClick={onClose} aria-label="關閉 MCP 管理">×</button>
+    <Modal label={t("MCP 管理")} overlayClassName="mcp-modal" cardClassName="mcp-modal__card" closeClassName="mcp-modal__close" closeLabel={t("關閉 MCP 管理")} onClose={onClose}>
         <header className="mcp-modal__header">
           <span className="mcp-modal__eyebrow">MCP SERVERS</span>
-          <h2 id="mcp-modal-title">
+          <h2>
             {capabilities.loading
-              ? "讀取中…"
+              ? t("讀取中…")
               : capabilities.toolCount == null
-                ? `${activeServerCount}/${servers.length} 個連線中`
-                : `${capabilities.toolCount} 個工具 · ${capabilities.source === "cache" ? "快取" : "已更新"}`}
+                ? t("{active}/{total} 個連線中", { active: activeServerCount, total: servers.length })
+                : t("{count} 個工具 · {status}", { count: capabilities.toolCount, status: capabilities.source === "cache" ? t("快取") : t("已更新") })}
           </h2>
           {provider === "claude" && platform === "darwin" && (
-            <button type="button" className="mcp-modal__refresh" disabled={pending} title="從 Claude Desktop 應用程式匯入已設定的 MCP servers" onClick={() => void importFromClaudeDesktop()}>
-              從 Claude Desktop 匯入
+            <button type="button" className="mcp-modal__refresh" disabled={pending} title={t("從 Claude Desktop 應用程式匯入已設定的 MCP servers")} onClick={() => void importFromClaudeDesktop()}>
+              {t("從 Claude Desktop 匯入")}
             </button>
           )}
           <button type="button" className="mcp-modal__refresh" disabled={pending || capabilities.loading} onClick={() => void refresh()}>
-            ↻ 重新讀取
+            ↻ {t("重新讀取")}
           </button>
         </header>
 
         {hasPendingApproval && provider === "claude" && (
           <div className="mcp-modal__hint">
-            有伺服器待核准（僅能在真人互動式終端核准，PixelCrew 無法代為核准）。
-            <button type="button" onClick={() => void resetProjectChoices()} disabled={pending}>重設本專案核准記憶</button>
+            {t("有伺服器待核准（僅能在真人互動式終端核准，PixelCrew 無法代為核准）。")}
+            <button type="button" onClick={() => void resetProjectChoices()} disabled={pending}>{t("重設本專案核准記憶")}</button>
           </div>
         )}
-        {capabilities.error && <div className="mcp-modal__warning">更新失敗，目前顯示最後一次資料</div>}
+        {capabilities.error && <div className="mcp-modal__warning">{t("更新失敗，目前顯示最後一次資料")}</div>}
 
         <section className="mcp-modal__list">
           {capabilities.loading && servers.length === 0 && (
-            <div className="mcp-modal__skeleton" aria-label="正在讀取 MCP servers"><i /><i /><i /></div>
+            <div className="mcp-modal__skeleton" aria-label={t("正在讀取 MCP servers")}><i /><i /><i /></div>
           )}
-          {!capabilities.loading && servers.length === 0 && <div className="mcp-modal__empty">沒有設定 MCP server</div>}
+          {!capabilities.loading && servers.length === 0 && <div className="mcp-modal__empty">{t("沒有設定 MCP server")}</div>}
           {servers.map((server) => {
             const detail = detailLine(server);
             const loggingIn = Boolean(pendingLogins[server.name]);
@@ -353,12 +346,12 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                     <span className="mcp-modal__name">{server.name}</span>
                     {server.scope && <span className={`mcp-modal__badge mcp-modal__badge--${server.scope}`}>{SCOPE_LABEL[server.scope]}</span>}
                     {server.transport && <span className="mcp-modal__badge mcp-modal__badge--transport">{server.transport}</span>}
-                    {server.builtin && <span className="mcp-modal__badge mcp-modal__badge--builtin">Codex 內建</span>}
+                    {server.builtin && <span className="mcp-modal__badge mcp-modal__badge--builtin">{t("Codex 內建")}</span>}
                   </div>
                   <div className="mcp-modal__status-line">
                     <span className="mcp-modal__status">{statusLabel(server.status)}</span>
-                    {server.status === "pending_approval" && <span className="mcp-modal__note">僅能在真人互動式終端核准</span>}
-                    {toolsFetchFailed && <span className="mcp-modal__note">可嘗試「重新讀取」或查看細節</span>}
+                    {server.status === "pending_approval" && <span className="mcp-modal__note">{t("僅能在真人互動式終端核准")}</span>}
+                    {toolsFetchFailed && <span className="mcp-modal__note">{t("可嘗試「重新讀取」或查看細節")}</span>}
                   </div>
                   {detail && <div className="mcp-modal__detail">{detail}</div>}
                   <div className="mcp-modal__tools">
@@ -367,12 +360,12 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                       className="mcp-modal__tools-toggle"
                       onClick={() => setExpandedTools((current) => ({ ...current, [server.name]: !current[server.name] }))}
                     >
-                      {expanded ? "隱藏工具" : "查看工具"}
-                      {provider === "codex" && server.tools ? `（${server.tools.length}）` : ""}
+                      {expanded ? t("隱藏工具") : t("查看工具")}
+                      {provider === "codex" && server.tools ? t("（{count}）", { count: server.tools.length }) : ""}
                     </button>
-                    {provider === "claude" && <span className="mcp-modal__note">僅顯示已使用過的工具</span>}
+                    {provider === "claude" && <span className="mcp-modal__note">{t("僅顯示已使用過的工具")}</span>}
                     {provider === "codex" && server.toolsStatus !== "available" && (
-                      <span className="mcp-modal__note">工具清單目前無法讀取</span>
+                      <span className="mcp-modal__note">{t("工具清單目前無法讀取")}</span>
                     )}
                     {expanded && (
                       <div className="mcp-modal__tools-list">
@@ -385,24 +378,24 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                               </div>
                             ))
                           ) : (
-                            <div className="mcp-modal__tools-empty">此伺服器目前沒有提供任何工具</div>
+                            <div className="mcp-modal__tools-empty">{t("此伺服器目前沒有提供任何工具")}</div>
                           )
                         )}
                         {provider === "codex" && server.toolsStatus !== "available" && (
                           <div className="mcp-modal__tools-fallback">
-                            目前無法取得完整工具清單（可能是實驗性 API 已變動，或尚無運作中的 Codex 工人）。
+                            {t("目前無法取得完整工具清單（可能是實驗性 API 已變動，或尚無運作中的 Codex 工人）。")}
                           </div>
                         )}
                         {provider === "claude" && (
                           usedTools.length > 0 ? (
                             <>
-                              <div className="mcp-modal__tools-fallback">此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具。</div>
+                              <div className="mcp-modal__tools-fallback">{t("此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具。")}</div>
                               {usedTools.map((toolName) => (
                                 <div key={toolName} className="mcp-modal__tools-name">{toolName}</div>
                               ))}
                             </>
                           ) : (
-                            <div className="mcp-modal__tools-empty">此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具；尚未使用過這個伺服器的任何工具。</div>
+                            <div className="mcp-modal__tools-empty">{t("此 provider 目前無法列出完整工具清單，僅顯示已使用過的工具；尚未使用過這個伺服器的任何工具。")}</div>
                           )
                         )}
                       </div>
@@ -417,18 +410,18 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                   {showLogin && (
                     loggingIn ? (
                       <span className="mcp-modal__login-pending">
-                        等待瀏覽器授權中…
-                        <button type="button" onClick={() => void cancelLogin(server.name)}>取消</button>
+                        {t("等待瀏覽器授權中…")}
+                        <button type="button" onClick={() => void cancelLogin(server.name)}>{t("取消")}</button>
                       </span>
                     ) : (
-                      <button type="button" className="mcp-modal__login" onClick={() => void login(server.name)}>登入</button>
+                      <button type="button" className="mcp-modal__login" onClick={() => void login(server.name)}>{t("登入")}</button>
                     )
                   )}
                   {showLogout && (
-                    <button type="button" className="mcp-modal__logout" disabled={pending} onClick={() => void logout(server.name)}>登出</button>
+                    <button type="button" className="mcp-modal__logout" disabled={pending} onClick={() => void logout(server.name)}>{t("登出")}</button>
                   )}
                   {editable && (
-                    <button type="button" className="mcp-modal__remove" title="移除這個 MCP server" disabled={pending} onClick={() => void remove(server)}>移除</button>
+                    <button type="button" className="mcp-modal__remove" title={t("移除這個 MCP server")} disabled={pending} onClick={() => void remove(server)}>{t("移除")}</button>
                   )}
                 </div>
               </div>
@@ -438,21 +431,21 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
 
         <form className="mcp-modal__add" onSubmit={add}>
           <div className="mcp-modal__add-title">
-            新增 MCP SERVER
+            {t("新增 MCP SERVER")}
             {provider === "claude" && (
               <button type="button" className="mcp-modal__mode-toggle" onClick={() => setAddMode((mode) => (mode === "form" ? "json" : "form"))}>
-                {addMode === "form" ? "進階：貼上 JSON" : "改用表單"}
+                {addMode === "form" ? t("進階：貼上 JSON") : t("改用表單")}
               </button>
             )}
           </div>
 
-          <input className="mcp-modal__input" placeholder="名稱（英數、-、_、.）" value={name} onChange={(e) => setName(e.target.value)} />
+          <input className="mcp-modal__input" placeholder={t("名稱（英數、-、_、.）")} value={name} onChange={(e) => setName(e.target.value)} />
 
           {provider === "claude" && (
             <select className="mcp-modal__input" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
-              <option value="local">本機（此專案私有）</option>
-              <option value="project">專案共享（.mcp.json）</option>
-              <option value="user">全域（所有專案）</option>
+              <option value="local">{t("本機（此專案私有）")}</option>
+              <option value="project">{t("專案共享（.mcp.json）")}</option>
+              <option value="user">{t("全域（所有專案）")}</option>
             </select>
           )}
 
@@ -465,7 +458,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                 value={json}
                 onChange={(e) => setJson(e.target.value)}
               />
-              <div className="mcp-modal__hint-inline">需包含 "type"（stdio 或 sse），否則詳細資訊可能不完整。</div>
+              <div className="mcp-modal__hint-inline">{t('需包含 "type"（stdio 或 sse），否則詳細資訊可能不完整。')}</div>
             </>
           ) : (
             <>
@@ -485,55 +478,55 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
               </div>
               <input
                 className="mcp-modal__input"
-                placeholder={transport === "stdio" ? "stdio 指令，例如 npx my-mcp-server" : "https://…/mcp"}
+                placeholder={transport === "stdio" ? t("stdio 指令，例如 npx my-mcp-server") : "https://…/mcp"}
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
               />
 
               {transport === "stdio" ? (
                 <div className="mcp-modal__rows">
-                  <div className="mcp-modal__rows-title">環境變數（選填）</div>
+                  <div className="mcp-modal__rows-title">{t("環境變數（選填）")}</div>
                   {envRows.map((row, index) => (
                     <div key={index} className="mcp-modal__row-inputs">
-                      <input aria-label={`環境變數 ${index + 1} 名稱`} placeholder="KEY" value={row.key} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, key: e.target.value } : r)))} />
-                      <input aria-label={`環境變數 ${index + 1} 值`} placeholder="value" value={row.value} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
-                      <button type="button" aria-label={`移除環境變數 ${index + 1}`} onClick={() => setEnvRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
+                      <input aria-label={t("環境變數 {n} 名稱", { n: index + 1 })} placeholder="KEY" value={row.key} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, key: e.target.value } : r)))} />
+                      <input aria-label={t("環境變數 {n} 值", { n: index + 1 })} placeholder="value" value={row.value} onChange={(e) => setEnvRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
+                      <button type="button" aria-label={t("移除環境變數 {n}", { n: index + 1 })} onClick={() => setEnvRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
                     </div>
                   ))}
-                  <button type="button" className="mcp-modal__row-add" onClick={() => setEnvRows((rows) => [...rows, { key: "", value: "" }])}>+ 新增環境變數</button>
+                  <button type="button" className="mcp-modal__row-add" onClick={() => setEnvRows((rows) => [...rows, { key: "", value: "" }])}>{t("+ 新增環境變數")}</button>
                 </div>
               ) : provider === "claude" ? (
                 <div className="mcp-modal__rows">
-                  <div className="mcp-modal__rows-title">Header（選填）</div>
+                  <div className="mcp-modal__rows-title">{t("Header（選填）")}</div>
                   {headerRows.map((row, index) => (
                     <div key={index} className="mcp-modal__row-inputs">
-                      <input aria-label={`Header ${index + 1} 名稱`} placeholder="Name" value={row.name} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} />
-                      <input aria-label={`Header ${index + 1} 值`} placeholder="value" value={row.value} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
-                      <button type="button" aria-label={`移除 Header ${index + 1}`} onClick={() => setHeaderRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
+                      <input aria-label={t("Header {n} 名稱", { n: index + 1 })} placeholder="Name" value={row.name} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} />
+                      <input aria-label={t("Header {n} 值", { n: index + 1 })} placeholder="value" value={row.value} onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
+                      <button type="button" aria-label={t("移除 Header {n}", { n: index + 1 })} onClick={() => setHeaderRows((rows) => rows.filter((_, i) => i !== index))}>×</button>
                     </div>
                   ))}
-                  <button type="button" className="mcp-modal__row-add" onClick={() => setHeaderRows((rows) => [...rows, { name: "", value: "" }])}>+ 新增 Header</button>
+                  <button type="button" className="mcp-modal__row-add" onClick={() => setHeaderRows((rows) => [...rows, { name: "", value: "" }])}>{t("+ 新增 Header")}</button>
                 </div>
               ) : (
-                <div className="mcp-modal__hint-inline">OAuth 或 bearer token 請先用 codex mcp login／終端設定。</div>
+                <div className="mcp-modal__hint-inline">{t("OAuth 或 bearer token 請先用 codex mcp login／終端設定。")}</div>
               )}
 
               {transport !== "stdio" && (
                 <div className="mcp-modal__rows">
                   <button type="button" className="mcp-modal__mode-toggle" onClick={() => setAdvancedOpen((open) => !open)}>
-                    {advancedOpen ? "隱藏進階選項" : "進階選項（OAuth）"}
+                    {advancedOpen ? t("隱藏進階選項") : t("進階選項（OAuth）")}
                   </button>
                   {advancedOpen && (
                     provider === "claude" ? (
                       <>
-                        <input className="mcp-modal__input" placeholder="Callback port（選填，固定 OAuth 回呼埠）" value={callbackPort} onChange={(e) => setCallbackPort(e.target.value)} />
-                        <input className="mcp-modal__input" placeholder="Client ID（選填）" value={clientId} onChange={(e) => setClientId(e.target.value)} />
-                        <div className="mcp-modal__hint-inline">需要 client secret 的伺服器請改用終端機執行 claude mcp add ... --client-secret（CLI 刻意不讓明碼 secret 經過任何 API）。</div>
+                        <input className="mcp-modal__input" placeholder={t("Callback port（選填，固定 OAuth 回呼埠）")} value={callbackPort} onChange={(e) => setCallbackPort(e.target.value)} />
+                        <input className="mcp-modal__input" placeholder={t("Client ID（選填）")} value={clientId} onChange={(e) => setClientId(e.target.value)} />
+                        <div className="mcp-modal__hint-inline">{t("需要 client secret 的伺服器請改用終端機執行 claude mcp add ... --client-secret（CLI 刻意不讓明碼 secret 經過任何 API）。")}</div>
                       </>
                     ) : (
                       <>
-                        <input className="mcp-modal__input" placeholder="OAuth client ID（選填）" value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} />
-                        <input className="mcp-modal__input" placeholder="OAuth resource（選填）" value={oauthResource} onChange={(e) => setOauthResource(e.target.value)} />
+                        <input className="mcp-modal__input" placeholder={t("OAuth client ID（選填）")} value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} />
+                        <input className="mcp-modal__input" placeholder={t("OAuth resource（選填）")} value={oauthResource} onChange={(e) => setOauthResource(e.target.value)} />
                       </>
                     )
                   )}
@@ -543,11 +536,10 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
           )}
 
           <button className="mcp-modal__submit" type="submit" disabled={submitting || !canSubmitAdd}>
-            {submitting ? "處理中…" : "加入"}
+            {submitting ? t("處理中…") : t("加入")}
           </button>
           {notice && <div className={`mcp-modal__notice ${notice.ok ? "" : "mcp-modal__notice--err"}`}>{notice.text}</div>}
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

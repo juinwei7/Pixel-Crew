@@ -10,7 +10,7 @@
 
 🌐 [Official website](https://pixelcrew.weibuilds.com/)
 
-**English** · [繁體中文](#zh-tw)
+[English](README.en.md) · [繁體中文](#zh-tw)
 
 Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pixel-art office. Each session is an NPC you can task, watch stream its output/thinking/tool calls in real time, and approve or deny permission requests — all running against the **official CLIs already installed on your machine**. Pixel Crew never asks you to paste an API key; authentication and usage stay in the underlying CLIs.
 
@@ -22,6 +22,8 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
 - **AI-routed department work** — use one “Hand to department” action; the Boss chooses a focused read-only Consult/Review or a full 2–5 step Mission, assigns same-workspace specialists, and keeps handoffs moving until completion or a real approval is needed.
 - **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
+- **3D office view (optional)** — add `?theme=modern` to switch from the default pixel (2D) office to a real-time 3D "dollhouse": a glass-curtain tower with per-floor bands, a day/night lighting cycle, NPCs seated at their stations as 3D characters, and floating work windows that show — in plain language — which tool each agent is running. Drag to orbit the azimuth and scroll to zoom; pull back to take in the whole tower.
+- **Remote access / mobile control (optional)** — a bundled gateway puts a passcode or Google sign-in (plus brute-force lockout and time-limited share codes) in front of the local server and opens an HTTPS tunnel via cloudflared or Tailscale, so you can command your crew from a phone. The connection QR renders as a 3D neon night city that flips into a scannable aerial view — tap to explore, drag to orbit.
 - **Folders as rooms** — bind each worker to a local folder; the agent runs there.
 - **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
 - **Image and document prompts** — paste or pick PNG/JPEG/WebP images plus text, Markdown, CSV, JSON, HTML, XML, YAML, PDF and modern Office documents. Images use native multimodal input; documents are staged privately for the selected CLI and removed after the turn.
@@ -78,6 +80,9 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **Provider 切換**：尚未對話時直接更換目前 NPC 類型；已有對話時透過摘要交接原地切換，但不混用兩邊不相容的原生 session 歷史。
 - **跨 LLM 交接**：空白 NPC 可直接原地更換 provider；已有對話時，會先整理目標、進度、決策與風險，再建立另一個 provider 的新 session 接手。交接摘要不是完整原生記憶，切換前會明確提醒並檢查目標 provider 的剩餘用量。
 - **AI 部門工作與辦公室**：你是老闆，只需在持久化任務日誌中選擇決策模型並直接描述工作。過於概略、涉及權限或欠缺驗收邊界時，模型會先逐題詢問，不會直接派工。資訊足夠後才建立一個或多個部門的執行圖，依相依關係傳遞部門報告並執行；不使用關鍵字配分或靜默備援。退件最多修正兩輪，只有權限、認證、重大決定或無法確認時才停下來；不會自行 commit、push、merge、tag 或 release。
+- **一鍵成軍**：從範本一次組出 1–6 位 NPC 的隊伍——你只挑隊長，Pixel Crew 自動推導互補的職務／人設、組成一個部門，並替你驗證命名與自動核准設定。
+- **圓桌（低成本模擬討論）**：由單一 NPC 在一次回合內自行分飾 2–4 個相關視角（不呼叫工具、不動檔案），回傳結構化的「多方觀點＋結論」。用於快速、低成本的方向確認，而非動用整個部門派工。
+- **作戰室（多代理辯論）**：面對高風險問題時，臨時召集 2–4 位持不同立場的短命同儕 NPC（提案／挑戰／權衡，難題再加一個查證立場負責事實查核），平行跑一輪開場與一輪反駁。模型分級隨難度調整（Haiku／Sonnet／Opus），由主持 NPC 彙整成結構化裁決——共識、爭點、優先行動、關鍵指標與圖表——結束後拆除臨時同儕。辯論歷史之後可回顧或刪除。
 - **即時串流**：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
 - **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
@@ -85,6 +90,8 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **全域工作能量**：頂部 HUD 顯示 Claude 與 Codex 目前的剩餘用量（讀取各自 CLI 的用量資訊），為帳號共用、不隨房間或 NPC 切換。
 - **富文字對話**：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
 - **像素辦公室**：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
+- **3D 辦公室（選用）**：在網址加上 `?theme=modern`，即可從預設的像素（2D）辦公室切換到即時 3D「娃娃屋」——玻璃帷幕塔身與逐層樓板環帶、日夜光影循環、NPC 以 3D 角色坐在各自工作站，頭上的浮動工作小窗會以白話中文即時顯示每位 Agent 正在執行的工具。滑鼠拖曳旋轉方位、滾輪縮放，拉遠即可欣賞整棟塔身。預設仍為像素主題。
+- **遠端存取／手機控制（選用）**：內建轉接站在本機 server 前加上通行碼或 Google 登入（含暴力嘗試鎖定與限時分享密碼），並以 cloudflared 或 Tailscale 開出 HTTPS 通道，手機掃碼即可連入指揮辦公室。連線 QR 以 3D 霓虹夜城呈現——進場長出城市後自動翻轉成可掃描的空拍視角，點一下逛街景、拖曳環繞城市。
 - **Commands / Skills**：Claude 啟動時掃描專案與使用者指令並快取原生指令；Codex 會預載 Pixel Crew 可透過 app-server 原生執行的 `/clear`、`/new`、`/compact`、`/review`，並另外掃描 repo-scoped `$skills`。新建 NPC 或剛切換房間都能立即使用，不必先送出測試訊息。
 - **MCP 狀態**：依目前 provider 載入 MCP servers，可在介面中新增、移除、重新整理及查看狀態（含「需授權」等狀態）。
 - **動態模型**：Claude 提供 Opus / Sonnet / Haiku / Fable 等別名，Codex 直接讀取本機 CLI 的 model catalog，不需隨版本手動更新清單。
@@ -232,7 +239,7 @@ npm run dev
 - Codex 遠端 MCP 的 OAuth 或 bearer token 不會由 Pixel Crew 接收，請透過 `codex mcp login` 或終端機設定。
 - `acceptEdits` 會允許 Claude 自動進行檔案編輯；請依目標 repo 的敏感度選擇適合的 `PERMISSION_MODE`。
 
-Pixel Crew 沒有遠端身分驗證，因此 `HOST` 只接受 loopback 位址；若未來要支援多人或遠端存取，必須先另行設計認證、TLS 與來源限制。
+Pixel Crew 核心 server 沒有遠端身分驗證，因此 `HOST` 只接受 loopback 位址。要從手機或外部連入，請使用隨附的**遠端存取轉接站**（`遠端存取.cmd` / `_tsproxy.mjs`）：它在核心 server 前面加上通行碼／Google 登入、暴力嘗試鎖定與限時分享密碼，並透過 cloudflared quick tunnel 或 Tailscale 提供 HTTPS 對外通道；真正的秘密設定存於被 `.gitignore` 排除的 `_tsproxy.secret.json`。
 
 ## 開發與驗證
 

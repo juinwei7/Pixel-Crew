@@ -6,6 +6,41 @@ import type {
   WorkerState,
 } from "./types";
 import { shortToolName, stationForTool } from "./stations";
+import { t } from "./i18n";
+
+// 把工具呼叫美化成好讀的中文短句（帶真實細節），取代直接吐英文工具名。3D/2D 小窗與對話泡共用。
+function friendlyToolSpeech(name: string, input: unknown): string {
+  const n = name.toLowerCase();
+  const o = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const base = (p: unknown) => { const s = str(p); const parts = s.split(/[\\/]/); return parts[parts.length - 1] || s; };
+  if (n === "bash" || n === "powershell" || n === "pwsh") {
+    let c = str(o.command).replace(/\s+/g, " ").trim();
+    // 短短的顯示額度要留給真正的指令：去掉開頭的切目錄前綴、把長路徑縮成 …\最後兩段
+    c = c.replace(/^(?:Set-Location|Push-Location|cd)\s+(?:"[^"]*"|'[^']*'|[^\s;]+)\s*;\s*/i, "");
+    c = c.replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"';|]+/g, (m) => { const parts = m.split(/[\\/]/); return parts.length > 2 ? `…\\${parts.slice(-2).join("\\")}` : m; });
+    return c ? t("執行指令：{cmd}", { cmd: c.slice(0, 60) }) : t("執行指令");
+  }
+  if (n === "edit" || n === "write" || n === "notebookedit") { const f = base(o.file_path ?? o.path ?? o.notebook_path); return f ? t("編輯 {file}", { file: f }) : t("編輯程式碼"); }
+  if (n === "read") { const f = base(o.file_path ?? o.path); return f ? t("讀取 {file}", { file: f }) : t("讀取檔案"); }
+  if (n === "websearch" || n === "webfetch") { const q = str(o.query ?? o.q ?? o.url); return q ? t("上網查：{q}", { q: q.slice(0, 40) }) : t("上網搜尋"); }
+  if (n === "grep") { const p = str(o.pattern); return p ? t("搜尋：{p}", { p: p.slice(0, 40) }) : t("搜尋程式碼"); }
+  if (n === "glob") { const p = str(o.pattern); return p ? t("找檔案：{p}", { p: p.slice(0, 40) }) : t("找檔案"); }
+  if (n === "task" || n.includes("agent")) return t("派發子任務…");
+  if (n === "todowrite" || n === "todoread") return t("整理待辦清單…");
+  if (n.includes("__")) return t("呼叫 {tool}…", { tool: shortToolName(name) });
+  return t("使用 {tool}…", { tool: shortToolName(name) });
+}
+
+// 從 WebSearch/WebFetch(及 firecrawl 等)的工具輸入撈出查詢字或網址，給工作小窗抓真實截圖用。
+function webQueryFromInput(input: unknown): string | undefined {
+  if (typeof input === "string") return input.trim() || undefined;
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  const cand = o.query ?? o.q ?? o.url ?? o.search ?? o.prompt ?? o.text;
+  const s = typeof cand === "string" ? cand.trim() : "";
+  return s || undefined;
+}
 
 function readableFailureDetail(value: unknown): string {
   if (typeof value === "string") return value.trim();
@@ -14,7 +49,7 @@ function readableFailureDetail(value: unknown): string {
   const tool = detail.tool_name ?? detail.toolName ?? detail.name;
   const reason = detail.reason ?? detail.message ?? detail.error;
   if (tool || reason) {
-    return [tool ? `工具 ${String(tool)}` : "權限遭拒", reason ? String(reason) : "未獲授權"]
+    return [tool ? t("工具 {name}", { name: String(tool) }) : t("權限遭拒"), reason ? String(reason) : t("未獲授權")]
       .filter(Boolean)
       .join("：");
   }
@@ -31,9 +66,9 @@ function turnFailureReason(event: Extract<RunnerEvent, { type: "turn_end" }>): s
   if (result) details.push(result);
   for (const denial of event.permissionDenials) {
     const readable = readableFailureDetail(denial);
-    if (readable) details.push(`權限問題：${readable}`);
+    if (readable) details.push(t("權限問題：{detail}", { detail: readable }));
   }
-  return [...new Set(details)].join("\n") || "Agent 回合失敗，但 CLI 沒有提供詳細原因；請重試或查看啟動 Pixel Crew 的終端輸出。";
+  return [...new Set(details)].join("\n") || t("Agent 回合失敗，但 CLI 沒有提供詳細原因；請重試或查看啟動 Pixel Crew 的終端輸出。");
 }
 
 function isAgentTool(name: string): boolean {
@@ -45,11 +80,11 @@ function subagentInfo(input: unknown): { name: string; task: string } {
   const description = String(detail.description ?? "").trim();
   const type = String(detail.subagent_type ?? detail.subagentType ?? "").trim();
   const prompt = String(detail.prompt ?? "").trim();
-  const rawName = description || type || "子代理";
+  const rawName = description || type || t("子代理");
   const characters = Array.from(rawName);
   return {
     name: characters.length > 20 ? `${characters.slice(0, 19).join("")}…` : rawName,
-    task: description || (prompt.length > 80 ? `${prompt.slice(0, 79)}…` : prompt) || type || "協助處理任務",
+    task: description || (prompt.length > 80 ? `${prompt.slice(0, 79)}…` : prompt) || type || t("協助處理任務"),
   };
 }
 
@@ -159,6 +194,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         mood: "neutral",
         station: "home",
         speech: "",
+        speechAt: event.at,
         bump: next.character.bump + 1,
       };
       break;
@@ -184,6 +220,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       next.character.activity = "idle";
       next.character.mood = "neutral";
       next.character.speech = w.character.speech + event.text;
+      next.character.speechAt = event.at ?? next.character.speechAt;
       break;
     }
     case "thinking_delta": {
@@ -226,11 +263,14 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
           { id: event.id, name: info.name, task: info.task, background: false },
         ];
       }
+      const startStation = stationForTool(event.name, event.input);
       next.character = {
         activity: "working",
         mood: "neutral",
-        station: stationForTool(event.name, event.input),
-        speech: `使用 ${shortToolName(event.name)}…`,
+        station: startStation,
+        speech: friendlyToolSpeech(event.name, event.input),
+        speechAt: event.at,
+        webQuery: startStation === "web" ? webQueryFromInput(event.input) : undefined,
         bump: next.character.bump + 1,
       };
       break;
@@ -257,7 +297,8 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       }, true);
       next.character.activity = "thinking";
       next.character.mood = "neutral";
-      next.character.speech = "等待核准…";
+      next.character.speech = t("等待核准…");
+      next.character.speechAt = event.at ?? next.character.speechAt;
       break;
     }
     case "approval_resolved": {
@@ -272,7 +313,8 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         }
       }
       next.character.activity = "working";
-      next.character.speech = event.decision === "deny" ? "已拒絕操作" : "繼續執行…";
+      next.character.speech = event.decision === "deny" ? t("已拒絕操作") : t("繼續執行…");
+      next.character.speechAt = event.at ?? next.character.speechAt;
       break;
     }
     case "tool_call_result": {
@@ -318,6 +360,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         turn.status = event.isError ? "error" : "done";
         turn.costUsd = event.costUsd;
         turn.durationMs = event.durationMs;
+        turn.contextTokens = event.contextTokens;
         if (event.isError) {
           turn.items.push({
             kind: "system_error",
@@ -408,6 +451,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         activity: "idle",
         mood: "error",
         speech: event.message,
+        speechAt: event.at,
         bump: next.character.bump + 1,
       };
       break;

@@ -11,48 +11,29 @@ export type McpLoginResult = {
   message: string | null;
 };
 
-export type McpScope = "local" | "project" | "user" | "account";
-export type McpTransport = "stdio" | "sse" | "http";
+// 跨線協定型別的唯一權威在 server/src/protocol.ts —— 這裡只做 type-only
+// re-export（Vite 編譯時擦除，零 runtime 依賴），不要再手抄一份。
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  AutoApproveMode,
+  McpScope,
+  McpServerState,
+  McpToolInfo,
+  McpTransport,
+  RunnerEvent,
+} from "../../server/src/protocol";
 
-export type McpToolInfo = {
-  name: string;
-  description?: string;
-  readOnlyHint?: boolean;
-  destructiveHint?: boolean;
+export type {
+  ApprovalDecision,
+  ApprovalRequest,
+  AutoApproveMode,
+  McpScope,
+  McpServerState,
+  McpToolInfo,
+  McpTransport,
+  RunnerEvent,
 };
-
-export type McpServerState = {
-  name: string;
-  status: string;
-  scope?: McpScope;
-  transport?: McpTransport;
-  command?: string;
-  args?: string[];
-  url?: string;
-  envKeys?: string[];
-  headerNames?: string[];
-  detail?: string;
-  // Codex only — gates the login/logout buttons instead of `status`, since
-  // Codex's status is enabled/disabled (is the server on?), not auth state.
-  authStatus?: string;
-  // Full tool catalog, when the provider's CLI can supply one. Currently
-  // Codex-only, via the experimental mcpServerStatus/list app-server method.
-  tools?: McpToolInfo[];
-  // "available": `tools` is a complete, live catalog (Codex, once fetched).
-  // "unsupported"/"error": no list available — Claude is always unsupported.
-  toolsStatus?: "available" | "unsupported" | "error";
-  // Codex's own internal codex_apps server — real and connected, but not
-  // user-configured/removable the way `codex mcp add`'d servers are.
-  builtin?: boolean;
-};
-
-export type ApprovalDecision = "allow_once" | "allow_session" | "deny" | "auto_allow";
-
-// "off": always prompts. "safe": narrow allowlist (read-only tools + a
-// curated set of verified-safe commands) — still asks for anything else.
-// "full": allows everything except commands matched by the dangerous-command
-// denylist (rm -rf, sudo, git push --force, …).
-export type AutoApproveMode = "off" | "safe" | "full";
 
 export type MessageImagePayload = {
   name: string;
@@ -73,45 +54,6 @@ export type CommandSubmission = {
   clientMessageId?: string;
   idempotencyKey?: string;
 };
-
-export type ApprovalRequest = {
-  id: string;
-  activityId: string | null;
-  category: "command" | "file_change" | "tool" | "permissions";
-  title: string;
-  input: unknown;
-  command?: string;
-  cwd?: string;
-  reason?: string;
-  decisions: ApprovalDecision[];
-};
-
-export type RunnerEvent =
-  | { type: "text_delta"; text: string }
-  | { type: "thinking_delta"; text: string }
-  | { type: "tool_call_start"; id: string; name: string; input: unknown }
-  | { type: "tool_call_output_delta"; id: string; delta: string }
-  | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
-  | { type: "approval_requested"; request: ApprovalRequest }
-  | { type: "approval_resolved"; id: string; decision: ApprovalDecision }
-  | {
-      type: "turn_end";
-      resultText: string;
-      costUsd: number;
-      durationMs: number;
-      isError: boolean;
-      permissionDenials: unknown[];
-    }
-  | {
-      type: "meta";
-      model: string;
-      slashCommands: string[];
-      mcpServers: McpServerState[];
-      toolCount: number;
-      builtinTools: string[];
-    }
-  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string }
-  | { type: "error"; message: string };
 
 export type ToolCallItem = {
   kind: "tool_call";
@@ -148,6 +90,7 @@ export type Turn = {
   items: TurnItem[];
   costUsd?: number;
   durationMs?: number;
+  contextTokens?: number;
 };
 
 export type UpdateInfo = {
@@ -166,6 +109,8 @@ export type CharacterState = {
   mood: CharacterMood;
   station: StationKey;
   speech: string;
+  speechAt?: number; // speech 對應事件的 server 時間戳（epoch ms）；重整重播也保留真實時間
+  webQuery?: string; // 上網查時的查詢字/網址＝工作小窗抓真實瀏覽器截圖用
   bump: number;
 };
 
@@ -184,17 +129,7 @@ export type SubagentState = {
   background: boolean;
 };
 
-export type CapabilityState = {
-  slashCommands: string[];
-  mcpServers: McpServerState[];
-  models: Array<{ id: string; label: string; description?: string }>;
-  toolCount: number | null;
-  builtinTools: string[] | null;
-  loading: boolean;
-  source: "empty" | "cache" | "live";
-  updatedAt: string | null;
-  error: string | null;
-};
+export type { CapabilityState } from "../../server/src/protocol";
 
 export type ProviderAuthState = {
   provider: ProviderId;

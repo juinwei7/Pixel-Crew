@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { t } from "../i18n";
 import type { WorkerState } from "../types";
 
 type Props = {
@@ -75,12 +76,12 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
   }
 
   const items = [
-    { key: "rename", label: "重新命名", danger: false, act: () => setMode("rename") },
-    { key: "persona", label: "個性 / 職務", danger: false, act: () => { onPersona(worker.id); onClose(); } },
-    { key: "avatar", label: "像素角色", danger: false, act: () => { onAvatar(worker.id); onClose(); } },
-    { key: "room", label: "切換房間", danger: false, act: () => { onRoom(worker.id); onClose(); } },
+    { key: "rename", label: t("重新命名"), danger: false, act: () => setMode("rename") },
+    { key: "persona", label: t("個性 / 職務"), danger: false, act: () => { onPersona(worker.id); onClose(); } },
+    { key: "avatar", label: t("像素角色"), danger: false, act: () => { onAvatar(worker.id); onClose(); } },
+    { key: "room", label: t("切換房間"), danger: false, act: () => { onRoom(worker.id); onClose(); } },
     ...(canRemove ? [{
-      key: "remove", label: "移除人員", danger: true,
+      key: "remove", label: t("移除人員"), danger: true,
       act: () => { if (hasHistory) setMode("confirm-remove"); else { onRemove(worker.id); onClose(); } },
     }] : []),
   ];
@@ -121,10 +122,10 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
       )}
       {mode === "confirm-remove" && (
         <div className="npc-radial__panel">
-          <small>確定移除 {worker.name}？</small>
+          <small>{t("確定移除 {name}？", { name: worker.name })}</small>
           <div className="npc-radial__confirm">
-            <button type="button" className="npc-radial__confirm-danger" onClick={() => { onRemove(worker.id); onClose(); }}>移除</button>
-            <button type="button" onClick={() => setMode("ring")}>取消</button>
+            <button type="button" className="npc-radial__confirm-danger" onClick={() => { onRemove(worker.id); onClose(); }}>{t("移除")}</button>
+            <button type="button" onClick={() => setMode("ring")}>{t("取消")}</button>
           </div>
         </div>
       )}
