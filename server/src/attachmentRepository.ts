@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { MessageDocument, MessageImage } from "./providers/session.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 export type AttachmentKind = "image" | "document";
 export type AttachmentRecord = {
@@ -43,7 +44,7 @@ export class AttachmentRepository {
       if (!attachment) continue;
       const path = join(this.directory, attachment.storageKey);
       if (!existsSync(path)) {
-        console.warn(`附件檔案遺失，已略過：${attachment.id} (${attachment.name})`);
+        console.warn(t("附件檔案遺失，已略過：{id} ({name})", { id: attachment.id, name: attachment.name }));
         continue;
       }
       const dataBase64 = readFileSync(path).toString("base64");
@@ -82,7 +83,7 @@ export class AttachmentRepository {
       kind,
       createdAt: new Date().toISOString(),
     };
-    if (!this.store.saveAttachment(attachment)) throw new Error("無法保存附件索引");
+    if (!this.store.saveAttachment(attachment)) throw new Error(t("無法保存附件索引"));
     return attachment;
   }
 }

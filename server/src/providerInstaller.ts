@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { ProviderId } from "./providers/types.js";
 import { execCli, type ExecCliResult } from "./platform/processes.js";
+import { t } from "./i18n.js";
 
 export type ProviderInstallStatus = "idle" | "running" | "succeeded" | "failed";
 
@@ -123,7 +124,7 @@ export class ProviderInstaller {
     const running: ProviderInstallState = {
       provider,
       status: "running",
-      phase: "正在執行官方安裝器",
+      phase: t("正在執行官方安裝器"),
       command: recipe.displayCommand,
       sourceUrl: recipe.sourceUrl,
       startedAt: new Date().toISOString(),
@@ -147,7 +148,7 @@ export class ProviderInstaller {
       this.states.set(provider, {
         ...this.get(provider),
         status: "succeeded",
-        phase: "安裝完成，正在檢查登入狀態",
+        phase: t("安裝完成，正在檢查登入狀態"),
         finishedAt: new Date().toISOString(),
         output: boundedTail([result.stdout, result.stderr].filter(Boolean).join("\n")),
         error: null,
@@ -158,10 +159,10 @@ export class ProviderInstaller {
       this.states.set(provider, {
         ...this.get(provider),
         status: "failed",
-        phase: "安裝失敗",
+        phase: t("安裝失敗"),
         finishedAt: new Date().toISOString(),
         output,
-        error: boundedTail(detail.message || "官方安裝器執行失敗", 2_000),
+        error: boundedTail(detail.message || t("官方安裝器執行失敗"), 2_000),
       });
     } finally {
       try {
@@ -178,7 +179,7 @@ export class ProviderInstaller {
     return {
       provider,
       status: "idle",
-      phase: "尚未開始",
+      phase: t("尚未開始"),
       command: recipe.displayCommand,
       sourceUrl: recipe.sourceUrl,
       startedAt: null,

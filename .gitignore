@@ -1,4 +1,8 @@
 node_modules/
+# 個人機器專用的部署腳本／備份殘留——路徑寫死在自己電腦，不進 repo
+apply-to-wei.ps1
+套用更新到wei.cmd
+*.pixel-backup
 server/dist/
 web/dist/
 *.tsbuildinfo
@@ -11,3 +15,6 @@ server/data/
 docs/
 release/
 CLAUDE.md
+# 遠端存取轉接站的秘密檔（通行碼/簽章密鑰/Google 憑證）——絕不進 repo
+_tsproxy.secret.json
+!_tsproxy.secret.example.json

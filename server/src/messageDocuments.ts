@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 export const MAX_MESSAGE_DOCUMENTS = 4;
 export const MAX_MESSAGE_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -29,25 +30,25 @@ export class MessageDocumentValidationError extends Error {}
 
 export function parseMessageDocuments(value: unknown): MessageDocument[] {
   if (value == null) return [];
-  if (!Array.isArray(value)) throw new MessageDocumentValidationError("文件附件格式不正確");
-  if (value.length > MAX_MESSAGE_DOCUMENTS) throw new MessageDocumentValidationError(`每則訊息最多 ${MAX_MESSAGE_DOCUMENTS} 份文件`);
+  if (!Array.isArray(value)) throw new MessageDocumentValidationError(t("文件附件格式不正確"));
+  if (value.length > MAX_MESSAGE_DOCUMENTS) throw new MessageDocumentValidationError(t("每則訊息最多 {max} 份文件", { max: MAX_MESSAGE_DOCUMENTS }));
 
   let totalBytes = 0;
   return value.map((raw, index) => {
-    if (!raw || typeof raw !== "object") throw new MessageDocumentValidationError(`第 ${index + 1} 份文件格式不正確`);
+    if (!raw || typeof raw !== "object") throw new MessageDocumentValidationError(t("第 {n} 份文件格式不正確", { n: index + 1 }));
     const item = raw as Record<string, unknown>;
     const fallback = `document-${index + 1}.txt`;
     const name = String(item.name ?? fallback).replace(/[\\/\r\n\0]/g, "").trim().slice(0, 120) || fallback;
     const extension = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
     const definition = DOCUMENT_TYPES[extension];
-    if (!definition) throw new MessageDocumentValidationError("只支援 TXT、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件");
+    if (!definition) throw new MessageDocumentValidationError(t("只支援 TXT、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件"));
     const dataBase64 = String(item.dataBase64 ?? "").trim();
-    if (!dataBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64)) throw new MessageDocumentValidationError(`第 ${index + 1} 份文件資料無效`);
+    if (!dataBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64)) throw new MessageDocumentValidationError(t("第 {n} 份文件資料無效", { n: index + 1 }));
     const data = Buffer.from(dataBase64, "base64");
-    if (!data.length || data.length > MAX_MESSAGE_DOCUMENT_BYTES) throw new MessageDocumentValidationError(`每份文件不可超過 ${MAX_MESSAGE_DOCUMENT_BYTES / 1024 / 1024} MiB`);
-    if (!matchesDocumentSignature(data, definition.kind)) throw new MessageDocumentValidationError(`第 ${index + 1} 份文件內容與格式不符`);
+    if (!data.length || data.length > MAX_MESSAGE_DOCUMENT_BYTES) throw new MessageDocumentValidationError(t("每份文件不可超過 {mib} MiB", { mib: MAX_MESSAGE_DOCUMENT_BYTES / 1024 / 1024 }));
+    if (!matchesDocumentSignature(data, definition.kind)) throw new MessageDocumentValidationError(t("第 {n} 份文件內容與格式不符", { n: index + 1 }));
     totalBytes += data.length;
-    if (totalBytes > MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES) throw new MessageDocumentValidationError(`文件總大小不可超過 ${MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES / 1024 / 1024} MiB`);
+    if (totalBytes > MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES) throw new MessageDocumentValidationError(t("文件總大小不可超過 {mib} MiB", { mib: MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES / 1024 / 1024 }));
     return { name, mimeType: definition.mimeType, dataBase64 };
   });
 }
@@ -78,7 +79,7 @@ export function stageMessageDocuments(documents: MessageDocument[], directory: s
 export function documentPrompt(files: Array<{ name: string; path: string }>): string {
   if (files.length === 0) return "";
   const list = files.map((file, index) => `${index + 1}. ${JSON.stringify(file.name)}: ${JSON.stringify(file.path)}`).join("\n");
-  return `Pixel Crew 已將使用者附加的文件暫存為以下唯讀檔案。請把它們視為本次訊息的附件，依使用者要求用讀檔工具檢視；不要修改或刪除附件：\n${list}`;
+  return t("Pixel Crew 已將使用者附加的文件暫存為以下唯讀檔案。請把它們視為本次訊息的附件，依使用者要求用讀檔工具檢視；不要修改或刪除附件：\n{list}", { list });
 }
 
 function matchesDocumentSignature(data: Buffer, kind: "text" | "pdf" | "zip"): boolean {

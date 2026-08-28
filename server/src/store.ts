@@ -13,9 +13,12 @@ import { legacyDepartmentName, type Department } from "./department.js";
 import type { AttachmentRecord } from "./attachmentRepository.js";
 import type { DepartmentMessage, DepartmentThread } from "./departmentThread.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { t } from "./i18n.js";
 
 function normalizeAutoApproveMode(value: unknown): AutoApproveMode {
-  return value === "safe" || value === "full" ? value : "off";
+  // 記得把新檔位列進來：漏了的話，使用者選的模式在 server 重啟、從資料庫載回時會被洗成 off
+  //（實際發生過：無敵模式一重啟就變「關閉」、又開始跳允許視窗）。
+  return value === "safe" || value === "full" || value === "invincible" ? value : "off";
 }
 
 function jsonValue<T>(value: unknown, fallback: T): T {
@@ -48,7 +51,7 @@ function collaborationFromRow(row: Record<string, unknown>): CollaborationTask {
 
 function missionFromRow(row: Record<string, unknown>): DepartmentMission {
   const status = String(row.status);
-  const normalizedStatus = ["planning", "executing", "reviewing", "needs_attention", "completed", "failed", "cancelled"].includes(status)
+  const normalizedStatus = ["discussing", "planning", "executing", "reviewing", "needs_attention", "completed", "failed", "cancelled"].includes(status)
     ? status as DepartmentMission["status"] : "failed";
   const storedSteps = jsonValue<DepartmentMission["steps"]>(row.steps_json, []);
   const steps = normalizedStatus === "failed"
@@ -226,6 +229,24 @@ export class LocalStore {
         provider TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS cost_log (
+        day TEXT NOT NULL,
+        worker_id TEXT NOT NULL,
+        worker_name TEXT NOT NULL DEFAULT '',
+        micros INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, worker_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL,
+        time TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_run_day TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
       CREATE TABLE IF NOT EXISTS slash_command_seed (
@@ -413,21 +434,22 @@ export class LocalStore {
       );
     `);
     this.migrateCollaborationTasks();
-    this.db.exec(`
+    // 這三句用綁定參數（而非把中文字面值烤進 SQL 字串）才能讓 COALESCE 預設訊息吃到 t()。
+    this.db.prepare(`
       UPDATE provider_handoffs
-      SET status = 'failed', error = COALESCE(error, '伺服器重啟，交接已中止'), completed_at = CURRENT_TIMESTAMP
+      SET status = 'failed', error = COALESCE(error, ?), completed_at = CURRENT_TIMESTAMP
       WHERE status IN ('checking', 'summarizing', 'fallback', 'bootstrapping')
-    `);
-    this.db.exec(`
+    `).run(t("伺服器重啟，交接已中止"));
+    this.db.prepare(`
       UPDATE collaboration_tasks
-      SET status = 'failed', error = COALESCE(error, '伺服器重啟，NPC 協作已中止'), completed_at = CURRENT_TIMESTAMP
+      SET status = 'failed', error = COALESCE(error, ?), completed_at = CURRENT_TIMESTAMP
       WHERE status IN ('queued', 'running', 'returning')
-    `);
-    this.db.exec(`
+    `).run(t("伺服器重啟，NPC 協作已中止"));
+    this.db.prepare(`
       UPDATE department_missions
-      SET status = 'failed', error = COALESCE(error, '伺服器重啟，Department Mission 已中止'), completed_at = CURRENT_TIMESTAMP
+      SET status = 'failed', error = COALESCE(error, ?), completed_at = CURRENT_TIMESTAMP
       WHERE status IN ('planning', 'executing', 'reviewing')
-    `);
+    `).run(t("伺服器重啟，Department Mission 已中止"));
     try {
       this.db.exec("ALTER TABLE department_missions ADD COLUMN attention_reason TEXT");
     } catch {
@@ -569,15 +591,15 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to explicit departments.
     }
-    this.db.exec(`
+    this.db.prepare(`
       INSERT INTO departments (id, name, purpose, workspace_path, lead_worker_id)
       SELECT 'legacy-' || lower(hex(randomblob(16))), workspace_path,
-             '從既有工作位置自動建立', workspace_path,
+             ?, workspace_path,
              (SELECT w2.id FROM workers w2 WHERE w2.workspace_path = workers.workspace_path ORDER BY w2.sort_order, w2.created_at LIMIT 1)
       FROM workers
       WHERE workspace_path IS NOT NULL AND workspace_path != '' AND department_id IS NULL
       GROUP BY workspace_path
-    `);
+    `).run(t("從既有工作位置自動建立"));
     this.db.exec(`
       UPDATE workers
       SET department_id = (
@@ -931,6 +953,84 @@ export class LocalStore {
     return this.getCounter(key);
   }
 
+  // 每日每 NPC 成本累計（micro-USD）。day 用本地日期 YYYY-MM-DD。
+  logDailyCost(day: string, workerId: string, workerName: string, micros: number): void {
+    this.db.prepare(`
+      INSERT INTO cost_log (day, worker_id, worker_name, micros) VALUES (?, ?, ?, ?)
+      ON CONFLICT(day, worker_id) DO UPDATE SET
+        micros = micros + excluded.micros,
+        worker_name = excluded.worker_name
+    `).run(day, workerId, workerName, micros);
+  }
+
+  listDailyCosts(sinceDay: string): Array<{ day: string; workerId: string; workerName: string; costUsd: number }> {
+    const rows = this.db.prepare(
+      "SELECT day, worker_id, worker_name, micros FROM cost_log WHERE day >= ? ORDER BY day ASC, micros DESC",
+    ).all(sinceDay) as Array<{ day: string; worker_id: string; worker_name: string; micros: number }>;
+    return rows.map((row) => ({
+      day: row.day,
+      workerId: row.worker_id,
+      workerName: row.worker_name,
+      costUsd: Number(row.micros) / 1_000_000,
+    }));
+  }
+
+  // 一日回放：撈某天（本地日期）的關鍵事件（user_message / turn_end / error）。
+  // created_at 是 SQLite 的 UTC CURRENT_TIMESTAMP，這裡統一用 'localtime' 轉本地日期與時刻。
+  listDayEvents(day: string, limit = 500): Array<{ workerId: string; ts: string; event: RunnerEvent }> {
+    const rows = this.db.prepare(`
+      SELECT worker_id, payload, time(created_at, 'localtime') AS ts
+      FROM runner_events
+      WHERE date(created_at, 'localtime') = ?
+        AND json_extract(payload, '$.type') IN ('user_message', 'turn_end', 'error')
+      ORDER BY seq DESC LIMIT ?
+    `).all(day, limit) as Array<{ worker_id: string; payload: string; ts: string }>;
+    rows.reverse();
+    const events: Array<{ workerId: string; ts: string; event: RunnerEvent }> = [];
+    for (const row of rows) {
+      try {
+        events.push({ workerId: row.worker_id, ts: row.ts, event: JSON.parse(row.payload) as RunnerEvent });
+      } catch {
+        // 壞掉的 payload 直接跳過，不影響整份報告
+      }
+    }
+    return events;
+  }
+
+  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null }> {
+    const rows = this.db.prepare(
+      "SELECT id, worker_id, time, prompt, enabled, last_run_day FROM schedules ORDER BY time ASC",
+    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null }>;
+    return rows.map((row) => ({
+      id: row.id,
+      workerId: row.worker_id,
+      time: row.time,
+      prompt: row.prompt,
+      enabled: Boolean(row.enabled),
+      lastRunDay: row.last_run_day,
+    }));
+  }
+
+  addSchedule(id: string, workerId: string, time: string, prompt: string): void {
+    this.db.prepare(
+      "INSERT INTO schedules (id, worker_id, time, prompt, enabled) VALUES (?, ?, ?, ?, 1)",
+    ).run(id, workerId, time, prompt);
+  }
+
+  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean }): void {
+    if (fields.time !== undefined) this.db.prepare("UPDATE schedules SET time = ? WHERE id = ?").run(fields.time, id);
+    if (fields.prompt !== undefined) this.db.prepare("UPDATE schedules SET prompt = ? WHERE id = ?").run(fields.prompt, id);
+    if (fields.enabled !== undefined) this.db.prepare("UPDATE schedules SET enabled = ? WHERE id = ?").run(fields.enabled ? 1 : 0, id);
+  }
+
+  deleteSchedule(id: string): void {
+    this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
+  }
+
+  markScheduleRun(id: string, day: string): void {
+    this.db.prepare("UPDATE schedules SET last_run_day = ? WHERE id = ?").run(day, id);
+  }
+
   loadCapabilities(repoPath: string): CapabilityState | null {
     const row = this.db.prepare(
       "SELECT payload FROM capability_cache WHERE repo_path = ?",
@@ -1269,9 +1369,9 @@ export class LocalStore {
       toProvider: row.to_provider === "codex" ? "codex" : "claude",
       toModel: row.to_model == null ? null : String(row.to_model),
       stage: "failed",
-      message: "上次 LLM 交接未完成，已保留原本的工作階段",
+      message: t("上次 LLM 交接未完成，已保留原本的工作階段"),
       source: row.source === "agent" ? "agent" : row.source === "local_fallback" ? "local_fallback" : null,
-      error: row.error == null ? "交接未完成" : String(row.error),
+      error: row.error == null ? t("交接未完成") : String(row.error),
     };
   }
 

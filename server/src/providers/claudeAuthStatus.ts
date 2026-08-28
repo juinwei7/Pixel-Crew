@@ -1,11 +1,12 @@
 import type { AuthStatus } from "./types.js";
+import { t } from "../i18n.js";
 
 export function resolveClaudeAuthStatus(
   error: NodeJS.ErrnoException | null,
   stdout: string,
 ): { status: AuthStatus; error: string | null } {
   if (error?.code === "ENOENT") {
-    return { status: "cli_missing", error: "找不到 Claude Code CLI" };
+    return { status: "cli_missing", error: t("找不到 Claude Code CLI") };
   }
 
   try {
@@ -18,6 +19,6 @@ export function resolveClaudeAuthStatus(
 
   return {
     status: "error",
-    error: error?.message || "無法確認 Claude 登入狀態",
+    error: error?.message || t("無法確認 Claude 登入狀態"),
   };
 }

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useWorkers } from "./hooks/useWorkers";
 import { topDismissibleLayer, useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { useUiPreferences, clampTaskLogWidth, enteredCompactOffice } from "./uiPreferences";
+import { useUiPreferences, clampTaskLogWidth, clampTaskLogHeight, enteredCompactOffice } from "./uiPreferences";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
 import { WorkerTabs } from "./components/WorkerTabs";
@@ -17,11 +17,130 @@ import { DepartmentMissionDialog } from "./components/DepartmentMissionDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { DepartmentCreator } from "./components/DepartmentCreator";
 import { McpModal } from "./components/McpModal";
+import { OpsModal } from "./components/OpsModal";
+import { SquadModal } from "./components/SquadModal";
+import { KanbanModal } from "./components/KanbanModal";
+import { DayReportModal } from "./components/DayReportModal";
+import { RemoteAccessModal } from "./components/RemoteAccessModal";
+import { OutboxModal } from "./components/OutboxModal";
 import { BackupModal } from "./components/BackupModal";
 import { BossTaskDesk } from "./components/BossTaskDesk";
 import { FocusControls } from "./components/FocusControls";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { OnboardingTour, hasSeenTour } from "./components/OnboardingTour";
+import { Office3D } from "./components/Office3D";
+import { theme } from "./theme";
 import { parseMcpToolName } from "./mcpToolName";
+import { roundtablePrompt } from "./roundtablePrompt";
+import { apiRequest } from "./api";
+import { t } from "./i18n";
+
+type WarRoomAction = { priority: "P1" | "P2" | "P3" | "P4"; title: string; how: string };
+type WarRoomDispute = { point: string; ruling: string };
+type WarRoomMetric = { label: string; value: string; note?: string };
+type WarRoomChart = { type: "line" | "bar" | "donut"; title: string; labels: string[]; values: number[]; unit?: string };
+type WarRoomResult = { verdict: string; consensus: string[]; disputes: WarRoomDispute[]; actions: WarRoomAction[]; metrics?: WarRoomMetric[]; charts?: WarRoomChart[]; structured: boolean; costUsd?: number };
+
+// 手工 SVG 圖表：走勢(line)/長條(bar)/圓餅(donut)。不引圖表庫——輕量、跟介面同一套深色霓虹風。
+const CHART_COLORS = ["#00e5ff", "#ffb000", "#00ffa3", "#ff2e88", "#a855ff", "#93a5ba"];
+
+function WarroomChartView({ chart }: { chart: WarRoomChart }) {
+  const { type, labels, values, unit } = chart;
+  const fmt = (v: number) => `${Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ?? ""}`;
+
+  if (type === "donut") {
+    const total = values.reduce((sum, v) => sum + Math.abs(v), 0) || 1;
+    const R = 34, C = 2 * Math.PI * R;
+    let acc = 0;
+    return <div className="warroom-chart">
+      <h4>{chart.title}</h4>
+      <div className="warroom-chart__donut">
+        <svg viewBox="0 0 100 100" width="96" height="96">
+          {values.map((v, i) => {
+            const frac = Math.abs(v) / total;
+            const dash = frac * C;
+            const el = <circle key={i} cx="50" cy="50" r={R} fill="none" stroke={CHART_COLORS[i % CHART_COLORS.length]}
+              strokeWidth="13" strokeDasharray={`${dash} ${C - dash}`} strokeDashoffset={-acc * C}
+              transform="rotate(-90 50 50)" />;
+            acc += frac;
+            return el;
+          })}
+        </svg>
+        <ul>{labels.map((l, i) => <li key={i}><i style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />{l} <b>{fmt(values[i])}</b><em>{Math.round(Math.abs(values[i]) / total * 100)}%</em></li>)}</ul>
+      </div>
+    </div>;
+  }
+
+  const W = 280, H = 110, padX = 8, padTop = 16, padBottom = 22;
+  const vmax = Math.max(...values, 0), vmin = Math.min(...values, 0);
+  const span = vmax - vmin || 1;
+  const y = (v: number) => padTop + (vmax - v) / span * (H - padTop - padBottom);
+  const zeroY = y(0);
+
+  if (type === "bar") {
+    const bw = Math.min(28, (W - padX * 2) / values.length * 0.62);
+    const step = (W - padX * 2) / values.length;
+    return <div className="warroom-chart">
+      <h4>{chart.title}</h4>
+      <svg viewBox={`0 0 ${W} ${H}`} className="warroom-chart__svg">
+        <line x1={padX} y1={zeroY} x2={W - padX} y2={zeroY} stroke="rgba(147,165,186,.35)" strokeWidth="1" />
+        {values.map((v, i) => {
+          const x = padX + step * i + (step - bw) / 2;
+          const top = Math.min(y(v), zeroY), h = Math.max(2, Math.abs(y(v) - zeroY));
+          const color = v >= 0 ? "#00e5ff" : "#ff2e88";
+          return <g key={i}>
+            <rect x={x} y={top} width={bw} height={h} rx="2" fill={color} opacity="0.85" />
+            <text x={x + bw / 2} y={top - 3} textAnchor="middle" fontSize="7.5" fill="#cfdbea">{fmt(v)}</text>
+            <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize="7.5" fill="#7d93ab">{labels[i]?.slice(0, 6)}</text>
+          </g>;
+        })}
+      </svg>
+    </div>;
+  }
+
+  // line：折線＋漸層面積＋端點數值
+  const step = (W - padX * 2) / Math.max(1, values.length - 1);
+  const pts = values.map((v, i) => [padX + step * i, y(v)] as const);
+  const poly = pts.map(([px, py]) => `${px},${py}`).join(" ");
+  const area = `${padX},${H - padBottom} ${poly} ${W - padX},${H - padBottom}`;
+  const up = values[values.length - 1] >= values[0];
+  const lineColor = up ? "#00ffa3" : "#ff2e88";
+  return <div className="warroom-chart">
+    <h4>{chart.title}</h4>
+    <svg viewBox={`0 0 ${W} ${H}`} className="warroom-chart__svg">
+      <polygon points={area} fill={lineColor} opacity="0.1" />
+      <polyline points={poly} fill="none" stroke={lineColor} strokeWidth="1.8" strokeLinejoin="round" />
+      {pts.map(([px, py], i) => <circle key={i} cx={px} cy={py} r="2" fill={lineColor} />)}
+      <text x={pts[0][0]} y={pts[0][1] - 5} fontSize="7.5" fill="#cfdbea">{fmt(values[0])}</text>
+      <text x={pts[pts.length - 1][0]} y={pts[pts.length - 1][1] - 5} textAnchor="end" fontSize="7.5" fill="#cfdbea">{fmt(values[values.length - 1])}</text>
+      <text x={padX} y={H - 8} fontSize="7.5" fill="#7d93ab">{labels[0]}</text>
+      <text x={W - padX} y={H - 8} textAnchor="end" fontSize="7.5" fill="#7d93ab">{labels[labels.length - 1]}</text>
+    </svg>
+  </div>;
+}
+
+// 裁決內容的共用渲染：結束彈窗與 📜歷史都用這一份，保證兩邊長得一模一樣。
+// 最上方是「關鍵數字」數據磚——用數字說話，不讓數據埋在文字裡。
+function WarroomVerdictBody({ result }: { result: WarRoomResult }) {
+  const metrics = result.metrics ?? [];
+  const charts = result.charts ?? [];
+  return <>
+    {metrics.length > 0 && <div className="warroom-metrics">{metrics.map((m, i) => (
+      <div key={i} className="warroom-metric" style={{ "--i": i } as React.CSSProperties}>
+        <small>{m.label}</small>
+        <strong>{m.value}</strong>
+        {m.note && <em className={m.note.trim().startsWith("-") ? "is-down" : m.note.trim().startsWith("+") ? "is-up" : ""}>{m.note}</em>}
+      </div>
+    ))}</div>}
+    {charts.length > 0 && <div className="warroom-charts">{charts.map((c, i) => <WarroomChartView key={i} chart={c} />)}</div>}
+    <p className="warroom-result__verdict">{result.verdict}</p>
+    {result.consensus.length > 0 && <section><h3>{t("✅ 共識")}</h3><ul>{result.consensus.map((c, i) => <li key={i}>{c}</li>)}</ul></section>}
+    {result.disputes.length > 0 && <section><h3>{t("⚖️ 分歧與裁決")}</h3><ul>{result.disputes.map((d, i) => <li key={i}><strong>{d.point}</strong> → {d.ruling}</li>)}</ul></section>}
+    {result.actions.length > 0 && <section><h3>{t("➡️ 可執行下一步")}</h3><ol>{result.actions.map((a, i) => <li key={i}><span className={`warroom-result__prio warroom-result__prio--${a.priority}`}>{a.priority}</span> <strong>{a.title}</strong>{a.how && <small>{a.how}</small>}</li>)}</ol></section>}
+    {!result.structured && <p className="warroom-result__note">{t("（NPC 未回傳結構化格式，以上為原始裁決文字）")}</p>}
+  </>;
+}
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerFocusStatus } from "./crew";
 import type { AutoApproveMode, ProviderId } from "./types";
@@ -33,7 +152,7 @@ const CommandCenter = lazy(() => import("./components/CommandCenter").then((modu
 const CLAUDE_MODEL_OPTIONS = [
   { id: "opus", label: "Opus" },
   { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: "Haiku（最快）" },
+  { id: "haiku", label: t("Haiku（最快）") },
   { id: "fable", label: "Fable" },
 ];
 
@@ -42,7 +161,7 @@ function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: ty
   for (const model of fallback) models.set(model.id, model);
   for (const model of discovered) models.set(model.id, model);
   if (activeModel && !models.has(activeModel)) models.set(activeModel, { id: activeModel, label: activeModel });
-  return [{ id: "", label: "預設模型" }, ...models.values()];
+  return [{ id: "", label: t("預設模型") }, ...models.values()];
 }
 
 const EMPTY_CAPABILITIES = {
@@ -64,6 +183,65 @@ export function App() {
   const [newWorkerProvider, setNewWorkerProvider] = useState<ProviderId>("claude");
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // 圓桌模式：開啟後，送出的訊息會被包成「讓這個 NPC 一次性扮演多角色討論並直接給結論」的提示，
+  // 成本 ≈ 一次普通提問（不像部門派工那樣開多個 agent 燒 token）。結果直接顯示在該 NPC 的工作日誌。
+  const [roundtableMode, setRoundtableMode] = useState(false);
+  // 目前正在「開圓桌」的 NPC id 清單，拿來在畫面上讓那位 NPC 冒出「🗣️ 圓桌討論中…」的對話泡
+  // （沿用場景既有的 speech bubble，不用另寫 pixi 動畫）。roundtableSeenBusy 用來避免競態：
+  // 剛送出時 worker 還沒變 busy，要等它「忙過又變回閒置」才算討論結束、才清掉旗標。
+  const [roundtableWorkerIds, setRoundtableWorkerIds] = useState<string[]>([]);
+  const roundtableSeenBusy = useRef<Set<string>>(new Set());
+  // 圓桌＝一次性、不累積：每次開圓桌就「自動建立一個臨時 NPC（跑在便宜模型 Haiku）」在它身上討論，
+  // 下次再開圓桌、或關掉圓桌模式時，就把上一個臨時 NPC 刪掉——問完即丟、絕不堆積、也不污染常駐 NPC。
+  const roundtableTempIdRef = useRef<string | null>(null);
+  const [warroomResult, setWarroomResult] = useState<WarRoomResult | null>(null);
+  const [warroomRunning, setWarroomRunning] = useState(false);
+  // 作戰室歷史面板：列出 .warroom/ 的過往裁決報告，可回看/刪除（null＝面板關閉）。
+  const [warroomHistory, setWarroomHistory] = useState<Array<{ file: string; topic: string; difficulty: string }> | null>(null);
+  const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
+  // 輸入框輪播小撇步：閒置時輪流提示隱藏功能（點會議桌、⚙ 自訂角色…），幫助發現功能。
+  const composerTips = [
+    t("點底部會議桌可直接開圓桌"),
+    t("⚙ 可自訂圓桌上桌角色"),
+    t("📜 歷史能回看每場裁決（含圖表）"),
+    t("圓桌會依難度自動配模型與人數"),
+  ];
+  const [tipIndex, setTipIndex] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTipIndex((index) => (index + 1) % composerTips.length), 8_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ⚙ 自訂圓桌角色：每行「角色名｜立場描述」，存 localStorage；空白＝用預設（依難度自動配）。
+  // （曾有過使用者可按的「🔍研究」按鈕，後拆除：委派是 host NPC（大腦）的工具——使用者直接
+  //   跟 NPC 講就好，由它決定要不要呼叫 /api/delegate 派研究員，按鈕只是繞過大腦的冗餘入口。）
+  const [stancesOpen, setStancesOpen] = useState(false);
+  const [stancesText, setStancesText] = useState(() => localStorage.getItem("warroom-stances") ?? "");
+
+  function parseCustomStances(text: string): Array<{ name: string; brief: string }> {
+    return text.split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [name, ...rest] = line.split(/[｜|]/);
+        return { name: (name ?? "").trim().slice(0, 12), brief: rest.join("｜").trim().slice(0, 200) };
+      })
+      .filter((s) => s.name)
+      .slice(0, 4);
+  }
+
+  async function openWarroomHistory() {
+    try {
+      const resp = await apiRequest<{ ok: boolean; reports: Array<{ file: string; topic: string; difficulty: string }> }>(
+        `/api/warroom/history?workspacePath=${encodeURIComponent(activeWorkspace)}`);
+      setWarroomHistory(resp.reports);
+      setWarroomHistoryContent(null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("讀取歷史失敗"), "error");
+    }
+  }
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(null);
@@ -73,6 +251,20 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [opsModalOpen, setOpsModalOpen] = useState(false);
+  const [remoteModalOpen, setRemoteModalOpen] = useState(false);
+  const [squadModalOpen, setSquadModalOpen] = useState(false);
+  const [kanbanModalOpen, setKanbanModalOpen] = useState(false);
+  const [dayReportOpen, setDayReportOpen] = useState(false);
+  const [outboxOpen, setOutboxOpen] = useState(false);
+  // 首次進站自動播新手導覽；之後從頂欄 ❓ 重看。開導覽時順手展開任務面板，讓對應步驟有東西可指
+  const [tourOpen, setTourOpen] = useState(() => !hasSeenTour());
+  const openTour = () => { updatePreferences({ taskLogOpen: true }); setTourOpen(true); };
+  // BOSS 桌從頂欄與看板空狀態兩處進入，開法保持一致。
+  const openBossDesk = () => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); setTaskSearchOpen(false); updatePreferences({ taskLogOpen: true }); };
+  const [restartPending, setRestartPending] = useState(false);
+  // 重啟完成後 WebSocket 會斷線再重連;重連成功就把 pending 徽章收掉
+  useEffect(() => { if (wsReady) setRestartPending(false); }, [wsReady]);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [bossAssignmentOpen, setBossAssignmentOpen] = useState(false);
   const [pendingModelSwitch, setPendingModelSwitch] = useState<{ workerId: string; model: string } | null>(null);
@@ -92,7 +284,29 @@ export function App() {
   const focusExitRef = useRef<HTMLButtonElement>(null);
   const focusReturnRef = useRef<HTMLElement | null>(null);
 
-  const workerList = order.map((id) => workers[id]).filter(Boolean);
+  // 這幾個清單以前每次 render 都用 .map / Object.values 重算一份新陣列，害得吃它們的重量級子元件
+  // （尤其 GameCanvas）內部那個 useEffect([workers, collaborations, missions, departments]) 每次 render
+  // 都以為資料變了，就重跑 visualWorkers() 並呼叫 pixi setWorkers()，造成畫面持續無謂重算。改用 useMemo
+  // 讓「內容沒變時陣列參照就不變」，這些效果只在真的有變動時才觸發。
+  const workerList = useMemo(() => order.map((id) => workers[id]).filter(Boolean), [order, workers]);
+  const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
+  const missionList = useMemo(() => Object.values(missions), [missions]);
+  const departmentList = useMemo(() => Object.values(departments), [departments]);
+  // 臨時圓桌 NPC 忙過又變回閒置＝討論結束，把它頭上「🗣️ 圓桌討論中…」的氣泡旗標清掉；
+  // 還沒開始忙的先留著，避免剛送出就被清。（臨時 NPC 本身的刪除時機見 onSubmit／圓桌開關。）
+  useEffect(() => {
+    if (roundtableWorkerIds.length === 0) return;
+    const seen = roundtableSeenBusy.current;
+    const stillActive: string[] = [];
+    for (const id of roundtableWorkerIds) {
+      const busy = Boolean(workers[id]?.busy);
+      if (busy) { seen.add(id); stillActive.push(id); }
+      else if (seen.has(id)) { seen.delete(id); } // 忙過又閒置 → 結束，移除旗標
+      else stillActive.push(id); // 還沒開始忙，先留著
+    }
+    if (stillActive.length !== roundtableWorkerIds.length) setRoundtableWorkerIds(stillActive);
+  }, [workers, roundtableWorkerIds]);
+  const roundtableIdSet = useMemo(() => new Set(roundtableWorkerIds), [roundtableWorkerIds]);
   const active = activeId ? workers[activeId] : undefined;
   const selectedDepartment = selectedDepartmentId ? departments[selectedDepartmentId] : undefined;
   const selectedDepartmentLead = selectedDepartment
@@ -164,6 +378,9 @@ export function App() {
     setSelectedDepartmentId(null);
     setBossMissionDetailId(null);
     setBossAssignmentOpen(false);
+    // 點任何 NPC＝回去跟他聊天，圓桌模式自動關閉（點會議桌才會再開圓桌）。
+    // 這樣「桌子＝開會、人＝聊天」的空間直覺才一致，不會忘了關圓桌結果把普通問題丟去辯論。
+    setRoundtableMode(false);
     updatePreferences({ taskLogOpen: true });
     setComposerFocusRequest((request) => request + 1);
   }, [setActiveId, updatePreferences]);
@@ -191,15 +408,15 @@ export function App() {
       return;
     }
     if (typeof Notification === "undefined") {
-      notify("這個瀏覽器不支援桌面通知", "error");
+      notify(t("這個瀏覽器不支援桌面通知"), "error");
       return;
     }
     void Notification.requestPermission().then((permission) => {
       if (permission === "granted") {
         updatePreferences({ notificationsEnabled: true });
-        notify("桌面通知已開啟：任務完成或等待核准時通知（分頁在背景才會跳）");
+        notify(t("桌面通知已開啟：任務完成或等待核准時通知（分頁在背景才會跳）"));
       } else {
-        notify("瀏覽器未授權通知，請在網址列旁的權限設定允許", "error");
+        notify(t("瀏覽器未授權通知，請在網址列旁的權限設定允許"), "error");
       }
     });
   }, [preferences.notificationsEnabled, updatePreferences, notify]);
@@ -274,6 +491,7 @@ export function App() {
 
   const shortcuts = useMemo(() => ({
     onCommandPalette: () => setCommandPaletteOpen(true),
+    onShortcutsHelp: () => setShortcutsHelpOpen((open) => !open),
     onToggleTaskLog: () => taskFocusMode
       ? exitTaskFocusMode()
       : updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
@@ -289,7 +507,7 @@ export function App() {
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
       const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || backupModalOpen
-        || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
+        || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
       if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
       if (layer === "command_palette") {
@@ -307,7 +525,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, avatarWorkerId, backupModalOpen, commandCenterOpen, commandPaletteOpen, departmentCreatorOpen, exitTaskFocusMode, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, setActiveId, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
+  }), [approvalWorker, avatarWorkerId, backupModalOpen, commandCenterOpen, commandPaletteOpen, departmentCreatorOpen, exitTaskFocusMode, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -357,16 +575,29 @@ export function App() {
 
   function beginPanelResize(event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
+    // On phones the log is a full-width bottom sheet, so a width drag does nothing
+    // visible; there the same handle sits along the top edge and drags the sheet's
+    // height instead (up = taller). Desktop keeps the left-edge width drag.
+    const phoneSheet = window.innerWidth <= 600;
     const startX = event.clientX;
+    const startY = event.clientY;
     const startWidth = preferences.taskLogWidth;
-    const move = (moveEvent: PointerEvent) => updatePreferences({
-      taskLogWidth: clampTaskLogWidth(startWidth + startX - moveEvent.clientX, window.innerWidth),
-    });
+    const startHeight = preferences.taskLogHeight;
+    let lastY = startY;
+    const move = (moveEvent: PointerEvent) => {
+      lastY = moveEvent.clientY;
+      updatePreferences(phoneSheet
+        ? { taskLogHeight: clampTaskLogHeight(startHeight + (startY - moveEvent.clientY) / window.innerHeight * 100) }
+        : { taskLogWidth: clampTaskLogWidth(startWidth + startX - moveEvent.clientX, window.innerWidth) });
+    };
     const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", cleanup);
       window.removeEventListener("pointercancel", cleanup);
       resizeCleanupRef.current = null;
+      // Phone bottom sheet: a firm downward flick on the top grabber dismisses it,
+      // restoring the height so it reopens at the same size (not the shrunk one).
+      if (phoneSheet && lastY - startY > 90) updatePreferences({ taskLogOpen: false, taskLogHeight: startHeight });
     };
     resizeCleanupRef.current?.();
     resizeCleanupRef.current = cleanup;
@@ -406,7 +637,7 @@ export function App() {
       setProviderChanging(true);
       const prepared = await prepareHandoff(active.id, provider);
       if (prepared.error || !prepared.data) {
-        notify(prepared.error || "無法檢查目標 LLM", "error");
+        notify(prepared.error || t("無法檢查目標 LLM"), "error");
         setProviderChanging(false);
         return;
       }
@@ -420,7 +651,7 @@ export function App() {
       const error = await startHandoff(active.id, prepared.data.handoffToken);
       setProviderChanging(false);
       if (error) notify(error, "error");
-      else notify(`正在切換至 ${provider === "claude" ? "Claude Code" : "Codex"}`, "info");
+      else notify(t("正在切換至 {provider}", { provider: provider === "claude" ? "Claude Code" : "Codex" }), "info");
       return;
     }
     setHandoffTarget(provider);
@@ -428,14 +659,14 @@ export function App() {
 
   async function handleRename(id: string, name: string) {
     const error = await renameWorker(id, name);
-    if (!error) notify("人員名稱已更新");
+    if (!error) notify(t("人員名稱已更新"));
     return error;
   }
 
   function handleRemoveWorker(id: string) {
     const name = workers[id]?.name;
-    if (!window.confirm(name ? `確定永久移除「${name}」嗎？工位與完整對話紀錄都會一併拆除，此動作無法復原。` : "確定永久移除這位 NPC 嗎？此動作無法復原。")) return;
-    void closeWorker(id).then((error) => error ? notify(error, "error") : notify("人員與工位拆除中", "info"));
+    if (!window.confirm(name ? t("確定永久移除「{name}」嗎？工位與完整對話紀錄都會一併拆除，此動作無法復原。", { name }) : t("確定永久移除這位 NPC 嗎？此動作無法復原。"))) return;
+    void closeWorker(id).then((error) => error ? notify(error, "error") : notify(t("人員與工位拆除中"), "info"));
   }
 
   function handleModelChange(model: string) {
@@ -455,7 +686,7 @@ export function App() {
         return;
       }
       setPendingModelSwitch(null);
-      notify(fresh ? "已切換模型並開啟全新工作階段" : "模型設定已更新");
+      notify(fresh ? t("已切換模型並開啟全新工作階段") : t("模型設定已更新"));
     });
   }
 
@@ -463,23 +694,54 @@ export function App() {
     if (!activeId) return;
     void setAutoApproveMode(activeId, mode).then((error) => {
       if (error) { notify(error, "error"); return; }
-      if (mode === "off") notify("自動核准已關閉");
-      else if (mode === "safe") notify("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問");
-      else notify("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問");
+      if (mode === "off") notify(t("自動核准已關閉"));
+      else if (mode === "safe") notify(t("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問"));
+      else if (mode === "full") notify(t("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問"));
+      else notify(t("⚡ 無限制模式已開啟：完全不設限、永不詢問（連 rm -rf、sudo 都放行），風險自負！"), "info");
     });
   }
 
+  async function requestServerRestart() {
+    if (restartPending) return;
+    if (!window.confirm(t("確定要重啟伺服器？會等所有 NPC 都空檔後才執行，不會打斷任何回合。"))) return;
+    try {
+      await apiRequest<{ ok: boolean }>("/api/restart-server", { method: "POST" });
+      setRestartPending(true);
+      notify(t("已排程重啟：等所有 NPC 空檔後自動重啟，新黑窗會自己開"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("重啟請求失敗"), "error");
+    }
+  }
+
   return (
-    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
+    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
+      "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
+      {theme === "modern" ? (
+        // 現代主題：3D 娃娃屋只當背景層，頂欄/日誌/對話/圓桌/Modal 全部沿用下方共用元件＝功能與像素風一致。
+        // 場景僅提供「點角色 = 選取」；改名/個性/派工等 NPC 操作走右側隊員列（WorkerTabs）與頂欄，跟像素風同入口。
+        <Office3D
+          workers={workerList}
+          departments={departmentList}
+          active={active ?? null}
+          onSelect={activateNpc}
+        />
+      ) : (
       <GameCanvas
         workers={workerList}
         activeId={activeId}
         completedTurns={stats.completedTurns}
-        collaborations={Object.values(collaborations)}
-        missions={Object.values(missions)}
-        departments={Object.values(departments)}
+        collaborations={collaborationList}
+        missions={missionList}
+        departments={departmentList}
+        roundtableIds={roundtableIdSet}
+        onMeetingTableClick={() => {
+          setRoundtableMode(true);
+          setComposerFocusRequest((request) => request + 1);
+          notify(t("🏛️ 圓桌模式已開啟——輸入問題送出即開始辯論"), "info");
+        }}
+        onEmptyTap={() => { if (preferences.taskLogOpen) updatePreferences({ taskLogOpen: false }); }}
         onSelect={activateNpc}
         onOpenLog={activateNpc}
         onAvatarError={(id, message) => { setActiveId(id); notify(message, "error"); }}
@@ -492,7 +754,9 @@ export function App() {
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
       />
+      )}
 
+      {/* 主題切換統一走頂欄那顆 🎨 像素｜現代（TopBar），這裡不再放浮動鈕＝避免左下角與縮放條重疊、功能重複。 */}
       <TopBar
         active={active}
         activeWorkspace={activeWorkspace}
@@ -503,57 +767,83 @@ export function App() {
         workerCount={workerList.length}
         providerChanging={providerChanging}
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
-        onBossAssignment={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); setTaskSearchOpen(false); updatePreferences({ taskLogOpen: true }); }}
+        onBossAssignment={openBossDesk}
         onOpenMcp={() => setMcpModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
+        onOpenOps={() => setOpsModalOpen(true)}
+        onOpenSquads={() => setSquadModalOpen(true)}
+        onOpenKanban={() => setKanbanModalOpen(true)}
+        onOpenDayReport={() => setDayReportOpen(true)}
+        onOpenOutbox={() => setOutboxOpen(true)}
+        onOpenTour={openTour}
+        onOpenRemote={() => setRemoteModalOpen(true)}
+        onRestart={() => void requestServerRestart()}
+        restartPending={restartPending}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={handleModelChange}
         onAutoApprove={handleAutoApproveChange}
         onRefreshAuth={() => void refreshAuth(activeProvider)}
-        onResetUi={() => { resetPreferences(); notify("介面配置已重設", "info"); }}
+        onResetUi={() => { resetPreferences(); notify(t("介面配置已重設"), "info"); }}
         notificationsEnabled={preferences.notificationsEnabled}
         onNotificationsToggle={toggleNotifications}
         updateInfo={updateInfo}
-      />
+      >
+        {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
+      </TopBar>
 
-      {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
+      {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
+      {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />{t("Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。")}</div>}
 
-      {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />本機服務重新連線中，現有畫面會保留。</div>}
-      {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。</div>}
-
-      <button className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`} onClick={() => updatePreferences({ taskLogOpen: !preferences.taskLogOpen })} title={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌（⌘/Ctrl J）`} aria-label={`${preferences.taskLogOpen ? "收合" : "展開"}任務日誌`}>
+      <button
+        className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`}
+        // Capture the pointer so a tap OR a swipe off the button both toggle: on a
+        // phone the log is a bottom sheet, and users instinctively press this arrow
+        // and drag to dismiss. Without capture the drag was eaten by the canvas
+        // (pan) and the release never counted as a click, so the log wouldn't close.
+        onPointerDown={(event) => { try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ } }}
+        onPointerUp={() => updatePreferences({ taskLogOpen: !preferences.taskLogOpen })}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); updatePreferences({ taskLogOpen: !preferences.taskLogOpen }); } }}
+        title={t(preferences.taskLogOpen ? "收合任務日誌（⌘/Ctrl J）" : "展開任務日誌（⌘/Ctrl J）")}
+        aria-label={t(preferences.taskLogOpen ? "收合任務日誌" : "展開任務日誌")}
+      >
         {preferences.taskLogOpen ? "▶" : "◀"}
       </button>
 
       <div
         ref={focusLayerRef}
         className="task-focus-layer"
-        aria-label={taskFocusMode ? "專心閱讀與輸入" : undefined}
+        aria-label={taskFocusMode ? t("專心閱讀與輸入") : undefined}
         aria-modal={taskFocusMode || undefined}
         role={taskFocusMode ? "dialog" : undefined}
         onKeyDown={trapFocusInReader}
       >
       <aside
         className={`holo-panel ${preferences.taskLogOpen ? "" : "holo-panel--closed"} ${taskFocusMode ? "holo-panel--focus" : ""}`}
-        aria-label={taskFocusMode ? "專心閱讀任務報告" : "任務日誌"}
+        aria-label={taskFocusMode ? t("專心閱讀任務報告") : t("任務日誌")}
       >
-        {!taskFocusMode && <button type="button" className="holo-panel__resize" aria-label="調整任務日誌寬度" title="拖曳調整；雙擊恢復閱讀版" onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences({ taskLogWidth: 600 })} onKeyDown={(event) => {
+        {!taskFocusMode && <button type="button" className="holo-panel__resize" aria-label={t("調整任務日誌大小")} title={t("拖曳調整；雙擊恢復預設")} onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences(window.innerWidth <= 600 ? { taskLogHeight: 62 } : { taskLogWidth: 600 })} onKeyDown={(event) => {
+          if (window.innerWidth <= 600) {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            updatePreferences({ taskLogHeight: clampTaskLogHeight(preferences.taskLogHeight + (event.key === "ArrowUp" ? 5 : -5)) });
+            return;
+          }
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
           event.preventDefault();
           updatePreferences({ taskLogWidth: preferences.taskLogWidth + (event.key === "ArrowLeft" ? 24 : -24) });
         }} />}
         <div className="holo-panel__title">
-          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "FOCUS BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "FOCUS DEPARTMENT" : "FOCUS READER" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? "老闆交辦" : taskFocusMode ? selectedDepartment ? "專注部門" : "專心閱讀" : selectedDepartment ? selectedDepartment.name : "任務日誌"}</strong></div>
+          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "FOCUS BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "FOCUS DEPARTMENT" : "FOCUS READER" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專注部門") : t("專心閱讀") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
           {taskFocusMode ? <div className="focus-context-switch">
-            <div className="focus-context-switch__kind" aria-label="專注模式工作對象">
+            <div className="focus-context-switch__kind" aria-label={t("專注模式工作對象")}>
               <button type="button" className={!selectedDepartment && !bossAssignmentOpen ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
-              <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>部門</button>
-              <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>老闆</button>
+              <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
+              <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
             </div>
             {!bossAssignmentOpen && (!selectedDepartment ? <label className="focus-worker-switch">
               <span>NPC</span>
-              <select aria-label="切換專心模式的 NPC 工作介面" value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
-                {!activeId && <option value="" disabled>選擇 NPC</option>}
+              <select aria-label={t("切換專心模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
+                {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
                 {Object.values(departments).map((department) => <optgroup key={department.id} label={department.name}>{workerList.filter((worker) => worker.departmentId === department.id).map((worker) => {
                   const latestKey = latestReadableTurnKey(worker);
                   const unread = worker.id !== activeId && Boolean(latestKey) && latestKey !== focusSeenTurns[worker.id];
@@ -561,23 +851,23 @@ export function App() {
                 })}</optgroup>)}
                 {workerList.filter((worker) => !worker.departmentId || !departments[worker.departmentId]).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {workerFocusStatus(worker)}</option>)}
               </select>
-            </label> : <label className="focus-worker-switch focus-department-switch"><span>部門</span><select aria-label="切換專心模式的部門工作介面" value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
+            </label> : <label className="focus-worker-switch focus-department-switch"><span>{t("部門")}</span><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
-              return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? "需處理" : "進行中"}` : " · 待命"}</option>;
+              return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></label>)}
-          </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />依部門職責與 NPC 職務自動路由</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{selectedDepartment.memberWorkerIds.length} 位 NPC · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
+          </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
           {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
-            {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label="日誌模式">
-              <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>摘要</button>
-              <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>活動</button>
+            {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label={t("日誌模式")}>
+              <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
+              <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>{t("活動")}</button>
             </div>}
-            {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label="搜尋任務日誌" title="搜尋">
+            {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label={t("搜尋任務日誌")} title={t("搜尋")}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
             </button>}
-            {!taskFocusMode && <button type="button" className="task-log-toolbar__focus" onClick={enterTaskFocusMode} aria-label="進入專心閱讀模式" title="專心閱讀"><span aria-hidden="true">▣</span> 專心</button>}
-            {!taskFocusMode && <select aria-label="日誌寬度" value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
-              <option value="420">緊湊</option><option value="600">閱讀</option><option value="820">寬版</option>
+            {!taskFocusMode && <button type="button" className="task-log-toolbar__focus" onClick={enterTaskFocusMode} aria-label={t("進入專心閱讀模式")} title={t("專心閱讀")}><span aria-hidden="true">▣</span> {t("專心")}</button>}
+            {!taskFocusMode && <select aria-label={t("日誌寬度")} value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
+              <option value="420">{t("緊湊")}</option><option value="600">{t("閱讀")}</option><option value="820">{t("寬版")}</option>
             </select>}
             {taskFocusMode && <FocusControls
               active={active}
@@ -601,7 +891,7 @@ export function App() {
               onNotificationsToggle={toggleNotifications}
               onOpenCommandCenter={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
             />}
-            {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label="退出專心閱讀模式">退出 <kbd>Esc</kbd></button>}
+            {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label={t("退出專心閱讀模式")}>{t("退出")} <kbd>Esc</kbd></button>}
           </div>
         </div>
         {bossAssignmentOpen && <BossTaskDesk
@@ -623,11 +913,11 @@ export function App() {
           composerHost={composerHost}
           focusMode={taskFocusMode}
         />}
-        {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? "搜尋目前 NPC 的任務" : "搜尋全部 NPC 的任務"} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label="搜尋範圍"><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>目前</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>全部</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
+        {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? t("搜尋目前 NPC 的任務") : t("搜尋全部 NPC 的任務")} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label={t("搜尋範圍")}><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>{t("目前")}</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>{t("全部")}</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
         {!bossAssignmentOpen && !selectedDepartment && active && pendingModelSwitch?.workerId === active.id && <ModelSwitchCard
           workerName={active.name}
-          currentModelLabel={modelOptions.find((option) => option.id === (active.model ?? ""))?.label ?? active.model ?? "預設模型"}
-          targetModelLabel={modelOptions.find((option) => option.id === pendingModelSwitch.model)?.label ?? (pendingModelSwitch.model || "預設模型")}
+          currentModelLabel={modelOptions.find((option) => option.id === (active.model ?? ""))?.label ?? active.model ?? t("預設模型")}
+          targetModelLabel={modelOptions.find((option) => option.id === pendingModelSwitch.model)?.label ?? (pendingModelSwitch.model || t("預設模型"))}
           focusMode={taskFocusMode}
           submitting={modelSwitchSubmitting}
           onContinue={() => commitModelSwitch(false)}
@@ -636,7 +926,7 @@ export function App() {
         />}
         {!bossAssignmentOpen && !selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} onApprove={(approvalId, decision) => {
           const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
-          return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve("找不到需要核准的 NPC");
+          return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve(t("找不到需要核准的 NPC"));
         }} />}
         {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
@@ -645,8 +935,8 @@ export function App() {
           focusSection={departmentFocusSection}
           boss={selectedDepartmentLead}
           workers={workerList}
-          missions={Object.values(missions)}
-          legacyTasks={Object.values(collaborations)}
+          missions={missionList}
+          legacyTasks={collaborationList}
           departmentRecord={selectedDepartment}
           onPrepare={prepareMission}
           onStart={startMission}
@@ -668,8 +958,8 @@ export function App() {
       <div ref={setComposerHostRef} className="unified-composer-host">
       {!bossAssignmentOpen && !selectedDepartment && <TaskComposer
         draftKey={activeSessionKey}
-        placeholder={active?.busy ? `${active.name} 執勤中，可輸入或附加檔案排隊…` : `對 ${active?.name ?? "…"} 下指令（可附加圖片或文件）`}
-        submitLabel="執行"
+        placeholder={active?.busy ? t("{name} 執勤中·可排隊", { name: active.name }) : t("對 {name} 下指令（{tip}）", { name: active?.name ?? "…", tip: composerTips[tipIndex] })}
+        submitLabel={t("執行")}
         disabled={!active || activeAuth.status !== "authenticated"}
         layout="dock"
         focusMode={taskFocusMode}
@@ -688,10 +978,64 @@ export function App() {
           onManage: () => { setCommandPaletteOpen(false); setCommandCenterOpen(true); },
         }}
         history={{ workers: workerList, provider: activeProvider, workspacePath: activeWorkspace }}
-        onSubmit={(command) => activeId ? send(activeId, command) : Promise.resolve("沒有可用的人員")}
+        toolbar={<>
+          <button
+            type="button"
+            className={`composer-roundtable-toggle${roundtableMode ? " is-active" : ""}`}
+            aria-pressed={roundtableMode}
+            title={t("圓桌模式：開啟後送出的訊息會召開作戰室（多 NPC 圍桌辯論→裁決）")}
+            onClick={() => setRoundtableMode((on) => !on)}
+          >{t("🗣️ 圓桌")}{roundtableMode ? t("・開") : ""}</button>
+          <button
+            type="button"
+            className="composer-roundtable-toggle composer-roundtable-toggle--gear"
+            aria-expanded={stancesOpen}
+            title={t("自訂圓桌角色（空白＝依難度自動配）")}
+            onClick={() => setStancesOpen((open) => !open)}
+          >⚙</button>
+          <button
+            type="button"
+            className="composer-roundtable-toggle"
+            title={t("回看過往作戰室裁決報告")}
+            onClick={() => void openWarroomHistory()}
+          >{t("📜 歷史")}</button>
+          {stancesOpen && <div className="warroom-stances-panel">
+            <header><strong>{t("⚙ 自訂圓桌角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
+            <textarea
+              value={stancesText}
+              rows={4}
+              placeholder={t("每行一位：角色名｜立場描述\n例：投資顧問｜從報酬與機會出發給建議\n　　風控｜專挑風險與下檔情境\n留空＝依難度自動配（提案/挑戰/權衡/查證）")}
+              onChange={(event) => { setStancesText(event.target.value); localStorage.setItem("warroom-stances", event.target.value); }}
+            />
+            <small>{parseCustomStances(stancesText).length > 0 ? t("將使用自訂 {count} 位角色（上限 4）", { count: String(parseCustomStances(stancesText).length) }) : t("目前使用預設角色")}</small>
+          </div>}
+        </>}
+        onSubmit={async (command) => {
+          if (!activeId) return t("沒有可用的人員");
+          const isWarroom = roundtableMode && Boolean(command.text.trim());
+          if (!isWarroom) return send(activeId, command);
+          // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個 🏛 角色 NPC 走到會議桌，兩輪辯論（表態→反駁）、
+          // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
+          if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return null; }
+          setWarroomRunning(true);
+          notify(t("🏛️ 作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
+          try {
+            const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
+              method: "POST",
+              body: { topic: command.text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
+              timeoutMs: 600_000,
+            });
+            setWarroomResult(resp.result);
+          } catch (error) {
+            notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
+          } finally {
+            setWarroomRunning(false);
+          }
+          return null;
+        }}
         onInterrupt={() => {
           if (!activeId) return;
-          void interrupt(activeId).then((error) => error ? notify(error, "error") : notify("已送出中止要求", "info"));
+          void interrupt(activeId).then((error) => error ? notify(error, "error") : notify(t("已送出中止要求"), "info"));
         }}
       />}
       </div>
@@ -700,8 +1044,8 @@ export function App() {
       <WorkerTabs
         workers={workerList}
         activeId={activeId}
-        departments={Object.values(departments)}
-        missions={Object.values(missions)}
+        departments={departmentList}
+        missions={missionList}
         selectedDepartmentId={selectedDepartmentId}
         currentRoom={activeWorkspace}
         filter={preferences.crewFilter}
@@ -738,20 +1082,20 @@ export function App() {
       {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
         if (workspaceMode === "create") {
           const result = await createWorker(undefined, newWorkerProvider, path);
-          if (!result.error) notify("新工位建造中");
+          if (!result.error) notify(t("新工位建造中"));
           return result.error ?? null;
         }
-        if (!activeId) return "請先選擇要搬遷的 NPC";
+        if (!activeId) return t("請先選擇要搬遷的 NPC");
         const error = await switchWorkspace(activeId, path);
-        if (!error) notify("人員已搬到新房間");
+        if (!error) notify(t("人員已搬到新房間"));
         return error;
       }} />}
 
-      {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify("自訂角色已套用"); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify("官方角色已套用"); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify("已切回自訂角色"); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify("已刪除自訂角色並恢復經典隊員"); return error; }} onClose={() => setAvatarWorkerId(null)} />}
+      {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify(t("自訂角色已套用")); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify(t("官方角色已套用")); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify(t("已切回自訂角色")); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify(t("已刪除自訂角色並恢復經典隊員")); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
       {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onDirectSwitch={switchProviderFresh} onClose={() => setHandoffTarget(null)} />}
 
-      {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? "個性已更新，下一句話生效" : "已清除個性"); return error; }} onClose={() => setPersonaWorkerId(null)} />}
+      {personaWorkerId && workers[personaWorkerId] && <PersonaEditor worker={workers[personaWorkerId]} onSave={async (id, persona) => { const error = await setPersona(id, persona); if (!error) notify(persona ? t("個性已更新，下一句話生效") : t("已清除個性")); return error; }} onClose={() => setPersonaWorkerId(null)} />}
 
       {departmentCreatorOpen && <DepartmentCreator
         initialProvider={activeProvider}
@@ -763,15 +1107,95 @@ export function App() {
         onCreated={(ids, purpose) => {
           if (ids.length) setActiveId(ids[ids.length - 1]);
           setDepartmentCreatorOpen(false);
-          notify(`「${purpose}」部門已建立，共 ${ids.length} 位 NPC`);
+          notify(t("「{purpose}」部門已建立，共 {count} 位 NPC", { purpose, count: String(ids.length) }));
         }}
         onClose={() => setDepartmentCreatorOpen(false)}
       />}
 
       {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} usedMcpTools={usedMcpTools} notify={notify} onClose={() => setMcpModalOpen(false)} />}
       {backupModalOpen && <BackupModal notify={notify} onClose={() => setBackupModalOpen(false)} />}
+      {opsModalOpen && <OpsModal workers={workerList} notify={notify} onClose={() => setOpsModalOpen(false)} />}
+      {remoteModalOpen && <RemoteAccessModal notify={notify} onClose={() => setRemoteModalOpen(false)} />}
+      {kanbanModalOpen && <KanbanModal workers={workerList} onOpenBoss={openBossDesk} onClose={() => setKanbanModalOpen(false)} />}
+      {dayReportOpen && <DayReportModal notify={notify} onClose={() => setDayReportOpen(false)} />}
+      {outboxOpen && <OutboxModal onClose={() => setOutboxOpen(false)} />}
+      {squadModalOpen && <SquadModal
+        provider={activeProvider}
+        initialWorkspacePath={activeWorkspace}
+        recentPaths={workspacePaths}
+        capacity={Math.max(0, 20 - workerList.length)}
+        existingNames={workerList.map((worker) => worker.name)}
+        onBrowse={pickWorkspace}
+        onCreated={(ids, leadId, name) => {
+          setActiveId(leadId);
+          setSquadModalOpen(false);
+          notify(t("「{name}」已成軍，{count} 位隊員進駐！點隊長下第一道指令吧", { name, count: String(ids.length) }));
+        }}
+        onClose={() => setSquadModalOpen(false)}
+      />}
+      {shortcutsHelpOpen && <ShortcutsHelp onClose={() => setShortcutsHelpOpen(false)} />}
+      {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
 
-      <footer className="app-copyright" aria-label="版權資訊">© 2026 weiwei</footer>
+      {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
+        <span className="warroom-running__dot" aria-hidden="true" />
+        {t("🏛️ 作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
+      </div>}
+
+      {warroomResult && <div className="warroom-result" role="dialog" aria-modal="true" aria-label={t("作戰室裁決")}>
+        <div className="warroom-result__card">
+          <button type="button" className="warroom-result__close" onClick={() => setWarroomResult(null)} aria-label={t("關閉")}>×</button>
+          <header><span>🏛️ WAR ROOM{typeof warroomResult.costUsd === "number" ? ` · ${t("本場花費 ${amount}", { amount: warroomResult.costUsd.toFixed(4) })}` : ""}</span><h2>{t("作戰室裁決")}</h2></header>
+          <WarroomVerdictBody result={warroomResult} />
+        </div>
+      </div>}
+
+      {warroomHistory && <div className="warroom-result" role="dialog" aria-modal="true" aria-label={t("作戰室歷史")}>
+        <div className="warroom-result__card">
+          <button type="button" className="warroom-result__close" onClick={() => { setWarroomHistory(null); setWarroomHistoryContent(null); }} aria-label={t("關閉")}>×</button>
+          <header><span>🏛️ WAR ROOM</span><h2>{t("📜 作戰室歷史")}</h2></header>
+          {warroomHistoryContent
+            ? <>
+                <button type="button" className="warroom-history__back" onClick={() => setWarroomHistoryContent(null)}>{t("← 回列表")}</button>
+                {warroomHistoryContent.report?.result
+                  ? <>
+                      {warroomHistoryContent.report.topic && <p className="warroom-history__topic">{t("主題：")}{warroomHistoryContent.report.topic}{warroomHistoryContent.report.difficulty ? ` · ${warroomHistoryContent.report.difficulty}` : ""}</p>}
+                      <WarroomVerdictBody result={warroomHistoryContent.report.result} />
+                    </>
+                  : <div className="warroom-history__content">{warroomHistoryContent.content.split("\n").map((line, i) => {
+                  // 輕量 Markdown 排版：報告是我們自己產的格式（#/##/-/**），照樣式渲染即可，
+                  // 不引整套 Markdown 引擎。這樣歷史看起來跟結果卡同一家人，不再是滿版原始符號。
+                  if (line.startsWith("# ")) return <h2 key={i}>{line.slice(2)}</h2>;
+                  if (line.startsWith("## ")) return <h3 key={i}>{line.slice(3)}</h3>;
+                  const clean = line.replace(/\*\*/g, "");
+                  if (clean.startsWith("- ")) return <p key={i} className="warroom-history__li">{clean.slice(2)}</p>;
+                  if (clean.startsWith("  - ")) return <p key={i} className="warroom-history__li warroom-history__li--sub">{clean.slice(4)}</p>;
+                  if (!clean.trim()) return null;
+                  return <p key={i}>{clean}</p>;
+                })}</div>}
+              </>
+            : warroomHistory.length === 0
+              ? <p className="warroom-result__note">{t("還沒有任何報告——開一場圓桌就會自動存檔到這裡。")}</p>
+              : <ul className="warroom-history__list">{warroomHistory.map((r) => (
+                  <li key={r.file}>
+                    <button type="button" className="warroom-history__item" onClick={() => {
+                      void apiRequest<{ ok: boolean; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null }>(`/api/warroom/history/${encodeURIComponent(r.file)}?workspacePath=${encodeURIComponent(activeWorkspace)}`)
+                        .then((resp) => setWarroomHistoryContent({ file: r.file, content: resp.content, report: resp.report ?? null }))
+                        .catch((error) => notify(error instanceof Error ? error.message : t("讀取失敗"), "error"));
+                    }}>
+                      <strong>{r.topic || r.file}</strong>
+                      <small>{r.file.replace(/^warroom-|\.md$/g, "").replace("T", " ").slice(0, 19)}{r.difficulty ? ` · ${r.difficulty}` : ""}</small>
+                    </button>
+                    <button type="button" className="warroom-history__delete" aria-label={t("刪除 {topic}", { topic: r.topic || r.file })} onClick={() => {
+                      void apiRequest(`/api/warroom/history/${encodeURIComponent(r.file)}?workspacePath=${encodeURIComponent(activeWorkspace)}`, { method: "DELETE" })
+                        .then(() => setWarroomHistory((list) => list?.filter((x) => x.file !== r.file) ?? null))
+                        .catch((error) => notify(error instanceof Error ? error.message : t("刪除失敗"), "error"));
+                    }}>🗑</button>
+                  </li>
+                ))}</ul>}
+        </div>
+      </div>}
+
+      <footer className="app-copyright" aria-label={t("版權資訊")}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
