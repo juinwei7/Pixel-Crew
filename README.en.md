@@ -38,6 +38,8 @@ The work itself is still carried out by the **official CLIs already installed on
 - **Work-energy HUD** — a top-of-screen HUD shows each provider's remaining usage (account-wide, not per-room or per-NPC).
 - **Rich text chat** — agent replies render GitHub Flavored Markdown plus a sanitized HTML subset, including tables, code blocks, links, and images.
 - **Pixel office** — NPCs walk to the task board, terminal, browser, or other stations depending on the tool they're using.
+- **3D office view (optional)** — add `?theme=modern` to switch from the default pixel (2D) office to a real-time 3D "dollhouse": a glass-curtain tower with per-floor bands, a day/night lighting cycle, NPCs seated at their stations as 3D characters, and floating work windows that show — in plain language — which tool each agent is running. Drag to orbit and scroll to zoom.
+- **Remote access / mobile control (optional)** — a bundled gateway puts a passcode or Google sign-in (plus brute-force lockout and time-limited share codes) in front of the local server and opens an HTTPS tunnel via cloudflared or Tailscale, so you can command your crew from a phone. The connection QR renders as a 3D neon night city that flips into a scannable aerial view — tap to explore, drag to orbit.
 - **Commands / Skills** — Claude scans and caches project- and user-level native slash commands at launch; Codex preloads the app-server-native `/clear`, `/new`, `/compact`, `/review`, and separately scans repo-scoped `$skills`. Both are available immediately for a new NPC or a freshly switched room, with no throwaway message required first.
 - **MCP status** — MCP servers load per active provider; you can add, remove, refresh, and inspect status (including "needs authorization") from the UI.
 - **Dynamic models** — Claude exposes Opus/Sonnet/Haiku/Fable aliases; Codex reads its local CLI's model catalog directly, so the list never needs manual updates across CLI versions.
@@ -209,7 +211,7 @@ Config file: `web/.env`
 - Pixel Crew never receives OAuth or bearer tokens for Codex remote MCP servers — configure those via `codex mcp login` or the terminal.
 - `acceptEdits` lets Claude apply file edits automatically; choose a `PERMISSION_MODE` appropriate to the sensitivity of the target repo.
 
-Pixel Crew has no remote authentication, so `HOST` only accepts loopback addresses; supporting multi-user or remote access in the future would require designing authentication, TLS, and origin restrictions first.
+The core Pixel Crew server has no remote authentication, so `HOST` only accepts loopback addresses. For phone or external access, use the bundled **remote-access gateway** (`_tsproxy.mjs`): it fronts the core server with a passcode / Google sign-in, brute-force lockout, and time-limited share codes, and exposes an HTTPS tunnel via cloudflared quick tunnels or Tailscale; real secrets live in `_tsproxy.secret.json`, which is excluded by `.gitignore`.
 
 ## Development & verification
 
