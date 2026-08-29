@@ -21,7 +21,7 @@ import { config } from "./config.js";
 import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import {
-  parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
+  isEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
 } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
@@ -337,6 +337,8 @@ type Worker = {
   id: string;
   runner: AgentSession;
   history: RunnerEvent[];
+  // 圓桌／委派成員只存在於本次流程；不得因共用 event hook 又被寫回 SQLite。
+  persistent: boolean;
   colorIndex: number;
   avatarId: string | null;
   avatarKind: "preset" | "custom";
@@ -353,6 +355,17 @@ type Worker = {
 };
 
 const workers = new Map<string, Worker>();
+
+// 舊版的共用 turn_end hook 會把 persist:false 的短命 worker 又存回 SQLite。
+// 服務重啟後，這些 worker 不可能再接回原本的編排 promise，會永遠顯示成閒置。
+// 在載入 department / worker 前先清掉，讓部門成員快取也不會含有孤兒資料。
+const staleEphemeralWorkerIds = store.loadWorkers(0)
+  .filter((worker) => isEphemeralWorkerName(worker.name))
+  .map((worker) => worker.id);
+for (const workerId of staleEphemeralWorkerIds) store.deleteWorker(workerId);
+if (staleEphemeralWorkerIds.length > 0) {
+  console.warn(`[startup] removed ${staleEphemeralWorkerIds.length} stale ephemeral worker(s) from an interrupted run`);
+}
 
 // /api/workers/:id/* 路由開頭的共用樣板：查 worker、不存在回 404。
 // 呼叫端寫 `const worker = requireWorker(res, req.params.id); if (!worker) return;`
@@ -622,6 +635,8 @@ function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapab
 }
 
 function persistWorker(worker: Worker): boolean {
+  // 任一共用 hook 就算漏做判斷，也不能把短命 worker 重新寫回資料庫。
+  if (!worker.persistent) return true;
   return store.saveWorker(workerPersistenceRecord(worker));
 }
 
@@ -1254,13 +1269,13 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   if (worker.history.length > MAX_HISTORY) {
     worker.history.splice(0, worker.history.length - MAX_HISTORY);
   }
-  if (event.type !== "tool_call_output_delta") {
+  if (worker.persistent && event.type !== "tool_call_output_delta") {
     store.appendEvent(worker.id, event, MAX_HISTORY);
   }
   if (event.type === "meta" && worker.runner.provider === "claude") {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
-  if (event.type === "turn_end" || event.type === "error") persistWorker(worker);
+  if (worker.persistent && (event.type === "turn_end" || event.type === "error")) persistWorker(worker);
   if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
   if (event.type === "turn_end") {
     const completedTurns = event.isError
@@ -1271,7 +1286,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
       (costMicros > 0
         ? store.incrementCounter("total_cost_usd_micros", costMicros)
         : store.getCounter("total_cost_usd_micros")) / 1_000_000;
-    if (costMicros > 0) {
+    if (costMicros > 0 && worker.persistent) {
       store.logDailyCost(localDay(), worker.id, worker.runner.name ?? "", costMicros);
       // 每日預算：這一筆讓今日花費「跨過」上限時，往聊天串塞一則醒目提示。
       // 之後的新訊息會被 /message 入口擋下，明天日期一換自動恢復。
@@ -1511,6 +1526,7 @@ function createWorker(
     id,
     runner: null as unknown as AgentSession,
     history: persisted?.events ?? [],
+    persistent: options.persist !== false,
     colorIndex: persisted?.colorIndex ?? workerCounter % 6,
     avatarId: persisted?.avatarId ?? null,
     avatarKind: persisted?.avatarKind ?? (persisted?.avatarId ? "custom" : "preset"),
@@ -1570,7 +1586,7 @@ function createWorker(
 // 不給記憶區塊——它們活不到下一次 spawn，注入只是浪費 token 還可能誤存記憶。
 function composeWorkerPrompt(worker: Worker): string {
   const name = worker.runner.name ?? "";
-  const ephemeral = name.startsWith("🏛") || name.startsWith("🔍");
+  const ephemeral = isEphemeralWorkerName(name);
   return [
     composePersonaPrompt(worker.persona),
     ephemeral ? "" : composeMemorySection(worker.id),
@@ -5394,25 +5410,59 @@ app.delete("/api/workers/:id", async (req, res) => {
 
 // ============ War Room（作戰室）orchestrator ============
 // 一場「真辯論（表態→反駁 2 輪）＋依難度配模型＋主持裁決」的顧問議會。peers 是可見的臨時 worker
-// （名字以 🏛 U+1F3DB 開頭，前端會把它們拉到會議桌圍坐；persist:false 所以 server 重啟不會殘留），
-// 跑完寬限期自動刪除。turn_end 透過 record() 裡的 warroomRecordHook 接回，用來 await 各成員發言完成。
+// （名字以 🏛 U+1F3DB 開頭，前端會把它們拉到會議桌圍坐；persist:false），跑完寬限期自動刪除。
+// 若 server 非正常重啟，啟動時也會清除上次殘留的短命 worker。turn_end 透過 record() 裡的
+// warroomRecordHook 接回，用來 await 各成員發言完成。
 const WARROOM_GRACE_MS = 45_000;
-const warroomWaiters = new Map<string, (event: RunnerEvent) => void>();
+// hard 模式原本單輪可等 4 分鐘，兩輪＋主持＋格式重試理論上會拖很久。整場封頂，才能保證
+// 前端不會無限顯示「開會中」；前端 timeout 會比這個再多保留一分鐘收 HTTP 回應。
+const WARROOM_TOTAL_TIMEOUT_MS = 12 * 60_000;
+type WarroomWaiter = (event: RunnerEvent) => void;
+const warroomWaiters = new Map<string, WarroomWaiter>();
+
+function warroomTimeoutError(): Error {
+  return new Error(t("作戰室整場討論超過 {minutes} 分鐘，已自動散會；請縮小主題後再試。", {
+    minutes: String(WARROOM_TOTAL_TIMEOUT_MS / 60_000),
+  }));
+}
+
+function warroomTurnTimeout(turnTimeoutMs: number, deadlineAt: number): number {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw warroomTimeoutError();
+  return Math.min(turnTimeoutMs, remainingMs);
+}
+
+async function waitForWarroomWarmup(ms: number, deadlineAt: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, warroomTurnTimeout(ms, deadlineAt)));
+  warroomTurnTimeout(1, deadlineAt);
+}
 
 function warroomRecordHook(worker: Worker, event: RunnerEvent): void {
   if (event.type !== "turn_end" && event.type !== "error") return;
   const waiter = warroomWaiters.get(worker.id);
-  if (waiter) { warroomWaiters.delete(worker.id); waiter(event); }
+  if (waiter) waiter(event);
 }
 
-function awaitWorkerTurn(workerId: string, timeoutMs: number): Promise<RunnerEvent> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
+function awaitWorkerTurn(workerId: string, timeoutMs: number): { wait: Promise<RunnerEvent>; cancel: (message: string) => void } {
+  let resolveWait: (event: RunnerEvent) => void = () => undefined;
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const finish: WarroomWaiter = (event) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    warroomWaiters.delete(workerId);
+    resolveWait(event);
+  };
+  const wait = new Promise<RunnerEvent>((resolve) => {
+    resolveWait = resolve;
+    timer = setTimeout(() => {
       warroomWaiters.delete(workerId);
-      resolve({ type: "error", message: t("作戰室成員逾時") });
+      finish({ type: "error", message: t("作戰室成員逾時") });
     }, timeoutMs);
-    warroomWaiters.set(workerId, (event) => { clearTimeout(timer); resolve(event); });
   });
+  warroomWaiters.set(workerId, finish);
+  return { wait, cancel: (message) => finish({ type: "error", message }) };
 }
 
 function warroomSend(worker: Worker, prompt: string, timeoutMs: number): Promise<RunnerEvent> {
@@ -5421,11 +5471,12 @@ function warroomSend(worker: Worker, prompt: string, timeoutMs: number): Promise
   try {
     worker.runner.send(prompt, [], []);
   } catch (error) {
-    warroomWaiters.delete(worker.id);
-    return Promise.resolve({ type: "error", message: error instanceof Error ? error.message : t("傳送失敗") });
+    waited.cancel(error instanceof Error ? error.message : t("傳送失敗"));
+    broadcast({ type: "worker_status", workerId: worker.id, busy: false });
+    return waited.wait;
   }
   broadcast({ type: "worker_status", workerId: worker.id, busy: true });
-  return waited;
+  return waited.wait;
 }
 
 function warroomEventText(event: RunnerEvent): string {
@@ -5443,9 +5494,11 @@ function warroomEventCost(event: RunnerEvent): number {
 function deleteWarroomPeer(id: string): void {
   const worker = workers.get(id);
   if (!worker) return;
+  warroomWaiters.get(id)?.({ type: "error", message: t("作戰室已結束") });
   try { worker.runner.stop(); } catch { /* ignore */ }
   const departmentId = worker.departmentId;
   workers.delete(id);
+  clearWorkerHookState(id);
   store.deleteWorker(id);
   repairDepartmentAfterMemberLeaves(departmentId, id);
   broadcast({ type: "worker_removed", workerId: id });
@@ -5454,8 +5507,10 @@ function deleteWarroomPeer(id: string): void {
 async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
   const { peer: peerModel, lead: leadModel } = warroomModels(difficulty);
   const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
+  const deadlineAt = Date.now() + WARROOM_TOTAL_TIMEOUT_MS;
   const created: Worker[] = [];
   let costMicros = 0;
+  let completed = false;
   // 上桌人數與輪數隨難度伸縮：簡單 2 人 1 輪（快又省）、中等 3 人 2 輪、困難 4 人（含查證方）2 輪。
   // 使用者有自訂角色（⚙ 面板）就用自訂的，輪數仍照難度。
   const stances = customStances.length >= 2 ? customStances : warroomStances(difficulty);
@@ -5471,10 +5526,10 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     }
     if (created.length === 0) throw new Error(t("無法建立作戰室成員（可能已達 NPC 上限）"));
     const peers = created.slice();
-    await new Promise((resolve) => setTimeout(resolve, 1_500)); // 讓 peers 暖機到位再開講
+    await waitForWarroomWarmup(1_500, deadlineAt); // 讓 peers 暖機到位再開講
     // 第 1 輪：各自鮮明表態
     const r1 = await Promise.allSettled(peers.map((worker, i) =>
-      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), timeoutMs)));
+      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), warroomTurnTimeout(timeoutMs, deadlineAt))));
     const r1texts = r1.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
     for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
     // 全員第一輪都沒能發言（額度滿、供應商掛…）→ 整場中止，別拿空辯論去「裁決」。
@@ -5482,14 +5537,16 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     if (r1texts.every((text) => !text.trim())) {
       throw new Error(t("作戰室成員全數未能發言（可能是使用額度已滿或供應商故障），本場中止。請稍後再試。"));
     }
+    warroomTurnTimeout(1, deadlineAt);
     // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決。
     let r2texts: string[] = peers.map(() => "");
     if (rounds >= 2) {
       const others = peers.map((_, i) => t("【{name}】\n{text}", { name: stances[i].name, text: r1texts[i] || t("(無)") })).join("\n\n");
       const r2 = await Promise.allSettled(peers.map((worker, i) =>
-        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), timeoutMs)));
+        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), warroomTurnTimeout(timeoutMs, deadlineAt))));
       r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
       for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
+      warroomTurnTimeout(1, deadlineAt);
     }
     const debate = peers.map((_, i) => t("## {name}\n【立場】{r1}{rebuttal}", {
       name: stances[i].name,
@@ -5502,12 +5559,12 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
       const lead = createWorker("\u{1F3DB}主持", leadModel, "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
       lead.autoApproveMode = "safe";
       created.push(lead);
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
-      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), timeoutMs);
+      await waitForWarroomWarmup(1_200, deadlineAt);
+      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), warroomTurnTimeout(timeoutMs, deadlineAt));
       costMicros += warroomEventCost(ev);
       result = parseWarroomResult(warroomEventText(ev));
       if (result && !result.structured) { // 議會裁決：格式重試一次就好、有上限
-        const retry = await warroomSend(lead, t("上一則沒有照 <warroom_result>{...}</warroom_result> 的 JSON 格式輸出。請只重輸出那段結構化 JSON，不要多寫任何字。"), timeoutMs);
+        const retry = await warroomSend(lead, t("上一則沒有照 <warroom_result>{...}</warroom_result> 的 JSON 格式輸出。請只重輸出那段結構化 JSON，不要多寫任何字。"), warroomTurnTimeout(timeoutMs, deadlineAt));
         costMicros += warroomEventCost(retry);
         const retried = parseWarroomResult(warroomEventText(retry));
         if (retried?.structured) result = retried;
@@ -5515,11 +5572,17 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     }
     if (!result) result = parseWarroomResult(debate) ?? { verdict: debate, consensus: [], disputes: [], actions: [], metrics: [], charts: [], structured: false };
     result.costUsd = costMicros / 1_000_000;
+    completed = true;
     return result;
   } finally {
-    // 寬限期後把整批臨時成員刪掉（讓使用者有時間看畫面）。persist:false，server 重啟也不會殘留。
+    // 正常完成才留一小段時間讓畫面播放散會；失敗／整場逾時則立即中止並清掉，避免留下
+    // 仍在跑的 CLI session 或卡在桌上的 NPC。server 非正常重啟則由 startup sweep 接手。
     const ids = created.map((worker) => worker.id);
-    setTimeout(() => { for (const id of ids) deleteWarroomPeer(id); }, WARROOM_GRACE_MS);
+    if (!completed) {
+      for (const id of ids) deleteWarroomPeer(id);
+    } else {
+      setTimeout(() => { for (const id of ids) deleteWarroomPeer(id); }, WARROOM_GRACE_MS);
+    }
   }
 }
 
@@ -6884,7 +6947,9 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
   res.json({ ok: true });
 });
 
-for (const savedWorker of store.loadWorkers(MAX_HISTORY).slice(0, MAX_WORKERS)) {
+for (const savedWorker of store.loadWorkers(MAX_HISTORY)
+  .filter((worker) => !isEphemeralWorkerName(worker.name))
+  .slice(0, MAX_WORKERS)) {
   createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker, null, null, { warmup: true });
 }
 if (workers.size === 0 && config.targetRepoConfigured) {

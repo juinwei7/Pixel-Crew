@@ -9,6 +9,12 @@ import { t } from "./i18n.js";
 
 export type WarRoomDifficulty = "simple" | "medium" | "hard";
 
+// 🏛／🔍 是編排器建立、完成後就該消失的短命 worker。集中判定，避免不同
+// lifecycle hook 各自硬編字首而漏掉清理或誤寫入永久資料。
+export function isEphemeralWorkerName(name: string): boolean {
+  return name.startsWith("🏛") || name.startsWith("🔍");
+}
+
 // 依難度配模型：簡單用便宜、難的用強。這是議會裁決「事中省 token、只在難處花貴」的落地。
 // peers 用中階、lead（最終裁決，最重要）用高階；simple 全便宜。
 export function warroomModels(difficulty: WarRoomDifficulty): { peer: string; lead: string } {
