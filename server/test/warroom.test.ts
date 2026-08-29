@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseWarroomResult,
+  isEphemeralWorkerName,
   sanitizeCustomStances,
   warroomModels,
   warroomOpeningPrompt,
@@ -10,6 +11,13 @@ import {
   warroomSynthesisPrompt,
   WARROOM_STANCES,
 } from "../src/warroom.js";
+
+test("only short-lived war room and delegate names are treated as ephemeral", () => {
+  assert.equal(isEphemeralWorkerName("🏛主持"), true);
+  assert.equal(isEphemeralWorkerName("🔍研究員"), true);
+  assert.equal(isEphemeralWorkerName("一號機"), false);
+  assert.equal(isEphemeralWorkerName("會議主持"), false);
+});
 
 test("custom stances are sanitized, bounded to 2-4, and get a fallback brief", () => {
   assert.deepEqual(sanitizeCustomStances("not-an-array"), []);

@@ -1025,7 +1025,8 @@ export function App() {
             const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
               method: "POST",
               body: { topic: command.text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
-              timeoutMs: 600_000,
+              // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
+              timeoutMs: 13 * 60_000,
             });
             setWarroomResult(resp.result);
           } catch (error) {
