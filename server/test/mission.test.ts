@@ -100,6 +100,33 @@ test("keeps a Mission turn open across an async Agent intermediate turn_end", ()
   assert.deepEqual(final.activity.openAgentIds, []);
 });
 
+test("stamps openedAt once an async Agent call opens and clears it once closed", () => {
+  let activity = createMissionActivity();
+  assert.equal(activity.openedAt, null);
+  ({ activity } = applyMissionActivityEvent(activity, { type: "tool_call_start", id: "agent-1", name: "Agent" }));
+  const launched = applyMissionActivityEvent(activity, {
+    type: "tool_call_result",
+    id: "agent-1",
+    output: "Async agent launched successfully\nagentId: abc123",
+    isError: false,
+  });
+  assert.equal(typeof launched.activity.openedAt, "number");
+  const openedAt = launched.activity.openedAt;
+  // A later turn_end while still open must not reset the clock — the caller
+  // needs the original open time to bound total wait, not per-turn wait.
+  const intermediate = applyMissionActivityEvent(launched.activity, { type: "turn_end" });
+  assert.equal(intermediate.activity.openedAt, openedAt);
+  const closed = applyMissionActivityEvent(intermediate.activity, {
+    type: "tool_call_result",
+    id: "agent-1",
+    output: "background result",
+    isError: false,
+  });
+  const final = applyMissionActivityEvent(closed.activity, { type: "turn_end" });
+  assert.equal(final.shouldFinish, true);
+  assert.equal(final.activity.openedAt, null);
+});
+
 test("Mission prompt binds assignments and keeps Git release actions unauthorized", () => {
   const prompt = missionPlanningPrompt({
     missionId: "mission-1",

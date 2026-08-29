@@ -130,6 +130,11 @@ export type MissionMember = {
 
 export type MissionActivity = {
   openAgentIds: string[];
+  // Set when openAgentIds first becomes non-empty; lets the caller bound how
+  // long a turn stays open waiting for a background agent's closing event
+  // that, empirically, does not always arrive (CLI restart, the background
+  // task itself hanging, or a coincidental match on a non-agent tool name).
+  openedAt: number | null;
 };
 
 type MissionActivityEvent =
@@ -140,7 +145,7 @@ type MissionActivityEvent =
   | { type: string };
 
 export function createMissionActivity(): MissionActivity {
-  return { openAgentIds: [] };
+  return { openAgentIds: [], openedAt: null };
 }
 
 export function isAgentTool(name: string): boolean {
@@ -164,10 +169,15 @@ export function applyMissionActivityEvent(
   } else if (event.type === "error") {
     return { activity: createMissionActivity(), shouldFinish: true };
   } else if (event.type === "turn_end") {
-    if (open.size > 0) return { activity: { openAgentIds: [...open] }, shouldFinish: false };
+    if (open.size > 0) {
+      return { activity: { openAgentIds: [...open], openedAt: current.openedAt ?? Date.now() }, shouldFinish: false };
+    }
     return { activity: createMissionActivity(), shouldFinish: true };
   }
-  return { activity: { openAgentIds: [...open] }, shouldFinish: false };
+  return {
+    activity: { openAgentIds: [...open], openedAt: open.size > 0 ? (current.openedAt ?? Date.now()) : null },
+    shouldFinish: false,
+  };
 }
 
 function text(value: unknown, limit: number): string {

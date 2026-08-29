@@ -184,7 +184,7 @@ export function Office3D({ workers, departments, active, onSelect }: Props) {
   };
 
   return (
-    <div style={{ ...S.root, background: bg }}>
+    <div className="office-3d" style={{ ...S.root, background: bg }}>
       <canvas ref={canvasRef} style={S.canvas} />
       {status === "loading" && <div style={S.overlay}>{t("載入 3D 場景中…")}</div>}
       {status === "error" && <div style={{ ...S.overlay, color: "#ffb4a2" }}>⚠ {t("3D 場景載入失敗")}：{errMsg}</div>}
@@ -252,27 +252,27 @@ const S: Record<string, React.CSSProperties> = {
   credit: { position: "absolute", bottom: 8, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "#7a879a", zIndex: 1, pointerEvents: "none" },
   // 焦點大螢幕（左側浮出）：展開態才顯示，吃點擊（右上角「–」可收合）
   // 位置：避開左側 CREW 隊員列（約 230px）與右側任務日誌，落在中間可見的 3D 空檔
-  screen: { position: "absolute", top: 76, left: 250, width: 380, maxWidth: "38vw", borderRadius: 12, overflow: "hidden", background: "rgba(9,14,24,0.94)", border: "2px solid #3f8cff", boxShadow: "0 12px 34px rgba(0,0,0,0.5)", zIndex: 3, pointerEvents: "auto" },
+  screen: { position: "absolute", top: 76, left: 250, width: 380, maxWidth: "38vw", borderRadius: 12, overflow: "hidden", background: "rgba(255,255,255,0.96)", border: "2px solid #3f8cff", boxShadow: "0 12px 34px rgba(25,55,86,0.26)", zIndex: 3, pointerEvents: "auto" },
   screenBar: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 12px", color: "#0b0f16" },
   screenTitle: { font: "700 13px var(--sans, sans-serif)", letterSpacing: 0.3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 },
   screenLive: { font: "700 10px var(--sans, sans-serif)", color: "#0b0f16", opacity: 0.85, marginLeft: 8 },
   screenClose: { marginLeft: 8, width: 22, height: 22, borderRadius: 6, border: "none", background: "rgba(0,0,0,0.18)", color: "#0b0f16", font: "700 16px var(--sans, sans-serif)", lineHeight: "18px", cursor: "pointer", padding: 0 },
   screenNav: { flexShrink: 0, width: 22, height: 22, marginRight: 4, borderRadius: 6, border: "none", background: "rgba(0,0,0,0.18)", color: "#0b0f16", font: "700 18px var(--sans, sans-serif)", lineHeight: "16px", cursor: "pointer", padding: 0 },
   // 收合態小標籤：平常只佔一小條，點一下展開
-  pill: { position: "absolute", top: 76, left: 250, display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 20, background: "rgba(9,14,24,0.9)", border: "2px solid #3f8cff", boxShadow: "0 6px 18px rgba(0,0,0,0.4)", zIndex: 3, pointerEvents: "auto", cursor: "pointer", color: "#e6eefc" },
+  pill: { position: "absolute", top: 76, left: 250, display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 20, background: "rgba(255,255,255,0.95)", border: "2px solid #3f8cff", boxShadow: "0 6px 18px rgba(25,55,86,0.2)", zIndex: 3, pointerEvents: "auto", cursor: "pointer", color: "#1e3a5f" },
   pillDot: { width: 9, height: 9, borderRadius: "50%", flexShrink: 0 },
   pillLabel: { font: "700 12px var(--sans, sans-serif)", whiteSpace: "nowrap", maxWidth: "22vw", overflow: "hidden", textOverflow: "ellipsis" },
   pillLive: { font: "700 9px var(--sans, sans-serif)", color: "#ff5a5a" },
   pillExpand: { font: "700 13px var(--sans, sans-serif)", opacity: 0.75 },
   // 首次操作提示（底部置中一條，按「知道了」收起）
-  hint: { position: "absolute", top: 120, left: 250, display: "flex", alignItems: "center", gap: 12, maxWidth: "46vw", padding: "8px 10px 8px 16px", borderRadius: 22, background: "rgba(12,18,30,0.92)", border: "1px solid rgba(120,150,190,0.45)", boxShadow: "0 8px 24px rgba(0,0,0,0.45)", zIndex: 4, pointerEvents: "auto" },
-  hintText: { font: "600 13px var(--sans, sans-serif)", color: "#dbe6f5", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  hint: { position: "absolute", top: 120, left: 250, display: "flex", alignItems: "center", gap: 12, maxWidth: "46vw", padding: "8px 10px 8px 16px", borderRadius: 22, background: "rgba(255,255,255,0.93)", border: "1px solid rgba(80,123,164,0.3)", boxShadow: "0 8px 24px rgba(25,55,86,0.2)", zIndex: 4, pointerEvents: "auto" },
+  hintText: { font: "600 13px var(--sans, sans-serif)", color: "#304866", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   hintBtn: { flexShrink: 0, padding: "5px 14px", borderRadius: 16, border: "none", background: "#3f8cff", color: "#fff", font: "700 12px var(--sans, sans-serif)", cursor: "pointer" },
   // 空手提示：淡淡一行，不吃點擊
-  emptyHint: { position: "absolute", top: 120, left: 250, padding: "6px 14px", borderRadius: 18, background: "rgba(12,18,30,0.62)", font: "600 12px var(--sans, sans-serif)", color: "rgba(219,230,245,0.82)", zIndex: 2, pointerEvents: "none", maxWidth: "80vw", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
+  emptyHint: { position: "absolute", top: 120, left: 250, padding: "6px 14px", borderRadius: 18, background: "rgba(255,255,255,0.72)", font: "600 12px var(--sans, sans-serif)", color: "#46617f", zIndex: 2, pointerEvents: "none", maxWidth: "80vw", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   screenWeb: { background: "#f3f6fb" },
   screenUrl: { margin: "7px 8px", padding: "5px 10px", borderRadius: 7, background: "#e2e8f0", font: "500 12px var(--sans, sans-serif)", color: "#4a5a68", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   screenShot: { display: "block", width: "100%", height: 300, objectFit: "cover", objectPosition: "top", background: "#fff" },
   screenLoading: { height: 300, display: "flex", alignItems: "center", justifyContent: "center", font: "500 13px var(--sans, sans-serif)", color: "#9aa7b4", background: "#fff" },
-  screenBody: { padding: "12px 14px", font: "500 14px var(--sans, sans-serif)", lineHeight: 1.5, color: "#dbe4f2", maxHeight: 260, overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  screenBody: { padding: "12px 14px", font: "500 14px var(--sans, sans-serif)", lineHeight: 1.5, color: "#253d59", maxHeight: 260, overflow: "hidden", whiteSpace: "pre-wrap", wordBreak: "break-word" },
 };

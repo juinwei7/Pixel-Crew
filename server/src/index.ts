@@ -1,4 +1,12 @@
 import express, { type Response } from "express";
+// Patches Express's router so a rejected promise inside an async route
+// handler is forwarded to next(err) instead of becoming an unhandled
+// rejection — Express 4 does not do this on its own, and previously an
+// error deep in any single request (malformed body, unexpected null, ...)
+// crashed the entire process via process.on("unhandledRejection") below,
+// taking every other worker's run down with it. Must be imported before any
+// app.get/post/... route registration.
+import "express-async-errors";
 import { PreparedTokenStore } from "./preparedTokens.js";
 import cors, { type CorsOptions } from "cors";
 import { createServer, request as httpRequest } from "node:http";
@@ -10,6 +18,7 @@ import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
+import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import {
   parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
@@ -362,6 +371,10 @@ const activeMissions = new Map<string, DepartmentMission>(
   store.listReservedDepartmentMissions().map((mission) => [mission.id, mission]),
 );
 const missionActivities = new Map<string, MissionActivity>();
+// How long a Mission/collaboration turn may stay open waiting for a
+// background "async agent" tool call's closing event before it's treated as
+// stuck. See the missionActivityTimeoutSweep below.
+const MISSION_ASYNC_AGENT_TIMEOUT_MS = 15 * 60_000;
 type MissionRunnerHandle = {
   runner: AgentSession;
   workerId: string;
@@ -550,7 +563,14 @@ function broadcastCollaboration(task: CollaborationTask, created = false): void 
 function broadcast(payload: unknown): void {
   const raw = JSON.stringify(payload);
   for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(raw);
+    if (client.readyState !== WebSocket.OPEN) continue;
+    // A single client's send failure (socket closing mid-send, etc.) must
+    // never become an uncaughtException that takes down every worker's run.
+    try {
+      client.send(raw);
+    } catch (error) {
+      console.error("[broadcast] client.send failed:", error);
+    }
   }
 }
 
@@ -653,6 +673,22 @@ async function deleteAvatarIfUnused(avatarId: string): Promise<void> {
   } catch (error) {
     console.warn("Delete unused avatar failed:", (error as Error).message);
   }
+}
+
+// See missionActivityTimeoutSweep: a collaboration turn kept open waiting for
+// a background agent's closing event that never arrives must not stay stuck.
+function timeoutCollaboration(taskId: string): void {
+  collaborationActivities.delete(taskId);
+  const task = activeCollaborations.get(taskId);
+  if (!task) return;
+  task.status = "failed";
+  task.error = t("背景代理任務超過 {minutes} 分鐘未回報完成", {
+    minutes: String(Math.round(MISSION_ASYNC_AGENT_TIMEOUT_MS / 60_000)),
+  });
+  task.completedAt = new Date().toISOString();
+  activeCollaborations.delete(taskId);
+  store.saveCollaborationTask(task);
+  broadcastCollaboration(task);
 }
 
 function finishCollaboration(worker: Worker, event: RunnerEvent): void {
@@ -1186,6 +1222,18 @@ function collaborationEventIsTerminal(worker: Worker, event: RunnerEvent): boole
 }
 
 function record(worker: Worker, event: RunnerEvent): void {
+  // A single worker's malformed/unexpected event must never become an
+  // uncaughtException that takes the whole process (and every other running
+  // worker) down with it — isolate the failure to this one event instead.
+  try {
+    recordUnsafe(worker, event);
+  } catch (error) {
+    console.error(`[record] failed to process event for worker ${worker.id}:`, error);
+    recordRuntimeFailure(`record() failed for worker ${worker.id} (event ${event.type})`, error);
+  }
+}
+
+function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   if (event.at == null) event.at = Date.now(); // 事件發生時間：這裡是唯一蓋章點，持久化＋廣播都帶著走
   // Output deltas can arrive many times per second. Keep a compact live copy
   // for reconnect snapshots without turning every chunk into a SQLite row.
@@ -2173,8 +2221,22 @@ function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
 }
 
 wss.on("connection", (socket) => {
+  // A client that drops mid-handshake (page reload, laptop sleep/wake, a
+  // network blip) emits 'error' with no listener otherwise — that's an
+  // uncaughtException that used to take the entire server, and every running
+  // worker, down with it. A routine disconnect must stay routine.
+  socket.on("error", (error) => {
+    console.error("[wss] client socket error:", error);
+  });
   for (const task of store.listBossTasksByStatus(["ready", "running"])) {
-    advanceBossTask(task);
+    // One malformed persisted boss task must not crash-loop the server on
+    // every reconnect (crash → supervisor restart → client reconnects →
+    // same bad task → crash again).
+    try {
+      advanceBossTask(task);
+    } catch (error) {
+      console.error(`[wss] advanceBossTask failed for task ${task.id}:`, error);
+    }
   }
   const snapshotPayload =
     JSON.stringify({
@@ -2204,7 +2266,11 @@ wss.on("connection", (socket) => {
     snapshotBudgetWarnedAt = Date.now(); // 重連風暴時最多每分鐘喊一次，避免洗版
     console.warn(`[snapshot] 初始 snapshot ${(snapshotBytes / 1024 / 1024).toFixed(2)}MB 超過 ${SNAPSHOT_BUDGET_BYTES / 1024 / 1024}MB 預算——手機連線會卡，請回頭瘦身（參考上次 18.7→4.85MB 的作法）`);
   }
-  socket.send(snapshotPayload);
+  try {
+    socket.send(snapshotPayload);
+  } catch (error) {
+    console.error("[wss] failed to send initial snapshot:", error);
+  }
 });
 
 app.get("/api/workers", (_req, res) => {
@@ -6860,6 +6926,33 @@ const usageRefreshTimer = setInterval(() => {
 }, 5 * 60_000);
 usageRefreshTimer.unref();
 
+// A Mission/collaboration turn is deliberately kept open while a background
+// "async agent" tool call is outstanding (see applyMissionActivityEvent), but
+// the CLI's matching closing event is empirical and not guaranteed — if it
+// never arrives, the turn (and the department's workspace lock, for
+// Missions) would otherwise stay stuck forever with no user-visible error.
+// Bound the wait and surface it instead of hanging indefinitely.
+const missionActivityTimeoutSweep = setInterval(() => {
+  const now = Date.now();
+  for (const [missionId, activity] of missionActivities) {
+    if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
+    missionActivities.delete(missionId);
+    const mission = activeMissions.get(missionId) ?? store.getDepartmentMission(missionId);
+    if (!mission) continue;
+    pauseMission(
+      mission,
+      t("背景代理任務超過 {minutes} 分鐘未回報完成，已暫停 Mission 等待你確認", {
+        minutes: String(Math.round(MISSION_ASYNC_AGENT_TIMEOUT_MS / 60_000)),
+      }),
+    );
+  }
+  for (const [taskId, activity] of collaborationActivities) {
+    if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
+    timeoutCollaboration(taskId);
+  }
+}, 60_000);
+missionActivityTimeoutSweep.unref();
+
 if (config.production && existsSync(config.webDistPath)) {
   app.use(express.static(config.webDistPath, {
     index: false,
@@ -6880,12 +6973,61 @@ if (config.production && existsSync(config.webDistPath)) {
   });
 }
 
+// Terminal handler: any route error forwarded via next(err) (including async
+// rejections, now caught by express-async-errors above) ends here instead of
+// crashing the process. Must be registered after every other app.use/route.
+app.use((err: unknown, _req: express.Request, res: Response, next: express.NextFunction) => {
+  if (res.headersSent) { next(err); return; }
+  console.error("[http] request handler error:", err);
+  res.status(500).json({ error: t("伺服器發生未預期的錯誤") });
+});
+
 let shuttingDown = false;
+
+function recordRuntimeFailure(event: string, error?: unknown): void {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : error;
+  console.error(`[runtime] ${event}${detail ? `: ${detail}` : ""}`);
+  appendRuntimeLog(config.dataDirectory, event, detail);
+}
+
+function exitAfterShutdown(reason: string, exitCode: number): void {
+  // `wss.close()` can wait on an unhealthy websocket implementation. A fatal
+  // path must still leave the process, otherwise tsx looks healthy while 8787
+  // is already closed. The supervisor will then make a clean replacement.
+  const forceExit = setTimeout(() => process.exit(exitCode), 3_000);
+  forceExit.unref();
+  void shutdown(reason)
+    .catch((error) => recordRuntimeFailure(`shutdown failed after ${reason}`, error))
+    .finally(() => {
+      clearTimeout(forceExit);
+      process.exit(exitCode);
+    });
+}
+
+// A closed HTTP listener with a still-running Node process looks alive to npm
+// and concurrently, but leaves the UI permanently retrying its WebSocket. Exit
+// deliberately so the development supervisor can create a fresh listener.
+server.on("close", () => {
+  if (shuttingDown) {
+    appendRuntimeLog(config.dataDirectory, "HTTP server closed during planned shutdown");
+    return;
+  }
+  recordRuntimeFailure("HTTP server closed unexpectedly; restarting process");
+  setImmediate(() => process.exit(1));
+});
+
+server.on("error", (error) => {
+  if (shuttingDown) return;
+  recordRuntimeFailure("HTTP listener error; shutting down", error);
+  exitAfterShutdown("HTTP listener error", 1);
+});
+
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`pixel-crew received ${signal}; shutting down`);
   clearInterval(usageRefreshTimer);
+  clearInterval(missionActivityTimeoutSweep);
   workflowWatcher.stop();
   mcpConfigWatcher.stop();
   void shutdownWebShot();
@@ -6903,10 +7045,7 @@ async function shutdown(signal: string): Promise<void> {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    // 收尾後明確退出，不賭事件迴圈能自己排乾（子行程 pipe 等 handle 會撐著它）；
-    // 再保底 3 秒強制退出，收尾途中任何一步卡住都不會讓 Ctrl+C 變成沒反應。
-    setTimeout(() => process.exit(0), 3000).unref();
-    void shutdown(signal).then(() => process.exit(0));
+    exitAfterShutdown(signal, 0);
   });
 }
 
@@ -6919,15 +7058,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 // inconsistent state), so this is a diagnostic improvement, not an attempt
 // to recover and keep serving.
 process.on("uncaughtException", (error) => {
-  console.error("[fatal] uncaught exception:", error);
-  void shutdown("uncaughtException").finally(() => process.exit(1));
+  recordRuntimeFailure("uncaught exception", error);
+  exitAfterShutdown("uncaughtException", 1);
 });
 process.on("unhandledRejection", (reason) => {
-  console.error("[fatal] unhandled rejection:", reason);
-  void shutdown("unhandledRejection").finally(() => process.exit(1));
+  recordRuntimeFailure("unhandled rejection", reason);
+  exitAfterShutdown("unhandled rejection", 1);
 });
 
 server.listen(config.port, config.host, () => {
+  appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
   console.log(`local database: ${config.dbPath}`);
