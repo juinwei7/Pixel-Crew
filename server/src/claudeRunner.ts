@@ -384,6 +384,11 @@ export class ClaudeSession implements AgentSession {
     this.child = child;
     this.spawnedProfile = this.executionProfile;
     const gen = ++this.generation;
+    // Writing to stdin after the CLI process has already died (but before
+    // Node delivers 'close') throws EPIPE asynchronously; without a listener
+    // that becomes an uncaught exception that takes down the whole server,
+    // not just this worker (observed under concurrent multi-worker load).
+    child.stdin.on("error", () => {});
 
     const rl = createInterface({ input: child.stdout });
     // result 事件的 usage 是整回合「所有」API 呼叫的累計（每步工具呼叫都重讀一次
@@ -415,7 +420,17 @@ export class ClaudeSession implements AgentSession {
         this.cleanupInputDocuments();
         this.cancelApprovals();
       }
-      handleLine(parsed, this.onEvent, lastContextTokens);
+      // An unexpected CLI output shape must only fail this worker's turn, not
+      // propagate to process.on("uncaughtException") and take every worker down.
+      try {
+        handleLine(parsed, this.onEvent, lastContextTokens);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[claudeRunner] event handling error: ${message}`);
+        this.busy = false;
+        this.cleanupInputDocuments();
+        this.onEvent({ type: "error", message: t("處理事件時發生錯誤：{message}", { message }) });
+      }
     });
 
     let stderrBuf = "";

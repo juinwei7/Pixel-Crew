@@ -329,10 +329,29 @@ export class CodexSession implements AgentSession {
       env: codexChildEnv(process.env),
     });
     this.child = child;
+    // Writing to stdin after the app-server has already died (but before
+    // Node delivers 'close') throws EPIPE asynchronously; without a listener
+    // that becomes an uncaught exception that takes down the whole server,
+    // not just this worker (observed under concurrent multi-worker load).
+    child.stdin.on("error", () => {});
     const generation = ++this.generation;
     let stderr = "";
     const rl = createInterface({ input: child.stdout });
-    rl.on("line", (line) => this.handleRpcLine(line, generation));
+    rl.on("line", (line) => {
+      // An unexpected app-server message shape must only fail this worker's
+      // turn, not propagate to process.on("uncaughtException") and take
+      // every worker down.
+      try {
+        this.handleRpcLine(line, generation);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[codexRunner] event handling error: ${message}`);
+        // generation matched at call time (handleRpcLine's own guard returns
+        // early otherwise), so `child` is still the live process for this turn.
+        this.handleProcessFailure(message, generation);
+        void terminateProcessTree(child);
+      }
+    });
     child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk.toString()}`.slice(-20_000); });
     child.on("error", (error) => this.handleProcessFailure(error.message, generation));
     child.on("close", (code) => this.handleProcessFailure(stderr.trim() || `codex app-server exited with code ${code}`, generation));

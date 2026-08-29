@@ -15,10 +15,14 @@ import { lookup } from "node:dns/promises";
 import { WebSocket } from "ws";
 
 // 依平台列出常見的 Chromium 系瀏覽器路徑（Windows/macOS/Linux 都要能找到，否則「上網查」在
-// 非 Windows 上永遠開不起來）。實際採用哪一個由 ensureChrome 挑「第一個真的存在」的，而非死用第一項。
-function chromeCandidates(): string[] {
-  const p = process.platform;
-  if (p === "win32") {
+// 非 Windows 上永遠開不起來）。環境變數指定的執行檔優先；其餘只保留確實存在的路徑。
+export function chromeCandidates(
+  platform: NodeJS.Platform = process.platform,
+  configured = process.env.WEBSHOT_CHROME ?? "",
+  isPresent: (path: string) => boolean = existsSync,
+): string[] {
+  const platformPaths = (() => {
+  if (platform === "win32") {
     const pf = process.env.PROGRAMFILES || "C:\\Program Files";
     const pfx86 = process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
     const local = process.env.LOCALAPPDATA || "";
@@ -30,7 +34,7 @@ function chromeCandidates(): string[] {
       `${pfx86}\\Microsoft\\Edge\\Application\\msedge.exe`,
     ].filter(Boolean) as string[];
   }
-  if (p === "darwin") {
+  if (platform === "darwin") {
     const home = homedir();
     return ["", home].flatMap((base) => [
       `${base}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
@@ -44,6 +48,8 @@ function chromeCandidates(): string[] {
     "/usr/bin/chromium", "/usr/bin/chromium-browser",
     "/snap/bin/chromium", "/usr/bin/microsoft-edge",
   ];
+  })();
+  return [configured, ...platformPaths].filter((path) => Boolean(path) && isPresent(path));
 }
 
 const DEBUG_PORT = Number(process.env.WEBSHOT_CDP_PORT ?? 9333);
@@ -137,7 +143,22 @@ async function ensureChrome() {
     "about:blank",
   ];
   const proc = spawn(bin, args, { stdio: "ignore", windowsHide: true });
+  const launchError = await new Promise<Error | null>((resolve) => {
+    proc.once("spawn", () => resolve(null));
+    proc.once("error", (error) => resolve(error));
+  });
+  // spawn() reports a missing executable asynchronously. Observe its error
+  // event instead of letting Node turn it into an uncaught server exception.
+  if (launchError) {
+    const dir = profileDir; profileDir = null;
+    if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch {} }
+    throw new Error(`無法啟動 Chrome：${launchError.message}`);
+  }
   chrome = proc; chromePid = proc.pid ?? null;
+  proc.on("error", (error) => {
+    log(`chrome process error: ${error.message}`);
+    if (chrome === proc) { chrome = null; chromePid = null; }
+  });
   proc.on("exit", () => { if (chrome === proc) { chrome = null; chromePid = null; } });
   log(`launched chrome pid=${chromePid} port=${DEBUG_PORT}`);
   // 等 DevTools 起來
@@ -169,9 +190,18 @@ async function getSession(): Promise<{ send: Send }> {
   const ws = new WebSocket(wsUrl, { perMessageDeflate: false });
   const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   let msgId = 0;
+  // Unlike every CDP round trip below, this handshake previously had no
+  // timeout. Headless Chrome can accept the TCP connection but never
+  // complete the WS upgrade in some sandboxes; since captureWebShot serializes
+  // all requests through one global queue, a single hung handshake here
+  // wedged every future screenshot request until the server restarted.
   await new Promise<void>((resolve, reject) => {
-    ws.once("open", () => resolve());
-    ws.once("error", (e) => reject(e as Error));
+    const timer = setTimeout(() => {
+      ws.terminate();
+      reject(new Error("CDP WebSocket handshake timeout"));
+    }, NAV_TIMEOUT_MS + 3000);
+    ws.once("open", () => { clearTimeout(timer); resolve(); });
+    ws.once("error", (e) => { clearTimeout(timer); reject(e as Error); });
   });
   ws.on("message", (raw) => {
     let msg: any; try { msg = JSON.parse(raw.toString()); } catch { return; }

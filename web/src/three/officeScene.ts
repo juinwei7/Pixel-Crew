@@ -1957,7 +1957,9 @@ export async function createOfficeScene(opts: OfficeSceneOptions): Promise<Offic
       if (composer) composer.dispose();
       pmrem.dispose();
       renderer.dispose();
-      renderer.forceContextLoss();   // 切回像素風時徹底歸還 WebGL context＝顯卡資源不殘留（dispose 只釋放快取，context 仍在）
+      // 不要在這裡呼叫 forceContextLoss()。React 開發模式與熱更新都可能
+      // 立刻重新掛載同一個 canvas；強制遺失 context 會讓新 renderer 只剩白畫面。
+      // dispose() 已經釋放 Three.js 持有的資源，整頁主題切換時瀏覽器也會回收 context。
     },
   };
 }
