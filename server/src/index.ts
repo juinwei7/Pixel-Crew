@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { configuredDefaultModels } from "./defaultModels.js";
@@ -2507,6 +2508,13 @@ app.post("/api/usage/refresh", async (_req, res) => {
 // 然後自行退出。舊黑窗因 node 正常結束而收掉，觸發者的回合完整落地。
 let restartPending = false;
 
+// dev（tsx watch, cwd=server/）跟正式版（node server/dist/index.js, cwd=release
+// 根目錄）下 process.cwd() 不一致；下面重啟/遠端存取用到的檔案
+// （restart-pixel-crew.*, _tsproxy*)都跟 server/ 同層，改用本檔自身位置鎖定，
+// 不依賴呼叫者怎麼設 cwd（server/src/index.ts 與 server/dist/index.js 都在
+// server/ 底下同一層，往上兩層即為該層根目錄）。
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
 function performServerRestart(): void {
   if (process.platform !== "win32") {
     console.log("[restart] 所有 NPC 空檔，重啟中…");
@@ -2531,7 +2539,7 @@ function performServerRestart(): void {
   // \" ，cmd 解析不了，start 那段會無聲失敗（實測驗證過）。所以改成直接執行
   // restart-pixel-crew.cmd：單一路徑參數不會被轉爛，start 的引號由 .cmd 內部
   // 的 cmd 自己解析。該 script 等 3 秒、殺掉殘留的 8787、再開可見新黑窗。
-  const script = join(process.cwd(), "restart-pixel-crew.cmd");
+  const script = join(REPO_ROOT, "restart-pixel-crew.cmd");
   if (!existsSync(script)) {
     console.error(`[restart] 找不到 ${script}，取消重啟`);
     restartPending = false;
@@ -2541,7 +2549,7 @@ function performServerRestart(): void {
   // windowsHide 配 detached 在 Windows 會被忽略（node 已知問題），直接 spawn cmd
   // 會讓 relauncher 黑窗在畫面上閃 3-4 秒。優先走 wscript+vbs（Run 視窗樣式 0 =
   // 完全隱藏，與 dc-voice-bot run-bot-hidden.vbs 同招）；vbs 不在才退回舊路徑。
-  const hiddenLauncher = join(process.cwd(), "restart-pixel-crew-hidden.vbs");
+  const hiddenLauncher = join(REPO_ROOT, "restart-pixel-crew-hidden.vbs");
   if (existsSync(hiddenLauncher)) {
     spawn("wscript.exe", [hiddenLauncher], {
       detached: true,
@@ -2598,14 +2606,14 @@ app.post("/api/remote-access/start", async (_req, res) => {
   try {
     if (process.platform === "win32") {
       // Windows：用隱藏視窗的 vbs 拉起（不彈黑窗）。
-      const vbs = join(process.cwd(), "_tsproxy_launch.vbs");
+      const vbs = join(REPO_ROOT, "_tsproxy_launch.vbs");
       if (!existsSync(vbs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy_launch.vbs") }); return; }
       spawn("wscript.exe", [vbs], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     } else {
       // macOS / Linux：直接用當前 node 執行檔跑 _tsproxy.mjs，detached 讓它獨立存活。
-      const mjs = join(process.cwd(), "_tsproxy.mjs");
+      const mjs = join(REPO_ROOT, "_tsproxy.mjs");
       if (!existsSync(mjs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy.mjs") }); return; }
-      spawn(process.execPath, [mjs], { detached: true, stdio: "ignore", cwd: process.cwd() }).unref();
+      spawn(process.execPath, [mjs], { detached: true, stdio: "ignore", cwd: REPO_ROOT }).unref();
     }
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
