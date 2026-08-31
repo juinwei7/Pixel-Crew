@@ -13,8 +13,8 @@ Keep both workflows and make their entry points explicit:
 
 - **Quick roundtable** sends one prompt to the selected NPC. The prompt asks
   it to simulate 2–4 viewpoints in one no-tools turn and return a conclusion.
-- **War Room** launches the existing 2–4 temporary Claude peers, with
-  difficulty-based model selection, one or two debate rounds, and synthesis.
+- **War Room** launches 2–4 temporary peers using the selected NPC's provider,
+  with difficulty-based model selection, one or two debate rounds, and synthesis.
 
 ## Acceptance criteria
 
@@ -23,7 +23,8 @@ Keep both workflows and make their entry points explicit:
 2. Quick roundtable uses the existing one-shot `roundtablePrompt` and normal
    selected-NPC send path; it does not call `/api/warroom`.
 3. War Room alone calls `/api/warroom` and clearly discloses 2–4 temporary
-   Claude NPCs, 1–2 rounds, several minutes of wait, and Claude usage.
+   peers using the selected NPC's provider, 1–2 rounds, several minutes of
+   wait, and that provider's usage.
 4. The meeting-table shortcut selects War Room, because it visually depicts
    multiple agents convening.
 5. War Room role customisation and report history are named as War Room
@@ -33,7 +34,7 @@ Keep both workflows and make their entry points explicit:
 
 ## Non-goals
 
-- This does not add a separate provider-neutral multi-agent orchestration
-  backend. The existing War Room implementation continues to use Claude.
+- This does not add a third provider or a provider-neutral backend: War Room
+  uses the selected NPC's existing Claude or Codex provider.
 - The quick-roundtable prompt is an agent instruction; it does not attempt to
   override the provider's native policy boundary.

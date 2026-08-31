@@ -338,6 +338,8 @@ export const enServerA: Record<string, string> = {
   "## 可執行下一步\n{actions}\n": "## Actionable Next Steps\n{actions}\n",
   "判斷這個討論主題的難度，只回一個英文單詞：simple（常識/簡單）、medium（需要一些分析）、hard（架構/專業/多方權衡）。規則：只要主題涉及「即時資訊」（今日行情、天氣、新聞、現價…需要上網查證的），至少回 medium，不可回 simple——因為查證需要較可靠的模型執行。不要多寫。\n主題：{topic}": "Judge the difficulty of this discussion topic and reply with a single English word only: simple (common knowledge/easy), medium (needs some analysis), hard (architecture/expertise/multi-stakeholder tradeoffs). Rule: if the topic involves \"real-time information\" (today's prices, weather, news, current quotes... anything that needs looking up online), reply at least medium, never simple — because verification needs a more capable model. Don't write anything else.\nTopic: {topic}",
   "請提供討論主題": "Please provide a discussion topic",
+  "請從目前 NPC 開啟作戰室": "Start the War Room from a current NPC",
+  "作戰室必須使用目前 NPC 的工作區": "The War Room must use the current NPC's workspace",
   "你": "you",
   "作戰室執行失敗": "War Room run failed",
   "讀取歷史失敗": "Failed to read history",

@@ -42,9 +42,11 @@ test("stance count scales with difficulty (2 simple / 3 medium / 4 hard incl. ve
 });
 
 test("difficulty tiers pick cheaper models for easy work, stronger for hard", () => {
-  assert.deepEqual(warroomModels("simple"), { peer: "haiku", lead: "haiku" });
-  assert.deepEqual(warroomModels("hard"), { peer: "sonnet", lead: "opus" });
-  assert.equal(warroomModels("medium").lead, "sonnet");
+  assert.deepEqual(warroomModels("claude", "simple"), { peer: "haiku", lead: "haiku" });
+  assert.deepEqual(warroomModels("claude", "hard"), { peer: "sonnet", lead: "opus" });
+  assert.equal(warroomModels("claude", "medium").lead, "sonnet");
+  assert.deepEqual(warroomModels("codex", "simple"), { peer: "gpt-5.6-luna", lead: "gpt-5.6-luna" });
+  assert.deepEqual(warroomModels("codex", "hard"), { peer: "gpt-5.6-terra", lead: "gpt-5.6-sol" });
 });
 
 test("three opposing stances exist so the debate is real, not unanimous", () => {
