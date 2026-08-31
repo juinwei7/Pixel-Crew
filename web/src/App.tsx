@@ -226,6 +226,25 @@ export function App() {
   //   跟 NPC 講就好，由它決定要不要呼叫 /api/delegate 派研究員，按鈕只是繞過大腦的冗餘入口。）
   const [stancesOpen, setStancesOpen] = useState(false);
   const [stancesText, setStancesText] = useState(() => localStorage.getItem("warroom-stances") ?? "");
+  // 圓桌「⋯」更多選項選單：自訂角色／歷史原本是兩顆跟「🗣️ 圓桌」開關並排的獨立按鈕，
+  // 看起來像三個平行功能；實際上後兩個都是圓桌的子設定/回顧，收進選單裡讓主開關更醒目。
+  const [roundtableMenuOpen, setRoundtableMenuOpen] = useState(false);
+  const roundtableMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!roundtableMenuOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setRoundtableMenuOpen(false); };
+    const closeOutside = (event: PointerEvent) => {
+      if (!roundtableMenuRef.current?.contains(event.target as Node)) setRoundtableMenuOpen(false);
+    };
+    window.addEventListener("keydown", close);
+    // 捕獲階段：像素/3D 辦公室畫布會在冒泡階段吃掉 pointerdown，冒泡監聽收不到點擊。
+    window.addEventListener("pointerdown", closeOutside, true);
+    return () => {
+      window.removeEventListener("keydown", close);
+      window.removeEventListener("pointerdown", closeOutside, true);
+    };
+  }, [roundtableMenuOpen]);
 
   function parseCustomStances(text: string): Array<{ name: string; brief: string }> {
     return text.split("\n")
@@ -643,6 +662,23 @@ export function App() {
       updatePreferences({ taskLogOpen: true });
     },
     onEscape: () => {
+      // The roundtable overflow and its two child surfaces live beside the
+      // composer rather than inside the standard modal family. Dismiss them
+      // before consulting the Focus Reader layer so one Escape cannot close a
+      // menu/history panel *and* leave Focus Mode in the same keypress.
+      if (roundtableMenuOpen) {
+        setRoundtableMenuOpen(false);
+        return;
+      }
+      if (stancesOpen) {
+        setStancesOpen(false);
+        return;
+      }
+      if (warroomHistory) {
+        setWarroomHistory(null);
+        setWarroomHistoryContent(null);
+        return;
+      }
       // These overlays already have their own Escape-to-close handling and can be
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
@@ -665,7 +701,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -907,7 +943,7 @@ export function App() {
   }
 
   return (
-    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
+    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
@@ -1203,19 +1239,20 @@ export function App() {
             title={t("圓桌模式：開啟後送出的訊息會召開作戰室（多 NPC 圍桌辯論→裁決）")}
             onClick={() => setRoundtableMode((on) => !on)}
           >{t("🗣️ 圓桌")}{roundtableMode ? t("・開") : ""}</button>
-          <button
-            type="button"
-            className="composer-roundtable-toggle composer-roundtable-toggle--gear"
-            aria-expanded={stancesOpen}
-            title={t("自訂圓桌角色（空白＝依難度自動配）")}
-            onClick={() => setStancesOpen((open) => !open)}
-          >⚙</button>
-          <button
-            type="button"
-            className="composer-roundtable-toggle"
-            title={t("回看過往作戰室裁決報告")}
-            onClick={() => void openWarroomHistory()}
-          >{t("📜 歷史")}</button>
+          <div className="composer-roundtable-more" ref={roundtableMenuRef}>
+            <button
+              type="button"
+              className="composer-roundtable-toggle composer-roundtable-toggle--more"
+              aria-expanded={roundtableMenuOpen}
+              aria-label={t("圓桌更多選項")}
+              title={t("圓桌更多選項：自訂角色、歷史")}
+              onClick={() => setRoundtableMenuOpen((open) => !open)}
+            >⋯</button>
+            {roundtableMenuOpen && <div className="composer-roundtable-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); setStancesOpen(true); }}>{t("⚙ 自訂角色")}</button>
+              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("📜 歷史")}</button>
+            </div>}
+          </div>
           {stancesOpen && <div className="warroom-stances-panel">
             <header><strong>{t("⚙ 自訂圓桌角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea

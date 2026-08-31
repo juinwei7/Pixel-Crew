@@ -5358,12 +5358,17 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-studios--collapsed .focus-studios__refresh { display: none; }
 .focus-studios--collapsed .focus-studios__search { display: none; }
 .focus-studios--collapsed .focus-studios__collapse { width: 34px; height: 28px; }
-.focus-studios--collapsed .focus-studios__studio { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
+/* flex, not grid: the mark child still carries `grid-row: 1 / span 2` from
+   the expanded (multi-column) layout, which under `display: grid` creates a
+   leftover narrow implicit column and centers the mark inside that column
+   instead of the full 42px box — off-center horizontally. Flex ignores
+   grid-row/grid-column on children entirely, so it centers reliably. */
+.focus-studios--collapsed .focus-studios__studio { display: flex; align-items: center; justify-content: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
 .focus-studios--collapsed .focus-studios__mark { width: 28px; height: 28px; }
 .focus-studios--collapsed .focus-studios__name,
 .focus-studios--collapsed .focus-studios__meta,
 .focus-studios--collapsed .focus-studios__git { display: none; }
-.focus-studios--collapsed .focus-studios__create { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
+.focus-studios--collapsed .focus-studios__create { display: flex; align-items: center; justify-content: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
 .focus-studios--collapsed .focus-studios__create-label { display: none; }
 .focus-studios__name i.focus-studios__signal--unread { background: #9b8cf0; box-shadow: 0 0 7px rgba(155, 140, 240, .75); }
 
@@ -5698,6 +5703,16 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 .game-root--focus .command-composer--attachments {
   margin-top: 90px;
+}
+
+/* Split view has ≥2 side-by-side panes below the composer — a centered
+   fixed-width box (the single-pane design) lands right on the boundary
+   between two bottom panes and reads as belonging to neither. Docking it
+   near-full-width instead makes it unambiguously a shared control surface;
+   which pane it targets is already shown by that pane's focused-border
+   highlight, so the composer itself doesn't need to visually point at one. */
+.game-root--focus-split .command-composer {
+  width: calc(100% - 48px);
 }
 
 @media (max-width: 640px) {
@@ -6417,7 +6432,13 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .composer-research-toggle:active { transform: translateY(0) scale(.97); }
 .composer-research-toggle.is-active { background: rgba(0, 229, 255,.16); border-color: rgba(0, 229, 255,.65); color: #e6fbff; box-shadow: 0 0 10px rgba(0, 229, 255,.35); animation: research-breathe 1.8s ease-in-out infinite; }
 @keyframes research-breathe { 50% { box-shadow: 0 0 16px rgba(0, 229, 255,.6); } }
-.composer-roundtable-toggle--gear { padding: 0 8px; }
+/* 圓桌「⋯」更多選項：自訂角色／歷史原本是兩顆跟圓桌主開關並排的獨立按鈕，收進這個
+   小選單裡，讓「🗣️ 圓桌」保持唯一醒目的主開關，其餘是它的子設定/回顧動作。 */
+.composer-roundtable-more { position: relative; }
+.composer-roundtable-toggle--more { padding: 0 8px; font-size: 13px; letter-spacing: .06em; }
+.composer-roundtable-menu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 21; display: grid; min-width: 140px; padding: 4px; border: 1px solid rgba(255,196,77,.3); border-radius: 10px; background: rgba(14,20,34,.99); box-shadow: 0 16px 44px rgba(0,0,0,.5); animation: tooltip-fade .15s ease both; }
+.composer-roundtable-menu button { min-height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #ffce7a; font: 10px var(--mono); text-align: left; cursor: pointer; white-space: nowrap; }
+.composer-roundtable-menu button:hover { background: rgba(255,196,77,.12); }
 
 /* ⚙ 自訂圓桌角色面板：掛在工具列上方的小卡 */
 .warroom-stances-panel { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20; width: min(360px, 80vw); padding: 10px 12px; border: 1px solid rgba(255,196,77,.3); border-radius: 12px; background: rgba(14,20,34,.99); box-shadow: 0 16px 44px rgba(0,0,0,.5); animation: tooltip-fade .15s ease both; }
@@ -6428,7 +6449,10 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .warroom-stances-panel small { display: block; margin-top: 6px; color: #7d93ab; font-size: 10px; }
 
 /* 作戰室裁決結果卡 */
-.warroom-result { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(4,8,16,.66); backdrop-filter: blur(3px); animation: fadeIn .15s ease; }
+/* z-index must clear .holo-panel--focus (25000) — this dialog (verdict result
+   and history) can be opened from the composer toolbar while Focus Mode's
+   overlay is active, and previously rendered invisibly behind it. */
+.warroom-result { position: fixed; inset: 0; z-index: 25010; display: grid; place-items: center; background: rgba(4,8,16,.66); backdrop-filter: blur(3px); animation: fadeIn .15s ease; }
 .warroom-result__card { position: relative; width: min(640px, 92vw); max-height: 84vh; overflow: auto; padding: 22px 24px; border: 1px solid rgba(255,196,77,.3); border-radius: 16px; background: linear-gradient(180deg, rgba(20,26,40,.99), rgba(12,17,28,.99)); box-shadow: 0 30px 80px rgba(0,0,0,.6); color: #cdd8e6; }
 .warroom-result__close { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border: 0; background: transparent; color: #7d8ea3; font-size: 20px; cursor: pointer; }
 .warroom-result__card header span { color: #ffce7a; font: 700 9px var(--mono); letter-spacing: .18em; }
