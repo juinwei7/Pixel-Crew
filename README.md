@@ -41,7 +41,7 @@ macOS users can install the self-contained app without Node.js or npm:
 curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
 ```
 
-Windows x64 users can download the [self-contained ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip), extract it, and double-click `start-pixel-crew.cmd`. Node.js and npm are bundled.
+Windows x64 users can download the [self-contained ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip), extract it, and double-click `start-pixel-crew.vbs`. It keeps the local service in the background without a persistent console window; Node.js and npm are bundled.
 
 For source development on any platform:
 
@@ -145,7 +145,7 @@ codex login
 
 ### Windows 快速安裝
 
-[下載免安裝 Windows x64 ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip)，解壓縮後直接雙擊 `start-pixel-crew.cmd`。一般使用者不需要另外安裝 Node.js、npm 或 Git。
+[下載免安裝 Windows x64 ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip)，解壓縮後直接雙擊 `start-pixel-crew.vbs`；服務會留在背景，不會常駐黑色主控台視窗。一般使用者不需要另外安裝 Node.js、npm 或 Git。
 
 完整步驟、CLI 安裝、更新與疑難排解請見 [Windows 安裝教學](./WINDOWS_SETUP.md)。
 

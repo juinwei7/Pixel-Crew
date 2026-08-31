@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import type { FocusStudio } from "../focusStudios";
@@ -40,31 +40,56 @@ function studioMark(name: string): string {
 
 export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedChange, onSelect }: Props) {
   const [summaries, setSummaries] = useState<Record<string, WorkspaceGitSummary>>({});
+  const [loading, setLoading] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
   const pathKey = useMemo(() => studios.map((studio) => studio.workspacePath).join("\u0000"), [studios]);
+  const visibleStudios = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return studios.map((studio, index) => ({ studio, index }));
+    return studios
+      .map((studio, index) => ({ studio, index }))
+      .filter(({ studio }) => `${studio.name} ${studio.workspacePath}`.toLocaleLowerCase().includes(needle));
+  }, [query, studios]);
 
-  useEffect(() => {
-    let disposed = false;
+  const refresh = useCallback(async (cancelled?: () => boolean) => {
     const workspacePaths = pathKey ? pathKey.split("\u0000") : [];
-    void Promise.all(workspacePaths.map(async (workspacePath) => {
+    if (workspacePaths.length === 0) return;
+    setLoading(true);
+    const results = await Promise.all(workspacePaths.map(async (workspacePath) => {
       try {
         return await apiRequest<WorkspaceGitSummary>(`/api/workspaces/git?workspacePath=${encodeURIComponent(workspacePath)}`, { timeoutMs: 6_000 });
       } catch {
         return { workspacePath, available: false, branch: null, head: null, changedFiles: 0, ahead: null, behind: null, message: t("Git 狀態目前無法讀取") } satisfies WorkspaceGitSummary;
       }
-    })).then((results) => {
-      if (!disposed) setSummaries(Object.fromEntries(results.map((summary) => [summary.workspacePath, summary])));
-    });
-    return () => { disposed = true; };
+    }));
+    if (cancelled?.()) return;
+    setSummaries(Object.fromEntries(results.map((summary) => [summary.workspacePath, summary])));
+    setUpdatedAt(Date.now());
+    setLoading(false);
   }, [pathKey]);
+
+  useEffect(() => {
+    let disposed = false;
+    void refresh(() => disposed);
+    return () => { disposed = true; };
+  }, [refresh]);
 
   if (studios.length === 0) return null;
   return <nav className={`focus-studios ${collapsed ? "focus-studios--collapsed" : ""}`} aria-label={t("工作室快速切換")}>
     <header className="focus-studios__header">
       <span className="focus-studios__eyebrow">STUDIOS</span>
+      {!collapsed && <span className="focus-studios__updated" title={updatedAt ? new Date(updatedAt).toLocaleTimeString() : undefined}>{loading ? t("更新中…") : updatedAt ? t("Git 已更新") : t("Git 狀態")}</span>}
+      <button type="button" className="focus-studios__refresh" disabled={loading} aria-label={t("重新整理 Git 狀態")} title={t("重新整理 Git 狀態（不會 fetch）")} onClick={() => void refresh()}>{loading ? "…" : "↻"}</button>
       <button type="button" className="focus-studios__collapse" aria-label={collapsed ? t("展開工作室列") : t("收合工作室列")} title={collapsed ? t("展開工作室列") : t("收合工作室列")} aria-pressed={!collapsed} onClick={() => onCollapsedChange(!collapsed)}>{collapsed ? "›" : "‹"}</button>
     </header>
+    {!collapsed && <label className="focus-studios__search">
+      <span aria-hidden="true">⌕</span>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("搜尋工作室")} aria-label={t("搜尋工作室")} />
+      {query && <button type="button" onClick={() => setQuery("")} aria-label={t("清除工作室搜尋")} title={t("清除工作室搜尋")}>×</button>}
+    </label>}
     <div className="focus-studios__list">
-      {studios.map((studio, index) => {
+      {visibleStudios.map(({ studio, index }) => {
         const summary = summaries[studio.workspacePath];
         const selected = studio.workspacePath === activeWorkspace;
         const shortcut = index < 9 ? `Alt+${index + 1}` : null;
@@ -76,6 +101,7 @@ export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedC
           <span className="focus-studios__git">{gitIdentity(summary) || gitState(summary)}</span>
         </button>;
       })}
+      {visibleStudios.length === 0 && <p className="focus-studios__empty" role="status">{t("沒有符合的工作室")}</p>}
     </div>
   </nav>;
 }

@@ -18,4 +18,4 @@ Write-Host "Installing Pixel Crew production dependencies..." -ForegroundColor C
 if ($LASTEXITCODE -ne 0) { throw "production dependency install failed" }
 
 & (Join-Path $PSScriptRoot "doctor.ps1")
-Write-Host "Ready. Double-click start-pixel-crew.cmd." -ForegroundColor Green
+Write-Host "Ready. Double-click start-pixel-crew.vbs for a background launch." -ForegroundColor Green

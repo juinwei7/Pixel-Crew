@@ -55,5 +55,5 @@ if (-not $SkipBuild) {
 Write-Host ""
 & (Join-Path $PSScriptRoot "doctor.ps1")
 Write-Host ""
-Write-Host "安裝完成。雙擊 start-pixel-crew.cmd 即可啟動。" -ForegroundColor Green
+Write-Host "安裝完成。雙擊 start-pixel-crew.vbs 即可背景啟動。" -ForegroundColor Green
 Write-Host "第一次使用請在畫面選擇專案資料夾；若 CLI 尚未登入，依畫面提示登入。"

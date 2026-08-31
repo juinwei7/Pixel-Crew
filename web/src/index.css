@@ -5193,9 +5193,21 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   font: 9px var(--mono);
   letter-spacing: .18em;
 }
+.focus-studios__updated { margin-left: auto; color: #708596; font: 8px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+.focus-studios__refresh { width: 24px; height: 24px; min-height: 24px; padding: 0; border: 1px solid rgba(143,177,196,.18); border-radius: 6px; background: rgba(255,255,255,.025); color: #91b7c8; cursor: pointer; font: 13px/1 var(--mono); }
+.focus-studios__refresh:hover:not(:disabled) { border-color: rgba(145,195,220,.46); background: rgba(145,195,220,.08); }
+.focus-studios__refresh:disabled { opacity: .5; cursor: wait; }
 .focus-studios__collapse { width: 25px; height: 25px; padding: 0; border: 1px solid rgba(201,210,220,.12); border-radius: 6px; background: #151a21; color: #8393a0; cursor: pointer; font: 17px/1 sans-serif; }
 .focus-studios__collapse:hover { border-color: rgba(140,194,213,.34); color: #d7e1e8; }
+.focus-studios__search { display: flex; align-items: center; gap: 6px; min-width: 0; height: 30px; margin: -2px 0 8px; padding: 0 8px; border: 1px solid rgba(143,177,196,.16); border-radius: 7px; background: rgba(12,17,23,.72); color: #657889; }
+.focus-studios__search:focus-within { border-color: rgba(102,194,221,.48); box-shadow: 0 0 0 2px rgba(76,167,197,.1); }
+.focus-studios__search > span { font: 14px/1 sans-serif; }
+.focus-studios__search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #d7e2e9; font: 10px var(--mono); }
+.focus-studios__search input::placeholder { color: #667686; }
+.focus-studios__search button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #879aa8; cursor: pointer; font: 16px/16px sans-serif; }
+.focus-studios__search button:hover { background: rgba(255,255,255,.08); color: #dce6ec; }
 .focus-studios__list { display: grid; gap: 7px; }
+.focus-studios__empty { margin: 0; padding: 12px 8px; border: 1px dashed rgba(143,177,196,.18); border-radius: 7px; color: #728492; font: 9px var(--mono); text-align: center; }
 .focus-studios__studio {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
@@ -5227,6 +5239,8 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-studios__studio--active .focus-studios__git { color: #9eb6c4; }
 .focus-studios--collapsed .focus-studios__header { justify-content: center; }
 .focus-studios--collapsed .focus-studios__eyebrow { display: none; }
+.focus-studios--collapsed .focus-studios__refresh { display: none; }
+.focus-studios--collapsed .focus-studios__search { display: none; }
 .focus-studios--collapsed .focus-studios__collapse { width: 34px; height: 28px; }
 .focus-studios--collapsed .focus-studios__studio { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
 .focus-studios--collapsed .focus-studios__mark { width: 28px; height: 28px; }

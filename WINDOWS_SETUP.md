@@ -20,7 +20,7 @@ Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 
    irm https://chatgpt.com/codex/install.ps1 | iex
    ```
 
-3. 雙擊 `start-pixel-crew.cmd`。視窗需保持開啟，瀏覽器會自動前往 <http://127.0.0.1:8787>。
+3. 雙擊 `start-pixel-crew.vbs`。Pixel Crew 會在背景持續執行、不保留黑色 CMD/PowerShell 視窗，瀏覽器會自動前往 <http://127.0.0.1:8787>。若啟動失敗，會顯示錯誤並把細節寫到 `%LOCALAPPDATA%\Pixel Crew\logs`。
 4. 第一次進入後點上方房間名稱，使用 Windows 原生資料夾選擇器選擇 repository。
 5. 如果 CLI 還沒登入，依介面提示在 PowerShell 執行：
 
@@ -47,7 +47,7 @@ winget install OpenJS.NodeJS.LTS
 git clone https://github.com/juinwei7/Pixel-Crew.git
 cd Pixel-Crew
 scripts\windows\setup-windows.cmd
-start-pixel-crew.cmd
+start-pixel-crew.vbs
 ```
 
 也可讓 setup 一併安裝 provider CLI：
@@ -108,7 +108,7 @@ C:\Users\name\Projects\my-repo
 ### Port 8787 被占用
 
 ```powershell
-start-pixel-crew.cmd -Port 8899
+start-pixel-crew.cmd -Console -Port 8899
 ```
 
 ### 如何完整移除
