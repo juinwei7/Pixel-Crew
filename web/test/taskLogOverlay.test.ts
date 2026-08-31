@@ -24,3 +24,8 @@ test("task log still owns an independently resizable panel width", () => {
   assert.match(css, /\.holo-panel[\s\S]*?width:\s*min\(var\(--log-panel-width\)/);
   assert.match(app, /"--log-panel-width": `\$\{preferences\.taskLogWidth\}px`/);
 });
+
+test("custom select controls vertically center their selected value and picker icon", () => {
+  assert.match(css, /select\s*\{[\s\S]*?display:\s*inline-flex;[\s\S]*?align-items:\s*center;/);
+  assert.match(css, /select::picker-icon\s*\{[\s\S]*?align-self:\s*center;/);
+});

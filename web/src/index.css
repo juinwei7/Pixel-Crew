@@ -4682,9 +4682,14 @@ select,
 }
 
 /* base-select 會讓 select 按鈕改用瀏覽器預設字體/箭頭——強制沿用 App 字體並把箭頭調成
-   跟介面一致的暗藍灰，觸發鈕與清單字體才會統一。 */
-select { font-family: inherit; }
-select::picker-icon { color: #7f92b4; }
+   跟介面一致的暗藍灰，觸發鈕與清單字體才會統一。Chromium 的 base-select 預設把選中值
+   對齊到內容區上緣；所有下拉都建立 flex formatting context，讓文字和箭頭垂直置中。 */
+select {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+}
+select::picker-icon { align-self: center; color: #7f92b4; }
 
 ::picker(select) {
   margin-top: 6px;
