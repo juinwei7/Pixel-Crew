@@ -943,7 +943,7 @@ export function App() {
   }
 
   return (
-    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
+    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
