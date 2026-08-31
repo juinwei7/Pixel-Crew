@@ -20,6 +20,7 @@ type Props = {
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
   onSelect(workspacePath: string): void;
+  onCreateNpc(): void;
 };
 
 function gitState(summary: WorkspaceGitSummary | undefined): string {
@@ -38,7 +39,7 @@ function studioMark(name: string): string {
   return [...name].slice(0, 2).join("").toLocaleUpperCase();
 }
 
-export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedChange, onSelect }: Props) {
+export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedChange, onSelect, onCreateNpc }: Props) {
   const [summaries, setSummaries] = useState<Record<string, WorkspaceGitSummary>>({});
   const [loading, setLoading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -89,6 +90,10 @@ export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedC
       {query && <button type="button" onClick={() => setQuery("")} aria-label={t("清除工作室搜尋")} title={t("清除工作室搜尋")}>×</button>}
     </label>}
     <div className="focus-studios__list">
+      <button type="button" className="focus-studios__create" onClick={onCreateNpc} aria-label={t("＋ 新增 NPC")} title={t("＋ 新增 NPC")}>
+        <span className="focus-studios__create-mark" aria-hidden="true">+</span>
+        <span className="focus-studios__create-label">{t("新增 NPC")}</span>
+      </button>
       {visibleStudios.map(({ studio, index }) => {
         const summary = summaries[studio.workspacePath];
         const selected = studio.workspacePath === activeWorkspace;

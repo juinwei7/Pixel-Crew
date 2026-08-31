@@ -10,6 +10,7 @@ test("renders accessible managed-workspace controls for Focus Reader", () => {
     collapsed={false}
     onCollapsedChange={() => {}}
     onSelect={() => {}}
+    onCreateNpc={() => {}}
     studios={[
       { workspacePath: "/repo/api", name: "api", workerIds: ["api-1"], busyCount: 1, attentionCount: 0 },
       { workspacePath: "/repo/web", name: "web", workerIds: ["web-1", "web-2"], busyCount: 0, attentionCount: 1 },
@@ -26,6 +27,10 @@ test("renders accessible managed-workspace controls for Focus Reader", () => {
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /disabled=""/);
   assert.match(html, /讀取 Git 狀態中/);
+  // 新增 NPC 是清單的第一個項目（鎖在最上面，不受搜尋篩選影響）。
+  const createIndex = html.indexOf("focus-studios__create");
+  const firstStudioIndex = html.indexOf("focus-studios__studio ");
+  assert.ok(createIndex >= 0 && createIndex < firstStudioIndex);
 });
 
 test("renders a compact rail without hiding accessible studio names", () => {
@@ -34,9 +39,23 @@ test("renders a compact rail without hiding accessible studio names", () => {
     collapsed
     onCollapsedChange={() => {}}
     onSelect={() => {}}
+    onCreateNpc={() => {}}
     studios={[{ workspacePath: "/repo/api", name: "api", workerIds: ["api-1"], busyCount: 0, attentionCount: 0 }]}
   />);
   assert.match(html, /focus-studios--collapsed/);
   assert.match(html, /展開工作室列/);
   assert.match(html, /aria-label="api/);
+});
+
+test("renders the add-NPC control with an accessible label", () => {
+  const html = renderToStaticMarkup(<FocusStudios
+    activeWorkspace="/repo/api"
+    collapsed={false}
+    onCollapsedChange={() => {}}
+    onSelect={() => {}}
+    onCreateNpc={() => {}}
+    studios={[{ workspacePath: "/repo/api", name: "api", workerIds: ["api-1"], busyCount: 0, attentionCount: 0 }]}
+  />);
+  assert.match(html, /focus-studios__create/);
+  assert.match(html, /新增 NPC/);
 });
