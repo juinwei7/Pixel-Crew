@@ -73,6 +73,9 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 
 - **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
 - **專心閱讀與工作室**：把完成的 NPC 對話切成專注閱讀工作區。左側可縮放的「工作室」欄列出受管理的本機工作資料夾，可用 `Alt+1`–`Alt+9` 快速切換，會記住各工作室最後選過的 NPC；並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind，不會修改 repository。
+- **Focus 工作台**：Focus Reader 可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
+- **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
+- **Codex 目標與指令面板**：用 `/goal` 設定、查看或清除 thread 的目標；Focus 控制與指令管理也會呈現內建 Codex 對話控制，而自訂面板項目會明確標示為一般聊天文字。
 - **持久化老闆任務日誌**：從頂部 Boss Desk 以聊天方式直接交辦。任務、探索問題、回答、跨部門進度與最終報告都會保存，切換畫面或重啟後仍可繼續。
 - **跨部門編排**：決策模型可依真實部門與 NPC 職務建立經過驗證的依賴圖，依序安排 PM、工程、QA 等部門；每個部門收到明確的上游報告，最後只向老闆提交一份彙整結果。
 - **NPC 管理**：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
@@ -89,11 +92,12 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
 - **互動式核准**：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次或拒絕；Codex 另支援「本次工作階段皆允許」。
 - **全域工作能量**：頂部 HUD 顯示 Claude 與 Codex 目前的剩餘用量（讀取各自 CLI 的用量資訊），為帳號共用、不隨房間或 NPC 切換。
+- **更可靠的本機執行環境**：Server 能妥善恢復計畫性重啟與卡住的背景活動；Windows release 預設隱藏啟動，並透過系統匣提供開啟、重啟、停止與查看 log。
 - **富文字對話**：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
 - **像素辦公室**：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
 - **3D 辦公室（選用）**：在網址加上 `?theme=modern`，即可從預設的像素（2D）辦公室切換到即時 3D「娃娃屋」——玻璃帷幕塔身與逐層樓板環帶、日夜光影循環、NPC 以 3D 角色坐在各自工作站，頭上的浮動工作小窗會以白話中文即時顯示每位 Agent 正在執行的工具。滑鼠拖曳旋轉方位、滾輪縮放，拉遠即可欣賞整棟塔身。預設仍為像素主題。
 - **遠端存取／手機控制（選用）**：內建轉接站在本機 server 前加上通行碼或 Google 登入（含暴力嘗試鎖定與限時分享密碼），並以 cloudflared 或 Tailscale 開出 HTTPS 通道，手機掃碼即可連入指揮辦公室。連線 QR 以 3D 霓虹夜城呈現——進場長出城市後自動翻轉成可掃描的空拍視角，點一下逛街景、拖曳環繞城市。
-- **Commands / Skills**：Claude 啟動時掃描專案與使用者指令並快取原生指令；Codex 會預載 Pixel Crew 可透過 app-server 原生執行的 `/clear`、`/new`、`/compact`、`/review`，並另外掃描 repo-scoped `$skills`。新建 NPC 或剛切換房間都能立即使用，不必先送出測試訊息。
+- **Commands / Skills**：Claude 啟動時掃描專案與使用者指令並快取原生指令；Codex 會預載 Pixel Crew 可透過 app-server 原生執行的 `/clear`、`/new`、`/compact`、`/review`、`/goal`，並另外掃描 repo-scoped `$skills`。新建 NPC 或剛切換房間都能立即使用，不必先送出測試訊息。
 - **MCP 狀態**：依目前 provider 載入 MCP servers，可在介面中新增、移除、重新整理及查看狀態（含「需授權」等狀態）。
 - **動態模型**：Claude 提供 Opus / Sonnet / Haiku / Fable 等別名，Codex 直接讀取本機 CLI 的 model catalog，不需隨版本手動更新清單。
 - **Session 延續**：重新啟動服務後，仍可透過 provider 的 session/thread ID 延續對話。
@@ -188,12 +192,14 @@ npm run dev
 3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。
 4. Claude Worker 可輸入 `/` 查看目前房間、使用者層級與內建原生指令；Codex Worker 可輸入 `/` 使用 Pixel Crew 支援的原生對話控制，或輸入 `$` 查看目前房間的 repo skills。模型、權限、MCP 等 TUI 專屬控制則使用 Pixel Crew 頂部的對應介面。
 5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
-6. 按**老闆交辦**：先選擇決策模型，再填寫目標；驗收條件可選填，不必預先選 NPC 或部門。決策模型會從可接單部門的用途、成員職務與指示做結構化判斷；信心不足時先請你補充。路由成立後，部門主管會依成員職務選擇快速 Consult／Review 或完整 Mission，自動規劃、直接開始、依序交接、有限次修正，最後提交一份部門報告。單人部門可執行工作，但兩位以上才能安排獨立 Review。
-7. 使用左下角的 `＋` 建立同 provider、同房間的新 Worker，再透過分頁切換任務。
-8. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
-9. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
-10. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
-11. 在任務日誌按**專心閱讀**可進入 Focus Reader。頂部會明示目前 NPC 的 provider 與實際使用模型；左側「工作室」可收合或展開，選擇另一間工作室會回到該工作室上次閱讀的 NPC。工作室卡片中的 Git 資訊僅供檢視，並不會執行 fetch、checkout、commit 或 push。
+6. 從頂部列開啟**帳號管理**，新增具名稱的 Claude Code 或 Codex 登入，在瀏覽器完成登入（Codex 也支援原本的 API key 流程），並在建立 NPC 時選擇要使用的帳號。已有原生對話歷史的 Worker 必須先清除工作階段才能換帳號，避免帳號切換悄悄放棄 provider 端的 thread。
+7. 按**老闆交辦**：先選擇決策模型，再填寫目標；驗收條件可選填，不必預先選 NPC 或部門。決策模型會從可接單部門的用途、成員職務與指示做結構化判斷；信心不足時先請你補充。路由成立後，部門主管會依成員職務選擇快速 Consult／Review 或完整 Mission，自動規劃、直接開始、依序交接、有限次修正，最後提交一份部門報告。單人部門可執行工作，但兩位以上才能安排獨立 Review。
+8. 使用左下角的 `＋` 建立同 provider、同帳號、同房間的新 Worker，再透過分頁切換任務。
+9. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
+10. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
+11. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
+12. 在任務日誌按**專心閱讀**可進入 Focus Reader。頂部會明示目前 NPC 的 provider 與實際使用模型；左側「工作室」可收合或展開，選擇另一間工作室會回到該工作室上次閱讀的 NPC。需要比較報告時可分割成最多四個窗格，按 `Alt+[`／`Alt+]` 在窗格間移動焦點。工作室卡片中的 Git 資訊僅供檢視，並不會執行 fetch、checkout、commit 或 push。
+13. Codex NPC 可輸入 `/goal <目標>` 設定目前 thread 目標、`/goal` 查看，或 `/goal clear` 清除；`/clear`、`/new`、`/compact`、`/review` 也都是支援的原生對話控制。
 
 右上角會分別顯示伺服器與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
 
@@ -230,6 +236,7 @@ npm run dev
 
 - 後端預設只監聽 `127.0.0.1`，定位為個人本機工具。
 - SQLite 會保存使用者訊息、thinking、工具輸入、工具結果與各 NPC 人設，預設位於作業系統的使用者應用資料目錄；Windows 為 `%LOCALAPPDATA%\Pixel Crew`。
+- 每個具名稱的 provider 帳號都在 Pixel Crew 資料目錄下使用自己的私有 CLI home；本機只保存帳號標籤與指派，認證資料仍由官方 CLI 管理。刪除帳號會移除該私有 home，並把它的閒置 NPC 改回共用登入。
 - 靜態角色來源圖只在瀏覽器處理，伺服器僅保存通過驗證的 24×32 PNG；GIF 為保留動畫會保存原檔，限制 2 MiB、320×320、120 幀與 800 萬解碼像素，並依 GIF 內建的每幀時間播放。兩者位於資料庫同層的 `avatars/`。
 - Worker 的房間路徑會存入 SQLite；實際專案檔案仍留在原本的本機資料夾，不會複製進 Pixel Crew。
 - 訊息圖片只經由本機 loopback server 傳給目前 provider。Codex 所需的本機圖片暫存檔權限為 `0600`，會在該回合完成、中止或失敗時刪除；圖片本體不會寫入 Pixel Crew 的 SQLite 事件歷史。
@@ -274,9 +281,9 @@ npm test -w web
 
 - 原生資料夾選擇器支援 macOS 與 Windows；Linux 可輸入本機絕對路徑或選擇最近房間。
 - Windows 第一版只支援本機磁碟 repository，不開放 UNC、網路磁碟與 `\\wsl$`；Codex 在 Windows 10 的原生支援由上游列為 best-effort，Windows 11 較穩定。
-- 沒有跨裝置同步或多人帳號系統。
+- 沒有跨裝置同步或多人帳號系統；具名稱的 provider 帳號是單一桌面使用者的本機 profile，不是可共用的團隊身分。
 - 最多為每位 Worker 保存最近 2,000 筆 runner events。
-- Slash commands 目前只提供給 Claude Worker；Codex 使用 `$` 觸發的 Repo Skills。MCP 管理同時支援 Claude 與 Codex。
+- Claude 可使用掃描到的原生 slash commands；Codex 支援 `/clear`、`/new`、`/compact`、`/review`、`/goal` 與 `$` 觸發的 Repo Skills。自訂 Codex 指令面板項目除非 Codex 本身理解，否則會以一般聊天文字送出。
 - 「本次工作階段皆允許」目前 Codex 為原生支援；Claude 端是否提供取決於所安裝 CLI 版本的權限提示能力。
 - 這是早期版本，資料庫 schema 尚未提供正式 migration 工具。
 - Claude 與 Codex 的原生 session 歷史不能互換；跨 LLM 切換使用摘要交接，因此可能遺漏細節、工具狀態、待核准操作或未完成的背景工作。

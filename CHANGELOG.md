@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Added managed, per-NPC provider accounts for both Codex and Claude Code. Named accounts use isolated local CLI homes, support browser login (plus Codex's API-key flow), and cannot replace a worker's active native conversation without an explicit reset.
+- Added Codex thread goals through `/goal`, including set, inspect, and clear operations, and added a command manager that distinguishes real built-ins from custom text-only palette entries.
+- Added a Focus workbench: split the reader into up to four panes, cycle panes with `Alt+[` / `Alt+]`, and keep workspace/provider/model context visible alongside the existing read-only Git summary.
+- Added a hidden Windows launcher and tray controls for open, restart, stop, and logs; background startup now records actionable diagnostics instead of leaving a persistent console window.
+
+### Changed
+
+- Improved Focus Studios, responsive reader layouts, model visibility, and the modern workspace shell.
+- Hardened the local runtime against planned restarts, stalled background work, optional dialog timing, and screenshot-browser failures.
+
+### Fixed
+
+- Removed obsolete one-click Squad templates from the product and documentation.
+- Hardened remote sharing passcode handling and screenshot navigation against unsafe local/private targets.
+
 ## [2.0.1] - 2026-07-28
 
 ### Added

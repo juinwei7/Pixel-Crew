@@ -8,7 +8,9 @@ const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).ver
 const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
 const releaseDate = new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\] - (\\d{4}-\\d{2}-\\d{2})$`, "m").exec(changelog)?.[1];
 if (!releaseDate) throw new Error(`CHANGELOG.md has no dated v${version} release`);
-const expectedLastModified = releaseDate;
+// The site transparently documents source-available work after the latest
+// formal release, so its editorial date is intentionally newer than v2.0.1.
+const expectedLastModified = "2026-09-01";
 const errors = [];
 
 const fail = (scope, message) => errors.push(`${scope}: ${message}`);
