@@ -36,6 +36,7 @@ import { parseMcpToolName } from "./mcpToolName";
 import { roundtablePrompt } from "./roundtablePrompt";
 import { apiRequest } from "./api";
 import { t } from "./i18n";
+import type { WorkerState } from "./types";
 
 type WarRoomAction = { priority: "P1" | "P2" | "P3" | "P4"; title: string; how: string };
 type WarRoomDispute = { point: string; ruling: string };
@@ -324,6 +325,19 @@ export function App() {
     activeCapabilities.models,
     active?.model,
   );
+  // 專注模式的選擇器同時是目前工作對象的資訊列：不能只寫 Codex／Claude，
+  // 否則讀者無法分辨這位 NPC 正用哪個模型。未指定模型時明說「預設模型」，
+  // 不假裝知道 CLI 在供應商端採用的實際預設值。
+  function focusWorkerLabel(worker: WorkerState, unread = false): string {
+    const catalog = [
+      ...(worker.provider === "claude" ? CLAUDE_MODEL_OPTIONS : []),
+      ...(capabilitiesByWorkspace[worker.workspacePath]?.[worker.provider]?.models ?? []),
+    ];
+    const model = worker.model
+      ? catalog.find((candidate) => candidate.id === worker.model)?.label ?? worker.model
+      : t("預設模型");
+    return `${unread ? "● " : ""}${worker.name} · ${worker.provider === "claude" ? "Claude" : "Codex"} · ${model} · ${workerFocusStatus(worker)}`;
+  }
   const decisionModelOptions = useMemo(() => {
     const options = new Map<string, { provider: ProviderId; model: string; label: string }>();
     for (const provider of ["claude", "codex"] as const) {
@@ -848,9 +862,9 @@ export function App() {
                 {Object.values(departments).map((department) => <optgroup key={department.id} label={department.name}>{workerList.filter((worker) => worker.departmentId === department.id).map((worker) => {
                   const latestKey = latestReadableTurnKey(worker);
                   const unread = worker.id !== activeId && Boolean(latestKey) && latestKey !== focusSeenTurns[worker.id];
-                  return <option key={worker.id} value={worker.id}>{unread ? "● " : ""}{worker.name} · {worker.provider === "claude" ? "Claude" : "Codex"} · {workerFocusStatus(worker)}</option>;
+                  return <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker, unread)}</option>;
                 })}</optgroup>)}
-                {workerList.filter((worker) => !worker.departmentId || !departments[worker.departmentId]).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {workerFocusStatus(worker)}</option>)}
+                {workerList.filter((worker) => !worker.departmentId || !departments[worker.departmentId]).map((worker) => <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker)}</option>)}
               </select>
             </div> : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
