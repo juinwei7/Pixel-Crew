@@ -2103,10 +2103,11 @@ function detachedRunner(
   initialState: { sessionId: string; completedTurns: number } | undefined,
   onEvent: (event: RunnerEvent) => void,
   persona: Persona | null,
+  homeDir?: string,
 ): AgentSession {
   const runner: AgentSession = provider === "codex"
-    ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), () => "off", initialState, () => config.defaultCodexHome)
-    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), () => "off", initialState, () => config.defaultClaudeHome);
+    ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), () => "off", initialState, () => homeDir ?? config.defaultCodexHome)
+    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), () => "off", initialState, () => homeDir ?? config.defaultClaudeHome);
   if (model && validModel(provider, model)) runner.setModel(model);
   return runner;
 }
@@ -2125,6 +2126,7 @@ function runDetachedTurn(
   prompt: string,
   timeoutMs = 60_000,
   policy: DetachedTurnPolicy = { kind: "normal" },
+  homeDir?: string,
 ): Promise<{
   text: string;
   state: { sessionId: string; completedTurns: number };
@@ -2177,7 +2179,7 @@ function runDetachedTurn(
           else finish(undefined, result);
         }
       }
-    }, persona);
+    }, persona, homeDir);
     timer = setTimeout(() => finish(new Error(t("LLM 交接逾時"))), timeoutMs);
     try {
       runner.send(prompt, [], [], policy.kind === "read_only_query"
@@ -5783,8 +5785,8 @@ function warroomEventText(event: RunnerEvent): string {
 }
 
 // 累加成本用：從一個 turn_end 事件取出這回合花的錢（micro-USD），沿用既有的計價函式。
-function warroomEventCost(event: RunnerEvent): number {
-  return event.type === "turn_end" ? costMicrosForTurnEnd("claude", event) : 0;
+function warroomEventCost(provider: ProviderId, event: RunnerEvent): number {
+  return event.type === "turn_end" ? costMicrosForTurnEnd(provider, event) : 0;
 }
 
 function deleteWarroomPeer(id: string): void {
@@ -5800,8 +5802,8 @@ function deleteWarroomPeer(id: string): void {
   broadcast({ type: "worker_removed", workerId: id });
 }
 
-async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
-  const { peer: peerModel, lead: leadModel } = warroomModels(difficulty);
+async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
+  const { peer: peerModel, lead: leadModel } = warroomModels(provider, difficulty);
   const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
   const deadlineAt = Date.now() + WARROOM_TOTAL_TIMEOUT_MS;
   const created: Worker[] = [];
@@ -5814,7 +5816,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   try {
     for (const stance of stances) {
       if (workers.size >= MAX_WORKERS) break;
-      const peer = createWorker(`\u{1F3DB}${stance.name}`, peerModel, "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+      const peer = createWorker(`\u{1F3DB}${stance.name}`, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true }, accountId);
       // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
       // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
       peer.autoApproveMode = "safe";
@@ -5827,7 +5829,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     const r1 = await Promise.allSettled(peers.map((worker, i) =>
       warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), warroomTurnTimeout(timeoutMs, deadlineAt))));
     const r1texts = r1.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
-    for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
+    for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
     // 全員第一輪都沒能發言（額度滿、供應商掛…）→ 整場中止，別拿空辯論去「裁決」。
     // 丟錯誤會讓外層 500 回報、不存檔、不回報 host，前端会看到明確錯誤而不是垃圾結論。
     if (r1texts.every((text) => !text.trim())) {
@@ -5841,7 +5843,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
       const r2 = await Promise.allSettled(peers.map((worker, i) =>
         warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), warroomTurnTimeout(timeoutMs, deadlineAt))));
       r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
-      for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(s.value);
+      for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
       warroomTurnTimeout(1, deadlineAt);
     }
     const debate = peers.map((_, i) => t("## {name}\n【立場】{r1}{rebuttal}", {
@@ -5852,22 +5854,22 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     // 主持裁決（可見的臨時 lead，用較強模型）
     let result: WarRoomResult | null = null;
     if (workers.size < MAX_WORKERS) {
-      const lead = createWorker("\u{1F3DB}主持", leadModel, "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+      const lead = createWorker("\u{1F3DB}主持", leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true }, accountId);
       lead.autoApproveMode = "safe";
       created.push(lead);
       await waitForWarroomWarmup(1_200, deadlineAt);
       const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), warroomTurnTimeout(timeoutMs, deadlineAt));
-      costMicros += warroomEventCost(ev);
+      costMicros += warroomEventCost(provider, ev);
       result = parseWarroomResult(warroomEventText(ev));
       if (result && !result.structured) { // 議會裁決：格式重試一次就好、有上限
         const retry = await warroomSend(lead, t("上一則沒有照 <warroom_result>{...}</warroom_result> 的 JSON 格式輸出。請只重輸出那段結構化 JSON，不要多寫任何字。"), warroomTurnTimeout(timeoutMs, deadlineAt));
-        costMicros += warroomEventCost(retry);
+        costMicros += warroomEventCost(provider, retry);
         const retried = parseWarroomResult(warroomEventText(retry));
         if (retried?.structured) result = retried;
       }
     }
     if (!result) result = parseWarroomResult(debate) ?? { verdict: debate, consensus: [], disputes: [], actions: [], metrics: [], charts: [], structured: false };
-    result.costUsd = costMicros / 1_000_000;
+    if (provider === "claude") result.costUsd = costMicros / 1_000_000;
     completed = true;
     return result;
   } finally {
@@ -5939,11 +5941,11 @@ function saveWarroomReport(topic: string, difficulty: WarRoomDifficulty, result:
 }
 
 // 難度自動分級：用便宜模型快速判斷 simple/medium/hard，讓簡單題別浪費強模型（省 token）。
-async function triageDifficulty(topic: string, workspacePath: string): Promise<WarRoomDifficulty> {
+async function triageDifficulty(topic: string, workspacePath: string, provider: ProviderId, homeDir: string): Promise<WarRoomDifficulty> {
   try {
-    const { text } = await runDetachedTurn("claude", workspacePath, "haiku", undefined, null,
+    const { text } = await runDetachedTurn(provider, workspacePath, warroomModels(provider, "simple").peer, undefined, null,
       t("判斷這個討論主題的難度，只回一個英文單詞：simple（常識/簡單）、medium（需要一些分析）、hard（架構/專業/多方權衡）。規則：只要主題涉及「即時資訊」（今日行情、天氣、新聞、現價…需要上網查證的），至少回 medium，不可回 simple——因為查證需要較可靠的模型執行。不要多寫。\n主題：{topic}", { topic }),
-      30_000, { kind: "no_tools" });
+      30_000, { kind: "no_tools" }, homeDir);
     const lowered = text.toLowerCase();
     if (lowered.includes("hard")) return "hard";
     if (lowered.includes("simple")) return "simple";
@@ -5963,24 +5965,31 @@ function postToHost(hostWorkerId: string | null, message: string): void {
 }
 
 app.post("/api/warroom", async (req, res) => {
-  if (!providerReady("claude")) {
-    res.status(503).json({ error: "claude_not_authenticated", auth: authStates.claude });
-    return;
-  }
   const topic = String(req.body?.topic ?? "").trim();
   if (!topic) { res.status(400).json({ error: t("請提供討論主題") }); return; }
   const requested = String(req.body?.difficulty);
   const hostWorkerId = typeof req.body?.hostWorkerId === "string" ? req.body.hostWorkerId : null;
+  const host = hostWorkerId ? workers.get(hostWorkerId) : null;
+  if (!host) { res.status(400).json({ error: t("請從目前 NPC 開啟作戰室") }); return; }
   let workspacePath: string;
   try { workspacePath = normalizeWorkspacePath(req.body?.workspacePath ?? config.targetRepoPath); }
   catch { workspacePath = config.targetRepoPath; }
+  if (!sameWorkspacePath(host.runner.workspacePath, workspacePath)) {
+    res.status(400).json({ error: t("作戰室必須使用目前 NPC 的工作區") });
+    return;
+  }
+  const provider = host.runner.provider;
+  if (!workerProviderReady(host)) {
+    res.status(503).json({ error: `${provider}_not_authenticated`, auth: workerAuthState(host) });
+    return;
+  }
   // "auto"（或沒指定）→ 自動分級；指定 simple/medium/hard 就照指定。
   const difficulty: WarRoomDifficulty = ["simple", "medium", "hard"].includes(requested)
     ? (requested as WarRoomDifficulty)
-    : await triageDifficulty(topic, workspacePath);
+    : await triageDifficulty(topic, workspacePath, provider, homeForWorker(host));
   const customStances = sanitizeCustomStances(req.body?.stances);
   try {
-    const result = await runWarroom(topic, difficulty, workspacePath, customStances);
+    const result = await runWarroom(topic, difficulty, workspacePath, provider, host.accountId, customStances);
     const reportPath = saveWarroomReport(topic, difficulty, result, workspacePath); // 自動存檔（人不在也拿得到）
     // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
     postToHost(hostWorkerId, formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath));

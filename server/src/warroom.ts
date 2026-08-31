@@ -1,5 +1,6 @@
 import { collaborationText } from "./collaboration.js";
 import { t } from "./i18n.js";
+import type { ProviderId } from "./providers/types.js";
 
 // 作戰室（War Room）＝一場「有真辯論、依難度配模型、結論收斂回主控」的顧問議會。
 // 這個檔只放「純邏輯」：難度分級 → 模型選擇、各輪提示（表態→反駁）、以及主持最終裁決的
@@ -15,9 +16,16 @@ export function isEphemeralWorkerName(name: string): boolean {
   return name.startsWith("🏛") || name.startsWith("🔍");
 }
 
-// 依難度配模型：簡單用便宜、難的用強。這是議會裁決「事中省 token、只在難處花貴」的落地。
-// peers 用中階、lead（最終裁決，最重要）用高階；simple 全便宜。
-export function warroomModels(difficulty: WarRoomDifficulty): { peer: string; lead: string } {
+// 依難度配模型：簡單用便宜、難的用強。作戰室必須沿用召集 NPC 的 provider，
+// 才不會在 Codex 對話裡暗中另開 Claude 用量。peers 用中階、lead（最終裁決）用高階。
+export function warroomModels(provider: ProviderId, difficulty: WarRoomDifficulty): { peer: string; lead: string } {
+  if (provider === "codex") {
+    switch (difficulty) {
+      case "hard": return { peer: "gpt-5.6-terra", lead: "gpt-5.6-sol" };
+      case "medium": return { peer: "gpt-5.6-luna", lead: "gpt-5.6-terra" };
+      default: return { peer: "gpt-5.6-luna", lead: "gpt-5.6-luna" };
+    }
+  }
   switch (difficulty) {
     case "hard": return { peer: "sonnet", lead: "opus" };
     case "medium": return { peer: "haiku", lead: "sonnet" };

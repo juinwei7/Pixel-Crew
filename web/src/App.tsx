@@ -198,7 +198,7 @@ export function App() {
   const [newWorkerAccountId, setNewWorkerAccountId] = useState<string | null>(null);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  // 快速圓桌＝目前 NPC 單回合模擬多視角；作戰室＝2–4 個短命 Claude 同儕真的辯論。
+  // 快速圓桌＝目前 NPC 單回合模擬多視角；作戰室＝2–4 個跟隨目前 provider 的短命同儕真的辯論。
   // 兩者刻意分成不同入口，讓時間、Provider 與用量預期不會混在一起。
   const [discussionMode, setDiscussionMode] = useState<DiscussionMode>(null);
   // 目前正在「開作戰室」的 NPC id 清單，拿來在畫面上讓那位 NPC 冒出討論中的對話泡
@@ -1269,7 +1269,7 @@ export function App() {
             type="button"
             className={`composer-roundtable-toggle composer-roundtable-toggle--warroom${discussionMode === "warroom" ? " is-active" : ""}`}
             aria-pressed={discussionMode === "warroom"}
-            title={t("作戰室：召集 2–4 位臨時 Claude NPC，進行 1–2 輪辯論再裁決；約需數分鐘並使用 Claude 用量")}
+            title={t("作戰室：召集 2–4 位與目前 NPC 相同 LLM 的臨時同儕，進行 1–2 輪辯論再裁決；約需數分鐘並使用該 LLM 用量")}
             onClick={() => setDiscussionMode((mode) => toggleDiscussionMode(mode, "warroom"))}
           >{t("🏛️ 作戰室")}{discussionMode === "warroom" ? t("・開") : ""}</button>
           <div className="composer-roundtable-more" ref={roundtableMenuRef}>

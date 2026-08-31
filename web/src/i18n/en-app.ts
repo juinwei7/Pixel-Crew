@@ -99,7 +99,7 @@ export const enApp: Record<string, string> = {
   "執行": "Run",
   "快速圓桌：由目前 NPC 單回合模擬 2–4 個觀點並直接給結論；不會啟動其他 Agent": "Quick Roundtable: the current NPC simulates 2–4 viewpoints in one turn and gives a conclusion; it does not start other agents",
   "🗣️ 快速圓桌": "🗣️ Quick Roundtable",
-  "作戰室：召集 2–4 位臨時 Claude NPC，進行 1–2 輪辯論再裁決；約需數分鐘並使用 Claude 用量": "War Room: convenes 2–4 temporary Claude NPCs for 1–2 debate rounds and a verdict; takes a few minutes and uses Claude usage",
+  "作戰室：召集 2–4 位與目前 NPC 相同 LLM 的臨時同儕，進行 1–2 輪辯論再裁決；約需數分鐘並使用該 LLM 用量": "War Room: convenes 2–4 temporary peers using the current NPC's LLM for 1–2 debate rounds and a verdict; takes a few minutes and uses that LLM's usage",
   "🏛️ 作戰室": "🏛️ War Room",
   "・開": "· On",
   "自訂作戰室角色（空白＝依難度自動配）": "Customize War Room roles (blank = auto-assigned by difficulty)",
