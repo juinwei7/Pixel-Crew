@@ -69,7 +69,7 @@
       "description": "Turn several Claude Code and Codex sessions into visible NPCs in one pixel office, and let them form departments that collaborate. Local-first, no API key, MIT licensed.",
       "inLanguage": "en",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-28",
+      "dateModified": "2026-09-01",
       "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
       "about": { "@id": "https://pixelcrew.weibuilds.com/#software" },
       "primaryImageOfPage": {
@@ -88,7 +88,7 @@
       "softwareVersion": "2.0.1",
       "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-28",
+      "dateModified": "2026-09-01",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
       "softwareRequirements": "macOS, Windows 10 22H2 or later, or Linux; Claude Code or Codex CLI",
@@ -116,7 +116,7 @@
   <nav class="nav">
     <span class="nav-logo"><i></i>PIXEL CREW</span>
     <div class="nav-links">
-      <a href="#whats-new">What's new in 2.0.0</a>
+      <a href="#whats-new">Updates since Aug 28</a>
       <a href="#departments">Departments</a>
       <a href="#features">Product tour</a>
       <a href="#updates">Release notes</a>
@@ -167,35 +167,35 @@
   </div>
 </header>
 
-<!-- ============================== WHAT'S NEW IN 2.0.0 ============================== -->
+<!-- ============================== DEVELOPMENT UPDATES SINCE AUG 28 ============================== -->
 <section class="launch wrap" id="whats-new">
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">WHAT'S NEW <i>·</i> TEAM COLLABORATION</span>
-        <h2>2.0.0 lets departments pick up work and hand it off on their own.</h2>
-        <p>This isn't a few new buttons — it's a whole layer of delegation. Hand a goal to a department and its lead will find an expert to consult, ask someone to review, or run a full Mission — every step still stops where you can see it and approve it.</p>
+        <span class="eyebrow">IN DEVELOPMENT <i>·</i> SINCE 2026.08.28</span>
+        <h2>Put accounts, goals, and long AI output into a more dependable workbench.</h2>
+        <p>Development since August 28 focuses on the work you do every day: safely assign distinct logins to distinct NPCs, keep a Codex thread pointed at a concrete objective, compare reports in a proper Focus workbench, and make the local service and Windows launch less likely to get stuck.</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.0.0</span>
-        <time class="launch-date" datetime="2026-07-22">2026.07.22</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.0">Full release notes ↗</a>
+        <span class="launch-version">DEV</span>
+        <time class="launch-date" datetime="2026-09-01">2026.09.01</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">View in-development changes ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / DEPARTMENTS</span><b>Create a department, AI drafts the roles</b><p>Fill in a purpose, headcount, and provider; AI drafts complementary roles and personas, you pick a lead, and the department is created with the rest of the NPCs in one click.</p></article>
-      <article class="upgrade-card"><span class="index">02 / HANDOFF</span><b>The lead picks how to collaborate</b><p>You only write a goal and acceptance criteria; the lead decides whether to run Quick Consult, Quick Review, or a full Mission.</p></article>
-      <article class="upgrade-card"><span class="index">03 / CONSULT &amp; REVIEW</span><b>Two-step, read-only collaboration</b><p>An expert NPC advises or reviews existing work, and the lead executes and finalizes it — entirely read-only, never touching your files.</p></article>
-      <article class="upgrade-card"><span class="index">04 / MISSION</span><b>A full 2-to-5-step task chain</b><p>Always starts with an execute step; every review step is done by a different NPC; failed reviews get up to two automatic correction rounds.</p></article>
-      <article class="upgrade-card"><span class="index">05 / GUARDRAILS</span><b>Dangerous actions always wait for you</b><p>No mode ever auto-commits, pushes, merges, tags, or releases, and none of them touch your authentication.</p></article>
-      <article class="upgrade-card"><span class="index">06 / VISIBILITY</span><b>Only real blockers interrupt you</b><p>A plan awaiting approval, an inconclusive review, a used-up correction budget, a failed step, or a member going offline — those five cases stop for you; everything else hands off automatically.</p></article>
+      <article class="upgrade-card"><span class="index">01 / ACCOUNTS</span><b>One NPC, an explicitly chosen login</b><p>Create named Claude Code or Codex accounts, each with its own private CLI home and sign-in state. Choose one while creating an NPC; an NPC with native history must be explicitly cleared before its account can change, so a thread is never discarded silently.</p></article>
+      <article class="upgrade-card"><span class="index">02 / CODEX GOALS</span><b>Keep the objective in the thread with /goal</b><p>Use <code>/goal &lt;objective&gt;</code> to set it, <code>/goal</code> to inspect it, and <code>/goal clear</code> to remove it. <code>/clear</code>, <code>/new</code>, <code>/compact</code>, and <code>/review</code> are surfaced clearly in the same Codex command UI.</p></article>
+      <article class="upgrade-card"><span class="index">03 / FOCUS WORKBENCH</span><b>Compare the difference in up to four panes</b><p>Split Focus Reader into up to four independently selected NPC panes; use <code>Alt+[</code> / <code>Alt+]</code> to move focus. Studios, model context, search, pins, copy, and Markdown export stay in the reading flow.</p></article>
+      <article class="upgrade-card"><span class="index">04 / STUDIOS</span><b>Change workspaces without losing your place</b><p>The collapsible Studio rail remembers the last NPC read in each local workspace and switches quickly with <code>Alt+1</code>–<code>Alt+9</code>. Branch, commit, dirty-file, and ahead/behind details are read-only: never fetch, checkout, commit, or push.</p></article>
+      <article class="upgrade-card"><span class="index">05 / WINDOWS</span><b>Launch in the background, keep control of the service</b><p>Windows now starts hidden through <code>start-pixel-crew.vbs</code>, without a lingering console. The tray can open, restart, stop, or show logs; a failed launch leaves diagnostics locally instead of losing them with the window.</p></article>
+      <article class="upgrade-card"><span class="index">06 / RESILIENCE</span><b>Harden the local details that tend to get stuck</b><p>Planned restarts, stalled background activity, deferred selection dialogs, and screenshot-browser failures have been hardened. Remote-share passcodes and screenshot navigation URLs also receive stricter security handling.</p></article>
     </div>
 
-    <div class="proof-strip" aria-label="Pixel Crew departments and collaboration UI">
-      <figure class="proof"><div class="proof-media"><img src="../assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="Create-department dialog: enter the department's purpose, headcount, and provider; AI drafts a list of complementary roles and personas for the user to pick a lead from"></div><figcaption>DEPARTMENT — AI drafts complementary roles</figcaption></figure>
-      <figure class="proof"><div class="proof-media"><img src="../assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="Hand-to-department dialog: enter a task goal and one acceptance criterion per line, then confirm to hand it to the department for the lead to route automatically"></div><figcaption>MISSION — write a goal, the lead routes it</figcaption></figure>
-      <figure class="proof"><div class="proof-media"><img src="../assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="A needs-attention state: a Mission has stopped because a review result was inconclusive, waiting for the user to decide the next step"></div><figcaption>NEEDS ATTENTION — only blockers interrupt you</figcaption></figure>
+    <div class="proof-strip" aria-label="Pixel Crew existing feature UI">
+      <figure class="proof"><div class="proof-media"><img src="../assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="Create-department dialog: enter the department's purpose, headcount, and provider; AI drafts a list of complementary roles and personas for the user to pick a lead from"></div><figcaption>DEPARTMENTS — existing collaboration flow</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="../assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="Hand-to-department dialog: enter a task goal and one acceptance criterion per line, then confirm to hand it to the department for the lead to route automatically"></div><figcaption>MISSION — existing task routing</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="../assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="A needs-attention state: a Mission has stopped because a review result was inconclusive, waiting for the user to decide the next step"></div><figcaption>NEEDS ATTENTION — only real blockers interrupt you</figcaption></figure>
     </div>
   </div>
 </section>
@@ -475,9 +475,19 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
+          <span class="release-version">In development</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+          <span class="release-current">SOURCE</span>
+        </div>
+        <h3>Account isolation, Codex goals, and a Focus workbench</h3>
+        <p>Source work since Aug 28 adds per-NPC Claude Code/Codex accounts, <code>/goal</code> thread objectives, and up to four Focus Reader panes; it also hardens the Windows background service, restart lifecycle, and remote/screenshot safety. This work is in development; the formal download remains v2.0.1 below.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">View in-development changes ↗</a>
+      </article>
+      <article class="release-card release-card--latest">
+        <div class="release-meta">
           <span class="release-version">v2.0.1</span>
           <time class="release-date" datetime="2026-07-28">2026.07.28</time>
-          <span class="release-current">LATEST</span>
+          <span class="release-current">LATEST RELEASE</span>
         </div>
         <h3>Boss task log and cross-department orchestration arrive</h3>
         <p>Assign work directly from a persistent Boss Desk; the decision model builds a dependency graph across departments and returns one consolidated report. Also adds mid-session model switching, live MCP config sync, and clearer diagnostics when Claude/Codex login detection disagrees with reality.</p>

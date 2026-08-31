@@ -69,7 +69,7 @@
       "description": "把多個 Claude Code 與 Codex session 變成像素辦公室裡看得見的 NPC，並讓它們組成部門互相協作。Local-first、不需要 API key、MIT 開源。",
       "inLanguage": "zh-Hant",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-28",
+      "dateModified": "2026-09-01",
       "isPartOf": { "@id": "https://pixelcrew.weibuilds.com/#website" },
       "about": { "@id": "https://pixelcrew.weibuilds.com/#software" },
       "primaryImageOfPage": {
@@ -88,7 +88,7 @@
       "softwareVersion": "2.0.1",
       "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1",
       "datePublished": "2026-07-17",
-      "dateModified": "2026-07-28",
+      "dateModified": "2026-09-01",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Windows, Linux",
       "softwareRequirements": "macOS, Windows 10 22H2 or later, or Linux; Claude Code or Codex CLI",
@@ -116,7 +116,7 @@
   <nav class="nav">
     <span class="nav-logo"><i></i>PIXEL CREW</span>
     <div class="nav-links">
-      <a href="#whats-new">2.0.0 新功能</a>
+      <a href="#whats-new">8/28 以後更新</a>
       <a href="#departments">部門與協作</a>
       <a href="#features">產品導覽</a>
       <a href="#updates">版本更新</a>
@@ -166,35 +166,35 @@
   </div>
 </header>
 
-<!-- ============================== 2.0.0 新功能 ============================== -->
+<!-- ============================== 8/28 以後的開發更新 ============================== -->
 <section class="launch wrap" id="whats-new">
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">WHAT'S NEW <i>·</i> TEAM COLLABORATION</span>
-        <h2>2.0.0 讓部門自己接工作、自己交接。</h2>
-        <p>這次不是多幾個按鈕，而是多了一整層分工機制：把目標交給一個部門，部門主管會自己找專家 Consult、請人 Review，或啟動一段完整的 Mission——每一步仍然停在你能看見、能核准的地方。</p>
+        <span class="eyebrow">IN DEVELOPMENT <i>·</i> SINCE 2026.08.28</span>
+        <h2>把帳號、目標與長篇 AI 產出，收進更可靠的工作台。</h2>
+        <p>8 月 28 日以後的開發更新，重點放在真正每天會遇到的事情：讓不同登入帳號安全地分給不同 NPC、在 Codex thread 中維持明確目標、把 Focus Reader 變成可比較多份報告的工作台，並讓本機服務與 Windows 啟動更不容易卡住。</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.0.0</span>
-        <time class="launch-date" datetime="2026-07-22">2026.07.22</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.0">完整發布內容 ↗</a>
+        <span class="launch-version">DEV</span>
+        <time class="launch-date" datetime="2026-09-01">2026.09.01</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">查看開發中變更 ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / DEPARTMENTS</span><b>建立部門，AI 幫你草擬分工</b><p>填目的、人數與 provider，AI 自動草擬互補的角色與 persona，你只要選出一位部門主管，一鍵建立部門與其餘 NPC。</p></article>
-      <article class="upgrade-card"><span class="index">02 / HANDOFF</span><b>主管自己選協作方式</b><p>交付工作時你只需要寫目標與驗收標準；主管會自己決定該用 Quick Consult、Quick Review，還是啟動一段 Mission。</p></article>
-      <article class="upgrade-card"><span class="index">03 / CONSULT &amp; REVIEW</span><b>兩步搞定的唯讀協作</b><p>找專家給建議或審查既有成果，主管負責執行與收尾；全程唯讀，不會動到你的檔案。</p></article>
-      <article class="upgrade-card"><span class="index">04 / MISSION</span><b>2 到 5 步的完整任務鏈</b><p>一定以執行開始，每個審查步驟一定換一位 NPC 進行；審查沒過，最多自動修正兩輪。</p></article>
-      <article class="upgrade-card"><span class="index">05 / GUARDRAILS</span><b>危險動作永遠留給你</b><p>無論哪種模式，都不會自動 commit、push、merge、tag 或建立 release，也不會碰任何登入認證。</p></article>
-      <article class="upgrade-card"><span class="index">06 / VISIBILITY</span><b>卡住的地方會直接跳出來</b><p>計畫待核准、審查結果不明確、修正輪數用完、步驟失敗、成員離線——只有這五種情況會停下來喊你，其餘全自動交接。</p></article>
+      <article class="upgrade-card"><span class="index">01 / ACCOUNTS</span><b>一個 NPC，一個可指定的登入身分</b><p>可建立具名稱的 Claude Code／Codex 帳號，各自使用私有 CLI home 與登入狀態。建立 NPC 時選擇帳號；已有原生對話的 NPC 必須明確清除後才能換帳號，不會默默丟掉 thread。</p></article>
+      <article class="upgrade-card"><span class="index">02 / CODEX GOALS</span><b>用 /goal 把目標留在 thread 裡</b><p><code>/goal &lt;目標&gt;</code> 設定、<code>/goal</code> 查看、<code>/goal clear</code> 清除。<code>/clear</code>、<code>/new</code>、<code>/compact</code>、<code>/review</code> 也會在同一個 Codex 指令面板中清楚呈現。</p></article>
+      <article class="upgrade-card"><span class="index">03 / FOCUS WORKBENCH</span><b>最多四窗格，並排讀出差異</b><p>Focus Reader 可以分割成最多四個獨立選擇 NPC 的窗格；按 <code>Alt+[</code>／<code>Alt+]</code> 移動焦點。工作室、模型、搜尋、釘選、複製與 Markdown 匯出都留在閱讀流程內。</p></article>
+      <article class="upgrade-card"><span class="index">04 / STUDIOS</span><b>切工作資料夾，不打斷閱讀</b><p>可收合的工作室欄保留每個本機 workspace 最後看的 NPC，並以 <code>Alt+1</code>–<code>Alt+9</code> 快速切換。branch、commit、dirty files 與 ahead/behind 全部是只讀摘要，絕不 fetch、checkout、commit 或 push。</p></article>
+      <article class="upgrade-card"><span class="index">05 / WINDOWS</span><b>背景啟動，仍能隨時掌握服務</b><p>Windows 版預設由 <code>start-pixel-crew.vbs</code> 隱藏啟動，不留黑色主控台；系統匣可開啟、重啟、停止和查看 logs。若啟動失敗，診斷會留在本機而不是消失在視窗裡。</p></article>
+      <article class="upgrade-card"><span class="index">06 / RESILIENCE</span><b>把容易卡住的本機細節補強</b><p>計畫性重啟、卡住的背景活動、延後顯示的選擇視窗與截圖瀏覽器都經過加固；遠端分享的通行碼，以及截圖前往的 URL，也增加了更嚴格的安全處理。</p></article>
     </div>
 
-    <div class="proof-strip" aria-label="Pixel Crew 部門與協作實際介面">
-      <figure class="proof"><div class="proof-media"><img src="assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="建立部門對話框：填入部門目的、成員人數與 provider，AI 草擬出互補的角色與 persona 清單，供使用者選定一位部門主管"></div><figcaption>DEPARTMENT — AI 幫你草擬互補角色</figcaption></figure>
-      <figure class="proof"><div class="proof-media"><img src="assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="交給部門對話框：填入任務目標與每行一條的驗收標準，按下確認並交給部門後由主管自動路由"></div><figcaption>MISSION — 只填目標，主管自己路由</figcaption></figure>
-      <figure class="proof"><div class="proof-media"><img src="assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="需要你決定的狀態畫面：Mission 因為審查結果不明確而停下，等待使用者確認下一步"></div><figcaption>NEEDS ATTENTION — 卡住才會喊你</figcaption></figure>
+    <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
+      <figure class="proof"><div class="proof-media"><img src="assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="建立部門對話框：填入部門目的、成員人數與 provider，AI 草擬出互補的角色與 persona 清單，供使用者選定一位部門主管"></div><figcaption>DEPARTMENTS — 既有協作流程</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="交給部門對話框：填入任務目標與每行一條的驗收標準，按下確認並交給部門後由主管自動路由"></div><figcaption>MISSION — 既有任務路由</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="需要你決定的狀態畫面：Mission 因為審查結果不明確而停下，等待使用者確認下一步"></div><figcaption>NEEDS ATTENTION — 只有真正卡住才打斷你</figcaption></figure>
     </div>
   </div>
 </section>
@@ -467,9 +467,19 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
+          <span class="release-version">開發中</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+          <span class="release-current">SOURCE</span>
+        </div>
+        <h3>帳號隔離、Codex 目標與 Focus 工作台</h3>
+        <p>8/28 以後的 source 更新加入每位 NPC 可指定的 Claude Code／Codex 帳號、<code>/goal</code> thread 目標與最多四窗格的 Focus Reader；同時補強 Windows 背景服務、重啟生命週期與遠端／截圖安全處理。這些內容仍在開發中，正式下載維持以下 v2.0.1。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">查看開發中變更 ↗</a>
+      </article>
+      <article class="release-card release-card--latest">
+        <div class="release-meta">
           <span class="release-version">v2.0.1</span>
           <time class="release-date" datetime="2026-07-28">2026.07.28</time>
-          <span class="release-current">LATEST</span>
+          <span class="release-current">LATEST RELEASE</span>
         </div>
         <h3>老闆任務日誌與跨部門編排上線</h3>
         <p>從持久化的 Boss Desk 直接交辦工作，決策模型會建立跨部門依賴圖並整合成一份報告；同時新增 session 中模型切換、即時 MCP 設定同步，並修正跨機器登入偵測缺少診斷資訊的問題。</p>
