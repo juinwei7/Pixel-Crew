@@ -30,6 +30,9 @@ export const enServerC: Record<string, string> = {
 
   // codexCapabilities.ts
   "讀取失敗": "Failed to read",
+  "指令名稱不能空白": "Command name cannot be blank",
+  "指令名稱只能用英數字、- 或 _，且需以字母開頭": "Command name can only use letters, digits, - or _, and must start with a letter",
+  "這個指令已經存在": "This command already exists",
 
   // platform/commandLine.ts
   "MCP 指令的引號沒有成對": "MCP command has unmatched quotes",
@@ -74,6 +77,10 @@ export const enServerC: Record<string, string> = {
   // codexRunner.ts
   "已建立新的 Codex 對話；後續工作不會沿用先前上下文。": "A new Codex conversation has been created; subsequent work won't carry over the previous context.",
   "Codex 對話內容已壓縮。": "The Codex conversation has been compacted.",
+  "已設定目標：{objective}": "Goal set: {objective}",
+  "已清除目標。": "Goal cleared.",
+  "目前沒有設定目標。": "No goal is currently set.",
+  "目前目標：{objective}（狀態：{status}）": "Current goal: {objective} (status: {status})",
   "計畫\n{text}": "Plan\n{text}",
   "唯讀模式已拒絕指令": "Read-only mode rejected the command",
   "唯讀模式已拒絕檔案變更": "Read-only mode rejected the file change",

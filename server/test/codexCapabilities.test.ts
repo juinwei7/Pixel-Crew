@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, mergeCodexMcpConfig, parseCodexMcpList, parseCodexMcpServerStatus, parseCodexModels } from "../src/codexCapabilities.js";
+import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, isValidCodexCommandName, mergeCodexMcpConfig, parseCodexMcpList, parseCodexMcpServerStatus, parseCodexModels } from "../src/codexCapabilities.js";
 import { LocalStore } from "../src/store.js";
 
 test("seeds Codex native slash commands before the first live refresh", () => {
   const registry = new CodexCapabilityRegistry(() => {}, "/repo");
 
   assert.deepEqual(registry.getState().slashCommands, DEFAULT_CODEX_SLASH_COMMANDS);
-  assert.deepEqual(registry.getState().slashCommands, ["clear", "compact", "new", "review"]);
+  assert.deepEqual(registry.getState().slashCommands, ["clear", "compact", "new", "review", "goal"]);
 });
 
 test("persists Codex command seeds before any conversation and reloads them in a new session", () => {
@@ -210,6 +210,74 @@ test("Codex config refresh preserves a tool catalog merged by an in-session relo
     toolsStatus: "available",
     tools: [{ name: "list_pending", readOnlyHint: true }],
   }]);
+});
+
+test("isValidCodexCommandName enforces charset, length, and rejects duplicates", () => {
+  assert.equal(isValidCodexCommandName("goal"), null);
+  assert.equal(isValidCodexCommandName("go-al_2"), null);
+  assert.match(isValidCodexCommandName("") ?? "", /空白/);
+  assert.match(isValidCodexCommandName("   ") ?? "", /空白/);
+  assert.match(isValidCodexCommandName("1goal") ?? "", /字母開頭/);
+  assert.match(isValidCodexCommandName("go al") ?? "", /字母開頭|英數字/);
+  assert.match(isValidCodexCommandName("a".repeat(41)) ?? "", /字母開頭|英數字/);
+  assert.match(isValidCodexCommandName("clear", ["clear", "compact"]) ?? "", /已經存在/);
+  // Case-insensitive duplicate check.
+  assert.match(isValidCodexCommandName("CLEAR", ["clear"]) ?? "", /已經存在/);
+  // "goal" now dispatches for real (see codexRunner.ts) and is a default —
+  // the route rejects re-adding it as a "custom" (plain-text) command.
+  assert.match(isValidCodexCommandName("goal", DEFAULT_CODEX_SLASH_COMMANDS) ?? "", /已經存在/);
+});
+
+test("CodexCapabilityRegistry merges user-added custom commands into slashCommands and exposes them separately", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-codex-custom-commands-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    store.addCustomCodexSlashCommand("plan");
+    const registry = new CodexCapabilityRegistry(() => {}, "/repo", store);
+
+    assert.deepEqual(registry.getState().customSlashCommands, ["plan"]);
+    assert.ok(registry.getState().slashCommands.includes("plan"));
+    assert.deepEqual(registry.getState().slashCommands, ["plan", ...DEFAULT_CODEX_SLASH_COMMANDS]);
+    // Constructing a second registry must not leak a user command into the
+    // portable built-in seed.
+    assert.deepEqual(store.loadSlashCommandSeed("codex"), [...DEFAULT_CODEX_SLASH_COMMANDS]);
+
+    let broadcastCount = 0;
+    let lastState: ReturnType<CodexCapabilityRegistry["getState"]> | null = null;
+    const live = new CodexCapabilityRegistry((state) => { broadcastCount += 1; lastState = state; }, "/repo-b", store);
+    live.setCustomSlashCommands(["plan", "todo"]);
+
+    assert.equal(broadcastCount, 1);
+    assert.deepEqual(lastState?.customSlashCommands, ["plan", "todo"]);
+    assert.ok(lastState?.slashCommands.includes("todo"));
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("store round-trips custom Codex slash commands: add, load, remove", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-custom-command-store-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    assert.deepEqual(store.loadCustomCodexSlashCommands(), []);
+    store.addCustomCodexSlashCommand("todo");
+    store.addCustomCodexSlashCommand("plan");
+    assert.deepEqual(store.loadCustomCodexSlashCommands(), ["todo", "plan"]);
+    // Adding the same name again must not duplicate it.
+    store.addCustomCodexSlashCommand("todo");
+    assert.deepEqual(store.loadCustomCodexSlashCommands(), ["todo", "plan"]);
+    // Simulate a registry constructed while the command existed. Previous
+    // releases wrote that merged list into the generic Codex seed; removing
+    // the custom command must clean the stale derived entry as well.
+    store.saveSlashCommandSeed(["todo", "plan", ...DEFAULT_CODEX_SLASH_COMMANDS], "codex");
+    store.removeCustomCodexSlashCommand("todo");
+    assert.deepEqual(store.loadCustomCodexSlashCommands(), ["plan"]);
+    assert.deepEqual(store.loadSlashCommandSeed("codex"), ["plan", ...DEFAULT_CODEX_SLASH_COMMANDS]);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("keeps visible Codex models in catalog priority order", () => {

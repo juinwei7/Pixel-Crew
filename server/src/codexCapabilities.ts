@@ -19,12 +19,29 @@ const FALLBACK_MODELS: ModelOption[] = [
 // not advertise TUI-only controls (theme, keymap, model picker, etc.): sending
 // those through turn/start would incorrectly treat them as ordinary prompts.
 // Repo workflows remain separate (`$skill`) and come from `.agents`.
+// "goal" dispatches through the app-server's thread/goal/{set,clear,get} —
+// see parseCodexNativeCommand/runNativeCommand in codexRunner.ts.
 export const DEFAULT_CODEX_SLASH_COMMANDS = [
-  "clear", "compact", "new", "review",
+  "clear", "compact", "new", "review", "goal",
 ] as const;
 
 function mergeSlashCommands(...groups: ReadonlyArray<readonly string[]>): string[] {
   return [...new Set(groups.flatMap((group) => [...group]).filter(Boolean))];
+}
+
+export const MAX_CUSTOM_CODEX_SLASH_COMMANDS = 30;
+const CODEX_COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/i;
+
+// Pure so the character-set/length/duplicate rules are unit-testable without
+// touching the store. `existing` is whatever the command would be merged
+// against (default + seed lists) — rejecting a name already covered there
+// keeps the user-added list meaningfully distinct from the built-ins.
+export function isValidCodexCommandName(name: string, existing: ReadonlyArray<string> = []): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return t("指令名稱不能空白");
+  if (!CODEX_COMMAND_NAME_PATTERN.test(trimmed)) return t("指令名稱只能用英數字、- 或 _，且需以字母開頭");
+  if (existing.some((candidate) => candidate.toLowerCase() === trimmed.toLowerCase())) return t("這個指令已經存在");
+  return null;
 }
 
 export function parseCodexMcpList(stdout: string): McpServerState[] {
@@ -154,12 +171,19 @@ export class CodexCapabilityRegistry {
     private readonly store?: LocalStore,
     private readonly codexHome: string | null = null,
   ) {
-    const slashCommands = mergeSlashCommands(
+    const customCommands = store?.loadCustomCodexSlashCommands() ?? [];
+    // The portable seed is for Pixel Crew's built-ins only. Keep user-owned
+    // commands separate: otherwise constructing a registry while a custom
+    // command exists would copy it into the seed and make later removal
+    // ineffective after a restart.
+    const seedCommands = mergeSlashCommands(
       store?.loadSlashCommandSeed("codex") ?? [],
       DEFAULT_CODEX_SLASH_COMMANDS,
     );
+    const slashCommands = mergeSlashCommands(customCommands, seedCommands);
     this.state = {
       slashCommands,
+      customSlashCommands: customCommands,
       mcpServers: [],
       models: FALLBACK_MODELS,
       toolCount: null,
@@ -172,11 +196,26 @@ export class CodexCapabilityRegistry {
     };
     // Persist immediately, before any worker turn, so every later room/session
     // can bootstrap from the same provider-scoped seed.
-    store?.saveSlashCommandSeed(slashCommands, "codex");
+    store?.saveSlashCommandSeed(seedCommands, "codex");
   }
 
   getState(): CapabilityState {
     return this.state;
+  }
+
+  // Called whenever the global custom-command list changes (add/remove via
+  // the API) so every already-constructed per-workspace registry — not just
+  // the one the request happened to touch — republishes the update.
+  setCustomSlashCommands(customCommands: string[]): void {
+    this.publish({
+      ...this.state,
+      customSlashCommands: customCommands,
+      slashCommands: mergeSlashCommands(
+        customCommands,
+        this.store?.loadSlashCommandSeed("codex") ?? [],
+        DEFAULT_CODEX_SLASH_COMMANDS,
+      ),
+    });
   }
 
   async refresh(): Promise<void> {

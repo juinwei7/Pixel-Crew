@@ -6,6 +6,7 @@ export type FocusStudioWorker = {
   workspacePath: string;
   busy: boolean;
   needsAttention: boolean;
+  unread?: boolean;
 };
 
 export type FocusStudio = {
@@ -14,6 +15,7 @@ export type FocusStudio = {
   workerIds: string[];
   busyCount: number;
   attentionCount: number;
+  unreadCount: number;
 };
 
 export function buildFocusStudios(workspacePaths: string[], workers: FocusStudioWorker[]): FocusStudio[] {
@@ -26,6 +28,7 @@ export function buildFocusStudios(workspacePaths: string[], workers: FocusStudio
       workerIds: members.map((worker) => worker.id),
       busyCount: members.filter((worker) => worker.busy).length,
       attentionCount: members.filter((worker) => worker.needsAttention).length,
+      unreadCount: members.filter((worker) => worker.unread).length,
     };
   });
 }

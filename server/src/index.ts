@@ -30,7 +30,7 @@ import {
 } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
-import { buildCodexMcpAddArgs, CodexCapabilityRegistry } from "./codexCapabilities.js";
+import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, isValidCodexCommandName, MAX_CUSTOM_CODEX_SLASH_COMMANDS } from "./codexCapabilities.js";
 import { McpLoginTracker } from "./mcpLogin.js";
 import { LocalStore, type ProviderAccount, type PersistedWorker } from "./store.js";
 import { ClaudeAuthProvider } from "./providers/claudeAuth.js";
@@ -7210,6 +7210,39 @@ app.delete("/api/mcp/:name", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: (err.stderr || err.message || "").trim().slice(0, 500) });
   }
+});
+
+// Codex's app-server never reports its own slash-command catalog (unlike
+// Claude, which reports `slash_commands` live via a `system/init` event), so
+// DEFAULT_CODEX_SLASH_COMMANDS in codexCapabilities.ts always drifts behind
+// whatever Codex ships next. This lets users grow the list themselves without
+// a Pixel Crew release. The list is global (not per-workspace, matching
+// DEFAULT_CODEX_SLASH_COMMANDS's own scope), so every already-constructed
+// per-workspace registry must be told about the change, not just whichever
+// workspace happened to receive the request.
+app.post("/api/codex/slash-commands", (req, res) => {
+  const name = String(req.body?.name ?? "").trim();
+  const existing = [...store.loadSlashCommandSeed("codex"), ...DEFAULT_CODEX_SLASH_COMMANDS, ...store.loadCustomCodexSlashCommands()];
+  const error = isValidCodexCommandName(name, existing);
+  if (error) {
+    res.status(400).json({ error });
+    return;
+  }
+  if (store.loadCustomCodexSlashCommands().length >= MAX_CUSTOM_CODEX_SLASH_COMMANDS) {
+    res.status(400).json({ error: t("自訂指令數量已達上限（{max} 個）", { max: String(MAX_CUSTOM_CODEX_SLASH_COMMANDS) }) });
+    return;
+  }
+  store.addCustomCodexSlashCommand(name);
+  const commands = store.loadCustomCodexSlashCommands();
+  for (const registry of codexCapabilityRegistries.values()) registry.setCustomSlashCommands(commands);
+  res.json({ ok: true, commands });
+});
+
+app.delete("/api/codex/slash-commands/:name", (req, res) => {
+  store.removeCustomCodexSlashCommand(req.params.name);
+  const commands = store.loadCustomCodexSlashCommands();
+  for (const registry of codexCapabilityRegistries.values()) registry.setCustomSlashCommands(commands);
+  res.json({ ok: true, commands });
 });
 
 // `claude mcp login`/`codex mcp login` open the user's system browser and

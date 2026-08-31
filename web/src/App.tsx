@@ -17,6 +17,7 @@ import { DepartmentMissionDialog } from "./components/DepartmentMissionDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { DepartmentCreator } from "./components/DepartmentCreator";
 import { McpModal } from "./components/McpModal";
+import { CodexCommandsModal } from "./components/CodexCommandsModal";
 import { AccountsModal } from "./components/AccountsModal";
 import { OpsModal } from "./components/OpsModal";
 import { SquadModal } from "./components/SquadModal";
@@ -28,6 +29,7 @@ import { BackupModal } from "./components/BackupModal";
 import { BossTaskDesk } from "./components/BossTaskDesk";
 import { FocusControls } from "./components/FocusControls";
 import { FocusStudios } from "./components/FocusStudios";
+import { FocusPaneGrid } from "./components/FocusPaneGrid";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { OnboardingTour, hasSeenTour } from "./components/OnboardingTour";
@@ -38,7 +40,7 @@ import { parseMcpToolName } from "./mcpToolName";
 import { roundtablePrompt } from "./roundtablePrompt";
 import { apiRequest } from "./api";
 import { t } from "./i18n";
-import type { WorkerState } from "./types";
+import type { ApprovalDecision, WorkerState } from "./types";
 
 type WarRoomAction = { priority: "P1" | "P2" | "P3" | "P4"; title: string; how: string };
 type WarRoomDispute = { point: string; ruling: string };
@@ -146,8 +148,9 @@ function WarroomVerdictBody({ result }: { result: WarRoomResult }) {
   </>;
 }
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
-import { latestReadableTurnKey, workerAttention, workerFocusStatus } from "./crew";
+import { latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnread } from "./crew";
 import { buildFocusStudios, focusStudioWorkers, studioWorkerId } from "./focusStudios";
+import { addPane, createFocusPanes, MAX_FOCUS_PANES, removePane, setPaneWorker, type FocusPane } from "./focusPanes";
 import type { AutoApproveMode, ProviderId } from "./types";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
@@ -257,6 +260,7 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [codexCommandsModalOpen, setCodexCommandsModalOpen] = useState(false);
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [opsModalOpen, setOpsModalOpen] = useState(false);
   const [remoteModalOpen, setRemoteModalOpen] = useState(false);
@@ -282,6 +286,16 @@ export function App() {
   const taskFocusMode = preferences.taskFocusMode;
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
+  // Split-pane workbench state: which NPC each pane shows and which pane
+  // currently receives keyboard input / rail selections. Only meaningful
+  // while taskFocusMode is on; a single pane behaves exactly like the
+  // pre-split-pane single-worker reader.
+  const [focusWorkbench, setFocusWorkbench] = useState<{ panes: FocusPane[]; focusedPaneId: string }>(() => {
+    const panes = createFocusPanes(1);
+    return { panes, focusedPaneId: panes[0].id };
+  });
+  const focusPanes = focusWorkbench.panes;
+  const focusedPaneId = focusWorkbench.focusedPaneId;
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [composerHost, setComposerHost] = useState<HTMLDivElement | null>(null);
   const setComposerHostRef = useCallback((node: HTMLDivElement | null) => setComposerHost(node), []);
@@ -398,8 +412,9 @@ export function App() {
       workspacePath: worker.workspacePath,
       busy: worker.busy,
       needsAttention: attention === "approval" || attention === "error",
+      unread: worker.id !== activeId && workerHasUnread(worker, focusSeenTurns[worker.id] ?? undefined),
     };
-  })), [workerList, workspacePaths]);
+  })), [activeId, focusSeenTurns, workerList, workspacePaths]);
   const focusWorkspaceWorkers = useMemo(() => focusStudioWorkers(workerList, activeWorkspace), [activeWorkspace, workerList]);
   const focusStudioDepartmentGroups = useMemo(() => Object.values(departments).map((department) => ({
     department,
@@ -447,13 +462,61 @@ export function App() {
     setComposerFocusRequest((request) => request + 1);
   }, [preferences.focusStudioLastWorkerIds, setActiveId, updatePreferences, workers]);
 
+  // Assigning a worker to a pane always focuses that pane too — picking an
+  // NPC for pane 2 should let you type to it immediately, without a second
+  // click. With a single pane this degenerates to today's plain "select NPC".
+  const assignWorkerToPane = useCallback((paneId: string, workerId: string) => {
+    setFocusWorkbench((current) => ({ panes: setPaneWorker(current.panes, paneId, workerId), focusedPaneId: paneId }));
+    activateNpc(workerId);
+  }, [activateNpc]);
+
+  const focusPane = useCallback((paneId: string) => {
+    setFocusWorkbench((current) => (current.focusedPaneId === paneId ? current : { ...current, focusedPaneId: paneId }));
+    const worker = focusPanes.find((pane) => pane.id === paneId)?.workerId;
+    if (worker) activateNpc(worker);
+  }, [activateNpc, focusPanes]);
+
+  const addFocusPane = useCallback(() => {
+    setFocusWorkbench((current) => ({ ...current, panes: addPane(current.panes, MAX_FOCUS_PANES) }));
+  }, []);
+
+  const removeFocusPane = useCallback((paneId: string) => {
+    setFocusWorkbench((current) => {
+      const panes = removePane(current.panes, paneId);
+      const focusedPaneId = panes.some((pane) => pane.id === current.focusedPaneId) ? current.focusedPaneId : panes[0].id;
+      return { panes, focusedPaneId };
+    });
+  }, []);
+
+  const setFocusPaneLayout = useCallback((count: 1 | 2 | 3 | 4) => {
+    setFocusWorkbench((current) => {
+      const seeds = current.panes.map((pane) => pane.workerId);
+      const panes = createFocusPanes(count, seeds);
+      const previousIndex = Math.max(0, current.panes.findIndex((pane) => pane.id === current.focusedPaneId));
+      return { panes, focusedPaneId: panes[Math.min(previousIndex, panes.length - 1)].id };
+    });
+  }, []);
+
+  const cycleFocusPane = useCallback((direction: 1 | -1): boolean => {
+    if (focusPanes.length < 2) return false;
+    const index = focusPanes.findIndex((pane) => pane.id === focusedPaneId);
+    const next = focusPanes[(index + direction + focusPanes.length) % focusPanes.length];
+    focusPane(next.id);
+    return true;
+  }, [focusPane, focusPanes, focusedPaneId]);
+
+  const resolveTaskApproval = useCallback((approvalId: string, decision: ApprovalDecision) => {
+    const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
+    return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve(t("找不到需要核准的 NPC"));
+  }, [resolveApproval, workerList]);
+
   const selectFocusStudio = useCallback((workspacePath: string): boolean => {
     const studio = focusStudios.find((candidate) => candidate.workspacePath === workspacePath);
     const workerId = studio && studioWorkerId(studio, preferences.focusStudioLastWorkerIds[workspacePath]);
     if (!workerId) return false;
-    activateNpc(workerId);
+    assignWorkerToPane(focusedPaneId, workerId);
     return true;
-  }, [activateNpc, focusStudios, preferences.focusStudioLastWorkerIds]);
+  }, [assignWorkerToPane, focusStudios, focusedPaneId, preferences.focusStudioLastWorkerIds]);
 
   const notifySnapshots = useRef(new Map<string, WorkerSnapshot>());
   useEffect(() => {
@@ -552,8 +615,10 @@ export function App() {
   const enterTaskFocusMode = useCallback(() => {
     focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setFocusSeenTurns(Object.fromEntries(workerList.map((worker) => [worker.id, latestReadableTurnKey(worker)])));
+    const panes = createFocusPanes(preferences.focusPaneLayout, [activeId]);
+    setFocusWorkbench({ panes, focusedPaneId: panes[0].id });
     updatePreferences({ taskLogOpen: true, taskFocusMode: true });
-  }, [updatePreferences, workerList]);
+  }, [activeId, preferences.focusPaneLayout, updatePreferences, workerList]);
 
   const exitTaskFocusMode = useCallback(() => {
     setFocusUsageOpen(false);
@@ -564,11 +629,16 @@ export function App() {
     onCommandPalette: () => setCommandPaletteOpen(true),
     onShortcutsHelp: () => setShortcutsHelpOpen((open) => !open),
     onStudioShortcut: (index: number) => taskFocusMode ? selectFocusStudio(focusStudios[index]?.workspacePath ?? "") : false,
+    onPaneCycle: (direction: 1 | -1) => taskFocusMode && cycleFocusPane(direction),
     onToggleTaskLog: () => taskFocusMode
       ? exitTaskFocusMode()
       : updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
     onApproval: () => {
       if (!approvalWorker) return;
+      if (taskFocusMode) {
+        assignWorkerToPane(focusedPaneId, approvalWorker.id);
+        return;
+      }
       setActiveId(approvalWorker.id);
       setSelectedDepartmentId(null);
       setBossMissionDetailId(null);
@@ -578,7 +648,7 @@ export function App() {
       // These overlays already have their own Escape-to-close handling and can be
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
-      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || accountsModalOpen || backupModalOpen
+      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
         || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
       if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
@@ -597,7 +667,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, avatarWorkerId, backupModalOpen, accountsModalOpen, commandCenterOpen, commandPaletteOpen, departmentCreatorOpen, exitTaskFocusMode, focusStudios, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -624,11 +694,43 @@ export function App() {
     };
   }, [taskFocusMode]);
 
+  // A worker counts as "seen" once it's showing in any visible pane, not just
+  // the focused one — split view lets you watch a pane you're not typing into.
   useEffect(() => {
-    if (!taskFocusMode || !active) return;
-    const latestKey = latestReadableTurnKey(active);
-    setFocusSeenTurns((current) => current[active.id] === latestKey ? current : { ...current, [active.id]: latestKey });
-  }, [active, taskFocusMode]);
+    if (!taskFocusMode) return;
+    const assignedIds = focusPanes.map((pane) => pane.workerId).filter((id): id is string => Boolean(id));
+    if (assignedIds.length === 0) return;
+    setFocusSeenTurns((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const id of assignedIds) {
+        const worker = workers[id];
+        if (!worker) continue;
+        const latestKey = latestReadableTurnKey(worker);
+        if (next[id] !== latestKey) { next[id] = latestKey; changed = true; }
+      }
+      return changed ? next : current;
+    });
+  }, [focusPanes, taskFocusMode, workers]);
+
+  // Any pane add/remove/layout-switch persists as the next "enter focus mode" default.
+  useEffect(() => {
+    if (!taskFocusMode) return;
+    const count = focusPanes.length as 1 | 2 | 3 | 4;
+    if (preferences.focusPaneLayout !== count) updatePreferences({ focusPaneLayout: count });
+  }, [focusPanes.length, preferences.focusPaneLayout, taskFocusMode, updatePreferences]);
+
+  // activeId can change via paths that don't go through assignWorkerToPane
+  // (e.g. the approval shortcut outside focus mode); keep the focused pane in
+  // sync so its QuestLog/composer never point at different workers.
+  useEffect(() => {
+    if (!taskFocusMode || !activeId) return;
+    setFocusWorkbench((current) => {
+      const focused = current.panes.find((pane) => pane.id === current.focusedPaneId);
+      if (!focused || focused.workerId === activeId) return current;
+      return { ...current, panes: setPaneWorker(current.panes, current.focusedPaneId, activeId) };
+    });
+  }, [activeId, taskFocusMode]);
 
   useEffect(() => {
     if (taskFocusMode && !preferences.taskLogOpen) updatePreferences({ taskLogOpen: true });
@@ -939,22 +1041,21 @@ export function App() {
               <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
               <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
             </div>
-            {!bossAssignmentOpen && (!selectedDepartment ? <div className="focus-worker-switch">
-              <select aria-label={t("切換專心模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
+            {!bossAssignmentOpen && (!selectedDepartment ? (focusPanes.length <= 1 && <div className="focus-worker-switch">
+              <select aria-label={t("切換專心模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => assignWorkerToPane(focusedPaneId, event.target.value)}>
                 {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
                 {focusStudioDepartmentGroups.map(({ department, workers: departmentWorkers }) => <optgroup key={department.id} label={department.name}>{departmentWorkers.map((worker) => {
-                  const latestKey = latestReadableTurnKey(worker);
-                  const unread = worker.id !== activeId && Boolean(latestKey) && latestKey !== focusSeenTurns[worker.id];
+                  const unread = worker.id !== activeId && workerHasUnread(worker, focusSeenTurns[worker.id] ?? undefined);
                   return <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker, unread)}</option>;
                 })}</optgroup>)}
                 {focusStudioStandaloneWorkers.map((worker) => <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker)}</option>)}
               </select>
-            </div> : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
+            </div>) : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />}
           <div className="task-log-toolbar">
             {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label={t("日誌模式")}>
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
@@ -967,6 +1068,11 @@ export function App() {
             {!taskFocusMode && <select aria-label={t("日誌寬度")} value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
               <option value="420">{t("緊湊")}</option><option value="600">{t("閱讀")}</option><option value="820">{t("寬版")}</option>
             </select>}
+            {taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="focus-pane-toggle" role="group" aria-label={t("分割視窗數量")}>
+              {([1, 2, 3, 4] as const).map((count) => (
+                <button key={count} type="button" className={focusPanes.length === count ? "active" : ""} title={t("分割成 {count} 個視窗", { count: String(count) })} onClick={() => setFocusPaneLayout(count)}>{count}</button>
+              ))}
+            </div>}
             {taskFocusMode && <FocusControls
               active={active}
               workerCount={workerList.length}
@@ -985,6 +1091,7 @@ export function App() {
               onCreateNpc={() => openWorkspaceForCreate(activeProvider)}
               onCreateDepartment={() => { setDepartmentCreatorOpen(true); }}
               onOpenMcp={() => setMcpModalOpen(true)}
+              onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
               onOpenAccounts={() => setAccountsModalOpen(true)}
               onOpenBackup={() => setBackupModalOpen(true)}
               onNotificationsToggle={toggleNotifications}
@@ -1023,10 +1130,24 @@ export function App() {
           onFresh={() => commitModelSwitch(true)}
           onCancel={() => setPendingModelSwitch(null)}
         />}
-        {!bossAssignmentOpen && !selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={(approvalId, decision) => {
-          const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
-          return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve(t("找不到需要核准的 NPC"));
-        }} />}
+        {!bossAssignmentOpen && !selectedDepartment && (taskFocusMode && focusPanes.length > 1 ? <FocusPaneGrid
+          panes={focusPanes}
+          focusedPaneId={focusedPaneId}
+          workers={workers}
+          departmentGroups={focusStudioDepartmentGroups}
+          standaloneWorkers={focusStudioStandaloneWorkers}
+          workerLabel={(worker, unread) => focusWorkerLabel(worker, unread)}
+          isUnread={(worker) => workerHasUnread(worker, focusSeenTurns[worker.id] ?? undefined)}
+          view={preferences.taskLogView}
+          searchQuery={taskSearch}
+          maxPanes={MAX_FOCUS_PANES}
+          studioRail={<FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} />}
+          onFocusPane={focusPane}
+          onAssignWorker={assignWorkerToPane}
+          onAddPane={addFocusPane}
+          onRemovePane={removeFocusPane}
+          onApprove={resolveTaskApproval}
+        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} />)}
         {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
           focusMode={taskFocusMode}
@@ -1066,7 +1187,7 @@ export function App() {
         busy={Boolean(active?.busy)}
         queueEnabled
         persistExtras
-        globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !accountsModalOpen}
+        globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !codexCommandsModalOpen && !accountsModalOpen}
         dropTargetLabel={active?.name}
         palette={{
           workspacePath: activeWorkspace,
@@ -1232,6 +1353,7 @@ export function App() {
       />}
 
       {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} usedMcpTools={usedMcpTools} notify={notify} onClose={() => setMcpModalOpen(false)} />}
+      {codexCommandsModalOpen && <CodexCommandsModal capabilities={capabilitiesByWorkspace[activeWorkspace]?.codex ?? EMPTY_CAPABILITIES} onClose={() => setCodexCommandsModalOpen(false)} />}
       {accountsModalOpen && <AccountsModal
         accounts={Object.values(accounts)}
         accountLogins={accountLogins}

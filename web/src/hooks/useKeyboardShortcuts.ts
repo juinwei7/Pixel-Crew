@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { focusStudioShortcut } from "../focusStudios";
+import { paneCycleShortcut } from "../focusPanes";
 
 type ShortcutHandlers = {
   onCommandPalette(): void;
@@ -8,6 +9,7 @@ type ShortcutHandlers = {
   onShortcutsHelp(): void;
   onEscape?(): void;
   onStudioShortcut?(index: number): boolean;
+  onPaneCycle?(direction: 1 | -1): boolean;
 };
 
 export type KeyboardShortcut = "command_palette" | "toggle_task_log" | "approval" | "shortcuts_help" | "escape";
@@ -47,6 +49,11 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
       const editable = isEditable(event.target);
       const studioIndex = focusStudioShortcut(event, editable);
       if (studioIndex !== null && handlers.onStudioShortcut?.(studioIndex)) {
+        event.preventDefault();
+        return;
+      }
+      const paneDirection = paneCycleShortcut(event, editable);
+      if (paneDirection !== null && handlers.onPaneCycle?.(paneDirection)) {
         event.preventDefault();
         return;
       }

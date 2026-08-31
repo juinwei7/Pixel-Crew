@@ -112,7 +112,7 @@ export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
   );
 }
 
-export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude", activeSubject }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId; activeSubject?: FocusSubject }) {
+export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude", activeSubject, anchored = false }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId; activeSubject?: FocusSubject; anchored?: boolean }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -140,7 +140,7 @@ export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange
   }
 
   return (
-    <div ref={rootRef} className="focus-energy">
+    <div ref={rootRef} className={`focus-energy ${anchored ? "focus-energy--anchored" : ""}`}>
       <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label={t("查看專心模式工作用量")}>
         <ProviderMeter provider={activeProvider} state={usage[activeProvider]} />
         <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? t("用量偏低") : t("全部")}</span>
@@ -148,7 +148,7 @@ export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange
           US$ {totalCostUsd.toFixed(2)}
         </span>
       </button>
-      <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label={t("工作用量詳情")}>
+      <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""} ${anchored ? "focus-energy__panel--anchored" : ""}`} aria-label={t("工作用量詳情")}>
         <header><div><span>WORK ENERGY</span><strong>{t("用量與重置時間")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
         {activeSubject && <div className="focus-energy__subject">
           <span>FOCUS SUBJECT</span>

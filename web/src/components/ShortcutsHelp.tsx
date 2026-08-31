@@ -27,6 +27,14 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: t("專心模式"),
+    rows: [
+      { keys: ["Alt", "1-9"], label: t("跳到第 N 個工作區") },
+      { keys: ["Alt", "]"], label: t("切到下一個分割視窗") },
+      { keys: ["Alt", "["], label: t("切到上一個分割視窗") },
+    ],
+  },
+  {
     title: t("像素辦公室"),
     rows: [
       { keys: [t("點擊")], label: t("選取 NPC") },

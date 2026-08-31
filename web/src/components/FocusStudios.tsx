@@ -98,10 +98,10 @@ export function FocusStudios({ studios, activeWorkspace, collapsed, onCollapsedC
         const summary = summaries[studio.workspacePath];
         const selected = studio.workspacePath === activeWorkspace;
         const shortcut = index < 9 ? `Alt+${index + 1}` : null;
-        const status = studio.attentionCount > 0 ? t("需處理 {count}", { count: String(studio.attentionCount) }) : studio.busyCount > 0 ? t("工作中 {count}", { count: String(studio.busyCount) }) : t("待命");
+        const status = studio.attentionCount > 0 ? t("需處理 {count}", { count: String(studio.attentionCount) }) : studio.busyCount > 0 ? t("工作中 {count}", { count: String(studio.busyCount) }) : studio.unreadCount > 0 ? t("未讀 {count}", { count: String(studio.unreadCount) }) : t("待命");
         return <button key={studio.workspacePath} type="button" className={`focus-studios__studio ${selected ? "focus-studios__studio--active" : ""}`} disabled={studio.workerIds.length === 0} aria-pressed={selected} aria-keyshortcuts={shortcut ?? undefined} aria-label={`${studio.name} · ${status} · ${gitIdentity(summary) || gitState(summary)}${shortcut ? ` · ${shortcut}` : ""}`} onClick={() => onSelect(studio.workspacePath)}>
           <span className="focus-studios__mark" aria-hidden="true">{studioMark(studio.name)}</span>
-          <span className="focus-studios__name"><i className={studio.attentionCount > 0 ? "focus-studios__signal--attention" : studio.busyCount > 0 ? "focus-studios__signal--busy" : ""} />{studio.name}</span>
+          <span className="focus-studios__name"><i className={studio.attentionCount > 0 ? "focus-studios__signal--attention" : studio.busyCount > 0 ? "focus-studios__signal--busy" : studio.unreadCount > 0 ? "focus-studios__signal--unread" : ""} />{studio.name}</span>
           <span className="focus-studios__meta"><b>{studio.workerIds.length} NPC</b>{shortcut && <kbd>{shortcut}</kbd>}</span>
           <span className="focus-studios__git">{gitIdentity(summary) || gitState(summary)}</span>
         </button>;

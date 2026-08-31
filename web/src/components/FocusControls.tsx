@@ -22,6 +22,7 @@ type Props = {
   onCreateNpc(): void;
   onCreateDepartment?(): void;
   onOpenMcp(): void;
+  onOpenCodexCommands(): void;
   onOpenAccounts(): void;
   onOpenBackup(): void;
   onNotificationsToggle(): void;
@@ -46,6 +47,7 @@ export function FocusControls({
   onCreateNpc,
   onCreateDepartment,
   onOpenMcp,
+  onOpenCodexCommands,
   onOpenAccounts,
   onOpenBackup,
   onNotificationsToggle,
@@ -216,6 +218,7 @@ export function FocusControls({
               <button type="button" onClick={() => { onCreateNpc(); setOpen(false); }}>{t("＋ 新增 NPC")}</button>
               {onCreateDepartment && <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>{t("＋ 建立部門")}</button>}
               <button type="button" onClick={() => { onOpenMcp(); setOpen(false); }}>{t("MCP 伺服器")}</button>
+              <button type="button" onClick={() => { onOpenCodexCommands(); setOpen(false); }}>{t("Codex 原生指令管理")}</button>
               <button type="button" onClick={() => { onOpenAccounts(); setOpen(false); }}>{t("🔑 帳號管理")}</button>
               <button type="button" onClick={() => { onOpenBackup(); setOpen(false); }}>{t("備份與還原")}</button>
               <button type="button" onClick={() => { onOpenCommandCenter(); setOpen(false); }}>{t("指令庫")}</button>

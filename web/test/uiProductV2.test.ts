@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { deriveCommandHistory } from "../src/commandHistory";
-import { filterCrew, latestReadableTurnKey, workerAttention, workerFocusStatus } from "../src/crew";
+import { filterCrew, latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnread } from "../src/crew";
 import { emptyWorker } from "../src/workerState";
 
 function worker(id: string, provider: "claude" | "codex" = "claude", room = "/room") {
@@ -82,4 +82,15 @@ test("focus-mode unread tracking uses the latest turn with readable output", () 
   ];
   assert.equal(latestReadableTurnKey(target), "report");
   assert.equal(latestReadableTurnKey(worker("empty")), null);
+});
+
+test("workerHasUnread compares the latest readable turn against a seen key", () => {
+  const target = worker("reader");
+  target.turns = [
+    { key: "report", command: "report", status: "done", items: [{ kind: "assistant_text", key: "text", text: "結果" }] },
+  ];
+  assert.equal(workerHasUnread(target, undefined), true);
+  assert.equal(workerHasUnread(target, "older-turn"), true);
+  assert.equal(workerHasUnread(target, "report"), false);
+  assert.equal(workerHasUnread(worker("empty"), undefined), false);
 });

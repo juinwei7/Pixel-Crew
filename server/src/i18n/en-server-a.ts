@@ -1,6 +1,7 @@
 /** server 端英文字典 A（index.ts 專用）。key=中文原文（或 "語境::原文"）。 */
 export const enServerA: Record<string, string> = {
   "還原正在進行中": "A restore is already in progress",
+  "自訂指令數量已達上限（{max} 個）": "Custom command limit reached ({max})",
   "附件保存失敗，請稍後重試": "Failed to save attachment, please try again later",
   "無法建立部門對話": "Could not create department conversation",
   "無法保存部門訊息": "Could not save department message",
