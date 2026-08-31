@@ -175,15 +175,6 @@ import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
 import { composeConsultAsk, composeConsultDigest, composeConsultSection, selectConsultTargets } from "./consult.js";
-import {
-  deriveSquadIdentity,
-  normalizeSquadMember,
-  parseSquadLeadIndex,
-  parseSquadMembers,
-  parseSquadProvider,
-  validateSquadMembers,
-  validateSquadSize,
-} from "./squads.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -3363,92 +3354,6 @@ app.post("/api/departments", (req, res) => {
     department,
     workers: created.map(workerSummary),
   });
-});
-
-// ── 一鍵成軍（模板小隊）──────────────────────────────────────────────────
-// 與 /api/departments 相同的批次建立流程，但成員來自前端內建模板而非 AI 規
-// 劃，所以不需要 planToken。autoApprove 只開放 off/safe/full——invincible
-// 不能透過模板一鍵取得。
-app.post("/api/squads", (req, res) => {
-  // 請求驗證與成員 normalize 抽在 squads.ts（純函式）；這裡保留 IO 檢查與建立流程。
-  const provider: ProviderId = parseSquadProvider(req.body?.provider);
-  const rawMembers = parseSquadMembers(req.body?.members);
-  const sizeError = validateSquadSize(rawMembers);
-  if (sizeError) {
-    res.status(400).json({ error: sizeError });
-    return;
-  }
-  if (workers.size + rawMembers.length > MAX_WORKERS) {
-    res.status(409).json({ error: t("NPC 已達上限（最多 {max} 位），請先精簡人力", { max: MAX_WORKERS }) });
-    return;
-  }
-  if (!providerReady(provider)) {
-    res.status(503).json({ error: t("{provider} 尚未登入，登入後才能成軍", { provider: providerLabel(provider) }), auth: authStates[provider] });
-    return;
-  }
-  let workspacePath: string;
-  try {
-    workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
-    return;
-  }
-  if (workspaceMission(workspacePath)) {
-    res.status(409).json({ error: t("這個工作位置正在執行部門工作，暫時不能成軍") });
-    return;
-  }
-  const normalizedMembers = rawMembers.map((candidate) => normalizeSquadMember(candidate, provider, validModel));
-  const memberError = validateSquadMembers(normalizedMembers, [...workers.values()].map((member) => member.runner.name));
-  if (memberError) {
-    res.status(400).json({ error: memberError });
-    return;
-  }
-  const leadIndex = parseSquadLeadIndex(req.body?.leadIndex, normalizedMembers.length);
-  if (leadIndex === null) {
-    res.status(400).json({ error: t("請指定一位隊長") });
-    return;
-  }
-  const { purpose, departmentName } = deriveSquadIdentity(req.body?.name, req.body?.purpose);
-  const departmentId = randomUUID();
-  const now = new Date().toISOString();
-  const created = normalizedMembers.map((member) => {
-    const worker = createWorker(
-      member.name,
-      member.model,
-      provider,
-      workspacePath,
-      undefined,
-      member.persona,
-      departmentId,
-      { warmup: false, persist: false, broadcast: false },
-    );
-    worker.autoApproveMode = member.autoApprove;
-    return worker;
-  });
-  const department: Department = {
-    id: departmentId,
-    name: departmentName,
-    purpose,
-    workspacePath,
-    leadWorkerId: created[leadIndex].id,
-    memberWorkerIds: created.map((worker) => worker.id),
-    createdAt: now,
-    updatedAt: now,
-  };
-  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
-    for (const worker of created) {
-      worker.runner.stop();
-      workers.delete(worker.id);
-    }
-    res.status(500).json({ error: t("小隊建立失敗，沒有新增任何 NPC") });
-    return;
-  }
-  departments.set(department.id, department);
-  broadcast({ type: "department_created", department });
-  for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
-  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
-  else void codexCapabilitiesFor(workspacePath).refresh();
-  res.json({ department, workers: created.map(workerSummary) });
 });
 
 // Must be registered before /api/workers/:id or Express treats "order" as an id.

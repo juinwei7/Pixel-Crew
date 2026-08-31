@@ -118,11 +118,6 @@ export const enServerB: Record<string, string> = {
   // --- persona.ts ---
   "【職務 / Role】{role}": "[Role] {role}",
   "請替 Pixel Crew 的 NPC 草擬一份實用且可直接編輯的人設。不要呼叫工具、讀取或修改檔案，也不要臆測專案內容。\nNPC: {workerName}\n工作位置: {workspacePath}\n同部門人員（包含目前 NPC）: {members}\n\n要求:\n- 依 NPC 名稱、工作位置名稱和現有職務，補上部門尚缺且不重複的職務。\n- role 是清楚的職稱，最多 {maxRole} 字。\n- instructions 使用繁體中文，具體描述專長、責任範圍、工作方式、交付品質與溝通方式；保持精簡，不超過 600 字。\n- 不要加入無法由軟體代理執行的背景故事。\n- 若資訊不足，選擇通用且能補足軟體團隊的角色。\n\n最後只能輸出：\n<persona_suggestion>{\"role\":\"職務\",\"instructions\":\"詳細指示\"}</persona_suggestion>": "Draft a practical, directly editable persona for a Pixel Crew NPC. Do not call tools, read or modify files, or guess about the project's content.\nNPC: {workerName}\nWorkspace: {workspacePath}\nMembers of the same department (including this NPC): {members}\n\nRequirements:\n- Based on the NPC's name, the workspace name, and existing roles, fill in a role the department still lacks and that doesn't duplicate one that exists.\n- role is a clear job title, up to {maxRole} characters.\n- instructions should be written in English, concretely describing expertise, scope of responsibility, working style, delivery quality, and communication style; keep it concise, under 600 characters.\n- Do not add backstory that a software agent cannot act on.\n- If information is insufficient, choose a generic role that rounds out a software team.\n\nOutput only:\n<persona_suggestion>{\"role\":\"role\",\"instructions\":\"detailed instructions\"}</persona_suggestion>",
-  // --- squads.ts ---
-  "小隊成員需為 1 到 6 位": "Squad members must number between 1 and 6",
-  "請確認每位隊員都有不重複的姓名與職責（可能與現有 NPC 同名）": "Make sure every member has a unique name and role (it may clash with an existing NPC's name)",
-  "模板小隊": "Template Squad",
-  "{purpose}小隊": "{purpose} Squad",
   // --- workerExtras.ts ---
   "記憶內容不能是空白": "Memory content cannot be blank",
   "這則記憶已經存在": "This memory already exists",

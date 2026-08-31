@@ -1,4 +1,4 @@
-/** ProviderHandoffDialog / QuestLog / RichText / ShortcutsHelp / SquadModal /
+/** ProviderHandoffDialog / QuestLog / RichText / ShortcutsHelp /
  *  TaskComposer / WorkerTabs / WorkflowDocumentEditor / WorkspacePicker /
  *  OnboardingTour 的英文字典（key = 中文原文）。 */
 export const enModalsD: Record<string, string> = {
@@ -27,10 +27,8 @@ export const enModalsD: Record<string, string> = {
   "· 已保存": "· Saved",
   "· 復原中…": "· Restoring…",
   "← 上一步": "← Previous",
-  "← 換一隊": "← Choose another squad",
   "↓ 最新內容": "↓ Latest",
   "一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。": "A folder is a work room; the current NPC will move to the new location right away.",
-  "一鍵成軍": "Squad Up",
   "上一筆搜尋結果": "Previous search result",
   "下一步 →": "Next →",
   "下一筆搜尋結果": "Next search result",
@@ -69,8 +67,6 @@ export const enModalsD: Record<string, string> = {
   "叫出指令選單（Claude）": "Open command menu (Claude)",
   "右側是對話與任務紀錄。員工要動用工具時，審批卡會用白話說明「它想做什麼、有什麼風險」，紅黃綠燈一看就懂，你再決定放不放行。": "The right side shows chat and task history. When a crew member wants to use a tool, an approval card explains in plain language what it wants to do and the risk — red, yellow, green at a glance — then you decide whether to allow it.",
   "右鍵": "Right-click",
-  "名額不足": "Not enough slots",
-  "名額不足：需要 {need} 位，只剩 {left} 位空位": "Not enough slots: needs {need}, only {left} left",
   "命令面板 / 快速指令": "Command Palette / Quick Commands",
   "啟動交接中…": "Starting handoff…",
   "圖片 {n}：{name}": "Image {n}: {name}",
@@ -111,8 +107,6 @@ export const enModalsD: Record<string, string> = {
   "從系統選擇資料夾": "Choose a folder from your system",
   "快捷鍵": "Shortcuts",
   "思考": "Thinking",
-  "成軍中…": "Assembling…",
-  "成軍後可以直接對隊長下第一道指令，例如：": "Once assembled, you can give the lead a first order right away, e.g.:",
   "我了解跨 LLM 可能遺漏上下文、工具狀態與未完成工作。": "I understand switching LLMs may lose context, tool state, and unfinished work.",
   "或指定現有專案": "Or specify an existing project",
   "或貼上完整路徑": "Or paste a full path",
@@ -127,7 +121,6 @@ export const enModalsD: Record<string, string> = {
   "指令輸入框": "Command Input",
   "指令面板（⌘/Ctrl K）": "Command palette (⌘/Ctrl K)",
   "指定模型": "Model",
-  "挑一組配好角色與分工的小隊，整隊直接進駐辦公室。每位隊員的個性都會以系統提示長駐，換模型、清空對話都不會忘記自己是誰。": "Pick a squad with roles and responsibilities already set — the whole team moves into the office at once. Each member's persona lives on as a system prompt, so switching models or clearing chats never makes them forget who they are.",
   "排隊": "Queue",
   "排隊訊息送出失敗": "Failed to send queued message",
   "描述 Codex 何時應該使用這個 Skill": "Describe when Codex should use this skill",
@@ -145,7 +138,7 @@ export const enModalsD: Record<string, string> = {
   "新人報到！": "New Hire Check-in!",
   "新增人員": "Add Crew Member",
   "新手導覽": "Onboarding Tour",
-  "日常營運都收在這顆 ⚙ 功能：🫡成軍一鍵整隊進駐、📋看板看任務卡片、📊營運看每日成本、🌙下班看今日報告與回放、⟳ 優雅重啟伺服器、MCP 連線狀態。": "Day-to-day operations live under this ⚙ menu: 🫡 Squad Up to bring in a whole team at once, 📋 Kanban for task cards, 📊 Ops for daily cost, 🌙 Wrap-up for today's report and replay, ⟳ graceful server restart, and MCP connection status.",
+  "日常營運都收在這顆 ⚙ 功能：📋看板看任務卡片、📊營運看每日成本、🌙下班看今日報告與回放、⟳ 優雅重啟伺服器、MCP 連線狀態。": "Day-to-day operations live under this ⚙ menu: 📋 Kanban for task cards, 📊 Ops for daily cost, 🌙 Wrap-up for today's report and replay, ⟳ graceful server restart, and MCP connection status.",
   "替 {name} 進行交接班": "Handing off {name}'s shift",
   "最直接的用法：在這裡打字交代目前選中的員工做事。可以直接拖檔案進來，按上下鍵翻歷史指令。": "The most direct way: type here to tell the currently selected crew member what to do. You can drag files straight in, and use the up/down keys to browse command history.",
   "最近房間": "Recent Rooms",
@@ -201,7 +194,6 @@ export const enModalsD: Record<string, string> = {
   "規劃中": "Planning",
   "觸發情境": "Trigger Context",
   "訊息送出失敗": "Failed to send message",
-  "請先選擇工作資料夾": "Choose a workspace folder first",
   "請先關閉目前的編輯或設定視窗": "Please close the current editing or settings window first",
   "請稍候…": "Please wait…",
   "跳到待核准的 NPC": "Jump to NPC awaiting approval",
@@ -232,7 +224,6 @@ export const enModalsD: Record<string, string> = {
   "關閉目前的面板 / 退出專心模式": "Close Current Panel / Exit Focus Mode",
   "附件讀取失敗，可重試": "Failed to read attachment, you can retry",
   "附加圖片或文件": "Attach image or document",
-  "隊名": "Squad Name",
   "隨時按 ": "Press ",
   "雙擊": "Double-click",
   "雙擊地板": "Double-click floor",
@@ -242,7 +233,5 @@ export const enModalsD: Record<string, string> = {
   "顯示這張快捷鍵說明": "Show This Shortcuts Sheet",
   "點擊": "Click",
   "點選內容可載入編輯；目前草稿會與該項目交換。": "Click an item to load it for editing; your current draft will swap with that item.",
-  "🫡 成軍！（{count} 位進駐）": "🫡 Assemble! ({count} joining)",
-  "（隊長）": " (Lead)",
   "，NPC 正在處理中…": ", the NPC is working on it…",
 };

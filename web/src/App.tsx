@@ -20,7 +20,6 @@ import { McpModal } from "./components/McpModal";
 import { CodexCommandsModal } from "./components/CodexCommandsModal";
 import { AccountsModal } from "./components/AccountsModal";
 import { OpsModal } from "./components/OpsModal";
-import { SquadModal } from "./components/SquadModal";
 import { KanbanModal } from "./components/KanbanModal";
 import { DayReportModal } from "./components/DayReportModal";
 import { RemoteAccessModal } from "./components/RemoteAccessModal";
@@ -264,7 +263,6 @@ export function App() {
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [opsModalOpen, setOpsModalOpen] = useState(false);
   const [remoteModalOpen, setRemoteModalOpen] = useState(false);
-  const [squadModalOpen, setSquadModalOpen] = useState(false);
   const [kanbanModalOpen, setKanbanModalOpen] = useState(false);
   const [dayReportOpen, setDayReportOpen] = useState(false);
   const [outboxOpen, setOutboxOpen] = useState(false);
@@ -971,7 +969,6 @@ export function App() {
         onOpenAccounts={() => setAccountsModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
         onOpenOps={() => setOpsModalOpen(true)}
-        onOpenSquads={() => setSquadModalOpen(true)}
         onOpenKanban={() => setKanbanModalOpen(true)}
         onOpenDayReport={() => setDayReportOpen(true)}
         onOpenOutbox={() => setOutboxOpen(true)}
@@ -1381,20 +1378,6 @@ export function App() {
       {kanbanModalOpen && <KanbanModal workers={workerList} onOpenBoss={openBossDesk} onClose={() => setKanbanModalOpen(false)} />}
       {dayReportOpen && <DayReportModal notify={notify} onClose={() => setDayReportOpen(false)} />}
       {outboxOpen && <OutboxModal onClose={() => setOutboxOpen(false)} />}
-      {squadModalOpen && <SquadModal
-        provider={activeProvider}
-        initialWorkspacePath={activeWorkspace}
-        recentPaths={workspacePaths}
-        capacity={Math.max(0, 20 - workerList.length)}
-        existingNames={workerList.map((worker) => worker.name)}
-        onBrowse={pickWorkspace}
-        onCreated={(ids, leadId, name) => {
-          setActiveId(leadId);
-          setSquadModalOpen(false);
-          notify(t("「{name}」已成軍，{count} 位隊員進駐！點隊長下第一道指令吧", { name, count: String(ids.length) }));
-        }}
-        onClose={() => setSquadModalOpen(false)}
-      />}
       {shortcutsHelpOpen && <ShortcutsHelp onClose={() => setShortcutsHelpOpen(false)} />}
       {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
 

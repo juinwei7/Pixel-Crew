@@ -5,7 +5,7 @@ import { t } from "../i18n";
 // 共用 dialog 殼：overlay + 卡片 + 右上關閉鈕 + focus trap + Esc 關閉。
 // overlayClassName / cardClassName / closeClassName 是「完整」class（不會自動疊加
 // warroom-result 系列樣式），沿用 warroom-result 家族的 modal（Ops/Kanban/DayReport/
-// Squad 那種）記得自己把 warroom-result / warroom-result__card 也寫進去；有自己一整套
+// 那種）記得自己把 warroom-result / warroom-result__card 也寫進去；有自己一整套
 // 卡片樣式的 modal（MCP、Backup…）直接傳自己的 class，避免兩套樣式疊加互相蓋掉。
 // eyebrow/title 沒填就不畫內建 header——原本 header 結構更複雜（多說明文字、按鈕）的
 // modal，直接把整段原本的 <header> 放進 children 最前面即可。
