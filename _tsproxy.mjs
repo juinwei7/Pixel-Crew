@@ -53,7 +53,10 @@ function loadConfig() {
   return cfg;
 }
 function saveConfig(cfg) {
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); } catch {}
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    fs.chmodSync(CONFIG_PATH, 0o600); // 內含明文通行碼／簽章金鑰，不給同機其他使用者讀
+  } catch {}
 }
 const CONFIG = loadConfig();
 const googleEnabled = () => !!(CONFIG.google && CONFIG.google.clientId && CONFIG.google.clientSecret);
@@ -841,6 +844,9 @@ const server = http.createServer((req, res) => {
             const hours = Math.max(1, Math.min(720, Number(body.hours) || 4));
             expiresAt = now + hours * 3600 * 1000;
           }
+          if (typeof body.passcode === 'string' && body.passcode && body.passcode.length < 4) {
+            sendJson(400, { error: '分享密碼至少 4 碼' }); return;
+          }
           CONFIG.share.enabled = true;
           CONFIG.share.expiresAt = expiresAt;
           if (typeof body.passcode === 'string' && body.passcode) CONFIG.share.passcode = body.passcode;
@@ -1062,7 +1068,12 @@ const server = http.createServer((req, res) => {
       } else if (action === 'disable') {
         CONFIG.share.enabled = false; CONFIG.share.expiresAt = 0;
       } else if (action === 'config') {
-        if (form.has('passcode')) CONFIG.share.passcode = form.get('passcode') || '';
+        const p = form.get('passcode');
+        if (form.has('passcode') && p && p.length < 4) {
+          adminPage('分享密碼至少 4 碼（或留空清除）').then((h) => sendHtml(res, 400, h));
+          return;
+        }
+        if (form.has('passcode')) CONFIG.share.passcode = p || '';
         const ttl = Number(form.get('sessionTtlHours'));
         if (ttl >= 1 && ttl <= 168) CONFIG.share.sessionTtlHours = Math.floor(ttl);
       }
