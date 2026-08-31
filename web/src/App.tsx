@@ -11,27 +11,13 @@ import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { EnergyHud, FocusEnergy } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { AvatarWorkshop } from "./components/AvatarWorkshop";
-import { ProviderHandoffDialog } from "./components/ProviderHandoffDialog";
 import { DepartmentMissionDialog } from "./components/DepartmentMissionDialog";
-import { PersonaEditor } from "./components/PersonaEditor";
-import { DepartmentCreator } from "./components/DepartmentCreator";
-import { McpModal } from "./components/McpModal";
-import { CodexCommandsModal } from "./components/CodexCommandsModal";
-import { AccountsModal } from "./components/AccountsModal";
-import { OpsModal } from "./components/OpsModal";
-import { KanbanModal } from "./components/KanbanModal";
-import { DayReportModal } from "./components/DayReportModal";
-import { RemoteAccessModal } from "./components/RemoteAccessModal";
-import { OutboxModal } from "./components/OutboxModal";
-import { BackupModal } from "./components/BackupModal";
 import { BossTaskDesk } from "./components/BossTaskDesk";
 import { FocusControls } from "./components/FocusControls";
 import { FocusStudios } from "./components/FocusStudios";
 import { FocusPaneGrid } from "./components/FocusPaneGrid";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
-import { ShortcutsHelp } from "./components/ShortcutsHelp";
-import { OnboardingTour, hasSeenTour } from "./components/OnboardingTour";
+import { hasSeenTour } from "./onboardingState";
 import { Office3D } from "./components/Office3D";
 import { RichText } from "./components/RichText";
 import { theme } from "./theme";
@@ -155,6 +141,24 @@ import type { AutoApproveMode, ProviderId } from "./types";
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
 })));
+// These dialogs are all opened by an explicit user action. Keeping them out of
+// the first-load graph makes the office usable sooner without changing any
+// interaction once a dialog is requested.
+const AvatarWorkshop = lazy(() => import("./components/AvatarWorkshop").then((module) => ({ default: module.AvatarWorkshop })));
+const ProviderHandoffDialog = lazy(() => import("./components/ProviderHandoffDialog").then((module) => ({ default: module.ProviderHandoffDialog })));
+const PersonaEditor = lazy(() => import("./components/PersonaEditor").then((module) => ({ default: module.PersonaEditor })));
+const DepartmentCreator = lazy(() => import("./components/DepartmentCreator").then((module) => ({ default: module.DepartmentCreator })));
+const McpModal = lazy(() => import("./components/McpModal").then((module) => ({ default: module.McpModal })));
+const CodexCommandsModal = lazy(() => import("./components/CodexCommandsModal").then((module) => ({ default: module.CodexCommandsModal })));
+const AccountsModal = lazy(() => import("./components/AccountsModal").then((module) => ({ default: module.AccountsModal })));
+const BackupModal = lazy(() => import("./components/BackupModal").then((module) => ({ default: module.BackupModal })));
+const OpsModal = lazy(() => import("./components/OpsModal").then((module) => ({ default: module.OpsModal })));
+const RemoteAccessModal = lazy(() => import("./components/RemoteAccessModal").then((module) => ({ default: module.RemoteAccessModal })));
+const KanbanModal = lazy(() => import("./components/KanbanModal").then((module) => ({ default: module.KanbanModal })));
+const DayReportModal = lazy(() => import("./components/DayReportModal").then((module) => ({ default: module.DayReportModal })));
+const OutboxModal = lazy(() => import("./components/OutboxModal").then((module) => ({ default: module.OutboxModal })));
+const ShortcutsHelp = lazy(() => import("./components/ShortcutsHelp").then((module) => ({ default: module.ShortcutsHelp })));
+const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((module) => ({ default: module.OnboardingTour })));
 
 const CLAUDE_MODEL_OPTIONS = [
   { id: "opus", label: "Opus" },
@@ -1365,6 +1369,7 @@ export function App() {
         return error;
       }} />}
 
+      <Suspense fallback={null}>
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify(t("自訂角色已套用")); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify(t("官方角色已套用")); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify(t("已切回自訂角色")); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify(t("已刪除自訂角色並恢復經典隊員")); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
       {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onDirectSwitch={switchProviderFresh} onClose={() => setHandoffTarget(null)} />}
@@ -1417,6 +1422,7 @@ export function App() {
       {outboxOpen && <OutboxModal onClose={() => setOutboxOpen(false)} />}
       {shortcutsHelpOpen && <ShortcutsHelp onClose={() => setShortcutsHelpOpen(false)} />}
       {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
+      </Suspense>
 
       {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />

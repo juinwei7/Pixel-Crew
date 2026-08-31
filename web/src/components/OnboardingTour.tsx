@@ -1,12 +1,8 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { t } from "../i18n";
+import { TOUR_DONE_KEY } from "../onboardingState";
 
 // 首次進站自動播放一次；跳過或走完都算看過
-export const TOUR_DONE_KEY = "pixel-crew:onboarding-tour-done";
-
-export function hasSeenTour(): boolean {
-  try { return localStorage.getItem(TOUR_DONE_KEY) === "1"; } catch { return true; }
-}
 
 type Step = {
   anchor?: string; // CSS selector；沒給就置中純對話
