@@ -18,6 +18,8 @@ type SystemStatus = {
   folderPicker: boolean;
   workspaceSetupRequired: boolean;
   codexWindowsBestEffort: boolean;
+  /** Local provider settings resolved by the server; labels an NPC with no explicit model override. */
+  providerDefaultModels?: Partial<Record<ProviderId, string>>;
   /** server 換腦門檻（tokens）；CTX 量條的 100% 基準。舊 server 沒帶就用 web 後備值。 */
   brainSwapThresholdTokens?: number;
 };

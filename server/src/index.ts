@@ -18,6 +18,7 @@ import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
+import { configuredDefaultModels } from "./defaultModels.js";
 import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import {
@@ -314,6 +315,7 @@ const mcpLoginTracker = new McpLoginTracker(async (state) => {
 // re-checking on every call would make an already-cleared marker ambiguous
 // with "no restore ever happened."
 const lastRestoreResult = readAndClearRestoreMarker(config.dataDirectory);
+const providerDefaultModels = configuredDefaultModels();
 
 function systemStatus() {
   const release = osRelease();
@@ -328,6 +330,7 @@ function systemStatus() {
     workspaceSetupRequired: workers.size === 0 && !config.targetRepoConfigured,
     codexWindowsBestEffort: process.platform === "win32" && Number.isFinite(windowsBuild) && (windowsBuild ?? 0) < 22_000,
     lastRestoreResult,
+    providerDefaultModels,
     // 前端 CTX 量條的 100% 基準；單一事實來源在 brainSwap.ts，避免 web 端硬編漂移。
     brainSwapThresholdTokens: BRAIN_SWAP_THRESHOLD_TOKENS,
   };

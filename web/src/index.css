@@ -5813,6 +5813,42 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   font-size: 9px;
 }
 
+.focus-energy__subject {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 3px;
+  margin: 12px 0 4px;
+  padding: 10px;
+  border: 1px solid rgba(120, 169, 190, 0.18);
+  border-radius: 9px;
+  background: rgba(120, 169, 190, 0.06);
+}
+
+.focus-energy__subject > span {
+  grid-column: 1 / -1;
+  color: #728594;
+  font: 700 8px var(--mono);
+  letter-spacing: 0.13em;
+}
+
+.focus-energy__subject strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #d5dde4;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-energy__subject small {
+  align-self: center;
+  color: #91aabb;
+  font: 9px var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+
 .focus-energy__panel section {
   padding: 14px 0 2px;
 }
