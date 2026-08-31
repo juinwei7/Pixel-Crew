@@ -134,7 +134,7 @@ export const FURNITURE_DEFS: FurnitureDef[] = [
   { key: "desk", label: t("其他工具"), map: CRATE, x: 352, bottom: 66, standX: 352, standY: 81, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
   // Invisible rendezvous point around the meeting table drawn by OfficeDecor.
   // 作戰室會議桌：桌子本體由 OfficeDecor 畫（在最底部空地），這裡放一塊「透明的點擊區」
-  // 蓋在桌面上，讓它跟其他工作站一樣可以懸停看說明、點擊互動（點桌子＝開圓桌模式）。
+  // 蓋在桌面上，讓它跟其他工作站一樣可以懸停看說明、點擊互動（點桌子＝開作戰室模式）。
   // map 全是透明點：pixi 的點擊判定用貼圖邊界矩形、不看像素透明度，所以照樣可點。
   { key: "meeting", label: t("作戰室"), map: Array.from({ length: 34 }, () => ".".repeat(112)), x: 120, bottom: 318, standX: 120, standY: 320, leds: [] },
   // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.

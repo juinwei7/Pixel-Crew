@@ -9,10 +9,10 @@ export const enModalsC: Record<string, string> = {
   "執行指令、跑測試、開伺服器": "Running commands, tests, or servers",
   "驗證成果、檢查輸出": "Verifying results, checking output",
   "其他工具／MCP 呼叫": "Other tools / MCP calls",
-  "作戰室會議桌——圓桌辯論在這開": "War room table — roundtable debates happen here",
+  "作戰室會議桌——圓桌辯論在這開": "War room table — debates happen here",
   "LLM 交接中…": "Handing off LLM…",
-  "🗣️ 圓桌討論中…": "🗣️ Roundtable discussion…",
-  "🗣️ 圓桌": "🗣️ Roundtable",
+  "🏛️ 作戰室辯論中…": "🏛️ War Room debate…",
+  "🏛️ 作戰室": "🏛️ War Room",
   "背景作業中…": "Working in background…",
   "像素辦公室無法啟動": "Pixel office failed to start",
   "這台裝置的瀏覽器拿不到 WebGL（常見原因：Chrome 硬體加速被關閉、遠端桌面連線、或顯示卡驅動被瀏覽器停用）。NPC 對話與任務日誌不受影響，仍可正常下指令。":

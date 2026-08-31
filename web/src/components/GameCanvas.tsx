@@ -102,10 +102,9 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       && (worker.departmentId ? task.departmentId === worker.departmentId : task.workspacePath === worker.workspacePath),
     );
     const missionStep = mission?.currentStepIndex == null ? null : mission.steps[mission.currentStepIndex];
-    // 開圓桌的 NPC：沿用場景既有的 thinking 姿勢＋speech 對話泡，冒出「🗣️ 圓桌討論中…」，
-    // 讓使用者在畫面上直接看到「這位正在幫我開圓桌」。交接（handingOff）優先，兩者不會同時。
-    // 作戰室 peer：名字以 🏛️ 開頭的臨時 NPC（由圓桌腳本建立）會被拉到「meeting」會議桌邊聚集，
-    // 加上既有 roundtableMode 的臨時 NPC，一起呈現「一群人圍著大桌開會」的畫面。站到 meeting 站點後，
+    // 作戰室 NPC：沿用場景既有的 thinking 姿勢＋speech 對話泡，讓使用者直接看到辯論進行中。
+    // 名字以 🏛️ 開頭的臨時 NPC 會被拉到「meeting」會議桌邊聚集；交接（handingOff）優先。
+    // 站到 meeting 站點後，
     // scene 的 standSpot 會自動把多個 NPC 錯開排在桌邊，不會重疊。
     const isWarRoomPeer = worker.name.codePointAt(0) === 0x1f3db; // 🏛 U+1F3DB：用碼位比對，避免 FE0F 變體選擇子不一致
     const roundtabling = !handingOff && (isWarRoomPeer || (roundtableIds.has(worker.id) && worker.busy));
@@ -114,7 +113,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       selectId: worker.id,
       name: worker.name,
       character: handingOff ? { ...worker.character, activity: "thinking", station: "home", speech: t("LLM 交接中…") }
-        : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("🗣️ 圓桌討論中…") : t("🗣️ 圓桌") }
+        : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("🏛️ 作戰室辯論中…") : t("🏛️ 作戰室") }
         : worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
@@ -187,7 +186,7 @@ type Props = {
   roundtableIds?: ReadonlySet<string>;
   /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
   swapThresholdTokens?: number;
-  /** 點擊作戰室會議桌時觸發（App 用它開圓桌模式並聚焦輸入框）。 */
+  /** 點擊作戰室會議桌時觸發（App 用它開作戰室模式並聚焦輸入框）。 */
   onMeetingTableClick?(): void;
   /** Tap on empty office floor — App uses it to dismiss the task log. */
   onEmptyTap?(): void;
@@ -385,7 +384,7 @@ export function GameCanvas({
       onFurnitureHover: setHoveredStation,
       onFurnitureClick: (key) => {
         setPinnedStation((current) => (current === key ? null : key));
-        if (key === "meeting") meetingClickRef.current?.(); // 點會議桌＝開圓桌模式
+        if (key === "meeting") meetingClickRef.current?.(); // 點會議桌＝開作戰室模式
       },
       onEmptyTap: () => {
         // Tapping bare floor dismisses lingering hover UI (station tooltip + NPC

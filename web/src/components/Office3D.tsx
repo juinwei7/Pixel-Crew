@@ -76,7 +76,7 @@ export function Office3D({ workers, departments, active, onSelect }: Props) {
         const station = demoStations[i % demoStations.length];
         const demoSpeech: Record<string, string> = {
           terminal: "npm run build — 編譯中，1205 modules…", code: "重構 officeScene.ts：抽出 buildTower()", web: "搜尋：three.js InstancedMesh 效能", books: "讀取 knowledge/agent-rig.md（94 頁）",
-          check: "驗證 17 個測試檔 · 品質檢查中", board: "更新看板：plan-41 → 完成", meeting: "🗣️ 圓桌討論：第二主題方向",
+          check: "驗證 17 個測試檔 · 品質檢查中", board: "更新看板：plan-41 → 完成", meeting: "🏛️ 作戰室辯論：第二主題方向",
         };
         return { id: `demo-${i}`, name: `隊員 ${i + 1}`, busy: station !== "home", departmentId: d[0], departmentLabel: d[1], colorIndex: i, station, activity: station === "home" ? "idle" : "working", speech: demoSpeech[station] ?? "", mood: "neutral" as const, webQuery: station === "web" ? "iPhone 17 台灣 售價 2026" : undefined };
       });

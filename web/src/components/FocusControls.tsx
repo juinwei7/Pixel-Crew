@@ -133,16 +133,19 @@ export function FocusControls({
                 </label>
                 <label className="focus-controls__row">
                   <span>{t("自動核准")}</span>
-                  <select
-                    className={`focus-controls__auto-approve focus-controls__auto-approve--${active.autoApproveMode}`}
-                    value={active.autoApproveMode}
-                    onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
-                  >
-                    <option value="off">{tc("自動核准", "關閉")}</option>
-                    <option value="safe">{t("安全")}</option>
-                    <option value="full">{t("完全")}</option>
-                    <option value="invincible">{t("⚡ 無限制")}</option>
-                  </select>
+                  <span className="focus-controls__auto-approve-actions">
+                    <select
+                      className={`focus-controls__auto-approve focus-controls__auto-approve--${active.autoApproveMode}`}
+                      value={active.autoApproveMode}
+                      onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
+                    >
+                      <option value="off">{tc("自動核准", "關閉")}</option>
+                      <option value="safe">{t("安全")}</option>
+                      <option value="full">{t("完全")}</option>
+                      <option value="invincible">{t("⚡ 無限制")}</option>
+                    </select>
+                    {active.autoApproveMode === "invincible" && <button type="button" className="focus-controls__auto-approve-reset" onClick={() => onAutoApprove("safe")}>{t("回到安全")}</button>}
+                  </span>
                 </label>
                 <label className="focus-controls__row">
                   <span>{t("引擎")}</span>
