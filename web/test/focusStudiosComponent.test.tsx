@@ -21,6 +21,8 @@ test("renders accessible managed-workspace controls for Focus Reader", () => {
   assert.match(html, /api/);
   assert.match(html, /web/);
   assert.match(html, /Alt\+1/);
+  assert.match(html, /aria-label="搜尋工作室"/);
+  assert.match(html, /重新整理 Git 狀態/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /disabled=""/);
   assert.match(html, /讀取 Git 狀態中/);
