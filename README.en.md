@@ -19,6 +19,7 @@ The work itself is still carried out by the **official CLIs already installed on
 ## Features
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, freely switchable at any time.
+- **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
 - **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, cross-department progress, and final reports persist across navigation and restarts.
 - **Multi-department orchestration** — the decision model builds a validated dependency graph across real departments and NPC roles, sequencing PM, engineering, QA, and others; each department receives bounded upstream reports and the Boss receives one consolidated result.
 - **NPC management** — up to 20 NPCs at once, renameable from the sidebar; names and conversations are stored locally in SQLite.
@@ -164,6 +165,7 @@ codex login
 8. Open the avatar workshop from an NPC's menu — choose an official preset, or upload an image and preview cropping, positioning, background removal, and color-count reduction before applying it.
 9. Click the MCP status indicator at the top to see the servers currently configured for the active provider; Claude and Codex configurations are independent of each other.
 10. The WORK ENERGY panel at the top shows Claude's and Codex's remaining usage. You can switch to another worker while one is running, or press "Abort" to stop the current turn.
+11. Use **Focus Reader** in the task log for a dedicated report view. Its header states the current NPC's provider and concrete model; the left **Studios** rail can collapse or expand, and selecting a studio restores its last-read NPC. Git details on studio cards are inspection only: Pixel Crew does not fetch, checkout, commit, or push from this view.
 
 The top right separately shows server status and the active provider's status. When a CLI isn't logged in, Pixel Crew pauses sending for that provider, shows the login command, and rechecks every 3 seconds; if the other provider is already logged in, you can switch to it directly from the guidance screen.
 

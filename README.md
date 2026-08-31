@@ -17,6 +17,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 ## Highlights
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
+- **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
 - **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart.
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
@@ -71,6 +72,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 ## 功能
 
 - **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
+- **專心閱讀與工作室**：把完成的 NPC 對話切成專注閱讀工作區。左側可縮放的「工作室」欄列出受管理的本機工作資料夾，可用 `Alt+1`–`Alt+9` 快速切換，會記住各工作室最後選過的 NPC；並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind，不會修改 repository。
 - **持久化老闆任務日誌**：從頂部 Boss Desk 以聊天方式直接交辦。任務、探索問題、回答、跨部門進度與最終報告都會保存，切換畫面或重啟後仍可繼續。
 - **跨部門編排**：決策模型可依真實部門與 NPC 職務建立經過驗證的依賴圖，依序安排 PM、工程、QA 等部門；每個部門收到明確的上游報告，最後只向老闆提交一份彙整結果。
 - **NPC 管理**：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
@@ -192,6 +194,7 @@ npm run dev
 8. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
 9. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
 10. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
+11. 在任務日誌按**專心閱讀**可進入 Focus Reader。頂部會明示目前 NPC 的 provider 與實際使用模型；左側「工作室」可收合或展開，選擇另一間工作室會回到該工作室上次閱讀的 NPC。工作室卡片中的 Git 資訊僅供檢視，並不會執行 fetch、checkout、commit 或 push。
 
 右上角會分別顯示伺服器與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。
 
