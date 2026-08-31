@@ -117,7 +117,6 @@ export const enApp: Record<string, string> = {
   "個性已更新，下一句話生效": "Persona updated, takes effect from the next message",
   "已清除個性": "Persona cleared",
   "「{purpose}」部門已建立，共 {count} 位 NPC": "\"{purpose}\" department created with {count} NPCs",
-  "「{name}」已成軍，{count} 位隊員進駐！點隊長下第一道指令吧": "\"{name}\" is assembled, {count} members have joined! Click the lead to give the first command",
   "🏛️ 作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回": "🏛️ War room debate in progress… members are sparring at the table, the result will be delivered automatically",
   "作戰室裁決": "War Room Verdict",
   "本場花費 ${amount}": "Cost this session: ${amount}",

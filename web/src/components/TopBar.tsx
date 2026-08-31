@@ -35,7 +35,6 @@ type Props = {
   onOpenAccounts(): void;
   onOpenBackup(): void;
   onOpenOps(): void;
-  onOpenSquads(): void;
   onOpenKanban(): void;
   onOpenDayReport(): void;
   onOpenOutbox(): void;
@@ -74,7 +73,6 @@ export function TopBar({
   onOpenAccounts,
   onOpenBackup,
   onOpenOps,
-  onOpenSquads,
   onOpenKanban,
   onOpenDayReport,
   onOpenOutbox,
@@ -241,7 +239,7 @@ export function TopBar({
           className={`top-bar__capability ${restartPending || capabilities.error ? "top-bar__capability--warn" : ""}`}
           onClick={() => { setHealthOpen(false); setToolsOpen((open) => !open); }}
           aria-expanded={toolsOpen}
-          title={t("辦公室功能：MCP、成軍、看板、營運、下班、重啟、導覽")}
+          title={t("辦公室功能：MCP、看板、營運、下班、重啟、導覽")}
         >
           {restartPending ? t("⟳ 等空檔重啟中…") : t("⚙ 功能")} <strong>⌄</strong>
         </button>
@@ -252,9 +250,6 @@ export function TopBar({
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenAccounts(); }} title={t("帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個")}>
               {t("🔑 帳號管理")}
-            </button>
-            <button type="button" onClick={() => { setToolsOpen(false); onOpenSquads(); }} title={t("一鍵成軍：整組配好角色分工的小隊直接進駐")}>
-              {t("🫡 一鍵成軍")}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenKanban(); }} title={t("任務看板：BOSS 交辦與部門 Mission 的所有卡片進度")}>
               {t("📋 任務看板")}
