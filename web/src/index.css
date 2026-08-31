@@ -5166,6 +5166,10 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  /* appearance: base-select 的預設選中值會貼上緣；這顆是專注模式的主要
+     導覽，直接用 flex 把字置中，與左側模式切換鈕對齊。 */
+  display: inline-flex;
+  align-items: center;
 }
 
 .focus-context-switch { min-width: 0; display: flex; flex: 1 1 auto; align-items: center; gap: 8px; margin-right: auto; }
