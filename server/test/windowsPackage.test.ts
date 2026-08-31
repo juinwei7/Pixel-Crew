@@ -12,6 +12,7 @@ const backgroundLauncher = fileURLToPath(new URL("../../start-pixel-crew.vbs", i
 const restartLauncher = fileURLToPath(new URL("../../relaunch-pixel-crew.ps1", import.meta.url));
 const portablePackager = fileURLToPath(new URL("../../scripts/package.mjs", import.meta.url));
 const trayController = fileURLToPath(new URL("../../scripts/windows/pixel-crew-tray.ps1", import.meta.url));
+const serverEntrypoint = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
 function peHeader(machine: number): Buffer {
   const buffer = Buffer.alloc(128);
@@ -66,4 +67,12 @@ test("Windows normal launch is background-only, while console diagnostics remain
   assert.match(traySource, /Restart service/);
   assert.match(traySource, /Stop service/);
   assert.match(traySource, /Open logs/);
+});
+
+test("server restart uses graceful shutdown after the detached launcher starts", () => {
+  const source = readFileSync(serverEntrypoint, "utf8");
+
+  assert.match(source, /launcher\.once\("spawn", \(\) => \{\s*started = true;\s*finishServerRestart\(\);/);
+  assert.match(source, /exitAfterShutdown\("planned restart", 0\)/);
+  assert.match(source, /app\.get\("\/api\/restart-server\/status"/);
 });

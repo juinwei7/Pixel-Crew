@@ -2633,10 +2633,11 @@ app.post("/api/usage/refresh", async (_req, res) => {
 // ── 優雅重啟 ────────────────────────────────────────────────────────────────
 // NPC 都跑在本 process 底下，直接殺 8787 會把觸發者自己的回合砍斷（result
 // 還沒送到 UI 就死了）。所以改成掛旗標等空檔：每 5 秒檢查一次，等到沒有任何
-// NPC 在忙（含交接/協作/任務）才 spawn 一個脫離的 relauncher——延遲 2 秒後
-// 用 start-pixel-crew.cmd 開新的「可見」黑窗（窗=伺服器的命是刻意設計）——
-// 然後自行退出。舊黑窗因 node 正常結束而收掉，觸發者的回合完整落地。
+// NPC 在忙（含交接/協作/任務）才啟動脫離的 relauncher，接著走完整 shutdown；
+// 舊服務會先收掉所有子程序與資料庫連線，新背景服務才接手。
 let restartPending = false;
+let restartFailure: string | null = null;
+let restartTimer: ReturnType<typeof setInterval> | null = null;
 
 // dev（tsx watch, cwd=server/）跟正式版（node server/dist/index.js, cwd=release
 // 根目錄）下 process.cwd() 不一致；下面重啟/遠端存取用到的檔案
@@ -2645,34 +2646,68 @@ let restartPending = false;
 // server/ 底下同一層，往上兩層即為該層根目錄）。
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+function failServerRestart(message: string): void {
+  if (restartTimer) {
+    clearInterval(restartTimer);
+    restartTimer = null;
+  }
+  restartPending = false;
+  restartFailure = message;
+  console.error(`[restart] ${message}`);
+}
+
+function finishServerRestart(): void {
+  // The restart response has already reached the browser. Use the same orderly
+  // path as normal shutdown so provider children, Mission runners, sockets,
+  // and the SQLite handle are all released before the replacement starts.
+  const timer = setTimeout(() => exitAfterShutdown("planned restart", 0), 800);
+  timer.unref();
+}
+
+function launchRestartHelper(command: string, args: string[]): void {
+  try {
+    const launcher = spawn(command, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    let started = false;
+    launcher.once("spawn", () => {
+      started = true;
+      finishServerRestart();
+    });
+    launcher.once("error", (error) => {
+      if (!started) failServerRestart(t("無法啟動重啟工具：{message}", { message: error.message }));
+      else console.error("[restart] 重啟工具在啟動後發生錯誤:", error);
+    });
+    launcher.unref();
+  } catch (error) {
+    failServerRestart(t("無法啟動重啟工具：{message}", { message: (error as Error).message }));
+  }
+}
+
 function performServerRestart(): void {
   if (process.platform !== "win32") {
     console.log("[restart] 所有 NPC 空檔，重啟中…");
     if (process.env.PIXEL_CREW_SUPERVISED === "1") {
       // macOS 的 menu bar launcher 監督中：直接退出，由它偵測結束後重生。
-      setTimeout(() => process.exit(0), 800);
+      finishServerRestart();
       return;
     }
     // 無監督（手動 node 啟動）：detached shell 等 3 秒（讓觸發者的回合落地、
     // 連接埠釋放）後用同一組 argv/cwd 重啟自己。
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
     const relaunch = [process.execPath, ...process.argv.slice(1)].map(quote).join(" ");
-    spawn("/bin/sh", ["-c", `sleep 3; exec ${relaunch}`], {
-      detached: true,
-      stdio: "ignore",
-      cwd: process.cwd(),
-    }).unref();
-    setTimeout(() => process.exit(0), 800);
+    launchRestartHelper("/bin/sh", ["-c", `sleep 3; exec ${relaunch}`]);
     return;
   }
   // 注意：不能把「含內層引號的整串指令」丟給 cmd /c——node spawn 會把引號轉義成
   // \" ，cmd 解析不了，start 那段會無聲失敗（實測驗證過）。所以改成直接執行
   // restart-pixel-crew.cmd：單一路徑參數不會被轉爛，start 的引號由 .cmd 內部
-  // 的 cmd 自己解析。該 script 等 3 秒、殺掉殘留的 8787、再開可見新黑窗。
+  // 的 cmd 自己解析。該 script 保留短暫等待與 8787 殘留程序清理，再啟動背景服務。
   const script = join(REPO_ROOT, "restart-pixel-crew.cmd");
   if (!existsSync(script)) {
-    console.error(`[restart] 找不到 ${script}，取消重啟`);
-    restartPending = false;
+    failServerRestart(t("找不到重啟工具，已取消重啟"));
     return;
   }
   console.log("[restart] 所有 NPC 空檔，重啟中…");
@@ -2681,19 +2716,10 @@ function performServerRestart(): void {
   // 完全隱藏，與 dc-voice-bot run-bot-hidden.vbs 同招）；vbs 不在才退回舊路徑。
   const hiddenLauncher = join(REPO_ROOT, "restart-pixel-crew-hidden.vbs");
   if (existsSync(hiddenLauncher)) {
-    spawn("wscript.exe", [hiddenLauncher], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    }).unref();
+    launchRestartHelper("wscript.exe", [hiddenLauncher]);
   } else {
-    spawn("cmd.exe", ["/c", script], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    }).unref();
+    launchRestartHelper("cmd.exe", ["/c", script]);
   }
-  setTimeout(() => process.exit(0), 800);
 }
 
 app.post("/api/restart-server", (_req, res) => {
@@ -2701,15 +2727,25 @@ app.post("/api/restart-server", (_req, res) => {
     res.json({ ok: true, message: t("已在等待空檔重啟") });
     return;
   }
+  if (process.platform === "win32" && !existsSync(join(REPO_ROOT, "restart-pixel-crew.cmd"))) {
+    res.status(503).json({ error: t("找不到重啟工具，請重新安裝 Pixel Crew") });
+    return;
+  }
   restartPending = true;
+  restartFailure = null;
   console.log("[restart] 已排程：等所有 NPC 空檔後重啟");
-  const timer = setInterval(() => {
+  restartTimer = setInterval(() => {
     const anyBusy = [...workers.values()].some((w) => workerSummary(w).busy);
     if (anyBusy) return;
-    clearInterval(timer);
+    clearInterval(restartTimer!);
+    restartTimer = null;
     performServerRestart();
   }, 5000);
-  res.json({ ok: true, message: t("將在所有 NPC 空檔時自動重啟並開新黑窗") });
+  res.json({ ok: true, message: t("將在所有 NPC 空檔時自動重啟背景服務") });
+});
+
+app.get("/api/restart-server/status", (_req, res) => {
+  res.json({ pending: restartPending, error: restartFailure });
 });
 
 // Windows' normal launcher deliberately runs without a persistent console or
