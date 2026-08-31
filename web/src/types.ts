@@ -141,6 +141,47 @@ export type ProviderAuthState = {
   debug: string | null;
 };
 
+// A named Codex or Claude account — the provider-agnostic 帳號管理 subsystem.
+// Codex accounts support an "api-key" login mode; Claude accounts are
+// browser-OAuth-only and pass through the "awaiting_code" status while
+// waiting for the owner to paste back the verification code.
+export type ProviderAccount = {
+  id: string;
+  provider: ProviderId;
+  label: string;
+  homeDir: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AccountWithAuth = ProviderAccount & { auth: ProviderAuthState | null };
+
+export type CodexAccountLoginMode = "oauth" | "api-key";
+
+export type AccountLoginState = {
+  accountId: string;
+  status: "running" | "awaiting_code" | "succeeded" | "failed" | "timeout" | "cancelled";
+  startedAt: string;
+  finishedAt: string | null;
+  message: string | null;
+  // Fallback OAuth URL, in case the CLI's own browser auto-open didn't
+  // actually open anything — lets the owner click through without ever
+  // touching a terminal.
+  loginUrl: string | null;
+};
+
+// Claude's default (no-account) login. Two-phase unlike Codex's: after the
+// owner authorizes in the browser, `claude auth login` waits for a code to be
+// pasted back — "awaiting_code" is when the UI should show that input.
+export type ClaudeLoginState = {
+  accountId: string;
+  status: "running" | "awaiting_code" | "succeeded" | "failed" | "timeout" | "cancelled";
+  startedAt: string;
+  finishedAt: string | null;
+  message: string | null;
+  loginUrl: string | null;
+};
+
 export type ProviderInstallState = {
   provider: ProviderId;
   status: "idle" | "running" | "succeeded" | "failed";
@@ -455,6 +496,8 @@ export type WorkerState = {
   provider: ProviderId;
   workspacePath: string;
   departmentId?: string | null;
+  // null = shared/global default login for this worker's provider.
+  accountId?: string | null;
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;

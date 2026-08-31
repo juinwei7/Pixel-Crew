@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import type { CapabilityState, McpServerState, McpToolInfo, ModelOption } from "./capabilities.js";
 import { execCli } from "./platform/processes.js";
+import { codexChildEnv } from "./codexEnv.js";
 import type { LocalStore } from "./store.js";
 import { t } from "./i18n.js";
 
@@ -151,6 +152,7 @@ export class CodexCapabilityRegistry {
     private readonly onUpdate: (state: CapabilityState) => void,
     private readonly workspacePath = config.targetRepoPath,
     private readonly store?: LocalStore,
+    private readonly codexHome: string | null = null,
   ) {
     const slashCommands = mergeSlashCommands(
       store?.loadSlashCommandSeed("codex") ?? [],
@@ -184,11 +186,13 @@ export class CodexCapabilityRegistry {
         cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 2 * 1024 * 1024,
+        env: codexChildEnv(process.env, this.codexHome),
       }),
       execCli(config.codexBin, ["debug", "models"], {
         cwd: this.workspacePath,
         timeout: 15000,
         maxBuffer: 8 * 1024 * 1024,
+        env: codexChildEnv(process.env, this.codexHome),
       }),
     ]);
 
@@ -220,13 +224,20 @@ export class CodexCapabilityRegistry {
       errors.push(`Models: ${modelResult.reason?.message ?? t("讀取失敗")}`);
     }
 
+    // Either call failing (most commonly: the account isn't authenticated
+    // anymore) keeps showing the previous mcpServers/models untouched — useful
+    // context, but it must not be labeled "live" with a fresh timestamp, or
+    // the UI implies these are current results from just now. Same class of
+    // bug as the providerUsage.ts fix: a stale-but-labeled-live cache
+    // silently misleads once the underlying session has ended.
+    const stale = mcpResult.status !== "fulfilled" || modelResult.status !== "fulfilled";
     this.publish({
       ...this.state,
       mcpServers,
       models,
       loading: false,
-      source: "live",
-      updatedAt: new Date().toISOString(),
+      source: stale && mcpServers.length > 0 ? "cache" : "live",
+      updatedAt: stale ? this.state.updatedAt : new Date().toISOString(),
       error: errors.length > 0 ? errors.join("; ") : null,
     });
   }

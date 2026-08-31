@@ -158,6 +158,16 @@ export type PersistedWorker = {
   autoApproveMode: AutoApproveMode;
   events: RunnerEvent[];
   departmentId: string | null;
+  accountId: string | null;
+};
+
+export type ProviderAccount = {
+  id: string;
+  provider: ProviderId;
+  label: string;
+  homeDir: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export class LocalStore {
@@ -432,8 +442,10 @@ export class LocalStore {
         key TEXT PRIMARY KEY,
         value INTEGER NOT NULL DEFAULT 0
       );
+
     `);
     this.migrateCollaborationTasks();
+    this.migrateCodexAccountsToUnifiedAccounts();
     // 這三句用綁定參數（而非把中文字面值烤進 SQL 字串）才能讓 COALESCE 預設訊息吃到 t()。
     this.db.prepare(`
       UPDATE provider_handoffs
@@ -591,6 +603,20 @@ export class LocalStore {
     } catch {
       // Existing databases already migrated to explicit departments.
     }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN codex_account_id TEXT");
+    } catch {
+      // Existing databases already migrated to per-worker Codex accounts.
+    }
+    try {
+      this.db.exec("ALTER TABLE workers ADD COLUMN account_id TEXT");
+    } catch {
+      // Existing databases already migrated to the provider-agnostic account_id column.
+    }
+    // One-time backfill from the old Codex-only column into the generic one —
+    // idempotent (only fills rows where account_id hasn't been set yet), so it's
+    // safe to run on every boot rather than gating it behind the ALTER's try/catch.
+    this.db.exec("UPDATE workers SET account_id = codex_account_id WHERE codex_account_id IS NOT NULL AND account_id IS NULL");
     this.db.prepare(`
       INSERT INTO departments (id, name, purpose, workspace_path, lead_worker_id)
       SELECT 'legacy-' || lower(hex(randomblob(16))), workspace_path,
@@ -623,7 +649,7 @@ export class LocalStore {
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id
       FROM workers ORDER BY sort_order, created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -655,6 +681,7 @@ export class LocalStore {
         autoApproveMode: normalizeAutoApproveMode(row.auto_approve_mode),
         events,
         departmentId: row.department_id == null ? null : String(row.department_id),
+        accountId: row.account_id == null ? null : String(row.account_id),
       };
     });
   }
@@ -663,8 +690,8 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -679,6 +706,7 @@ export class LocalStore {
           persona = excluded.persona,
           auto_approve_mode = excluded.auto_approve_mode,
           department_id = excluded.department_id,
+          account_id = excluded.account_id,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -695,6 +723,7 @@ export class LocalStore {
         serializePersona(worker.persona),
         worker.autoApproveMode,
         worker.departmentId ?? null,
+        worker.accountId ?? null,
       );
     });
   }
@@ -858,6 +887,75 @@ export class LocalStore {
     return this.safeWrite("delete department", () => {
       this.db.prepare("DELETE FROM departments WHERE id = ?").run(id);
     });
+  }
+
+  listAccounts(provider?: ProviderId): ProviderAccount[] {
+    const rows = (provider
+      ? this.db.prepare(
+          "SELECT id, provider, label, home_dir, created_at, updated_at FROM accounts WHERE provider = ? ORDER BY created_at, rowid",
+        ).all(provider)
+      : this.db.prepare(
+          "SELECT id, provider, label, home_dir, created_at, updated_at FROM accounts ORDER BY created_at, rowid",
+        ).all()
+    ) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      provider: row.provider === "codex" ? "codex" : "claude",
+      label: String(row.label),
+      homeDir: String(row.home_dir),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    }));
+  }
+
+  getAccount(id: string): ProviderAccount | null {
+    const row = this.db.prepare(
+      "SELECT id, provider, label, home_dir, created_at, updated_at FROM accounts WHERE id = ?",
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      provider: row.provider === "codex" ? "codex" : "claude",
+      label: String(row.label),
+      homeDir: String(row.home_dir),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  saveAccount(account: ProviderAccount): boolean {
+    return this.safeWrite("save account", () => {
+      this.db.prepare(`
+        INSERT INTO accounts (id, provider, label, home_dir, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          label = excluded.label,
+          home_dir = excluded.home_dir,
+          updated_at = excluded.updated_at
+      `).run(account.id, account.provider, account.label, account.homeDir, account.createdAt, account.updatedAt);
+    });
+  }
+
+  // Deleting an account falls its workers back to the shared/global default
+  // login (account_id = NULL) rather than blocking the delete or removing the workers.
+  deleteAccount(id: string): { deleted: boolean; orphanedWorkerIds: string[] } {
+    let orphanedWorkerIds: string[] = [];
+    const deleted = this.safeWrite("delete account", () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        orphanedWorkerIds = (this.db.prepare("SELECT id FROM workers WHERE account_id = ?").all(id) as Array<{ id: string }>)
+          .map((row) => row.id);
+        if (orphanedWorkerIds.length > 0) {
+          this.db.prepare("UPDATE workers SET account_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE account_id = ?").run(id);
+        }
+        this.db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+    return { deleted, orphanedWorkerIds };
   }
 
   saveDepartmentWithWorkers(
@@ -1456,6 +1554,53 @@ export class LocalStore {
           ON collaboration_tasks(source_worker_id, created_at DESC);
         CREATE INDEX collaboration_tasks_target_created
           ON collaboration_tasks(target_worker_id, created_at DESC);
+      `);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // Unifies the old Codex-only codex_accounts table into a provider-agnostic
+  // accounts table (adds a `provider` column, renames codex_home -> home_dir)
+  // so Claude can share the same named-account subsystem instead of a
+  // duplicated parallel table. No RENAME COLUMN precedent exists in this
+  // codebase (untested in node:sqlite), so this reuses the same
+  // rebuild-via-rename pattern as migrateCollaborationTasks() rather than
+  // risking an untested ALTER TABLE ... RENAME COLUMN.
+  private migrateCodexAccountsToUnifiedAccounts(): void {
+    const unified = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").get();
+    if (unified) return; // already unified, or a fresh install that will create it below.
+    const legacy = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'codex_accounts'").get();
+    if (!legacy) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS accounts (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          label TEXT NOT NULL,
+          home_dir TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      return;
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.exec(`
+        ALTER TABLE codex_accounts RENAME TO accounts_legacy;
+        CREATE TABLE accounts (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          label TEXT NOT NULL,
+          home_dir TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO accounts (id, provider, label, home_dir, created_at, updated_at)
+        SELECT id, 'codex', label, codex_home, created_at, updated_at FROM accounts_legacy;
+        DROP TABLE accounts_legacy;
       `);
       this.db.exec("COMMIT");
     } catch (error) {

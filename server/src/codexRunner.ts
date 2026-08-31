@@ -11,6 +11,7 @@ import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProt
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 import { parseCodexMcpServerStatus, type CodexMcpServerToolsEntry } from "./codexCapabilities.js";
+import { codexChildEnv } from "./codexEnv.js";
 import { t } from "./i18n.js";
 import {
   ABORTED_MESSAGE,
@@ -94,6 +95,11 @@ export class CodexSession implements AgentSession {
     // See dangerousCommand.ts.
     private readonly getAutoApproveMode: () => AutoApproveMode = () => "off",
     initialState?: { sessionId: string; completedTurns: number },
+    // Per-worker Codex account: overrides CODEX_HOME for this worker's
+    // app-server child. Read live at each spawn (not cached at construction)
+    // so reassigning a worker's account takes effect next restart. null/undefined
+    // falls back to the shared/global CODEX_HOME (legacy behavior).
+    private readonly getCodexHome: () => string | null = () => null,
   ) {
     this.sessionId = initialState?.sessionId || randomUUID();
     this.completedTurns = initialState?.completedTurns ?? 0;
@@ -326,7 +332,7 @@ export class CodexSession implements AgentSession {
     }
     const child = spawnCli(config.codexBin, args, {
       cwd: this.workspacePath,
-      env: codexChildEnv(process.env),
+      env: codexChildEnv(process.env, this.getCodexHome()),
     });
     this.child = child;
     // Writing to stdin after the app-server has already died (but before
@@ -757,11 +763,12 @@ export function buildCodexArgs(options: { sessionId: string; completedTurns: num
   return args;
 }
 
-export function codexChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...source };
-  for (const key of Object.keys(env)) if (key.startsWith("CODEX_") && key !== "CODEX_HOME") delete env[key];
-  return env;
-}
+// Re-exported for backward compatibility — callers/tests that import
+// codexChildEnv from here keep working; the real implementation lives in
+// codexEnv.ts (a dependency-free leaf module so codexCapabilities.ts can also
+// import it without an import cycle, since codexRunner.ts <-> codexCapabilities.ts
+// already import from each other).
+export { codexChildEnv } from "./codexEnv.js";
 
 export function codexTool(item: any): { name: string; input: unknown; output: unknown; isError: boolean } | null {
   const failed = item?.status === "failed" || Number(item?.exit_code ?? 0) !== 0;

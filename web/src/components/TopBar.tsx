@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
+import type { AccountWithAuth, AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
 import { APP_VERSION } from "../appVersion";
 import { lang, setLang, t, tc } from "../i18n";
 import { theme, setTheme } from "../theme";
@@ -19,9 +19,12 @@ type Props = {
   modelOptions: ModelOption[];
   workerCount: number;
   providerChanging?: boolean;
+  accounts?: AccountWithAuth[];
+  onSetWorkerAccount?(workerId: string, accountId: string | null): void;
   onRoom(): void;
   onBossAssignment?(): void;
   onOpenMcp(): void;
+  onOpenAccounts(): void;
   onOpenBackup(): void;
   onOpenOps(): void;
   onOpenSquads(): void;
@@ -53,9 +56,12 @@ export function TopBar({
   modelOptions,
   workerCount,
   providerChanging = false,
+  accounts,
+  onSetWorkerAccount,
   onRoom,
   onBossAssignment,
   onOpenMcp,
+  onOpenAccounts,
   onOpenBackup,
   onOpenOps,
   onOpenSquads,
@@ -175,6 +181,33 @@ export function TopBar({
           ))}
         </select>
         {capabilities.loading && <span className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></span>}
+        {active && (() => {
+          const providerAccounts = accounts?.filter((account) => account.provider === provider) ?? [];
+          if (providerAccounts.length === 0) return null;
+          const hasHistory = active.turns.length > 0;
+          const providerLabel = provider === "codex" ? "Codex" : "Claude";
+          return (
+          <select
+            className="top-bar__provider-select"
+            value={active.accountId ?? ""}
+            disabled={active.busy || hasHistory}
+            onChange={(event) => onSetWorkerAccount?.(active.id, event.target.value || null)}
+            aria-label={t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })}
+            title={
+              hasHistory
+                ? t("這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶", { provider: providerLabel })
+                : t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })
+            }
+          >
+            <option value="">{t("共用登入")}</option>
+            {providerAccounts.map((account) => (
+              <option key={account.id} value={account.id} disabled={account.auth?.status !== "authenticated"}>
+                {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
+              </option>
+            ))}
+          </select>
+          );
+        })()}
         <select
           className={`top-bar__auto-approve top-bar__auto-approve--${active?.autoApproveMode ?? "off"}`}
           value={active?.autoApproveMode ?? "off"}
@@ -204,6 +237,9 @@ export function TopBar({
           <div className="top-bar__more-menu" role="menu">
             <button type="button" onClick={() => { setToolsOpen(false); onOpenMcp(); }} title={t("MCP 能力與連線狀態")}>
               {t("MCP 能力")} <strong>{capabilities.loading && capabilities.mcpServers.length === 0 ? "…" : `${connected}/${capabilities.mcpServers.length}`}</strong>
+            </button>
+            <button type="button" onClick={() => { setToolsOpen(false); onOpenAccounts(); }} title={t("帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個")}>
+              {t("🔑 帳號管理")}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenSquads(); }} title={t("一鍵成軍：整組配好角色分工的小隊直接進駐")}>
               {t("🫡 一鍵成軍")}

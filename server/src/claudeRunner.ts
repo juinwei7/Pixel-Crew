@@ -9,6 +9,7 @@ import type { AgentSession, ExecutionProfile, MessageDocument, MessageImage, Sen
 import { stageMessageDocuments } from "./messageDocuments.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { claudeChildEnv } from "./claudeEnv.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
 import { queryToolPolicy, readOnlyBuiltinToolNames } from "./toolPolicy.js";
 import { t } from "./i18n.js";
@@ -116,6 +117,11 @@ export class ClaudeSession implements AgentSession {
     // everything except isDangerousCommand matches. See dangerousCommand.ts.
     private readonly getAutoApproveMode: () => AutoApproveMode = () => "off",
     initialState?: { sessionId: string; completedTurns: number },
+    // Overrides CLAUDE_CONFIG_DIR for this worker's child process. Read live
+    // at each spawn (mirrors CodexSession.getCodexHome), not cached at
+    // construction. null/undefined falls back to the shared/global
+    // CLAUDE_CONFIG_DIR (ambient ~/.claude.json).
+    private readonly getClaudeHome: () => string | null = () => null,
   ) {
     this.claudeSessionId = initialState?.sessionId || randomUUID();
     this.completedTurns = initialState?.completedTurns ?? 0;
@@ -379,7 +385,7 @@ export class ClaudeSession implements AgentSession {
 
     const child = spawnCli(config.claudeBin, args, {
       cwd: this.workspacePath,
-      env: process.env,
+      env: claudeChildEnv(process.env, this.getClaudeHome()),
     });
     this.child = child;
     this.spawnedProfile = this.executionProfile;

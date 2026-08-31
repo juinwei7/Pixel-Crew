@@ -512,3 +512,137 @@ test("persists Boss task chat, stages, and final report across reopen", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("provider accounts round-trip across Codex and Claude, and deleting one falls back its workers to the shared login", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-accounts-"));
+  const path = join(dir, "test.sqlite");
+  const stores: LocalStore[] = [];
+  try {
+    const store = new LocalStore(path);
+    stores.push(store);
+    const base = { model: null, avatarId: null, avatarKind: "preset" as const, avatarPresetId: "classic", workspacePath: "/repo", completedTurns: 0, persona: null, autoApproveMode: "off" as const, departmentId: null };
+
+    assert.deepEqual(store.listAccounts(), []);
+    const account = { id: "acct-1", provider: "codex" as const, label: "alice", homeDir: "/data/accounts/acct-1", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    assert.equal(store.saveAccount(account), true);
+    assert.deepEqual(store.getAccount("acct-1"), account);
+    assert.deepEqual(store.listAccounts(), [account]);
+    assert.deepEqual(store.listAccounts("codex"), [account]);
+    assert.deepEqual(store.listAccounts("claude"), []);
+
+    const renamed = { ...account, label: "alice (renamed)", updatedAt: "2026-01-02T00:00:00.000Z" };
+    assert.equal(store.saveAccount(renamed), true);
+    assert.deepEqual(store.getAccount("acct-1"), renamed);
+
+    const claudeAccount = { id: "acct-2", provider: "claude" as const, label: "bob", homeDir: "/data/accounts/acct-2", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    assert.equal(store.saveAccount(claudeAccount), true);
+    assert.deepEqual(store.listAccounts("claude"), [claudeAccount]);
+
+    store.saveWorker({ ...base, id: "worker-1", name: "一號機", colorIndex: 0, provider: "codex", sessionId: "s1", accountId: "acct-1" });
+    store.saveWorker({ ...base, id: "worker-2", name: "二號機", colorIndex: 1, provider: "claude", sessionId: "s2", accountId: null });
+    assert.equal(store.loadWorkers(0).find((w) => w.id === "worker-1")?.accountId, "acct-1");
+
+    const { deleted, orphanedWorkerIds } = store.deleteAccount("acct-1");
+    assert.equal(deleted, true);
+    assert.deepEqual(orphanedWorkerIds, ["worker-1"]);
+    assert.equal(store.getAccount("acct-1"), null);
+    const reloaded = store.loadWorkers(0);
+    assert.equal(reloaded.find((w) => w.id === "worker-1")?.accountId, null);
+    assert.equal(reloaded.find((w) => w.id === "worker-2")?.accountId, null);
+
+    // Deleting an account with no referencing workers reports an empty orphan list.
+    assert.deepEqual(store.deleteAccount("never-existed"), { deleted: true, orphanedWorkerIds: [] });
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a pre-migration workers table (no account_id column) backfills to NULL, not an error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-legacy-codex-account-"));
+  let store: LocalStore | null = null;
+  try {
+    const path = join(dir, "test.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model TEXT,
+        color_index INTEGER NOT NULL,
+        avatar_id TEXT,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
+        claude_session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        persona TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO workers (id, name, color_index, provider, workspace_path, claude_session_id)
+      VALUES ('pre-migration', '舊角色', 0, 'codex', '/repo', 'session-1');
+    `);
+    legacy.close();
+
+    store = new LocalStore(path);
+    const [worker] = store.loadWorkers(0);
+    assert.equal(worker.accountId, null);
+    assert.deepEqual(store.listAccounts(), []);
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a database with the legacy codex_accounts table rebuilds it into the unified accounts table on boot", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-legacy-codex-accounts-table-"));
+  let store: LocalStore | null = null;
+  try {
+    const path = join(dir, "test.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model TEXT,
+        color_index INTEGER NOT NULL,
+        avatar_id TEXT,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
+        claude_session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        persona TEXT,
+        codex_account_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE codex_accounts (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        codex_home TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO codex_accounts (id, label, codex_home, created_at, updated_at)
+      VALUES ('acct-legacy', 'legacy alice', '/data/codex-accounts/acct-legacy', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+      INSERT INTO workers (id, name, color_index, provider, workspace_path, claude_session_id, codex_account_id)
+      VALUES ('worker-legacy', '舊角色', 0, 'codex', '/repo', 'session-1', 'acct-legacy');
+    `);
+    legacy.close();
+
+    store = new LocalStore(path);
+    const accounts = store.listAccounts();
+    assert.deepEqual(accounts, [{
+      id: "acct-legacy", provider: "codex", label: "legacy alice",
+      homeDir: "/data/codex-accounts/acct-legacy",
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    }]);
+    // The one-time backfill (account_id <- codex_account_id) carries the worker's
+    // existing assignment forward into the generic column.
+    const [worker] = store.loadWorkers(0);
+    assert.equal(worker.accountId, "acct-legacy");
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

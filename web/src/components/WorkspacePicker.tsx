@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { AccountWithAuth, ProviderId } from "../types";
 import { roomName } from "../workspace";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
@@ -9,12 +10,19 @@ type Props = {
   currentPath: string;
   recentPaths: string[];
   resetsConversation: boolean;
+  // Only meaningful when mode === "create": lets the new NPC use its own
+  // named account instead of the shared login. Omit both when not applicable
+  // (no named accounts for this provider yet, or moving an existing NPC).
+  newWorkerProvider?: ProviderId;
+  accounts?: AccountWithAuth[];
+  accountId?: string | null;
+  onAccountChange?(id: string | null): void;
   onClose(): void;
   onSelect(path: string): Promise<string | null>;
   onBrowse(): Promise<{ path?: string; canceled?: boolean; error?: string }>;
 };
 
-export function WorkspacePicker({ required = false, mode = "move", currentPath, recentPaths, resetsConversation, onClose, onSelect, onBrowse }: Props) {
+export function WorkspacePicker({ required = false, mode = "move", currentPath, recentPaths, resetsConversation, newWorkerProvider, accounts, accountId, onAccountChange, onClose, onSelect, onBrowse }: Props) {
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +101,30 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
             <b>{t("建議")}</b>
           </button>
         )}
+
+        {creating && newWorkerProvider && (() => {
+          const providerAccounts = accounts?.filter((account) => account.provider === newWorkerProvider) ?? [];
+          if (providerAccounts.length === 0) return null;
+          const providerLabel = newWorkerProvider === "codex" ? "Codex" : "Claude";
+          return (
+          <div className="workspace-picker__label" style={{ marginTop: 0 }}>
+            <label htmlFor="workspace-account">{t("{provider} 帳號", { provider: providerLabel })}</label>
+            <select
+              id="workspace-account"
+              className="workspace-picker__input"
+              value={accountId ?? ""}
+              onChange={(event) => onAccountChange?.(event.target.value || null)}
+            >
+              <option value="">{t("使用共用登入")}</option>
+              {providerAccounts.map((account) => (
+                <option key={account.id} value={account.id} disabled={account.auth?.status !== "authenticated"}>
+                  {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          );
+        })()}
 
         {resetsConversation && (
           <div className="workspace-picker__reset-warning">

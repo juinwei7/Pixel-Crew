@@ -1,12 +1,22 @@
 import { useState } from "react";
 import { t } from "../i18n";
-import type { ProviderAuthState, ProviderId, ProviderInstallState } from "../types";
+import type { AccountLoginState, ClaudeLoginState, CodexAccountLoginMode, ProviderAuthState, ProviderId, ProviderInstallState } from "../types";
 
 type Props = {
   auth: ProviderAuthState;
   providers: Record<ProviderId, ProviderAuthState>;
   installs: Record<ProviderId, ProviderInstallState>;
   platform?: string;
+  // The app-managed default login for each provider (see codexAccountLogin.ts
+  // / claudeAccountLogin.ts on the server) — lets the owner log in without
+  // ever opening a terminal.
+  defaultCodexLogin: AccountLoginState | null;
+  onStartDefaultCodexLogin(mode: CodexAccountLoginMode, apiKey?: string): void | Promise<string | null>;
+  onCancelDefaultCodexLogin(): void | Promise<void>;
+  defaultClaudeLogin: ClaudeLoginState | null;
+  onStartDefaultClaudeLogin(): void | Promise<string | null>;
+  onSubmitDefaultClaudeLoginCode(code: string): void | Promise<string | null>;
+  onCancelDefaultClaudeLogin(): void | Promise<void>;
   onRefresh(provider?: ProviderId): void | Promise<void>;
   onInstall(provider: ProviderId): void | Promise<string | null>;
   onUseProvider(provider: ProviderId): void;
@@ -38,9 +48,17 @@ function statusLabel(auth: ProviderAuthState): string {
   return t("連線異常");
 }
 
-export function AuthGate({ auth, providers, installs, platform, onRefresh, onInstall, onUseProvider }: Props) {
+export function AuthGate({
+  auth, providers, installs, platform,
+  defaultCodexLogin, onStartDefaultCodexLogin, onCancelDefaultCodexLogin,
+  defaultClaudeLogin, onStartDefaultClaudeLogin, onSubmitDefaultClaudeLoginCode, onCancelDefaultClaudeLogin,
+  onRefresh, onInstall, onUseProvider,
+}: Props) {
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmProvider, setConfirmProvider] = useState<ProviderId | null>(null);
+  const [codexApiKeyOpen, setCodexApiKeyOpen] = useState(false);
+  const [codexApiKeyDraft, setCodexApiKeyDraft] = useState("");
+  const [claudeCodeDraft, setClaudeCodeDraft] = useState("");
   const readyProviders = (Object.keys(providers) as ProviderId[]).filter(
     (provider) => providers[provider].status === "authenticated",
   );
@@ -107,23 +125,105 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
                 {state.status === "checking" && <div className="auth-provider-card__checking"><span className="spinner" />{t("正在確認 CLI 與登入狀態")}</div>}
                 {state.status === "authenticated" && <p className="auth-provider-card__ready">{t("已可接收任務。")}</p>}
 
-                {showSetup && (
-                  <ol className="auth-provider-steps">
-                    {showInstall && (
-                      <li>
-                        <span>1</span>
-                        <div><strong>{t("安裝 CLI")}</strong><CommandRow command={installCommand} copyKey={`${provider}:install`} copied={copied} onCopy={copyCommand} /></div>
-                      </li>
+                {showSetup && provider === "codex" && !showInstall && (
+                  <div className="auth-provider-inapp-login">
+                    <div className="auth-provider-inapp-login__title">{t("直接在 app 內登入（不用開終端機）")}</div>
+                    {defaultCodexLogin?.status === "running" ? (
+                      <div className="auth-provider-inapp-login__pending">
+                        <span className="spinner" />
+                        {t("登入中…")}
+                        <button type="button" onClick={() => void onCancelDefaultCodexLogin()}>{t("取消")}</button>
+                        {defaultCodexLogin.loginUrl && (
+                          <div className="auth-gate__hint-inline">
+                            {t("瀏覽器沒有自動跳出來？")}{" "}
+                            <a href={defaultCodexLogin.loginUrl} target="_blank" rel="noreferrer">{t("點這裡開啟登入頁面")}</a>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="auth-provider-inapp-login__actions">
+                        <button type="button" onClick={() => void onStartDefaultCodexLogin("oauth")}>{t("瀏覽器登入")}</button>
+                        <button type="button" onClick={() => setCodexApiKeyOpen((open) => !open)}>{t("API Key 登入")}</button>
+                      </div>
                     )}
-                    <li>
-                      <span>{showInstall ? "2" : "1"}</span>
-                      <div><strong>{t("在終端機登入")}</strong><CommandRow command={state.loginCommand} copyKey={`${provider}:login`} copied={copied} onCopy={copyCommand} /></div>
-                    </li>
-                    <li>
-                      <span>{showInstall ? "3" : "2"}</span>
-                      <div><strong>{t("確認安裝完成")}</strong><CommandRow command={verifyCommand} copyKey={`${provider}:verify`} copied={copied} onCopy={copyCommand} /></div>
-                    </li>
-                  </ol>
+                    {codexApiKeyOpen && defaultCodexLogin?.status !== "running" && (
+                      <div className="auth-provider-inapp-login__apikey">
+                        <input
+                          type="password"
+                          placeholder="sk-..."
+                          value={codexApiKeyDraft}
+                          onChange={(event) => setCodexApiKeyDraft(event.target.value)}
+                        />
+                        <button
+                          type="button"
+                          disabled={!codexApiKeyDraft.trim()}
+                          onClick={() => {
+                            void onStartDefaultCodexLogin("api-key", codexApiKeyDraft.trim());
+                            setCodexApiKeyDraft("");
+                            setCodexApiKeyOpen(false);
+                          }}
+                        >
+                          {t("送出")}
+                        </button>
+                      </div>
+                    )}
+                    {defaultCodexLogin && !["running", "succeeded"].includes(defaultCodexLogin.status) && (
+                      <div className="auth-gate__error">{defaultCodexLogin.message}</div>
+                    )}
+                  </div>
+                )}
+
+                {showSetup && provider === "claude" && !showInstall && (
+                  <div className="auth-provider-inapp-login">
+                    <div className="auth-provider-inapp-login__title">{t("直接在 app 內登入（不用開終端機）")}</div>
+                    {defaultClaudeLogin?.status === "running" || defaultClaudeLogin?.status === "awaiting_code" ? (
+                      <div className="auth-provider-inapp-login__pending">
+                        <span className="spinner" />
+                        {defaultClaudeLogin.status === "awaiting_code" ? t("等待貼上驗證碼…") : t("登入中…")}
+                        <button type="button" onClick={() => void onCancelDefaultClaudeLogin()}>{t("取消")}</button>
+                        {defaultClaudeLogin.loginUrl && (
+                          <div className="auth-gate__hint-inline">
+                            {t("瀏覽器沒有自動跳出來？")}{" "}
+                            <a href={defaultClaudeLogin.loginUrl} target="_blank" rel="noreferrer">{t("點這裡開啟登入頁面")}</a>
+                          </div>
+                        )}
+                        {defaultClaudeLogin.status === "awaiting_code" && (
+                          <div className="auth-provider-inapp-login__apikey">
+                            <input
+                              type="text"
+                              placeholder={t("完成瀏覽器授權後，把驗證碼貼在這裡")}
+                              value={claudeCodeDraft}
+                              onChange={(event) => setClaudeCodeDraft(event.target.value)}
+                            />
+                            <button
+                              type="button"
+                              disabled={!claudeCodeDraft.trim()}
+                              onClick={() => {
+                                void onSubmitDefaultClaudeLoginCode(claudeCodeDraft.trim());
+                                setClaudeCodeDraft("");
+                              }}
+                            >
+                              {t("送出")}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="auth-provider-inapp-login__actions">
+                        <button type="button" onClick={() => void onStartDefaultClaudeLogin()}>{t("瀏覽器登入")}</button>
+                      </div>
+                    )}
+                    {defaultClaudeLogin && !["running", "awaiting_code", "succeeded"].includes(defaultClaudeLogin.status) && (
+                      <div className="auth-gate__error">{defaultClaudeLogin.message}</div>
+                    )}
+                  </div>
+                )}
+
+                {showSetup && (
+                  <details className="auth-provider-steps-details">
+                    <summary>{t("進階：手動在終端機安裝／登入")}</summary>
+                    <ManualSteps showInstall={showInstall} installCommand={installCommand} verifyCommand={verifyCommand} loginCommand={state.loginCommand} provider={provider} copied={copied} onCopy={copyCommand} />
+                  </details>
                 )}
 
                 {showInstall && (
@@ -200,6 +300,43 @@ export function AuthGate({ auth, providers, installs, platform, onRefresh, onIns
         )}
       </div>
     </div>
+  );
+}
+
+function ManualSteps({
+  showInstall,
+  installCommand,
+  verifyCommand,
+  loginCommand,
+  provider,
+  copied,
+  onCopy,
+}: {
+  showInstall: boolean;
+  installCommand: string;
+  verifyCommand: string;
+  loginCommand: string;
+  provider: ProviderId;
+  copied: string | null;
+  onCopy(key: string, command: string): void | Promise<void>;
+}) {
+  return (
+    <ol className="auth-provider-steps">
+      {showInstall && (
+        <li>
+          <span>1</span>
+          <div><strong>{t("安裝 CLI")}</strong><CommandRow command={installCommand} copyKey={`${provider}:install`} copied={copied} onCopy={onCopy} /></div>
+        </li>
+      )}
+      <li>
+        <span>{showInstall ? "2" : "1"}</span>
+        <div><strong>{t("在終端機登入")}</strong><CommandRow command={loginCommand} copyKey={`${provider}:login`} copied={copied} onCopy={onCopy} /></div>
+      </li>
+      <li>
+        <span>{showInstall ? "3" : "2"}</span>
+        <div><strong>{t("確認安裝完成")}</strong><CommandRow command={verifyCommand} copyKey={`${provider}:verify`} copied={copied} onCopy={onCopy} /></div>
+      </li>
+    </ol>
   );
 }
 

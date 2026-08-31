@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { resolveClaudeAuthStatus } from "./claudeAuthStatus.js";
 import { execCli } from "../platform/processes.js";
 import { buildAuthDebug } from "./authDebug.js";
+import { claudeChildEnv } from "../claudeEnv.js";
 
 function shellCommand(value: string): string {
   if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
@@ -17,6 +18,10 @@ export class ClaudeAuthProvider implements AgentAuthProvider {
   readonly loginCommand = `${shellCommand(config.claudeBin)} auth login`;
 
   private activeCheck: Promise<ProviderAuthState> | null = null;
+
+  // null = shared/global CLAUDE_CONFIG_DIR (ambient ~/.claude.json), same
+  // fallback-to-legacy-behavior convention as CodexAuthProvider's codexHome.
+  constructor(private readonly claudeHome: string | null = null) {}
 
   checkAuth(): Promise<ProviderAuthState> {
     if (this.activeCheck) return this.activeCheck;
@@ -33,7 +38,10 @@ export class ClaudeAuthProvider implements AgentAuthProvider {
     let stdout = "";
     let stderr = "";
     try {
-      ({ stdout, stderr } = await execCli(config.claudeBin, args, { timeout: 10_000 }));
+      ({ stdout, stderr } = await execCli(config.claudeBin, args, {
+        timeout: 10_000,
+        env: claudeChildEnv(process.env, this.claudeHome),
+      }));
     } catch (caught) {
       error = caught as NodeJS.ErrnoException;
       stdout = String((caught as any).stdout ?? "");

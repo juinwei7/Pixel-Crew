@@ -49,7 +49,7 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-usage-"));
   const store = new LocalStore(join(dir, "test.sqlite"));
   try {
-    const registry = new ProviderUsageRegistry(store, () => undefined, () => false);
+    const registry = new ProviderUsageRegistry(store, () => undefined, () => "unauthenticated");
 
     // A forced refresh on a not-ready provider must resolve to a neutral,
     // non-loading, error-free state without ever reading live usage.
@@ -59,6 +59,58 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
     assert.equal(state.source, "empty");
     assert.equal(state.updatedAt, null);
     assert.deepEqual(state.windows, []);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// idleState() (constructor-time load from disk) always recomputes source as
+// "cache"/"empty" itself — it never trusts a stored "live" label. So to test
+// the in-memory relabeling that happens when a provider signs out *during*
+// the same process lifetime (the actual bug: a live fetch succeeds, then the
+// provider becomes unauthenticated without a restart), the "live" state has
+// to be seeded directly on the instance, the same way codexCapabilities.test.ts
+// seeds `(registry as any).state` — there's no injectable CLI executor here to
+// fake a real refresh() call into producing it.
+function seedLiveState(registry: ProviderUsageRegistry, provider: "codex" | "claude") {
+  (registry as any).states = {
+    ...(registry as any).states,
+    [provider]: {
+      provider, windows: [{ id: "w", label: "5 小時", usedPercent: 10, remainingPercent: 90, resetsAt: null, scope: "rate" }],
+      loading: false, source: "live", updatedAt: new Date().toISOString(), error: null,
+    },
+  };
+}
+
+test("a provider still 'checking' keeps its previously shown windows untouched (no flicker while the 3s re-poll settles)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-usage-checking-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    const registry = new ProviderUsageRegistry(store, () => undefined, () => "checking");
+    seedLiveState(registry, "codex");
+
+    const state = await registry.refresh("codex", true);
+    assert.equal(state.source, "live");
+    assert.equal(state.windows.length, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("confirmed sign-out relabels stale 'live' windows as 'cache' instead of showing them as current", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-usage-signedout-"));
+  const store = new LocalStore(join(dir, "test.sqlite"));
+  try {
+    const registry = new ProviderUsageRegistry(store, () => undefined, () => "unauthenticated");
+    seedLiveState(registry, "codex");
+
+    const state = await registry.refresh("codex", true);
+    assert.equal(state.source, "cache");
+    // The windows themselves are kept (still useful context), just no longer
+    // presented as "current" — this mirrors the existing 快取 badge, not a new UI concept.
+    assert.equal(state.windows.length, 1);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

@@ -16,6 +16,7 @@ type WatcherOptions = {
   intervalMs?: number;
   homeDirectory?: string;
   codexHome?: string;
+  claudeHome?: string;
 };
 
 function uniqueWorkspacePaths(paths: string[]): string[] {
@@ -24,17 +25,18 @@ function uniqueWorkspacePaths(paths: string[]): string[] {
 
 export function mcpConfigTargets(
   workspacePaths: string[],
-  options: Pick<WatcherOptions, "homeDirectory" | "codexHome"> = {},
+  options: Pick<WatcherOptions, "homeDirectory" | "codexHome" | "claudeHome"> = {},
 ): McpConfigChange[] {
   const homeDirectory = options.homeDirectory ?? homedir();
   const codexHome = options.codexHome
     ?? process.env.CODEX_HOME?.trim()
     ?? join(homeDirectory, ".codex");
+  const claudeHome = options.claudeHome ?? homeDirectory;
   const targets: McpConfigChange[] = [
     {
       provider: "claude",
       workspacePath: null,
-      path: join(homeDirectory, ".claude.json"),
+      path: join(claudeHome, ".claude.json"),
       scope: "global",
       section: "claude-global",
     },
@@ -51,7 +53,7 @@ export function mcpConfigTargets(
       {
         provider: "claude",
         workspacePath,
-        path: join(homeDirectory, ".claude.json"),
+        path: join(claudeHome, ".claude.json"),
         scope: "workspace",
         section: "claude-project",
       },
@@ -134,7 +136,7 @@ function targetKey(target: McpConfigChange): string {
  */
 export class McpConfigWatcher {
   private readonly intervalMs: number;
-  private readonly targetOptions: Pick<WatcherOptions, "homeDirectory" | "codexHome">;
+  private readonly targetOptions: Pick<WatcherOptions, "homeDirectory" | "codexHome" | "claudeHome">;
   private readonly fingerprints = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -150,6 +152,7 @@ export class McpConfigWatcher {
     this.targetOptions = {
       homeDirectory: options.homeDirectory,
       codexHome: options.codexHome,
+      claudeHome: options.claudeHome,
     };
   }
 

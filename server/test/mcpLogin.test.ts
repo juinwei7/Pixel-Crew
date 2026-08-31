@@ -31,6 +31,17 @@ test("start() marks the login running and reports a duplicate start as already r
   assert.equal(spawned.length, 1);
 });
 
+test("an explicit env is passed through to the spawner (Codex logins pin CODEX_HOME); omitting it leaves the ambient environment untouched", () => {
+  const spawnedOptions: Array<{ cwd: string; env?: NodeJS.ProcessEnv }> = [];
+  const tracker = new McpLoginTracker(() => {}, (_bin, _args, options) => { spawnedOptions.push(options); return fakeChild(); });
+
+  tracker.start("codex", "/repo", "docs", { CODEX_HOME: "/data/codex-home" } as NodeJS.ProcessEnv);
+  tracker.start("claude", "/repo", "notion");
+
+  assert.deepEqual(spawnedOptions[0].env, { CODEX_HOME: "/data/codex-home" });
+  assert.equal(spawnedOptions[1].env, undefined);
+});
+
 test("a successful CLI exit reports succeeded with the captured stdout", () => {
   let finishedState: McpLoginState | null = null;
   let child: any;
