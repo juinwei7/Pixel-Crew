@@ -34,6 +34,15 @@ test("parses only the Codex native commands implemented by Pixel Crew", () => {
   assert.equal(parseCodexNativeCommand("/theme"), null);
 });
 
+test("parses /goal into get/clear/set, without misreading an objective that starts with the word clear", () => {
+  assert.deepEqual(parseCodexNativeCommand("/goal"), { type: "goal_get" });
+  assert.deepEqual(parseCodexNativeCommand(" /goal "), { type: "goal_get" });
+  assert.deepEqual(parseCodexNativeCommand("/goal clear"), { type: "goal_clear" });
+  assert.deepEqual(parseCodexNativeCommand("/goal CLEAR"), { type: "goal_clear" });
+  assert.deepEqual(parseCodexNativeCommand("/goal ship the release"), { type: "goal_set", objective: "ship the release" });
+  assert.deepEqual(parseCodexNativeCommand("/goal clear the auth debt"), { type: "goal_set", objective: "clear the auth debt" });
+});
+
 test("dispatches compact through app-server instead of sending it as a prompt", async () => {
   const events: RunnerEvent[] = [];
   const writes: any[] = [];
@@ -57,6 +66,76 @@ test("dispatches compact through app-server instead of sending it as a prompt", 
 
   internals.handleRpcLine(JSON.stringify({ method: "thread/compacted", params: { threadId: "thread-1" } }), internals.generation);
   assert.equal(events.some((event) => event.type === "turn_end" && event.resultText.includes("已壓縮")), true);
+  assert.equal(session.busy, false);
+});
+
+test("dispatches thread/goal/set through app-server and reports the confirmed objective from the response", async () => {
+  const events: RunnerEvent[] = [];
+  const writes: any[] = [];
+  const session = new CodexSession((event) => events.push(event), "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+
+  session.send("/goal ship the release");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ method: "thread/goal/set", id: 1, params: { threadId: "thread-1", objective: "ship the release", status: "active" } }]);
+
+  // The response itself carries the result — no separate notification needed.
+  internals.handleRpcLine(JSON.stringify({ id: 1, result: { goal: { objective: "ship the release", status: "active" } } }), internals.generation);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.type === "turn_end" && event.resultText.includes("ship the release")), true);
+  assert.equal(session.busy, false);
+});
+
+test("dispatches thread/goal/clear through app-server and reports whether a goal was actually cleared", async () => {
+  const events: RunnerEvent[] = [];
+  const writes: any[] = [];
+  const session = new CodexSession((event) => events.push(event), "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+
+  session.send("/goal clear");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ method: "thread/goal/clear", id: 1, params: { threadId: "thread-1" } }]);
+
+  internals.handleRpcLine(JSON.stringify({ id: 1, result: { cleared: true } }), internals.generation);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.type === "turn_end" && event.resultText.includes("已清除")), true);
+  assert.equal(session.busy, false);
+});
+
+test("dispatches thread/goal/get through app-server and reports no-goal distinctly from a set goal", async () => {
+  const events: RunnerEvent[] = [];
+  const writes: any[] = [];
+  const session = new CodexSession((event) => events.push(event), "/repo");
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } };
+    ready: Promise<string>;
+    generation: number;
+    handleRpcLine(line: string, generation: number): void;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.ready = Promise.resolve("thread-1");
+
+  session.send("/goal");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ method: "thread/goal/get", id: 1, params: { threadId: "thread-1" } }]);
+
+  internals.handleRpcLine(JSON.stringify({ id: 1, result: { goal: null } }), internals.generation);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event.type === "turn_end" && event.resultText.includes("目前沒有設定目標")), true);
   assert.equal(session.busy, false);
 });
 

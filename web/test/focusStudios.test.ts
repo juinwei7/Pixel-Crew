@@ -4,14 +4,14 @@ import { buildFocusStudios, focusStudioShortcut, focusStudioWorkers, studioWorke
 
 test("builds stable studios from managed paths and worker state", () => {
   const studios = buildFocusStudios(["/repo/a", "/repo/b"], [
-    { id: "a1", name: "A", workspacePath: "/repo/a", busy: true, needsAttention: false },
+    { id: "a1", name: "A", workspacePath: "/repo/a", busy: true, needsAttention: false, unread: true },
     { id: "a2", name: "A2", workspacePath: "/repo/a", busy: false, needsAttention: true },
     { id: "c1", name: "C", workspacePath: "/repo/c", busy: false, needsAttention: false },
   ]);
-  assert.deepEqual(studios.map(({ workspacePath, name, workerIds, busyCount, attentionCount }) => ({ workspacePath, name, workerIds, busyCount, attentionCount })), [
-    { workspacePath: "/repo/a", name: "a", workerIds: ["a1", "a2"], busyCount: 1, attentionCount: 1 },
-    { workspacePath: "/repo/b", name: "b", workerIds: [], busyCount: 0, attentionCount: 0 },
-    { workspacePath: "/repo/c", name: "c", workerIds: ["c1"], busyCount: 0, attentionCount: 0 },
+  assert.deepEqual(studios.map(({ workspacePath, name, workerIds, busyCount, attentionCount, unreadCount }) => ({ workspacePath, name, workerIds, busyCount, attentionCount, unreadCount })), [
+    { workspacePath: "/repo/a", name: "a", workerIds: ["a1", "a2"], busyCount: 1, attentionCount: 1, unreadCount: 1 },
+    { workspacePath: "/repo/b", name: "b", workerIds: [], busyCount: 0, attentionCount: 0, unreadCount: 0 },
+    { workspacePath: "/repo/c", name: "c", workerIds: ["c1"], busyCount: 0, attentionCount: 0, unreadCount: 0 },
   ]);
   assert.equal(studioWorkerId(studios[0], "a2"), "a2");
   assert.equal(studioWorkerId(studios[0], "removed"), "a1");

@@ -20,6 +20,7 @@ const baseProps = {
   onRemove: () => {},
   onCreateNpc: () => {},
   onOpenMcp: () => {},
+  onOpenCodexCommands: () => {},
   onOpenBackup: () => {},
   onNotificationsToggle: () => {},
   onOpenCommandCenter: () => {},

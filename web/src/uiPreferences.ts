@@ -3,8 +3,10 @@ import { useCallback, useEffect, useState } from "react";
 export type TaskLogView = "summary" | "activity";
 export type CrewFilter = "all" | "working" | "attention" | "claude" | "codex" | "room";
 
+export type FocusPaneLayout = 1 | 2 | 3 | 4;
+
 export type UiPreferencesV2 = {
-  version: 5;
+  version: 6;
   taskLogWidth: number;
   taskLogHeight: number;
   taskLogView: TaskLogView;
@@ -16,13 +18,14 @@ export type UiPreferencesV2 = {
   taskFocusMode: boolean;
   focusStudioLastWorkerIds: Record<string, string>;
   focusStudiosCollapsed: boolean;
+  focusPaneLayout: FocusPaneLayout;
 };
 
 export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
 export const COMPACT_OFFICE_MAX_WIDTH = 1440;
 
 export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
-  version: 5,
+  version: 6,
   taskLogWidth: 600,
   taskLogHeight: 62,
   taskLogView: "summary",
@@ -34,10 +37,12 @@ export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   taskFocusMode: false,
   focusStudioLastWorkerIds: {},
   focusStudiosCollapsed: true,
+  focusPaneLayout: 1,
 };
 
 const VIEWS = new Set<TaskLogView>(["summary", "activity"]);
 const FILTERS = new Set<CrewFilter>(["all", "working", "attention", "claude", "codex", "room"]);
+const PANE_LAYOUTS = new Set<FocusPaneLayout>([1, 2, 3, 4]);
 
 function studioWorkerIds(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -86,7 +91,7 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
     ? raw.taskLogWidth
     : DEFAULT_UI_PREFERENCES.taskLogWidth;
   return {
-    version: 5,
+    version: 6,
     taskLogWidth: clampTaskLogWidth(width, viewportWidth),
     taskLogHeight: clampTaskLogHeight(
       typeof raw.taskLogHeight === "number" ? raw.taskLogHeight : DEFAULT_UI_PREFERENCES.taskLogHeight,
@@ -114,6 +119,9 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
     focusStudiosCollapsed: typeof raw.focusStudiosCollapsed === "boolean"
       ? raw.focusStudiosCollapsed
       : DEFAULT_UI_PREFERENCES.focusStudiosCollapsed,
+    focusPaneLayout: typeof raw.focusPaneLayout === "number" && PANE_LAYOUTS.has(raw.focusPaneLayout as FocusPaneLayout)
+      ? raw.focusPaneLayout as FocusPaneLayout
+      : DEFAULT_UI_PREFERENCES.focusPaneLayout,
   };
 }
 

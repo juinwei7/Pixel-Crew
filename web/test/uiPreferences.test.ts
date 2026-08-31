@@ -40,7 +40,7 @@ test("migrates the panel-layout regression once while preserving other v2 prefer
     taskLogView: "activity",
     crewRailCollapsed: true,
   }, 1_024);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(migrated.taskLogOpen, true);
   assert.equal(migrated.taskLogWidth, 544);
   assert.equal(migrated.taskLogView, "activity");
@@ -63,6 +63,13 @@ test("defaults the workspace rail to collapsed and persists its explicit state",
   assert.equal(parseUiPreferences({}).focusStudiosCollapsed, true);
   assert.equal(parseUiPreferences({ focusStudiosCollapsed: false }).focusStudiosCollapsed, false);
   assert.equal(parseUiPreferences({ focusStudiosCollapsed: "no" }).focusStudiosCollapsed, true);
+});
+
+test("defaults focus pane layout to 1 and clamps to the [1,4] union", () => {
+  assert.equal(parseUiPreferences({}).focusPaneLayout, 1);
+  assert.equal(parseUiPreferences({ focusPaneLayout: 3 }).focusPaneLayout, 3);
+  assert.equal(parseUiPreferences({ focusPaneLayout: 9 }).focusPaneLayout, 1);
+  assert.equal(parseUiPreferences({ focusPaneLayout: "2" }).focusPaneLayout, 1);
 });
 
 test("only auto-collapses the task log when crossing into compact desktop width", () => {

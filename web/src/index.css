@@ -4426,6 +4426,15 @@ body {
 .mcp-modal__empty { padding: 14px; color: var(--text-dim); font-size: 11.5px; text-align: center; }
 
 .mcp-modal__row { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border: 1px solid var(--panel-border-dim); border-radius: 10px; background: rgba(255, 255, 255, 0.02); }
+
+.codex-commands-modal__add { display: flex; gap: 8px; margin-bottom: 12px; }
+.codex-commands-modal__add input { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--panel-border-dim); background: rgba(0, 0, 0, 0.25); color: var(--text); font-size: 12px; font-family: var(--mono); outline: none; }
+.codex-commands-modal__add button { flex: 0 0 auto; padding: 0 14px; border: 1px solid var(--panel-border-dim); border-radius: 8px; background: transparent; color: var(--cyan); font-size: 11.5px; cursor: pointer; }
+.codex-commands-modal__add button:disabled { opacity: .5; cursor: default; }
+.codex-commands-modal__row { align-items: center; justify-content: space-between; }
+.codex-commands-modal__remove { flex: 0 0 auto; padding: 4px 10px; border: 1px solid var(--panel-border-dim); border-radius: 6px; background: transparent; color: var(--text-dim); font-size: 10.5px; cursor: pointer; }
+.codex-commands-modal__remove:hover:not(:disabled) { color: var(--err); border-color: var(--err); }
+.codex-commands-modal__remove:disabled { opacity: .5; cursor: default; }
 .mcp-modal__dot { flex: 0 0 auto; margin-top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
 .mcp-modal__dot--on { background: var(--ok); box-shadow: 0 0 6px rgba(0, 255, 163, 0.7); }
 .mcp-modal__dot--warn { background: #f5c451; box-shadow: 0 0 6px rgba(245, 196, 81, 0.6); }
@@ -5356,6 +5365,47 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-studios--collapsed .focus-studios__git { display: none; }
 .focus-studios--collapsed .focus-studios__create { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
 .focus-studios--collapsed .focus-studios__create-label { display: none; }
+.focus-studios__name i.focus-studios__signal--unread { background: #9b8cf0; box-shadow: 0 0 7px rgba(155, 140, 240, .75); }
+
+/* Split-pane workbench (cmux-style): a shared studio rail beside a grid of
+   compact QuestLogs, one per pane. Only mounted once a second pane exists —
+   the single-pane case keeps using the original Focus Reader layout above. */
+.focus-pane-toggle { display: flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid rgba(201,210,220,.12); border-radius: 8px; background: #151a21; }
+.focus-pane-toggle button { min-width: 26px; min-height: 26px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: #788592; cursor: pointer; font: 10px var(--mono); }
+.focus-pane-toggle button:hover { background: rgba(255,255,255,.055); color: #eef1f4; }
+.focus-pane-toggle button.active { background: rgba(255,255,255,.075); color: #e0e5ea; }
+
+.focus-workbench { min-height: 0; flex: 1; display: flex; gap: 16px; padding: 16px max(20px, calc((100vw - 1800px) / 2)); overflow: hidden; }
+.focus-workbench__rail { flex: 0 0 auto; align-self: stretch; max-height: 100%; overflow: auto; padding: 12px 4px; }
+
+.focus-pane-grid { flex: 1; min-width: 0; display: grid; gap: 10px; overflow: auto; }
+.focus-pane-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 1fr; }
+.focus-pane-grid--3,
+.focus-pane-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.focus-pane-grid--3 .focus-pane:first-child { grid-column: 1 / -1; }
+
+.focus-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid rgba(201, 210, 220, 0.12); border-radius: 10px; background: #141922; overflow: hidden; }
+.focus-pane--focused { border-color: rgba(94, 184, 211, .55); box-shadow: 0 0 0 1px rgba(94, 184, 211, .3); }
+
+.focus-pane__header { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 6px 8px; border-bottom: 1px solid rgba(218, 224, 232, 0.07); background: rgba(255, 255, 255, 0.015); }
+.focus-pane__header select { min-width: 0; flex: 1 1 auto; height: 28px; padding: 0 8px; border: 1px solid rgba(201, 210, 220, 0.13); border-radius: 6px; background: #171c24; color: #c4ccd4; font: 9px var(--mono); cursor: pointer; display: inline-flex; align-items: center; }
+.focus-pane__close { flex: 0 0 auto; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: #788592; cursor: pointer; font-size: 13px; line-height: 1; }
+.focus-pane__close:hover { background: rgba(255,255,255,.075); color: #eef1f4; }
+
+.focus-pane__body { flex: 1; min-height: 0; overflow: auto; }
+.focus-pane__empty { display: grid; place-items: center; height: 100%; padding: 24px; color: #687582; font: 10px var(--mono); text-align: center; }
+
+/* The single-pane reader's .quest-log/.turn-text padding assumes it owns
+   the full viewport width (centers an 860px column via 100vw math) — inside
+   a several-hundred-px-wide split pane that padding alone can eat the whole
+   width and wrap CJK text one character per line. Three-class selectors so
+   this wins over the .holo-panel--focus rules regardless of source order. */
+.holo-panel--focus .focus-pane .quest-log { height: 100%; gap: 14px; padding: 12px 12px 16px; font-size: 13px; }
+.holo-panel--focus .focus-pane .turn-text,
+.holo-panel--focus .focus-pane .turn-text--final { padding: 14px 16px 18px; font-size: 13px; line-height: 1.6; }
+
+.focus-pane-grid__add { min-height: 60px; border: 1px dashed rgba(201, 210, 220, 0.18); border-radius: 10px; background: transparent; color: #687582; cursor: pointer; font: 10px var(--mono); }
+.focus-pane-grid__add:hover { border-color: rgba(140, 194, 213, .36); color: #c4ccd4; }
 
 .holo-panel--focus .task-log-toolbar button:hover,
 .holo-panel--focus .task-log-toolbar button.active {
@@ -5956,6 +6006,28 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   border-radius: 12px;
   background: #141922;
   color: #9aa6b2;
+}
+
+/* The fixed placement above deliberately lands in the single-pane reader's
+   reserved right-hand gutter and (at wide viewports) stays permanently
+   visible there as an ambient readout, not a dropdown. Split view has no
+   such gutter — panes fill that space — so a permanently-fixed panel there
+   would just sit on top of a pane forever. Anchor it under the button
+   instead, like the office top bar's usage popover, and make it a real
+   click-to-open/close dropdown regardless of viewport width. */
+.focus-energy--anchored { position: relative; }
+.focus-energy__panel--anchored {
+  display: none;
+  position: absolute;
+  inset: auto 0 auto auto;
+  top: calc(100% + 9px);
+  width: 300px;
+  max-height: min(70vh, 560px);
+  z-index: 60;
+  box-shadow: 0 24px 55px rgba(0, 0, 0, 0.4);
+}
+.focus-energy__panel--anchored.focus-energy__panel--open {
+  display: block;
 }
 
 .focus-energy__panel > header {

@@ -48,6 +48,12 @@ export type ModelOption = { id: string; label: string; description?: string };
 
 export type CapabilityState = {
   slashCommands: string[];
+  // Codex-only: which entries in slashCommands were added by the user (and
+  // are therefore removable), vs. the built-in seed/default list. Codex's
+  // app-server never reports its own slash-command catalog, so this is the
+  // only way to grow the list without a Pixel Crew release. Always empty for
+  // Claude, which already discovers commands live from the CLI.
+  customSlashCommands?: string[];
   mcpServers: McpServerState[];
   models: ModelOption[];
   toolCount: number | null;

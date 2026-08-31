@@ -36,16 +36,27 @@ export function codexSandbox(profile: ExecutionProfile, normalSandbox: string): 
 export type CodexNativeCommand =
   | { type: "reset" }
   | { type: "compact" }
-  | { type: "review"; instructions: string };
+  | { type: "review"; instructions: string }
+  | { type: "goal_set"; objective: string }
+  | { type: "goal_clear" }
+  | { type: "goal_get" };
 
 export function parseCodexNativeCommand(text: string): CodexNativeCommand | null {
-  const match = text.trim().match(/^\/(clear|new|compact|review)(?:\s+([\s\S]*))?$/i);
+  const match = text.trim().match(/^\/(clear|new|compact|review|goal)(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
   const name = match[1].toLowerCase();
   const argument = (match[2] ?? "").trim();
   if ((name === "clear" || name === "new") && !argument) return { type: "reset" };
   if (name === "compact" && !argument) return { type: "compact" };
   if (name === "review") return { type: "review", instructions: argument };
+  if (name === "goal") {
+    if (!argument) return { type: "goal_get" };
+    // Only the whole (trimmed) argument being exactly "clear" counts as the
+    // clear verb — "/goal clear the auth debt" must set that as the
+    // objective, not be misread as clearing the goal.
+    if (argument.toLowerCase() === "clear") return { type: "goal_clear" };
+    return { type: "goal_set", objective: argument };
+  }
   return null;
 }
 
@@ -199,6 +210,25 @@ export class CodexSession implements AgentSession {
         });
         // review/start produces the ordinary turn/item notifications; the
         // turn/completed handler owns the final state and persisted output.
+        return;
+      }
+      // Unlike compact (fire-and-forget, confirmed later by thread/compacted),
+      // the goal RPCs' own responses already carry the result — no need to
+      // also listen for thread/goal/updated|cleared notifications.
+      if (command.type === "goal_set") {
+        const result = await this.request("thread/goal/set", { threadId, objective: command.objective, status: "active" });
+        this.finishNativeCommand(t("已設定目標：{objective}", { objective: result?.goal?.objective ?? command.objective }), false);
+        return;
+      }
+      if (command.type === "goal_clear") {
+        const result = await this.request("thread/goal/clear", { threadId });
+        this.finishNativeCommand(result?.cleared ? t("已清除目標。") : t("目前沒有設定目標。"), false);
+        return;
+      }
+      if (command.type === "goal_get") {
+        const result = await this.request("thread/goal/get", { threadId });
+        const goal = result?.goal;
+        this.finishNativeCommand(goal ? t("目前目標：{objective}（狀態：{status}）", { objective: goal.objective, status: goal.status }) : t("目前沒有設定目標。"), false);
         return;
       }
       this.finishNativeCommand(t("已建立新的 Codex 對話；後續工作不會沿用先前上下文。"), false);

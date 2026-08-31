@@ -29,6 +29,11 @@ export function latestReadableTurnKey(worker: WorkerState): string | null {
   return null;
 }
 
+export function workerHasUnread(worker: WorkerState, lastSeenKey: string | undefined): boolean {
+  const latest = latestReadableTurnKey(worker);
+  return latest !== null && latest !== lastSeenKey;
+}
+
 export function filterCrew(workers: WorkerState[], filter: CrewFilter, query: string, currentRoom: string): WorkerState[] {
   const needle = query.trim().toLowerCase();
   return workers.filter((worker) => {

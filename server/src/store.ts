@@ -274,6 +274,18 @@ export class LocalStore {
       INSERT OR IGNORE INTO provider_slash_command_seed (provider, commands, updated_at)
       SELECT 'claude', commands, updated_at FROM slash_command_seed WHERE id = 1;
 
+      -- User-added Codex native slash commands. Deliberately separate from
+      -- provider_slash_command_seed above: that table is silently recomputed
+      -- and overwritten by CodexCapabilityRegistry on every construction, so
+      -- mixing user-added entries into it would make "is this removable"
+      -- ambiguous. Codex's app-server never reports its own slash-command
+      -- catalog, so this is the only way new commands (e.g. "goal") can be
+      -- added without a Pixel Crew release.
+      CREATE TABLE IF NOT EXISTS codex_custom_slash_commands (
+        name TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS persona_templates (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -1200,6 +1212,52 @@ export class LocalStore {
           commands = excluded.commands,
           updated_at = CURRENT_TIMESTAMP
       `).run(provider, JSON.stringify(commands));
+    });
+  }
+
+  /** User-added Codex native slash commands — see codex_custom_slash_commands comment. */
+  loadCustomCodexSlashCommands(): string[] {
+    const rows = this.db.prepare(
+      "SELECT name FROM codex_custom_slash_commands ORDER BY created_at ASC",
+    ).all() as Array<{ name: string }>;
+    return rows.map((row) => row.name);
+  }
+
+  addCustomCodexSlashCommand(name: string): void {
+    this.safeWrite("add custom codex slash command", () => {
+      this.db.prepare(
+        "INSERT OR IGNORE INTO codex_custom_slash_commands (name) VALUES (?)",
+      ).run(name);
+    });
+  }
+
+  removeCustomCodexSlashCommand(name: string): void {
+    this.safeWrite("remove custom codex slash command", () => {
+      this.db.prepare("DELETE FROM codex_custom_slash_commands WHERE name = ?").run(name);
+      // Older registries persisted their merged display list into the generic
+      // Codex seed. Drop this user-owned entry from that derived cache too, or
+      // a removed command would reappear when a registry is constructed.
+      const row = this.db.prepare(
+        "SELECT commands FROM provider_slash_command_seed WHERE provider = 'codex'",
+      ).get() as { commands?: string } | undefined;
+      if (!row?.commands) return;
+      try {
+        const commands = JSON.parse(row.commands);
+        if (!Array.isArray(commands)) return;
+        const next = commands.filter((value): value is string =>
+          typeof value === "string" && value.toLowerCase() !== name.toLowerCase(),
+        );
+        if (next.length !== commands.length) {
+          this.db.prepare(`
+            UPDATE provider_slash_command_seed
+            SET commands = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE provider = 'codex'
+          `).run(JSON.stringify(next));
+        }
+      } catch {
+        // A corrupt seed already loads as empty; leave it for the normal
+        // registry bootstrap path to repair rather than failing removal.
+      }
     });
   }
 

@@ -149,6 +149,19 @@ export const enModalsC: Record<string, string> = {
   "處理中…": "Processing…",
   "加入": "Add",
 
+  // CodexCommandsModal
+  "關閉 Codex 指令管理": "Close Codex command management",
+  "目前只有 clear / compact / new / review / goal 這幾個內建指令在 Pixel Crew 這邊有真正對應的執行邏輯。這裡新增的自訂指令只會被當成一般文字送給 codex，能不能被理解、有沒有實際效果，完全取決於 codex 本身。":
+    "Only clear / compact / new / review / goal have real dispatch logic on the Pixel Crew side. Custom commands added here are sent to codex as plain text — whether they're understood or do anything is entirely up to codex itself.",
+  "指令名稱，例如 plan": "Command name, e.g. plan",
+  "新指令名稱": "New command name",
+  "新增中…": "Adding…",
+  "新增": "Add",
+  "還沒有自訂指令": "No custom commands yet",
+  "移除中…": "Removing…",
+  "已新增 /{name}": "Added /{name}",
+  "已移除 /{name}": "Removed /{name}",
+
   // ModelSwitchCard
   "模型切換選擇": "Model switch choice",
   "{worker} 要切換到 {target}": "{worker} is switching to {target}",

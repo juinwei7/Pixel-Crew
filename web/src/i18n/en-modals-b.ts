@@ -224,6 +224,7 @@ export const enModalsB: Record<string, string> = {
   "＋ 新增 NPC": "＋ Add NPC",
   "＋ 建立部門": "＋ Create department",
   "MCP 伺服器": "MCP servers",
+  "Codex 原生指令管理": "Codex native commands",
   "備份與還原": "Backup & restore",
   "指令庫": "Command library",
   "桌面通知": "Desktop notifications",
