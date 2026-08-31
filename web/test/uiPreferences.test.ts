@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_UI_PREFERENCES, enteredCompactOffice, parseUiPreferences } from "../src/uiPreferences";
+import { DEFAULT_UI_PREFERENCES, enteredCompactOffice, isTaskLogVisible, parseUiPreferences, shouldAutoCollapseTaskLog } from "../src/uiPreferences";
 
 test("parses UI preferences field by field and bounds task log width", () => {
   const parsed = parseUiPreferences({
@@ -40,11 +40,29 @@ test("migrates the panel-layout regression once while preserving other v2 prefer
     taskLogView: "activity",
     crewRailCollapsed: true,
   }, 1_024);
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 5);
   assert.equal(migrated.taskLogOpen, true);
   assert.equal(migrated.taskLogWidth, 544);
   assert.equal(migrated.taskLogView, "activity");
   assert.equal(migrated.crewRailCollapsed, true);
+});
+
+test("persists bounded last-selected NPC ids per focus studio", () => {
+  const parsed = parseUiPreferences({
+    focusStudioLastWorkerIds: {
+      "/repo/a": "worker-a",
+      "/repo/b": "worker-b",
+      ignored: 42,
+    },
+  });
+  assert.deepEqual(parsed.focusStudioLastWorkerIds, { "/repo/a": "worker-a", "/repo/b": "worker-b" });
+  assert.deepEqual(parseUiPreferences({ focusStudioLastWorkerIds: "bad" }).focusStudioLastWorkerIds, {});
+});
+
+test("defaults the workspace rail to collapsed and persists its explicit state", () => {
+  assert.equal(parseUiPreferences({}).focusStudiosCollapsed, true);
+  assert.equal(parseUiPreferences({ focusStudiosCollapsed: false }).focusStudiosCollapsed, false);
+  assert.equal(parseUiPreferences({ focusStudiosCollapsed: "no" }).focusStudiosCollapsed, true);
 });
 
 test("only auto-collapses the task log when crossing into compact desktop width", () => {
@@ -53,4 +71,15 @@ test("only auto-collapses the task log when crossing into compact desktop width"
   assert.equal(enteredCompactOffice(1_280, 1_100), false);
   assert.equal(enteredCompactOffice(1_280, 1_440), false);
   assert.equal(enteredCompactOffice(1_440, 1_600), false);
+});
+
+test("never auto-collapses the report while Focus Reader is active", () => {
+  assert.equal(shouldAutoCollapseTaskLog(1_441, 1_200, false), true);
+  assert.equal(shouldAutoCollapseTaskLog(1_441, 1_200, true), false);
+});
+
+test("keeps Focus Reader visible even when a stale office preference says the log is closed", () => {
+  assert.equal(isTaskLogVisible(false, true), true);
+  assert.equal(isTaskLogVisible(false, false), false);
+  assert.equal(isTaskLogVisible(true, false), true);
 });

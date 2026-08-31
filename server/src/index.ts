@@ -19,6 +19,7 @@ import { basename, dirname, join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { configuredDefaultModels } from "./defaultModels.js";
+import { readWorkspaceGitSummary } from "./workspaceGit.js";
 import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import {
@@ -2327,6 +2328,15 @@ app.patch("/api/departments/:departmentId", (req, res) => {
 
 app.get("/api/workspaces", (_req, res) => {
   res.json({ defaultPath: config.targetRepoPath, paths: recentWorkspacePaths() });
+});
+
+app.get("/api/workspaces/git", async (req, res) => {
+  try {
+    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
+    res.json(await readWorkspaceGitSummary(workspacePath));
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message || t("無法讀取工作位置的 Git 狀態") });
+  }
 });
 
 app.get("/healthz", (_req, res) => {

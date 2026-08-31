@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { focusStudioShortcut } from "../focusStudios";
 
 type ShortcutHandlers = {
   onCommandPalette(): void;
@@ -6,6 +7,7 @@ type ShortcutHandlers = {
   onApproval(): void;
   onShortcutsHelp(): void;
   onEscape?(): void;
+  onStudioShortcut?(index: number): boolean;
 };
 
 export type KeyboardShortcut = "command_palette" | "toggle_task_log" | "approval" | "shortcuts_help" | "escape";
@@ -42,7 +44,13 @@ function isEditable(target: EventTarget | null): boolean {
 export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      const shortcut = keyboardShortcut(event, isEditable(event.target));
+      const editable = isEditable(event.target);
+      const studioIndex = focusStudioShortcut(event, editable);
+      if (studioIndex !== null && handlers.onStudioShortcut?.(studioIndex)) {
+        event.preventDefault();
+        return;
+      }
+      const shortcut = keyboardShortcut(event, editable);
       if (!shortcut) return;
       if (shortcut !== "escape") event.preventDefault();
       if (shortcut === "command_palette") handlers.onCommandPalette();

@@ -114,6 +114,15 @@ test("focus mode reads every final response without tool or thinking noise", () 
   assert.doesNotMatch(html, /1\.2s/);
 });
 
+test("narrow Focus Reader keeps studio navigation before report navigation and content", () => {
+  const turn: Turn = { key: "rwd", command: "報告內容", status: "done", items: [{ kind: "assistant_text", key: "text", text: "內容" }] };
+  const html = renderToStaticMarkup(<QuestLog turns={[turn]} focusMode studioRail={<nav aria-label="STUDIOS">工作室</nav>} />);
+  const studio = html.indexOf("工作室");
+  const reportIndex = html.indexOf("報告導覽");
+  const content = html.indexOf("內容");
+  assert.ok(studio >= 0 && reportIndex > studio && content > reportIndex);
+});
+
 test("focus mode keeps pending approvals visible even when they belong to an older turn", () => {
   const turns: Turn[] = [
     {

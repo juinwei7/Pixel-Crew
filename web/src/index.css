@@ -5180,6 +5180,60 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-context-switch .focus-worker-switch { margin-right: 0; }
 .holo-panel__department i { background: #bba9ff; box-shadow: 0 0 8px rgba(169,145,255,.55); }
 
+/* Focus Reader is an engineering cockpit: a workspace rail stays separate from
+   the NPC selector so switching repositories never means parsing a long list. */
+.focus-studios {
+  width: 100%;
+  color: #7f8d9a;
+}
+.focus-studios__header { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 0 9px; }
+.focus-studios__eyebrow {
+  display: block;
+  color: #647483;
+  font: 9px var(--mono);
+  letter-spacing: .18em;
+}
+.focus-studios__collapse { width: 25px; height: 25px; padding: 0; border: 1px solid rgba(201,210,220,.12); border-radius: 6px; background: #151a21; color: #8393a0; cursor: pointer; font: 17px/1 sans-serif; }
+.focus-studios__collapse:hover { border-color: rgba(140,194,213,.34); color: #d7e1e8; }
+.focus-studios__list { display: grid; gap: 7px; }
+.focus-studios__studio {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  width: 100%;
+  min-height: 66px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(201, 210, 220, .11);
+  border-radius: 9px;
+  background: rgba(22, 28, 36, .86);
+  color: #aab5c0;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.focus-studios__studio:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(140, 194, 213, .36); background: #1a222c; }
+.focus-studios__studio--active { border-color: rgba(94, 184, 211, .55); background: linear-gradient(135deg, rgba(44, 101, 120, .25), rgba(22, 28, 36, .94)); box-shadow: inset 2px 0 0 #63cbe0; }
+.focus-studios__studio:disabled { opacity: .44; cursor: not-allowed; }
+.focus-studios__mark { display: grid; grid-row: 1 / span 2; place-items: center; width: 26px; height: 26px; border: 1px solid rgba(201,210,220,.13); border-radius: 6px; background: rgba(255,255,255,.035); color: #b5c6d0; font: 8px var(--mono); letter-spacing: -.04em; }
+.focus-studios__name { min-width: 0; overflow: hidden; color: #d5dde4; font: 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.focus-studios__name i { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: #61707d; }
+.focus-studios__name i.focus-studios__signal--busy { background: #65cbe0; box-shadow: 0 0 7px rgba(101, 203, 224, .8); }
+.focus-studios__name i.focus-studios__signal--attention { background: #e8a56b; box-shadow: 0 0 7px rgba(232, 165, 107, .72); }
+.focus-studios__meta { display: flex; align-items: center; gap: 6px; color: #748390; font: 8px var(--mono); white-space: nowrap; }
+.focus-studios__meta b { color: #8998a5; font-weight: 500; }
+.focus-studios__meta kbd { padding: 2px 3px; border: 1px solid rgba(201, 210, 220, .12); border-radius: 3px; color: #738795; font: 7px var(--mono); }
+.focus-studios__git { grid-column: 2 / -1; overflow: hidden; color: #708494; font: 8px var(--mono); letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
+.focus-studios__studio--active .focus-studios__git { color: #9eb6c4; }
+.focus-studios--collapsed .focus-studios__header { justify-content: center; }
+.focus-studios--collapsed .focus-studios__eyebrow { display: none; }
+.focus-studios--collapsed .focus-studios__collapse { width: 34px; height: 28px; }
+.focus-studios--collapsed .focus-studios__studio { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
+.focus-studios--collapsed .focus-studios__mark { width: 28px; height: 28px; }
+.focus-studios--collapsed .focus-studios__name,
+.focus-studios--collapsed .focus-studios__meta,
+.focus-studios--collapsed .focus-studios__git { display: none; }
+
 .holo-panel--focus .task-log-toolbar button:hover,
 .holo-panel--focus .task-log-toolbar button.active {
   background: rgba(255, 255, 255, 0.055);
@@ -5546,15 +5600,19 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 }
 
 .focus-reader {
+  --focus-studio-rail-width: 0px;
   min-height: 0;
   flex: 1;
   display: grid;
   grid-template-columns: 230px minmax(0, 860px) 250px;
   justify-content: center;
   gap: 24px;
-  padding: 18px max(24px, calc((100vw - 1500px) / 2));
+  padding: 18px max(24px, calc((100vw - 1800px) / 2));
   overflow: hidden;
 }
+.focus-reader--with-studios { --focus-studio-rail-width: 190px; grid-template-columns: var(--focus-studio-rail-width) 230px minmax(0, 860px) 250px; }
+.focus-reader--with-studios.focus-reader--studios-collapsed { --focus-studio-rail-width: 52px; }
+.focus-reader__studio-rail { min-width: 0; align-self: start; max-height: 100%; overflow: auto; padding: 12px 4px; }
 
 .focus-reader > .quest-log {
   width: 100%;
@@ -5907,6 +5965,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .focus-reader {
     grid-template-columns: 220px minmax(0, 860px);
   }
+  .focus-reader--with-studios { grid-template-columns: var(--focus-studio-rail-width) 220px minmax(0, 860px); }
 
   .focus-reader__usage-space {
     display: none;
@@ -5928,16 +5987,24 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 }
 
-@media (max-width: 1099px) {
+/* At medium widths, a fourth engineering column leaves the document too narrow.
+   Switch the two navigation surfaces into a normal reading flow before either
+   the report or the workspace rail has to overlap or clip. */
+@media (max-width: 1240px) {
   .focus-reader {
     display: flex;
     flex-direction: column;
     gap: 0;
     padding: 12px;
   }
+  .focus-reader--with-studios { --focus-studio-rail-width: auto; }
+  .focus-reader__studio-rail { max-height: none; padding: 0; }
+  .focus-reader__studio-rail .focus-studios:not(.focus-studios--collapsed) .focus-studios__list { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .focus-reader__studio-rail .focus-studios--collapsed .focus-studios__list { display: flex; overflow-x: auto; padding-bottom: 2px; }
 
   .focus-reader > .quest-log {
     flex: 1;
+    min-height: 280px;
     height: auto;
     border: 1px solid rgba(218, 224, 232, 0.055);
   }
@@ -5982,6 +6049,31 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .focus-report-nav > header > span,
   .focus-report-nav > header > strong {
     display: none;
+  }
+}
+
+@media (max-width: 840px) {
+  .holo-panel--focus .holo-panel__title {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .focus-context-switch {
+    flex: 1 0 100%;
+    order: 4;
+  }
+
+  .focus-worker-switch {
+    width: auto;
+    max-width: none;
+  }
+
+  .holo-panel--focus .task-log-toolbar {
+    margin-left: auto;
+  }
+
+  .focus-reader__studio-rail .focus-studios:not(.focus-studios--collapsed) .focus-studios__list {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
 }
 
