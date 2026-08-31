@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TopBar } from "../src/components/TopBar";
+import { canShowBackgroundServiceStop, TopBar } from "../src/components/TopBar";
 import { emptyWorker } from "../src/workerState";
 
 test("top bar exposes room, selected provider, model, capabilities, and health", () => {
@@ -59,6 +59,14 @@ test("top bar exposes the single Boss Assignment entry point", () => {
   />);
   assert.match(html, /BOSS/);
   assert.match(html, /交辦工作/);
+});
+
+test("Windows enables the background-service stop control", () => {
+  const shutdown = () => {};
+
+  assert.equal(canShowBackgroundServiceStop("win32", shutdown), true);
+  assert.equal(canShowBackgroundServiceStop("darwin", shutdown), false);
+  assert.equal(canShowBackgroundServiceStop("win32", undefined), false);
 });
 
 test("cached models remain selectable while capabilities refresh in background", () => {
