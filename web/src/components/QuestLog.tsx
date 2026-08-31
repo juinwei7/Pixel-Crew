@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
 import { extractMarkdownHeadings, RichText } from "./RichText";
@@ -389,7 +389,7 @@ function navStatus(turn: Turn): string {
   return t("完成");
 }
 
-export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, studioRail, studioRailCollapsed = true }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; studioRail?: ReactNode; studioRailCollapsed?: boolean }) {
   const logRef = useRef<HTMLDivElement>(null);
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -516,12 +516,13 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   if (!focusMode) return log;
   return (
-    <div className="focus-reader" onKeyDown={(event) => {
+    <div className={`focus-reader ${studioRail ? "focus-reader--with-studios" : ""} ${studioRailCollapsed ? "focus-reader--studios-collapsed" : ""}`} onKeyDown={(event) => {
       if (event.key !== "Escape" || !navigationOpen) return;
       event.preventDefault();
       event.stopPropagation();
       setNavigationOpen(false);
     }}>
+      {studioRail && <aside className="focus-reader__studio-rail">{studioRail}</aside>}
       <button type="button" className="focus-report-nav__toggle" aria-expanded={navigationOpen} onClick={() => setNavigationOpen((open) => !open)}>{t("報告導覽")} <span>{renderedTurns.length}</span></button>
       <nav className={`focus-report-nav ${navigationOpen ? "focus-report-nav--open" : ""}`} aria-label={t("報告章節導覽")}>
         <header><span>REPORT INDEX</span><strong>{t("報告導覽")}</strong><ReportActions markdown={reportMarkdown(completeReportTurns)} /></header>
