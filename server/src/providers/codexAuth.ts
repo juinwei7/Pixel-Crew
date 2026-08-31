@@ -3,6 +3,7 @@ import type { AgentAuthProvider, ProviderAuthState } from "./types.js";
 import { execCli } from "../platform/processes.js";
 import { resolveCodexAuthStatus } from "./codexAuthStatus.js";
 import { buildAuthDebug } from "./authDebug.js";
+import { codexChildEnv } from "../codexRunner.js";
 
 function shellCommand(value: string): string {
   if (process.platform === "win32") return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
@@ -19,6 +20,11 @@ export class CodexAuthProvider implements AgentAuthProvider {
   private cliMissingState: ProviderAuthState | null = null;
   private cliMissingAt = 0;
   private lastLoggedStatus: ProviderAuthState["status"] | null = null;
+
+  // null = shared/global CODEX_HOME (legacy, one provider instance for the whole
+  // process). A per-account instance passes its own directory so its 60s
+  // cli_missing cache and login status never cross-contaminate other accounts.
+  constructor(private readonly codexHome: string | null = null) {}
 
   checkAuth(): Promise<ProviderAuthState> {
     // CLI 不在 PATH 時,前端對未登入 provider 每 3 秒輪詢一次,會不停 spawn
@@ -41,7 +47,10 @@ export class CodexAuthProvider implements AgentAuthProvider {
     let stdout = "";
     let stderr = "";
     try {
-      ({ stdout, stderr } = await execCli(config.codexBin, args, { timeout: 10_000 }));
+      ({ stdout, stderr } = await execCli(config.codexBin, args, {
+        timeout: 10_000,
+        env: codexChildEnv(process.env, this.codexHome),
+      }));
     } catch (caught) {
       error = caught as NodeJS.ErrnoException;
       stdout = String((caught as any).stdout ?? "");

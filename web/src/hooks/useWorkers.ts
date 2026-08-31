@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
@@ -33,6 +33,7 @@ type ServerMessage =
       updateInfo?: UpdateInfo;
       workspacePaths: string[];
       auth: ProviderAuthState[];
+      accounts?: AccountWithAuth[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
       capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
       collaborations?: CollaborationTask[];
@@ -51,6 +52,7 @@ type ServerMessage =
         provider: ProviderId;
         workspacePath: string;
         departmentId?: string | null;
+        accountId?: string | null;
         persona: Persona | null;
         autoApproveMode: AutoApproveMode;
         handoff: HandoffProgress | null;
@@ -75,7 +77,14 @@ type ServerMessage =
   | { type: "auth_updated"; auth: ProviderAuthState }
   | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
   | { type: "stats_updated"; stats: { completedTurns: number; totalCostUsd: number } }
-  | { type: "update_info"; updateInfo: UpdateInfo };
+  | { type: "update_info"; updateInfo: UpdateInfo }
+  | { type: "account_login_result"; accountId: string; ok: boolean; status: AccountLoginState["status"]; message: string | null }
+  | { type: "account_login_url"; accountId: string; loginUrl: string | null; status?: AccountLoginState["status"] }
+  | { type: "account_auth_updated"; accountId: string; auth: ProviderAuthState }
+  | { type: "codex_default_login_result"; ok: boolean; status: AccountLoginState["status"]; message: string | null }
+  | { type: "codex_default_login_url"; loginUrl: string | null }
+  | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
+  | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] };
 
 type WorkerSummary = {
   id: string;
@@ -89,6 +98,7 @@ type WorkerSummary = {
   provider: ProviderId;
   workspacePath: string;
   departmentId?: string | null;
+  accountId?: string | null;
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
@@ -162,6 +172,10 @@ export function useWorkers() {
     claude: emptyInstall("claude"),
     codex: emptyInstall("codex"),
   });
+  const [accounts, setAccounts] = useState<Record<string, AccountWithAuth>>({});
+  const [accountLogins, setAccountLogins] = useState<Record<string, AccountLoginState>>({});
+  const [defaultCodexLogin, setDefaultCodexLogin] = useState<AccountLoginState | null>(null);
+  const [defaultClaudeLogin, setDefaultClaudeLogin] = useState<ClaudeLoginState | null>(null);
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
 
@@ -192,6 +206,7 @@ export function useWorkers() {
           if (data.updateInfo) setUpdateInfo(data.updateInfo);
           setWorkspacePaths(data.workspacePaths);
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
+          setAccounts(Object.fromEntries((data.accounts ?? []).map((account) => [account.id, account])));
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
           setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
           setCollaborations(Object.fromEntries((data.collaborations ?? []).map((task) => [task.id, task])));
@@ -229,6 +244,7 @@ export function useWorkers() {
             }
             state.busy = w.busy;
             state.departmentId = w.departmentId ?? null;
+            state.accountId = w.accountId ?? null;
             record[w.id] = state;
             ids.push(w.id);
           }
@@ -262,7 +278,7 @@ export function useWorkers() {
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
               data.worker.autoApproveMode,
-            ), departmentId: data.worker.departmentId ?? null },
+            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null },
           }));
           setWorkspacePaths((current) =>
             current.includes(data.worker.workspacePath)
@@ -312,7 +328,7 @@ export function useWorkers() {
                   data.worker.handoff ?? null,
                   data.worker.autoApproveMode,
                 );
-            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null };
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>
@@ -389,7 +405,21 @@ export function useWorkers() {
           break;
         }
         case "auth_updated": {
-          setAuth((current) => ({ ...current, [data.auth.provider]: data.auth }));
+          setAuth((current) => {
+            const existing = current[data.auth.provider];
+            // The background poll below re-checks every 3s while a provider
+            // isn't authenticated, and the server always broadcasts a
+            // transient "checking" state before the real result. Once we've
+            // already shown a real status once, swallow that transient blip
+            // instead of applying it — otherwise AuthGate's "checking" branch
+            // (which replaces the whole login UI with a spinner) flashes in
+            // and out every few seconds, looking like the page keeps
+            // reloading even though this is plain WS-pushed state, not a
+            // navigation. The very first check still shows "checking" since
+            // the initial state (defaultAuth) starts as "checking" too.
+            if (data.auth.status === "checking" && existing && existing.status !== "checking") return current;
+            return { ...current, [data.auth.provider]: data.auth };
+          });
           break;
         }
         case "usage_updated": {
@@ -402,6 +432,66 @@ export function useWorkers() {
         }
         case "update_info": {
           setUpdateInfo(data.updateInfo);
+          break;
+        }
+        case "account_login_result": {
+          setAccountLogins((current) => ({
+            ...current,
+            [data.accountId]: {
+              accountId: data.accountId,
+              status: data.status,
+              startedAt: current[data.accountId]?.startedAt ?? new Date().toISOString(),
+              finishedAt: new Date().toISOString(),
+              message: data.message,
+              loginUrl: current[data.accountId]?.loginUrl ?? null,
+            },
+          }));
+          break;
+        }
+        case "account_login_url": {
+          setAccountLogins((current) => {
+            const existing = current[data.accountId];
+            if (!existing) return current;
+            return { ...current, [data.accountId]: { ...existing, loginUrl: data.loginUrl, ...(data.status ? { status: data.status } : {}) } };
+          });
+          break;
+        }
+        case "account_auth_updated": {
+          setAccounts((current) => {
+            const existing = current[data.accountId];
+            if (!existing) return current;
+            return { ...current, [data.accountId]: { ...existing, auth: data.auth } };
+          });
+          break;
+        }
+        case "codex_default_login_result": {
+          setDefaultCodexLogin((current) => ({
+            accountId: "default",
+            status: data.status,
+            startedAt: current?.startedAt ?? new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            message: data.message,
+            loginUrl: current?.loginUrl ?? null,
+          }));
+          break;
+        }
+        case "codex_default_login_url": {
+          setDefaultCodexLogin((current) => (current ? { ...current, loginUrl: data.loginUrl } : current));
+          break;
+        }
+        case "claude_default_login_result": {
+          setDefaultClaudeLogin((current) => ({
+            accountId: "default",
+            status: data.status,
+            startedAt: current?.startedAt ?? new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            message: data.message,
+            loginUrl: current?.loginUrl ?? null,
+          }));
+          break;
+        }
+        case "claude_default_login_url": {
+          setDefaultClaudeLogin((current) => (current ? { ...current, loginUrl: data.loginUrl, status: data.status } : current));
           break;
         }
       }
@@ -420,16 +510,150 @@ export function useWorkers() {
     provider: ProviderId = "claude",
     workspacePath?: string,
     model?: string,
+    accountId?: string | null,
   ): Promise<{ id?: string; error?: string }> => {
     try {
       const data = await apiRequest<{ id: string }>("/api/workers", {
         method: "POST",
-        body: { name, provider, workspacePath, model },
+        body: { name, provider, workspacePath, model, accountId },
       });
       if (data.id) setActiveId(data.id);
       return { id: data.id };
     } catch (error) {
       return { error: (error as Error).message };
+    }
+  }, []);
+
+  const createAccount = useCallback(async (provider: ProviderId, label: string): Promise<{ data?: AccountWithAuth; error?: string }> => {
+    try {
+      const data = await apiRequest<{ account: AccountWithAuth }>("/api/accounts", {
+        method: "POST",
+        body: { provider, label },
+      });
+      setAccounts((current) => ({ ...current, [data.account.id]: data.account }));
+      return { data: data.account };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const deleteAccount = useCallback(async (id: string): Promise<{ orphanedWorkerIds?: string[]; error?: string }> => {
+    try {
+      const data = await apiRequest<{ ok: boolean; orphanedWorkerIds: string[] }>(`/api/accounts/${id}`, {
+        method: "DELETE",
+      });
+      setAccounts((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      return { orphanedWorkerIds: data.orphanedWorkerIds };
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const refreshAccount = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ auth: ProviderAuthState | null }>(`/api/accounts/${id}/refresh`, { method: "POST" });
+      if (data.auth) setAccounts((current) => (current[id] ? { ...current, [id]: { ...current[id], auth: data.auth } } : current));
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  // opts is Codex-only (mode/apiKey) — Claude accounts are browser-OAuth-only
+  // and ignore it; the server-side route dispatches on the account's provider.
+  const startAccountLogin = useCallback(async (
+    id: string,
+    opts?: { mode?: CodexAccountLoginMode; apiKey?: string },
+  ): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ state: AccountLoginState }>(`/api/accounts/${id}/login`, {
+        method: "POST",
+        body: { mode: opts?.mode, apiKey: opts?.apiKey },
+      });
+      setAccountLogins((current) => ({ ...current, [id]: data.state }));
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  // Claude-only: submits the verification code pasted back after browser
+  // authorization. Calling this for a Codex account fails server-side.
+  const submitAccountLoginCode = useCallback(async (id: string, code: string): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/accounts/${id}/login/code`, { method: "POST", body: { code } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const cancelAccountLogin = useCallback(async (id: string): Promise<void> => {
+    try {
+      await apiRequest(`/api/accounts/${id}/login/cancel`, { method: "POST" });
+    } catch {
+      // best-effort — a WS account_login_result still lands if the process was already finishing.
+    }
+  }, []);
+
+  const startDefaultCodexLogin = useCallback(async (mode: CodexAccountLoginMode, apiKey?: string): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ state: AccountLoginState }>("/api/auth/codex/login", {
+        method: "POST",
+        body: { mode, apiKey },
+      });
+      setDefaultCodexLogin(data.state);
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const cancelDefaultCodexLogin = useCallback(async (): Promise<void> => {
+    try {
+      await apiRequest("/api/auth/codex/login/cancel", { method: "POST" });
+    } catch {
+      // best-effort — a WS codex_default_login_result still lands if the process was already finishing.
+    }
+  }, []);
+
+  const startDefaultClaudeLogin = useCallback(async (): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ state: ClaudeLoginState }>("/api/auth/claude/login", { method: "POST" });
+      setDefaultClaudeLogin(data.state);
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const submitDefaultClaudeLoginCode = useCallback(async (code: string): Promise<string | null> => {
+    try {
+      await apiRequest("/api/auth/claude/login/code", { method: "POST", body: { code } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const cancelDefaultClaudeLogin = useCallback(async (): Promise<void> => {
+    try {
+      await apiRequest("/api/auth/claude/login/cancel", { method: "POST" });
+    } catch {
+      // best-effort — a WS claude_default_login_result still lands if the process was already finishing.
+    }
+  }, []);
+
+  const setWorkerAccount = useCallback(async (workerId: string, accountId: string | null): Promise<string | null> => {
+    try {
+      await apiRequest(`/api/workers/${workerId}/account`, { method: "PATCH", body: { accountId } });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
     }
   }, []);
 
@@ -1020,6 +1244,22 @@ export function useWorkers() {
     auth,
     providerUsage,
     providerInstalls,
+    accounts,
+    accountLogins,
+    defaultCodexLogin,
+    defaultClaudeLogin,
+    createAccount,
+    deleteAccount,
+    refreshAccount,
+    startAccountLogin,
+    submitAccountLoginCode,
+    cancelAccountLogin,
+    startDefaultCodexLogin,
+    cancelDefaultCodexLogin,
+    startDefaultClaudeLogin,
+    submitDefaultClaudeLoginCode,
+    cancelDefaultClaudeLogin,
+    setWorkerAccount,
     createWorker,
     pickWorkspace,
     prepareHandoff,

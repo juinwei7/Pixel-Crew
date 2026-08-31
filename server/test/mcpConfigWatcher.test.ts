@@ -23,6 +23,24 @@ test("builds global and workspace MCP configuration targets without duplicates",
   );
 });
 
+test("an explicit claudeHome overrides homeDirectory for both Claude targets, independent of codexHome", () => {
+  const targets = mcpConfigTargets(["/repo"], {
+    homeDirectory: "/home/tester",
+    codexHome: "/config/codex",
+    claudeHome: "/config/claude",
+  });
+  const claudeTargets = targets.filter((target) => target.provider === "claude" && target.section !== "file");
+  assert.deepEqual(
+    claudeTargets.map(({ path, scope }) => ({ path, scope })),
+    [
+      { path: join("/config/claude", ".claude.json"), scope: "global" },
+      { path: join("/config/claude", ".claude.json"), scope: "workspace" },
+    ],
+  );
+  // codexHome must not leak into the Claude targets, and vice versa.
+  assert.equal(targets.some((t) => t.path.includes("/config/codex")), true);
+});
+
 test("ignores Claude session telemetry and watches only MCP-relevant sections", async () => {
   const root = await mkdtemp(join(tmpdir(), "pixel-crew-claude-watch-"));
   const home = join(root, "home");

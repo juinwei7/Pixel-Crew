@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline";
 import { config } from "./config.js";
-import type { ProviderId } from "./providers/types.js";
+import type { AuthStatus, ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
 import { execCli, spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { codexChildEnv } from "./codexEnv.js";
+import { claudeChildEnv } from "./claudeEnv.js";
 import { t } from "./i18n.js";
 const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
@@ -129,23 +131,18 @@ async function readClaudeUsage(): Promise<UsageWindow[]> {
     cwd: config.targetRepoPath,
     timeout: 30_000,
     maxBuffer: 1_000_000,
+    env: claudeChildEnv(process.env, config.defaultClaudeHome),
   });
   const windows = parseClaudeUsage(stdout);
   if (windows.length === 0) throw new Error(t("Claude /usage 沒有回傳可辨識的用量區間"));
   return windows;
 }
 
-function codexChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...source };
-  for (const key of Object.keys(env)) if (key.startsWith("CODEX_") && key !== "CODEX_HOME") delete env[key];
-  return env;
-}
-
 async function readCodexUsage(): Promise<UsageWindow[]> {
   return new Promise((resolve, reject) => {
     const child = spawnCli(config.codexBin, ["app-server"], {
       cwd: config.targetRepoPath,
-      env: codexChildEnv(process.env),
+      env: codexChildEnv(process.env, config.defaultCodexHome),
     });
     const rl = createInterface({ input: child.stdout });
     let settled = false;
@@ -201,7 +198,12 @@ export class ProviderUsageRegistry {
     // Usage is read by spawning the provider CLI. We only do that once the
     // provider is authenticated/started, so a signed-out Claude is never
     // woken up just to draw the energy panel. Defaults to always-ready.
-    private readonly isReady: (provider: ProviderId) => boolean = () => true,
+    // Takes the *status*, not a plain ready/not-ready boolean, so refresh()
+    // can tell "still checking" (transient — keep showing the last windows
+    // untouched, same as before) apart from "confirmed not authenticated"
+    // (the cached windows are from a since-ended session and must not keep
+    // being presented as "live").
+    private readonly getAuthStatus: (provider: ProviderId) => AuthStatus = () => "authenticated",
   ) {
     this.states = {
       claude: idleState("claude", store.loadProviderUsage("claude")),
@@ -217,12 +219,29 @@ export class ProviderUsageRegistry {
     const running = this.active.get(provider);
     if (running) return running;
     const previous = this.states[provider];
-    if (!this.isReady(provider)) {
-      // Provider not started yet — keep any cached windows, but never spawn
-      // the CLI and never surface a connection error for it.
+    const status = this.getAuthStatus(provider);
+    if (status === "checking") {
+      // Transient — a real answer is imminent (e.g. the 3s re-poll while
+      // unauthenticated). Keep whatever was already shown untouched so this
+      // doesn't flicker the same way the auth badge itself used to.
       const idle: ProviderUsageState = { ...previous, loading: false, error: null };
       if (previous.loading || previous.error) this.publish(idle, false);
       return Promise.resolve(idle);
+    }
+    if (status !== "authenticated") {
+      // Confirmed signed out (unauthenticated/cli_missing/error) — never
+      // spawn the CLI, and if we're still holding onto a previous session's
+      // "live" windows, relabel them "cache" so the UI shows the existing
+      // 快取 badge instead of implying the numbers are current. Persist the
+      // relabel too, so a page reload before the next real fetch doesn't
+      // flash the stale "live" label again.
+      const relabeled: ProviderUsageState = previous.windows.length > 0 && previous.source === "live"
+        ? { ...previous, loading: false, error: null, source: "cache" }
+        : { ...previous, loading: false, error: null };
+      if (previous.loading || previous.error || previous.source !== relabeled.source) {
+        this.publish(relabeled, previous.source !== relabeled.source);
+      }
+      return Promise.resolve(relabeled);
     }
     if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish({ ...previous, loading: true, error: null }, false);

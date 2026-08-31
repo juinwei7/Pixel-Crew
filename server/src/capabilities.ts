@@ -4,6 +4,7 @@ import { join, relative, sep } from "node:path";
 import { config } from "./config.js";
 import type { LocalStore } from "./store.js";
 import { execCli } from "./platform/processes.js";
+import { claudeChildEnv } from "./claudeEnv.js";
 import { t } from "./i18n.js";
 
 import type {
@@ -281,6 +282,7 @@ export class CapabilityRegistry {
     private readonly store: LocalStore,
     private readonly onUpdate: (state: CapabilityState) => void,
     private readonly workspacePath = config.targetRepoPath,
+    private readonly claudeHome: string | null = null,
   ) {
     // Always seed portable built-ins, then merge the global discovery cache,
     // so a fresh NPC or not-yet-messaged room shows commands like /mcp
@@ -336,6 +338,7 @@ export class CapabilityRegistry {
       const mcpResult = await execCli(config.claudeBin, ["mcp", "list"], {
         cwd: this.workspacePath,
         timeout: 60000,
+        env: claudeChildEnv(process.env, this.claudeHome),
       });
       listed = parseMcpList(mcpResult.stdout);
       // Carry over this server's previous scope/transport/detail as a
@@ -354,13 +357,20 @@ export class CapabilityRegistry {
     // and that the UI most needs to reflect promptly. The `mcp get` detail
     // enrichment below is comparatively expensive (a health-check subprocess
     // per server) and must not hold up this update.
+    // A failed `mcp list` (most commonly: the provider isn't authenticated
+    // anymore) keeps showing the previous mcpServers untouched — that's
+    // useful context, but it must not be labeled "live" with a fresh
+    // timestamp, or the UI implies these are current results from just now.
+    // Same class of bug as the providerUsage.ts fix: a stale-but-labeled-live
+    // cache silently misleads once the underlying session has ended.
+    const stale = listed == null;
     this.publish({
       ...this.state,
       slashCommands: uniqueSorted([...this.diskCommands, ...this.runtimeCommands]),
       mcpServers,
       loading: listed != null,
-      source: "live",
-      updatedAt: new Date().toISOString(),
+      source: stale && mcpServers.length > 0 ? "cache" : "live",
+      updatedAt: stale ? this.state.updatedAt : new Date().toISOString(),
       error,
     });
     if (!listed) return;
@@ -377,6 +387,7 @@ export class CapabilityRegistry {
         const getResult = await execCli(config.claudeBin, ["mcp", "get", server.name], {
           cwd: this.workspacePath,
           timeout: 15000,
+          env: claudeChildEnv(process.env, this.claudeHome),
         });
         return { ...server, ...parseMcpGetOutput(getResult.stdout) };
       } catch {

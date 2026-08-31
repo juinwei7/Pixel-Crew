@@ -23,6 +23,7 @@ import { configuredDefaultModels } from "./defaultModels.js";
 import { readWorkspaceGitSummary } from "./workspaceGit.js";
 import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
+import { claudeChildEnv } from "./claudeEnv.js";
 import {
   isEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
@@ -31,10 +32,15 @@ import { costMicrosForTurnEnd } from "./costTracking.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
 import { buildCodexMcpAddArgs, CodexCapabilityRegistry } from "./codexCapabilities.js";
 import { McpLoginTracker } from "./mcpLogin.js";
-import { LocalStore, type PersistedWorker } from "./store.js";
+import { LocalStore, type ProviderAccount, type PersistedWorker } from "./store.js";
 import { ClaudeAuthProvider } from "./providers/claudeAuth.js";
 import { CodexAuthProvider } from "./providers/codexAuth.js";
-import { CodexSession } from "./codexRunner.js";
+import { AccountRegistry } from "./accountRegistry.js";
+import { CodexAccountLoginTracker, type CodexAccountLoginMode } from "./codexAccountLogin.js";
+import { ClaudeLoginTracker } from "./claudeAccountLogin.js";
+import { migrateAmbientCodexHome } from "./codexHomeMigration.js";
+import { migrateAmbientClaudeHome } from "./claudeHomeMigration.js";
+import { CodexSession, codexChildEnv } from "./codexRunner.js";
 import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
 import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./providers/types.js";
 import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
@@ -280,15 +286,17 @@ const usageRegistry = new ProviderUsageRegistry(
   (usage) => {
     broadcast({ type: "usage_updated", provider: usage.provider, usage });
   },
-  providerReady,
+  (provider) => authStates[provider].status,
 );
 const updateChecker = new UpdateChecker(readCurrentVersion(), (info) => {
   broadcast({ type: "update_info", updateInfo: info });
 });
 updateChecker.start();
+migrateAmbientCodexHome(config.defaultCodexHome);
+migrateAmbientClaudeHome(config.defaultClaudeHome);
 const authProviders: Record<ProviderId, AgentAuthProvider> = {
-  claude: new ClaudeAuthProvider(),
-  codex: new CodexAuthProvider(),
+  claude: new ClaudeAuthProvider(config.defaultClaudeHome),
+  codex: new CodexAuthProvider(config.defaultCodexHome),
 };
 const authStates: Record<ProviderId, ProviderAuthState> = {
   claude: initialAuthState(authProviders.claude),
@@ -296,6 +304,87 @@ const authStates: Record<ProviderId, ProviderAuthState> = {
 };
 const providerInstaller = new ProviderInstaller(async (provider) => {
   await refreshOneAuth(provider);
+});
+// One registry shared by both providers' named accounts — see accountRegistry.ts.
+const accountRegistry = new AccountRegistry(
+  (id) => store.getAccount(id),
+  (provider, homeDir) => provider === "codex" ? new CodexAuthProvider(homeDir) : new ClaudeAuthProvider(homeDir),
+);
+const codexAccountLoginTracker = new CodexAccountLoginTracker(async (state) => {
+  broadcast({
+    type: "account_login_result",
+    accountId: state.accountId,
+    ok: state.status === "succeeded",
+    status: state.status,
+    message: state.message,
+  });
+  if (state.status === "succeeded") {
+    const auth = await accountRegistry.refresh(state.accountId);
+    if (auth) {
+      broadcast({ type: "account_auth_updated", accountId: state.accountId, auth });
+      if (auth.status === "authenticated") restartIdleWorkersForAccount(state.accountId);
+    }
+  }
+}, undefined, undefined, undefined, (state) => {
+  // Fallback link for when codex's own browser auto-open doesn't actually
+  // open anything — without this the URL only ever exists in this process's
+  // stdout, and the owner has no way to reach it short of a terminal.
+  broadcast({ type: "account_login_url", accountId: state.accountId, loginUrl: state.loginUrl });
+});
+// Mirrors codexAccountLoginTracker for named Claude accounts — a second
+// ClaudeLoginTracker instance, separate from defaultClaudeLoginTracker below
+// (same split as Codex's default-slot vs named-account trackers).
+const claudeAccountLoginTracker = new ClaudeLoginTracker(async (state) => {
+  broadcast({
+    type: "account_login_result",
+    accountId: state.accountId,
+    ok: state.status === "succeeded",
+    status: state.status,
+    message: state.message,
+  });
+  if (state.status === "succeeded") {
+    const auth = await accountRegistry.refresh(state.accountId);
+    if (auth) {
+      broadcast({ type: "account_auth_updated", accountId: state.accountId, auth });
+      if (auth.status === "authenticated") restartIdleWorkersForAccount(state.accountId);
+    }
+  }
+}, undefined, undefined, undefined, (state) => {
+  broadcast({ type: "account_login_url", accountId: state.accountId, loginUrl: state.loginUrl, status: state.status });
+});
+function accountLoginTrackerFor(provider: ProviderId): CodexAccountLoginTracker | ClaudeLoginTracker {
+  return provider === "codex" ? codexAccountLoginTracker : claudeAccountLoginTracker;
+}
+// The "default" Codex slot (workers with no accountId) isn't a row in
+// accounts — it's Pixel Crew's own managed replacement for the ambient
+// $CODEX_HOME login, always at config.defaultCodexHome. Separate tracker
+// instance (rather than overloading codexAccountLoginTracker with a magic
+// accountId) so its callback can plug into the existing authStates.codex /
+// refreshOneAuth machinery instead of the per-named-account registry.
+const DEFAULT_CODEX_LOGIN_ID = "default";
+const defaultCodexLoginTracker = new CodexAccountLoginTracker(async (state) => {
+  broadcast({
+    type: "codex_default_login_result",
+    ok: state.status === "succeeded",
+    status: state.status,
+    message: state.message,
+  });
+  if (state.status === "succeeded") await refreshOneAuth("codex");
+}, undefined, undefined, undefined, (state) => {
+  broadcast({ type: "codex_default_login_url", loginUrl: state.loginUrl });
+});
+// Mirrors defaultCodexLoginTracker, for Claude's default (no-account) slot.
+const DEFAULT_CLAUDE_LOGIN_ID = "default";
+const defaultClaudeLoginTracker = new ClaudeLoginTracker(async (state) => {
+  broadcast({
+    type: "claude_default_login_result",
+    ok: state.status === "succeeded",
+    status: state.status,
+    message: state.message,
+  });
+  if (state.status === "succeeded") await refreshOneAuth("claude");
+}, undefined, undefined, undefined, (state) => {
+  broadcast({ type: "claude_default_login_url", loginUrl: state.loginUrl, status: state.status });
 });
 const mcpLoginTracker = new McpLoginTracker(async (state) => {
   broadcast({
@@ -317,7 +406,7 @@ const mcpLoginTracker = new McpLoginTracker(async (state) => {
 // re-checking on every call would make an already-cleared marker ambiguous
 // with "no restore ever happened."
 const lastRestoreResult = readAndClearRestoreMarker(config.dataDirectory);
-const providerDefaultModels = configuredDefaultModels();
+const providerDefaultModels = configuredDefaultModels(undefined, undefined, config.defaultCodexHome);
 
 function systemStatus() {
   const release = osRelease();
@@ -357,6 +446,11 @@ type Worker = {
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
   departmentId: string | null;
+  // null = shared/global default login for this worker's provider (legacy
+  // behavior, still the default for every worker). Otherwise refers to a row
+  // in the provider-agnostic `accounts` table whose `provider` must match
+  // runner.provider.
+  accountId: string | null;
 };
 
 const workers = new Map<string, Worker>();
@@ -423,6 +517,7 @@ function workerSummary(w: Worker) {
     provider: w.runner.provider,
     workspacePath: w.runner.workspacePath,
     departmentId: w.departmentId,
+    accountId: w.accountId,
     persona: w.persona,
     autoApproveMode: w.autoApproveMode,
     handoff: w.handoff,
@@ -608,6 +703,30 @@ function providerReady(provider: ProviderId): boolean {
   return authStates[provider].status === "authenticated";
 }
 
+// A worker with its own assigned account is gated on that account's auth
+// state instead of the shared/global one; every worker with no account
+// assigned keeps using the process-wide authStates as before.
+function workerAuthState(worker: Worker): ProviderAuthState {
+  if (worker.accountId) {
+    const account = store.getAccount(worker.accountId);
+    if (account?.provider === worker.runner.provider) {
+      return accountRegistry.stateFor(worker.accountId) ?? authStates[worker.runner.provider];
+    }
+  }
+  return authStates[worker.runner.provider];
+}
+
+function workerProviderReady(worker: Worker): boolean {
+  return workerAuthState(worker).status === "authenticated";
+}
+
+function homeForWorker(worker: Worker): string {
+  const fallback = worker.runner.provider === "codex" ? config.defaultCodexHome : config.defaultClaudeHome;
+  if (!worker.accountId) return fallback;
+  const account = store.getAccount(worker.accountId);
+  return account && account.provider === worker.runner.provider ? account.homeDir : fallback;
+}
+
 const claudeCapabilityRegistries = new Map<string, CapabilityRegistry>();
 const codexCapabilityRegistries = new Map<string, CodexCapabilityRegistry>();
 
@@ -621,7 +740,7 @@ function claudeCapabilitiesFor(workspacePath = config.targetRepoPath): Capabilit
   if (!registry) {
     registry = new CapabilityRegistry(store, (state) => {
       broadcast({ type: "capabilities_updated", workspacePath: key, provider: "claude", capabilities: state });
-    }, key);
+    }, key, config.defaultClaudeHome);
     claudeCapabilityRegistries.set(key, registry);
   }
   return registry;
@@ -633,7 +752,7 @@ function codexCapabilitiesFor(workspacePath = config.targetRepoPath): CodexCapab
   if (!registry) {
     registry = new CodexCapabilityRegistry((state) => {
       broadcast({ type: "capabilities_updated", workspacePath: key, provider: "codex", capabilities: state });
-    }, key, store);
+    }, key, store, config.defaultCodexHome);
     codexCapabilityRegistries.set(key, registry);
   }
   return registry;
@@ -660,6 +779,7 @@ function workerPersistenceRecord(worker: Worker): Omit<PersistedWorker, "events"
     persona: worker.persona,
     autoApproveMode: worker.autoApproveMode,
     departmentId: worker.departmentId,
+    accountId: worker.accountId,
     ...session,
   };
 }
@@ -770,7 +890,7 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
     fail(t("來源 NPC 狀態已改變，無法自動接續工作"));
     return;
   }
-  if (!providerReady(source.runner.provider)) {
+  if (!workerProviderReady(source)) {
     fail(t("{provider} 尚未登入，無法自動接續工作", { provider: providerLabel(source.runner.provider) }));
     return;
   }
@@ -861,7 +981,7 @@ function dispatchMissionStep(
     pauseMission(mission, t("{name} 正在執行其他工作，請稍後重試或重新指派", { name: assignee.runner.name }), "member_unavailable");
     return;
   }
-  if (!providerReady(assignee.runner.provider)) {
+  if (!workerProviderReady(assignee)) {
     pauseMission(mission, t("{provider} 尚未登入，請登入後重試或重新指派", { provider: providerLabel(assignee.runner.provider) }), "member_unavailable");
     return;
   }
@@ -1523,6 +1643,7 @@ function createWorker(
   initialPersona: Persona | null = null,
   departmentId: string | null = null,
   options: { warmup?: boolean; persist?: boolean; broadcast?: boolean } = {},
+  accountId: string | null = null,
 ): Worker {
   const workerProvider = persisted?.provider ?? provider;
   const workerWorkspace = registryKey(persisted?.workspacePath || workspacePath || config.targetRepoPath);
@@ -1540,6 +1661,7 @@ function createWorker(
     autoApproveMode: persisted?.autoApproveMode ?? "off",
     handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
     departmentId: persisted?.departmentId ?? departmentId,
+    accountId: persisted?.accountId ?? accountId,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -1553,7 +1675,7 @@ function createWorker(
   const selectedModel = persisted?.model ?? model;
   if (selectedModel && validModel(workerProvider, selectedModel)) runner.setModel(selectedModel);
   workers.set(id, worker);
-  if (options.warmup === true && providerReady(workerProvider)) runner.warmup();
+  if (options.warmup === true && workerProviderReady(worker)) runner.warmup();
   if (options.persist !== false) {
     if (!persisted && !worker.departmentId) {
       const departmentId = randomUUID();
@@ -1619,6 +1741,7 @@ function createRunner(
         () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         initialState,
+        () => homeForWorker(worker),
       )
     : new ClaudeSession(
         (event) => record(worker, event),
@@ -1627,6 +1750,7 @@ function createRunner(
         () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         initialState,
+        () => homeForWorker(worker),
       );
 }
 
@@ -1707,6 +1831,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
+        () => homeForWorker(worker),
       )
     : new ClaudeSession(
         onEvent,
@@ -1715,6 +1840,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         () => composeWorkerPrompt(worker),
         () => worker.autoApproveMode,
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
+        () => homeForWorker(worker),
       );
   runner.name = worker.runner.name;
   const model = checkpoint?.model ?? worker.runner.getModel();
@@ -1988,8 +2114,8 @@ function detachedRunner(
   persona: Persona | null,
 ): AgentSession {
   const runner: AgentSession = provider === "codex"
-    ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), () => "off", initialState)
-    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), () => "off", initialState);
+    ? new CodexSession(onEvent, workspacePath, () => composePersonaPrompt(persona), () => "off", initialState, () => config.defaultCodexHome)
+    : new ClaudeSession(onEvent, workspacePath, () => [], () => composePersonaPrompt(persona), () => "off", initialState, () => config.defaultClaudeHome);
   if (model && validModel(provider, model)) runner.setModel(model);
   return runner;
 }
@@ -2271,6 +2397,10 @@ wss.on("connection", (socket) => {
       updateInfo: updateChecker.getInfo(),
       workspacePaths: recentWorkspacePaths(),
       auth: Object.values(authStates),
+      accounts: store.listAccounts().map((account) => ({
+        ...account,
+        auth: accountRegistry.stateFor(account.id),
+      })),
       providerUsage: usageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       collaborations: store.listRecentCollaborationTasks(),
@@ -2759,7 +2889,7 @@ setInterval(() => {
     if (!schedule.enabled || schedule.lastRunDay === today || schedule.time > hhmm) continue;
     const worker = workers.get(schedule.workerId);
     if (!worker) continue;
-    if (!providerReady(worker.runner.provider)) continue;
+    if (!workerProviderReady(worker)) continue;
     // 無人看管風險口（作戰室裁決 P1）：⚡無限制模式跳過所有審批，不給自動排程觸發。
     // 標記為今天已處理＋留一則說明，避免每 30 秒重試洗版。
     if (worker.autoApproveMode === "invincible") {
@@ -2820,6 +2950,14 @@ app.post("/api/workers", (req, res) => {
     return;
   }
   const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  const accountId = typeof req.body?.accountId === "string" && req.body.accountId ? req.body.accountId : null;
+  if (accountId) {
+    const account = store.getAccount(accountId);
+    if (!account || account.provider !== provider) {
+      res.status(400).json({ error: t("找不到指定的帳號") });
+      return;
+    }
+  }
   try {
     const workspacePath = normalizeWorkspacePath(req.body?.workspacePath);
     if (workspaceMission(workspacePath)) {
@@ -2835,6 +2973,7 @@ app.post("/api/workers", (req, res) => {
       null,
       null,
       { warmup: true },
+      accountId,
     );
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
@@ -2842,6 +2981,187 @@ app.post("/api/workers", (req, res) => {
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
   }
+});
+
+app.get("/api/accounts", (_req, res) => {
+  const accounts = store.listAccounts().map((account) => ({
+    ...account,
+    auth: accountRegistry.stateFor(account.id),
+  }));
+  res.json({ accounts });
+});
+
+app.post("/api/accounts", (req, res) => {
+  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
+  const label = String(req.body?.label ?? "").trim();
+  if (!label) { res.status(400).json({ error: t("請輸入帳號名稱") }); return; }
+  const id = randomUUID();
+  const homeDir = join(config.dataDirectory, "accounts", id);
+  ensurePrivateDirectorySync(homeDir);
+  const now = new Date().toISOString();
+  const account: ProviderAccount = { id, provider, label, homeDir, createdAt: now, updatedAt: now };
+  if (!store.saveAccount(account)) {
+    res.status(500).json({ error: t("儲存帳號失敗") });
+    return;
+  }
+  res.json({ account, auth: accountRegistry.stateFor(id) });
+});
+
+app.delete("/api/accounts/:id", (req, res) => {
+  const account = store.getAccount(req.params.id);
+  const busyWorkers = account
+    ? [...workers.values()].filter((worker) => worker.accountId === account.id && worker.runner.busy)
+    : [];
+  if (busyWorkers.length > 0) {
+    res.status(409).json({ error: t("以下 NPC 正在使用這個帳號工作，請等工作結束再刪除：{names}", { names: busyWorkers.map((worker) => worker.runner.name).join("、") }) });
+    return;
+  }
+  // Do this before deleting its home directory: an in-flight OAuth child can
+  // otherwise recreate credentials after the account has been removed.
+  if (account) accountLoginTrackerFor(account.provider).cancel(account.id);
+  const { deleted, orphanedWorkerIds } = store.deleteAccount(req.params.id);
+  if (!deleted) { res.status(500).json({ error: t("刪除帳號失敗") }); return; }
+  accountRegistry.invalidate(req.params.id);
+  if (account) {
+    try {
+      rmSync(account.homeDir, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`[accounts] failed to remove ${account.homeDir}:`, (error as Error).message);
+    }
+  }
+  for (const workerId of orphanedWorkerIds) {
+    const worker = workers.get(workerId);
+    if (!worker) continue;
+    worker.accountId = null;
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  }
+  res.json({ ok: true, orphanedWorkerIds });
+});
+
+app.post("/api/accounts/:id/refresh", async (req, res) => {
+  const account = store.getAccount(req.params.id);
+  if (!account) { res.status(404).json({ error: "unknown account" }); return; }
+  const auth = await accountRegistry.refresh(account.id);
+  if (auth) {
+    broadcast({ type: "account_auth_updated", accountId: account.id, auth });
+    if (auth.status === "authenticated") restartIdleWorkersForAccount(account.id);
+  }
+  res.json({ auth });
+});
+
+app.post("/api/accounts/:id/login", (req, res) => {
+  const account = store.getAccount(req.params.id);
+  if (!account) { res.status(404).json({ error: "unknown account" }); return; }
+  if (account.provider === "codex") {
+    const mode: CodexAccountLoginMode = req.body?.mode === "api-key" ? "api-key" : "oauth";
+    const apiKey = mode === "api-key" ? String(req.body?.apiKey ?? "").trim() : undefined;
+    if (mode === "api-key" && !apiKey) { res.status(400).json({ error: t("請輸入 API key") }); return; }
+    const { state, alreadyRunning } = codexAccountLoginTracker.start(account.id, account.homeDir, mode, apiKey);
+    res.status(alreadyRunning ? 200 : 202).json({ state });
+    return;
+  }
+  // Claude has no api-key login mode — browser OAuth + paste-code-back only.
+  const { state, alreadyRunning } = claudeAccountLoginTracker.start(account.id, account.homeDir);
+  res.status(alreadyRunning ? 200 : 202).json({ state });
+});
+
+app.get("/api/accounts/:id/login", (req, res) => {
+  const account = store.getAccount(req.params.id);
+  const state = account ? accountLoginTrackerFor(account.provider).get(req.params.id) : undefined;
+  res.json({ state: state ?? null });
+});
+
+app.post("/api/accounts/:id/login/code", (req, res) => {
+  const account = store.getAccount(req.params.id);
+  if (!account || account.provider !== "claude") {
+    res.status(400).json({ error: t("這個帳號不需要輸入驗證碼") });
+    return;
+  }
+  const code = String(req.body?.code ?? "").trim();
+  if (!code) { res.status(400).json({ error: t("請輸入驗證碼") }); return; }
+  const ok = claudeAccountLoginTracker.submitCode(account.id, code);
+  if (!ok) { res.status(409).json({ error: t("目前沒有等待驗證碼的登入流程") }); return; }
+  res.json({ ok: true });
+});
+
+app.post("/api/accounts/:id/login/cancel", (req, res) => {
+  const account = store.getAccount(req.params.id);
+  const cancelled = account ? accountLoginTrackerFor(account.provider).cancel(req.params.id) : false;
+  res.json({ ok: cancelled });
+});
+
+// Separate namespace from /api/accounts/:id/login — the default slot isn't
+// a row in accounts, so there's no :id to look up.
+app.post("/api/auth/codex/login", (req, res) => {
+  const mode: CodexAccountLoginMode = req.body?.mode === "api-key" ? "api-key" : "oauth";
+  const apiKey = mode === "api-key" ? String(req.body?.apiKey ?? "").trim() : undefined;
+  if (mode === "api-key" && !apiKey) { res.status(400).json({ error: t("請輸入 API key") }); return; }
+  const { state, alreadyRunning } = defaultCodexLoginTracker.start(DEFAULT_CODEX_LOGIN_ID, config.defaultCodexHome, mode, apiKey);
+  res.status(alreadyRunning ? 200 : 202).json({ state });
+});
+
+app.get("/api/auth/codex/login", (_req, res) => {
+  res.json({ state: defaultCodexLoginTracker.get(DEFAULT_CODEX_LOGIN_ID) ?? null });
+});
+
+app.post("/api/auth/codex/login/cancel", (_req, res) => {
+  res.json({ ok: defaultCodexLoginTracker.cancel(DEFAULT_CODEX_LOGIN_ID) });
+});
+
+// Claude's default-slot login. No api-key mode (claude auth login has no
+// equivalent to `codex login --with-api-key`) and an extra step: the owner
+// pastes back the code shown after authorizing in the browser.
+app.post("/api/auth/claude/login", (_req, res) => {
+  const { state, alreadyRunning } = defaultClaudeLoginTracker.start(DEFAULT_CLAUDE_LOGIN_ID, config.defaultClaudeHome);
+  res.status(alreadyRunning ? 200 : 202).json({ state });
+});
+
+app.get("/api/auth/claude/login", (_req, res) => {
+  res.json({ state: defaultClaudeLoginTracker.get(DEFAULT_CLAUDE_LOGIN_ID) ?? null });
+});
+
+app.post("/api/auth/claude/login/code", (req, res) => {
+  const code = String(req.body?.code ?? "").trim();
+  if (!code) { res.status(400).json({ error: t("請輸入驗證碼") }); return; }
+  const ok = defaultClaudeLoginTracker.submitCode(DEFAULT_CLAUDE_LOGIN_ID, code);
+  if (!ok) { res.status(409).json({ error: t("目前沒有等待驗證碼的登入流程") }); return; }
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/claude/login/cancel", (_req, res) => {
+  res.json({ ok: defaultClaudeLoginTracker.cancel(DEFAULT_CLAUDE_LOGIN_ID) });
+});
+
+app.patch("/api/workers/:id/account", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  if (worker.runner.busy) {
+    res.status(409).json({ error: t("NPC 忙碌中，請等目前回合結束再切換帳號") });
+    return;
+  }
+  // Switching accounts only takes effect on the session's next restart, at
+  // which point it can't resume the old thread under the new account's home
+  // directory (thread/conversation history is scoped per CODEX_HOME /
+  // CLAUDE_CONFIG_DIR) and silently starts a blank one. Rather than let that
+  // happen as a surprising side effect of switching, require the owner to
+  // explicitly clear the session first.
+  if (worker.runner.getPersistenceState().completedTurns > 0) {
+    res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
+    return;
+  }
+  const raw = req.body?.accountId;
+  const accountId = raw === null || raw === undefined || raw === "" ? null : String(raw);
+  if (accountId) {
+    const account = store.getAccount(accountId);
+    if (!account || account.provider !== worker.runner.provider) {
+      res.status(400).json({ error: t("找不到指定的帳號") });
+      return;
+    }
+  }
+  worker.accountId = accountId;
+  persistWorker(worker);
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  res.json({ ok: true });
 });
 
 type PreparedDepartment = {
@@ -3581,7 +3901,7 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
   if (members.length < 1) return { error: t("部門目前沒有可執行工作的 NPC") };
   if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return { error: t("{name} 正在工作、交接或協作中", { name: boss.runner.name }) };
   if (handoffActivityBlock(boss.history)) return { error: t("{name} 尚有待處理的權限或背景 Agent", { name: boss.runner.name }) };
-  if (!providerReady(boss.runner.provider)) return { error: t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) }) };
+  if (!workerProviderReady(boss)) return { error: t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) }) };
   return { members };
 }
 
@@ -4720,7 +5040,7 @@ app.post("/api/missions/:id/follow-up", async (req, res) => {
     res.status(409).json({ error: t("部門正在執行新的 Mission，完成後才能追問舊報告") });
     return;
   }
-  if (!providerReady(lead.runner.provider)) {
+  if (!workerProviderReady(lead)) {
     res.status(503).json({ error: t("{provider} 尚未登入", { provider: providerLabel(lead.runner.provider) }), auth: authStates[lead.runner.provider] });
     return;
   }
@@ -4774,7 +5094,7 @@ app.post("/api/missions/:id/approve-plan", (req, res) => {
   }
   const first = mission.steps[0];
   const assignee = workers.get(first.assigneeWorkerId);
-  if (!assignee || assignee.runner.busy || !providerReady(assignee.runner.provider)) {
+  if (!assignee || assignee.runner.busy || !workerProviderReady(assignee)) {
     res.status(409).json({ error: t("第一位執行 NPC 目前無法開始，請稍後再核准") });
     return;
   }
@@ -4792,7 +5112,7 @@ function retryMissionPlanning(mission: DepartmentMission): string | null {
   const boss = workers.get(mission.bossWorkerId);
   if (!boss) return t("部門主管 NPC 已不存在");
   if (boss.runner.busy || handoffInProgress(boss) || collaborationInProgress(boss.id)) return t("部門主管正在執行其他工作");
-  if (!providerReady(boss.runner.provider)) return t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) });
+  if (!workerProviderReady(boss)) return t("{provider} 尚未登入", { provider: providerLabel(boss.runner.provider) });
   const members = missionMembers(mission);
   mission.status = "planning";
   mission.attentionReason = null;
@@ -4978,7 +5298,7 @@ function collaborationEligibility(source: Worker, target: Worker): string | null
   if (target.runner.busy || handoffInProgress(target) || collaborationInProgress(target.id)) return t("目標 NPC 正在工作、交接或協作中");
   if (handoffActivityBlock(source.history)) return t("來源 NPC 尚有待處理的權限或背景 Agent");
   if (handoffActivityBlock(target.history)) return t("目標 NPC 尚有待處理的權限或背景 Agent");
-  if (!providerReady(target.runner.provider)) return t("{provider} 尚未登入", { provider: providerLabel(target.runner.provider) });
+  if (!workerProviderReady(source) || !workerProviderReady(target)) return t("{provider} 尚未登入", { provider: providerLabel(!workerProviderReady(source) ? source.runner.provider : target.runner.provider) });
   if (activeCollaborations.size >= MAX_ACTIVE_COLLABORATIONS) return t("目前協作工作已達上限");
   return null;
 }
@@ -5198,7 +5518,7 @@ app.post("/api/collaborations/:id/adopt", (req, res) => {
     res.status(409).json({ error: t("來源 NPC 正在工作，暫時無法交回結果") });
     return;
   }
-  if (!providerReady(source.runner.provider)) {
+  if (!workerProviderReady(source)) {
     res.status(503).json({ error: `${source.runner.provider}_not_authenticated`, auth: authStates[source.runner.provider] });
     return;
   }
@@ -5376,7 +5696,7 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     worker.runner = createRunner(worker, provider, workspacePath);
     worker.runner.name = name;
     if (model && validModel(provider, model)) worker.runner.setModel(model);
-    if (providerReady(provider)) worker.runner.warmup();
+  if (workerProviderReady(worker)) worker.runner.warmup();
     const now = new Date().toISOString();
     const newDepartment: Department = {
       id: randomUUID(), name: t("{name}部門", { name: basename(workspacePath) || t("個人") }), purpose: t("個人工作部門"),
@@ -5405,7 +5725,7 @@ app.post("/api/workers/:id/activate", (req, res) => {
   } else {
     void codexCapabilitiesFor(worker.runner.workspacePath).refresh();
   }
-  if (providerReady(worker.runner.provider) && !worker.runner.busy) worker.runner.warmup();
+  if (workerProviderReady(worker) && !worker.runner.busy) worker.runner.warmup();
   res.json({ ok: true, workspacePath: worker.runner.workspacePath });
 });
 
@@ -5868,9 +6188,8 @@ app.post("/api/workers/:id/consult", (req, res) => {
 app.post("/api/workers/:id/message", (req, res) => {
   const worker = requireWorker(res, req.params.id);
   if (!worker) return;
-  if (!providerReady(worker.runner.provider)) {
-    const provider = worker.runner.provider;
-    res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
+  if (!workerProviderReady(worker)) {
+    res.status(503).json({ error: `${worker.runner.provider}_not_authenticated`, auth: workerAuthState(worker) });
     return;
   }
   if (worker.runner.busy) {
@@ -6017,7 +6336,7 @@ app.post("/internal/claude-approval", async (req, res) => {
 app.post("/api/workers/:id/model", (req, res) => {
   const worker = requireWorker(res, req.params.id);
   if (!worker) return;
-  if (!providerReady(worker.runner.provider)) {
+  if (!workerProviderReady(worker)) {
     const provider = worker.runner.provider;
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
     return;
@@ -6046,13 +6365,15 @@ async function departmentCleanPreflightError(members: Worker[]): Promise<string 
     return t("以下 NPC 正在工作，不能重建：{names}", { names: blocked.map((worker) => worker.runner.name).join("、") });
   }
   const providerErrors: string[] = [];
-  for (const provider of new Set(members.map((member) => member.runner.provider))) {
-    if (!providerReady(provider)) providerErrors.push(t("{provider} 尚未登入", { provider: providerLabel(provider) }));
-    else {
-      const usage = await usageRegistry.refresh(provider, true);
-      const usageError = usageBlockReason(provider, usage, null);
-      if (usageError) providerErrors.push(t("{provider}：{error}", { provider: providerLabel(provider), error: usageError }));
-    }
+  for (const member of members) {
+    if (!workerProviderReady(member)) providerErrors.push(t("{name} 的 {provider} 尚未登入", { name: member.runner.name, provider: providerLabel(member.runner.provider) }));
+  }
+  // Usage telemetry belongs to the shared/default login. A named account has
+  // independent limits, so do not block it on the default account's snapshot.
+  for (const provider of new Set(members.filter((member) => !member.accountId).map((member) => member.runner.provider))) {
+    const usage = await usageRegistry.refresh(provider, true);
+    const usageError = usageBlockReason(provider, usage, null);
+    if (usageError) providerErrors.push(t("{provider}：{error}", { provider: providerLabel(provider), error: usageError }));
   }
   return providerErrors.length > 0 ? providerErrors.join("；") : null;
 }
@@ -6182,7 +6503,7 @@ app.post("/api/workers/:id/model/fresh", (req, res) => {
   const worker = requireWorker(res, req.params.id);
   if (!worker) return;
   const provider = worker.runner.provider;
-  if (!providerReady(provider)) {
+  if (!workerProviderReady(worker)) {
     res.status(503).json({ error: `${provider}_not_authenticated`, auth: authStates[provider] });
     return;
   }
@@ -6247,6 +6568,11 @@ app.post("/api/workers/:id/provider/fresh", (req, res) => {
 
   const workspacePath = worker.runner.workspacePath;
   const previousHandoff = worker.handoff;
+  // Named accounts are provider-specific. A fresh provider switch cannot
+  // reuse (for example) a Claude account for Codex, so fall back to that
+  // provider's managed default until the owner explicitly assigns one.
+  const previousAccountId = worker.accountId;
+  worker.accountId = null;
   worker.handoff = null;
   const fresh = replaceWithFreshSession(
     worker,
@@ -6263,6 +6589,7 @@ app.post("/api/workers/:id/provider/fresh", (req, res) => {
     () => store.deleteProviderCheckpoint(worker.id, sourceProvider),
   );
   if (!fresh) {
+    worker.accountId = previousAccountId;
     worker.handoff = previousHandoff;
     persistWorker(worker);
     res.status(500).json({ error: t("無法切換新的 LLM 工作階段，已保留原工作階段") });
@@ -6285,7 +6612,7 @@ app.post("/api/workers/:id/persona/suggest", async (req, res) => {
     return;
   }
   const provider = worker.runner.provider;
-  if (!providerReady(provider)) {
+  if (!workerProviderReady(worker)) {
     res.status(503).json({ error: t("{provider} 尚未登入，登入後才能由 AI 產生人設", { provider: providerLabel(provider) }), auth: authStates[provider] });
     return;
   }
@@ -6339,7 +6666,7 @@ app.post("/api/workers/:id/persona", (req, res) => {
   // conversation is preserved because the CLI resumes the same session id;
   // a signed-out provider simply stores it until it next starts.
   worker.runner.stop();
-  if (providerReady(worker.runner.provider)) worker.runner.warmup();
+  if (workerProviderReady(worker)) worker.runner.warmup();
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, persona: worker.persona });
@@ -6361,7 +6688,7 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
   // 並重生（CLI 以 --resume 續接同一對話，不遺失上下文），讓新模式的核准橋掛回來。
   if (prevMode === "invincible" && mode !== "invincible") {
     if (worker.runner.busy) worker.runner.interrupt(); else worker.runner.stop();
-    if (providerReady(worker.runner.provider)) worker.runner.warmup();
+    if (workerProviderReady(worker)) worker.runner.warmup();
   }
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -6449,9 +6776,19 @@ function restartIdleWorkers(provider?: ProviderId, workspacePath?: string): void
     if (
       (!provider || worker.runner.provider === provider) &&
       (!workspacePath || sameWorkspacePath(worker.runner.workspacePath, workspacePath)) &&
-      providerReady(worker.runner.provider) &&
+      workerProviderReady(worker) &&
       !worker.runner.busy
     ) {
+      worker.runner.stop();
+      worker.runner.warmup();
+    }
+  }
+}
+
+/** Warm only workers that use a specific named account after its auth check succeeds. */
+function restartIdleWorkersForAccount(accountId: string): void {
+  for (const worker of workers.values()) {
+    if (worker.accountId === accountId && workerProviderReady(worker) && !worker.runner.busy) {
       worker.runner.stop();
       worker.runner.warmup();
     }
@@ -6629,6 +6966,7 @@ app.post("/api/mcp", async (req, res) => {
       const { stdout } = await execCli(config.claudeBin, buildClaudeMcpAddArgs({ name, scope, mode: "json", json }), {
         cwd: workspacePath,
         timeout: 30000,
+        env: claudeChildEnv(process.env, config.defaultClaudeHome),
       });
       void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
       const reload = await reloadMcpWorkers(provider, workspacePath);
@@ -6726,6 +7064,9 @@ app.post("/api/mcp", async (req, res) => {
     const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, args, {
       cwd: workspacePath,
       timeout: 30000,
+      env: provider === "codex"
+        ? codexChildEnv(process.env, config.defaultCodexHome)
+        : claudeChildEnv(process.env, config.defaultClaudeHome),
     });
     void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
     const reload = await reloadMcpWorkers(provider, workspacePath);
@@ -6809,6 +7150,9 @@ app.delete("/api/mcp/:name", async (req, res) => {
     const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, args, {
       cwd: workspacePath,
       timeout: 30000,
+      env: provider === "codex"
+        ? codexChildEnv(process.env, config.defaultCodexHome)
+        : claudeChildEnv(process.env, config.defaultClaudeHome),
     });
     void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
     const reload = await reloadMcpWorkers(provider, workspacePath);
@@ -6841,7 +7185,12 @@ app.post("/api/mcp/login", (req, res) => {
     res.status(400).json({ error: t("缺少 server 名稱") });
     return;
   }
-  const { state, alreadyRunning } = mcpLoginTracker.start(provider, workspacePath, name);
+  const { state, alreadyRunning } = mcpLoginTracker.start(
+    provider, workspacePath, name,
+    provider === "codex"
+      ? codexChildEnv(process.env, config.defaultCodexHome)
+      : claudeChildEnv(process.env, config.defaultClaudeHome),
+  );
   res.json({ ok: true, started: true, alreadyRunning, state });
 });
 
@@ -6892,6 +7241,9 @@ app.post("/api/mcp/logout", async (req, res) => {
     const { stdout } = await execCli(provider === "codex" ? config.codexBin : config.claudeBin, ["mcp", "logout", name], {
       cwd: workspacePath,
       timeout: 30000,
+      env: provider === "codex"
+        ? codexChildEnv(process.env, config.defaultCodexHome)
+        : claudeChildEnv(process.env, config.defaultClaudeHome),
     });
     void refreshAffectedWorkspace(provider, workspacePath).catch(() => {});
     const reload = await reloadMcpWorkers(provider, workspacePath);
@@ -6917,6 +7269,7 @@ app.post("/api/mcp/reset-project-choices", async (req, res) => {
     const { stdout } = await execCli(config.claudeBin, ["mcp", "reset-project-choices"], {
       cwd: workspacePath,
       timeout: 15000,
+      env: claudeChildEnv(process.env, config.defaultClaudeHome),
     });
     await claudeCapabilitiesFor(workspacePath).refresh();
     res.json({ ok: true, message: stdout.trim() || t("已清除本專案核准記憶，下次互動式 session 會重新詢問") });
@@ -6943,6 +7296,7 @@ app.post("/api/mcp/import-from-claude-desktop", async (req, res) => {
     const { stdout } = await execCli(config.claudeBin, ["mcp", "add-from-claude-desktop", "-s", scope], {
       cwd: workspacePath,
       timeout: 30000,
+      env: claudeChildEnv(process.env, config.defaultClaudeHome),
     });
     await claudeCapabilitiesFor(workspacePath).refresh();
     const reload = await reloadMcpWorkers("claude", workspacePath);
@@ -6997,6 +7351,7 @@ workflowWatcher.start();
 const mcpConfigWatcher = new McpConfigWatcher(
   recentWorkspacePaths,
   synchronizeExternalMcpChange,
+  { codexHome: config.defaultCodexHome, claudeHome: config.defaultClaudeHome },
 );
 mcpConfigWatcher.start();
 
@@ -7007,6 +7362,15 @@ void Promise.all(recentWorkspacePaths().flatMap((workspacePath) => [
   restartIdleWorkers();
 });
 void refreshAuth();
+// Named accounts do not share the default provider state. Prime every saved
+// account on startup so assigned NPCs become usable without requiring a
+// manual refresh from the Accounts modal.
+void Promise.all(store.listAccounts().map(async (account) => {
+  const auth = await accountRegistry.refresh(account.id);
+  if (!auth) return;
+  broadcast({ type: "account_auth_updated", accountId: account.id, auth });
+  if (auth.status === "authenticated") restartIdleWorkersForAccount(account.id);
+}));
 const usageRefreshTimer = setInterval(() => {
   void usageRegistry.refreshAll(true);
 }, 5 * 60_000);

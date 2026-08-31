@@ -17,6 +17,7 @@ import { DepartmentMissionDialog } from "./components/DepartmentMissionDialog";
 import { PersonaEditor } from "./components/PersonaEditor";
 import { DepartmentCreator } from "./components/DepartmentCreator";
 import { McpModal } from "./components/McpModal";
+import { AccountsModal } from "./components/AccountsModal";
 import { OpsModal } from "./components/OpsModal";
 import { SquadModal } from "./components/SquadModal";
 import { KanbanModal } from "./components/KanbanModal";
@@ -176,7 +177,7 @@ const EMPTY_CAPABILITIES = {
 export function App() {
   const {
     workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
-    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, createWorker, pickWorkspace,
+    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
     send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
@@ -185,6 +186,7 @@ export function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<"create" | "move">("move");
   const [newWorkerProvider, setNewWorkerProvider] = useState<ProviderId>("claude");
+  const [newWorkerAccountId, setNewWorkerAccountId] = useState<string | null>(null);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   // 圓桌模式：開啟後，送出的訊息會被包成「讓這個 NPC 一次性扮演多角色討論並直接給結論」的提示，
@@ -255,6 +257,7 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [opsModalOpen, setOpsModalOpen] = useState(false);
   const [remoteModalOpen, setRemoteModalOpen] = useState(false);
   const [squadModalOpen, setSquadModalOpen] = useState(false);
@@ -477,6 +480,7 @@ export function App() {
 
   const openWorkspaceForCreate = useCallback((provider: ProviderId) => {
     setNewWorkerProvider(provider);
+    setNewWorkerAccountId(null);
     setWorkspaceMode("create");
     setWorkspaceOpen(true);
   }, []);
@@ -553,7 +557,7 @@ export function App() {
       // These overlays already have their own Escape-to-close handling and can be
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
-      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || backupModalOpen
+      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || accountsModalOpen || backupModalOpen
         || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
       if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
@@ -572,7 +576,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, avatarWorkerId, backupModalOpen, commandCenterOpen, commandPaletteOpen, departmentCreatorOpen, exitTaskFocusMode, focusStudios, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
+  }), [approvalWorker, avatarWorkerId, backupModalOpen, accountsModalOpen, commandCenterOpen, commandPaletteOpen, departmentCreatorOpen, exitTaskFocusMode, focusStudios, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, taskFocusMode, taskSearchOpen, updatePreferences, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -720,6 +724,13 @@ export function App() {
     void closeWorker(id).then((error) => error ? notify(error, "error") : notify(t("人員與工位拆除中"), "info"));
   }
 
+  function handleSetWorkerAccount(workerId: string, accountId: string | null) {
+    // TopBar already hard-disables this control once the NPC has any conversation
+    // history (switching mid-session can't resume the old thread under the new
+    // account anyway) — this is just the plain follow-through for a fresh NPC.
+    void setWorkerAccount(workerId, accountId).then((error) => { if (error) notify(error, "error"); });
+  }
+
   function handleModelChange(model: string) {
     if (!activeId || model === (active?.model ?? "")) return;
     setPendingModelSwitch({ workerId: activeId, model });
@@ -818,9 +829,12 @@ export function App() {
         modelOptions={modelOptions}
         workerCount={workerList.length}
         providerChanging={providerChanging}
+        accounts={Object.values(accounts)}
+        onSetWorkerAccount={handleSetWorkerAccount}
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
         onBossAssignment={openBossDesk}
         onOpenMcp={() => setMcpModalOpen(true)}
+        onOpenAccounts={() => setAccountsModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
         onOpenOps={() => setOpsModalOpen(true)}
         onOpenSquads={() => setSquadModalOpen(true)}
@@ -938,6 +952,7 @@ export function App() {
               onCreateNpc={() => openWorkspaceForCreate(activeProvider)}
               onCreateDepartment={() => { setDepartmentCreatorOpen(true); }}
               onOpenMcp={() => setMcpModalOpen(true)}
+              onOpenAccounts={() => setAccountsModalOpen(true)}
               onOpenBackup={() => setBackupModalOpen(true)}
               onNotificationsToggle={toggleNotifications}
               onOpenCommandCenter={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
@@ -1018,7 +1033,7 @@ export function App() {
         busy={Boolean(active?.busy)}
         queueEnabled
         persistExtras
-        globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen}
+        globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !accountsModalOpen}
         dropTargetLabel={active?.name}
         palette={{
           workspacePath: activeWorkspace,
@@ -1123,6 +1138,25 @@ export function App() {
         providers={auth}
         installs={providerInstalls}
         platform={system?.platform}
+        defaultCodexLogin={defaultCodexLogin}
+        onStartDefaultCodexLogin={async (mode, apiKey) => {
+          const error = await startDefaultCodexLogin(mode, apiKey);
+          if (error) notify(error, "error");
+          return error;
+        }}
+        onCancelDefaultCodexLogin={cancelDefaultCodexLogin}
+        defaultClaudeLogin={defaultClaudeLogin}
+        onStartDefaultClaudeLogin={async () => {
+          const error = await startDefaultClaudeLogin();
+          if (error) notify(error, "error");
+          return error;
+        }}
+        onSubmitDefaultClaudeLoginCode={async (code) => {
+          const error = await submitDefaultClaudeLoginCode(code);
+          if (error) notify(error, "error");
+          return error;
+        }}
+        onCancelDefaultClaudeLogin={cancelDefaultClaudeLogin}
         onRefresh={refreshAuth}
         onInstall={installProvider}
         onUseProvider={(provider) => {
@@ -1131,9 +1165,9 @@ export function App() {
         }}
       />}
 
-      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
+      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} newWorkerProvider={newWorkerProvider} accounts={Object.values(accounts)} accountId={newWorkerAccountId} onAccountChange={setNewWorkerAccountId} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
         if (workspaceMode === "create") {
-          const result = await createWorker(undefined, newWorkerProvider, path);
+          const result = await createWorker(undefined, newWorkerProvider, path, undefined, newWorkerAccountId);
           if (!result.error) notify(t("新工位建造中"));
           return result.error ?? null;
         }
@@ -1165,6 +1199,27 @@ export function App() {
       />}
 
       {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} usedMcpTools={usedMcpTools} notify={notify} onClose={() => setMcpModalOpen(false)} />}
+      {accountsModalOpen && <AccountsModal
+        accounts={Object.values(accounts)}
+        accountLogins={accountLogins}
+        onCreate={createAccount}
+        onDelete={deleteAccount}
+        onRefresh={refreshAccount}
+        onLogin={startAccountLogin}
+        onSubmitLoginCode={submitAccountLoginCode}
+        onCancelLogin={cancelAccountLogin}
+        onClose={() => setAccountsModalOpen(false)}
+        initialProvider={activeProvider}
+        defaultAuth={auth}
+        defaultCodexLogin={defaultCodexLogin}
+        defaultClaudeLogin={defaultClaudeLogin}
+        onRefreshDefaultAuth={refreshAuth}
+        onStartDefaultCodexLogin={startDefaultCodexLogin}
+        onCancelDefaultCodexLogin={cancelDefaultCodexLogin}
+        onStartDefaultClaudeLogin={startDefaultClaudeLogin}
+        onSubmitDefaultClaudeLoginCode={submitDefaultClaudeLoginCode}
+        onCancelDefaultClaudeLogin={cancelDefaultClaudeLogin}
+      />}
       {backupModalOpen && <BackupModal notify={notify} onClose={() => setBackupModalOpen(false)} />}
       {opsModalOpen && <OpsModal workers={workerList} notify={notify} onClose={() => setOpsModalOpen(false)} />}
       {remoteModalOpen && <RemoteAccessModal notify={notify} onClose={() => setRemoteModalOpen(false)} />}

@@ -267,6 +267,56 @@ test("removes host Codex runtime flags while preserving user configuration", () 
   );
 });
 
+test("codexHome override replaces any inherited CODEX_HOME", () => {
+  assert.deepEqual(
+    codexChildEnv({
+      PATH: "/bin",
+      CODEX_HOME: "/home/user/.codex",
+      CODEX_THREAD_ID: "host-thread",
+    }, "/data/codex-accounts/acct-1"),
+    {
+      PATH: "/bin",
+      CODEX_HOME: "/data/codex-accounts/acct-1",
+    },
+  );
+});
+
+test("a falsy codexHome override leaves the inherited CODEX_HOME untouched", () => {
+  assert.deepEqual(
+    codexChildEnv({ PATH: "/bin", CODEX_HOME: "/home/user/.codex" }, null),
+    { PATH: "/bin", CODEX_HOME: "/home/user/.codex" },
+  );
+});
+
+test("CodexSession reads getCodexHome live on every app-server spawn, not just at construction", () => {
+  const events: RunnerEvent[] = [];
+  let codexHome: string | null = "/data/codex-accounts/acct-1";
+  const session = new CodexSession(
+    (event) => events.push(event),
+    "/repo",
+    () => "",
+    () => "off",
+    undefined,
+    () => codexHome,
+  );
+  const spawnedEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
+  (session as unknown as { startAppServer(): Promise<string> }).startAppServer = async function (this: any) {
+    spawnedEnvs.push(codexChildEnv(process.env, codexHome));
+    return "thread-stub";
+  };
+  const internals = session as unknown as { ensureThread(): Promise<string> };
+  // Reassigning the worker's account between spawns must be picked up next
+  // time, since getCodexHome is read live rather than cached at construction.
+  return internals.ensureThread().then(() => {
+    codexHome = "/data/codex-accounts/acct-2";
+    (session as unknown as { ready: Promise<string> | null }).ready = null;
+    return internals.ensureThread();
+  }).then(() => {
+    assert.equal(spawnedEnvs[0]?.CODEX_HOME, "/data/codex-accounts/acct-1");
+    assert.equal(spawnedEnvs[1]?.CODEX_HOME, "/data/codex-accounts/acct-2");
+  });
+});
+
 test("quotes persona instruction paths for Codex config overrides", () => {
   assert.equal(
     codexPersonaConfig("/Users/test/data info/persona.md"),

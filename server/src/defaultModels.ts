@@ -24,10 +24,14 @@ function configuredValue(text: string, key: string): string | null {
 export function configuredDefaultModels(
   home = homedir(),
   readText: ReadText = (path) => readFileSync(path, "utf8"),
+  // Codex no longer necessarily lives at ~/.codex (Pixel Crew's own managed
+  // default lives elsewhere) — defaults to the ambient location only when the
+  // caller doesn't know better, so existing callers/tests are unaffected.
+  codexHome = join(home, ".codex"),
 ): ProviderDefaultModels {
   const defaults = { ...FALLBACK_DEFAULT_MODELS };
   try {
-    defaults.codex = configuredValue(readText(join(home, ".codex", "config.toml")), "model") ?? defaults.codex;
+    defaults.codex = configuredValue(readText(join(codexHome, "config.toml")), "model") ?? defaults.codex;
   } catch { /* no Codex config yet */ }
   try {
     const settings = JSON.parse(readText(join(home, ".claude", "settings.json"))) as { model?: unknown };

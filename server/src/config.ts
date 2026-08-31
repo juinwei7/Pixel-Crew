@@ -62,6 +62,15 @@ export const config = {
   dbPath,
   avatarDir,
   dataDirectory: dirname(dbPath),
+  // Pixel Crew's own managed Codex login for workers with no explicit
+  // codexAccountId — deliberately NOT the ambient $CODEX_HOME/~/.codex the
+  // host's own `codex` CLI uses, so the app never depends on (or silently
+  // shares state with) whatever the user is logged into in their terminal.
+  defaultCodexHome: join(dirname(dbPath), "codex-home"),
+  // Same idea as defaultCodexHome, for Claude — points CLAUDE_CONFIG_DIR away
+  // from ambient ~/.claude.json so Pixel Crew's own login never depends on
+  // (or overwrites) whatever the terminal's own `claude auth login` has.
+  defaultClaudeHome: join(dirname(dbPath), "claude-home"),
   webDistPath: process.env.WEB_DIST_PATH?.trim() || fileURLToPath(new URL("../../web/dist", import.meta.url)),
   production: process.env.NODE_ENV === "production" || process.argv.includes("--serve-web"),
 };

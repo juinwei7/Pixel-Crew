@@ -21,7 +21,7 @@ function boundedTail(value: string, limit = 4_000): string {
   return sanitized.length <= limit ? sanitized : `…${sanitized.slice(-limit)}`;
 }
 
-type Spawner = (command: string, args: string[], options: { cwd: string }) => ChildProcessWithoutNullStreams;
+type Spawner = (command: string, args: string[], options: { cwd: string; env?: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
 type Terminator = (child: ChildProcessWithoutNullStreams) => void | Promise<void>;
 
 // `claude mcp login <name>` / `codex mcp login <name>` open the user's system
@@ -51,7 +51,7 @@ export class McpLoginTracker {
     return this.states.get(this.key(provider, workspacePath, name));
   }
 
-  start(provider: ProviderId, workspacePath: string, name: string): { state: McpLoginState; alreadyRunning: boolean } {
+  start(provider: ProviderId, workspacePath: string, name: string, env?: NodeJS.ProcessEnv): { state: McpLoginState; alreadyRunning: boolean } {
     const k = this.key(provider, workspacePath, name);
     const existing = this.states.get(k);
     if (existing?.status === "running") return { state: existing, alreadyRunning: true };
@@ -68,7 +68,7 @@ export class McpLoginTracker {
     };
     this.states.set(k, state);
 
-    const child = this.spawner(bin, ["mcp", "login", name], { cwd: workspacePath });
+    const child = this.spawner(bin, ["mcp", "login", name], env ? { cwd: workspacePath, env } : { cwd: workspacePath });
     this.children.set(k, child);
     let stdout = "";
     let stderr = "";

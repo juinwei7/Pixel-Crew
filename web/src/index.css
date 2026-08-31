@@ -1417,6 +1417,105 @@ body {
   font-weight: 600;
 }
 
+.auth-provider-inapp-login {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 229, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(0, 229, 255, 0.05);
+}
+
+.auth-provider-inapp-login__title {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.auth-provider-inapp-login__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-provider-inapp-login__actions button,
+.auth-provider-inapp-login__apikey button {
+  padding: 8px 14px;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--cyan);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.auth-provider-inapp-login__actions button:hover,
+.auth-provider-inapp-login__apikey button:hover {
+  background: rgba(0, 229, 255, 0.16);
+}
+
+.auth-provider-inapp-login__pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.auth-provider-inapp-login__pending button {
+  border: none;
+  background: none;
+  color: var(--cyan);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.auth-provider-inapp-login__apikey {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-provider-inapp-login__apikey input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border-dim);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.auth-gate__hint-inline {
+  width: 100%;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.auth-gate__hint-inline a {
+  color: var(--cyan);
+}
+
+.auth-provider-steps-details {
+  margin: 16px 0 0;
+}
+
+.auth-provider-steps-details > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.auth-provider-steps-details .auth-provider-steps {
+  margin-top: 12px;
+}
+
 .auth-gate__command {
   display: flex;
   align-items: center;
@@ -4313,6 +4412,10 @@ body {
 .mcp-modal__header h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
 .mcp-modal__refresh { padding: 5px 10px; border: 1px solid var(--panel-border); border-radius: 7px; background: transparent; color: var(--cyan); font-size: 11px; cursor: pointer; }
 .mcp-modal__refresh:disabled { opacity: 0.4; cursor: default; }
+
+.accounts-modal__tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.accounts-modal__tab { padding: 5px 12px; border: 1px solid var(--panel-border); border-radius: 7px; background: transparent; color: var(--text-dim); font-size: 11px; font-weight: 600; cursor: pointer; }
+.accounts-modal__tab--active { border-color: var(--cyan); color: var(--cyan); background: rgba(0, 224, 255, 0.08); }
 
 .mcp-modal__hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid rgba(255, 176, 0, 0.3); border-radius: 8px; background: rgba(30, 24, 8, 0.5); color: #ffb000; font-size: 11px; line-height: 1.5; }
 .mcp-modal__hint button { padding: 4px 9px; border: 1px solid rgba(255, 176, 0, 0.4); border-radius: 6px; background: transparent; color: #ffb000; font-size: 10.5px; cursor: pointer; }
