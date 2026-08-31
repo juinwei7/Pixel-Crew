@@ -4671,6 +4671,18 @@ body {
 .top-bar__auto-approve:disabled { cursor: default; opacity: 0.4; }
 .top-bar__auto-approve--safe { background: rgba(0, 255, 163, 0.14); color: #6fe6bd; }
 .top-bar__auto-approve--full { background: rgba(255, 183, 94, 0.16); color: #ffcf8a; }
+.top-bar__auto-approve-reset {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid rgba(0, 255, 163, .42);
+  border-radius: 6px;
+  background: rgba(0, 255, 163, .1);
+  color: #7fe7bf;
+  font: 700 10px var(--mono);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.top-bar__auto-approve-reset:hover, .top-bar__auto-approve-reset:focus-visible { border-color: rgba(0, 255, 163, .8); background: rgba(0, 255, 163, .18); }
 
 /* 全域自訂化下拉（Chromium 134+ 的 appearance: base-select）：把原生 select 的彈出清單
    變成可完全用 CSS 造型的 popover——圓角、陰影、hover、間距全部自己畫，終於跟 App 的
@@ -5148,6 +5160,9 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-controls__auto-approve--safe { color: #7fd1a0; }
 .focus-controls__auto-approve--full { color: #e0a276; }
 .focus-controls__auto-approve--invincible { color: #ff8a5f; text-shadow: 0 0 8px rgba(255, 51, 85, 0.5); }
+.focus-controls__auto-approve-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.focus-controls__auto-approve-reset { min-height: 30px; padding: 0 7px; border: 1px solid rgba(0, 255, 163, .35); border-radius: 6px; background: rgba(0, 255, 163, .08); color: #7fd1a0; font: 700 9px var(--mono); cursor: pointer; }
+.focus-controls__auto-approve-reset:hover, .focus-controls__auto-approve-reset:focus-visible { border-color: rgba(0, 255, 163, .75); background: rgba(0, 255, 163, .16); }
 
 .focus-controls__rename {
   display: flex;
@@ -6424,7 +6439,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .command-composer__library { min-height: 32px; padding: 0 9px; border: 1px solid rgba(0, 229, 255,.13); border-radius: 7px; background: rgba(0, 229, 255,.045); color: var(--cyan); cursor: pointer; font: 10px var(--mono); }
 .command-composer__library span { color: #7289a6; font-size: 8px; }
 
-/* 圓桌模式切換鈕：關閉時低調，開啟時發光＋輕微呼吸動畫，讓使用者一眼看出現在送出的是「圓桌」。
+/* 討論模式切換鈕：關閉時低調，開啟時發光＋輕微呼吸動畫，讓使用者一眼看出現在送出的是討論模式。
    純 CSS 動畫，不花任何 token。 */
 .composer-roundtable-toggle { min-height: 32px; padding: 0 10px; border: 1px solid rgba(255,196,77,.22); border-radius: 7px; background: rgba(255,196,77,.05); color: #ffce7a; cursor: pointer; font: 10px var(--mono); white-space: nowrap; transition: background .15s ease, border-color .15s ease, box-shadow .15s ease; }
 .composer-roundtable-toggle:hover { background: rgba(255,196,77,.1); border-color: rgba(255,196,77,.4); }
@@ -6437,15 +6452,14 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .composer-research-toggle:active { transform: translateY(0) scale(.97); }
 .composer-research-toggle.is-active { background: rgba(0, 229, 255,.16); border-color: rgba(0, 229, 255,.65); color: #e6fbff; box-shadow: 0 0 10px rgba(0, 229, 255,.35); animation: research-breathe 1.8s ease-in-out infinite; }
 @keyframes research-breathe { 50% { box-shadow: 0 0 16px rgba(0, 229, 255,.6); } }
-/* 圓桌「⋯」更多選項：自訂角色／歷史原本是兩顆跟圓桌主開關並排的獨立按鈕，收進這個
-   小選單裡，讓「🗣️ 圓桌」保持唯一醒目的主開關，其餘是它的子設定/回顧動作。 */
+/* 作戰室「⋯」更多選項：自訂角色與歷史收進這個子選單。 */
 .composer-roundtable-more { position: relative; }
 .composer-roundtable-toggle--more { padding: 0 8px; font-size: 13px; letter-spacing: .06em; }
 .composer-roundtable-menu { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 21; display: grid; min-width: 140px; padding: 4px; border: 1px solid rgba(255,196,77,.3); border-radius: 10px; background: rgba(14,20,34,.99); box-shadow: 0 16px 44px rgba(0,0,0,.5); animation: tooltip-fade .15s ease both; }
 .composer-roundtable-menu button { min-height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: #ffce7a; font: 10px var(--mono); text-align: left; cursor: pointer; white-space: nowrap; }
 .composer-roundtable-menu button:hover { background: rgba(255,196,77,.12); }
 
-/* ⚙ 自訂圓桌角色面板：掛在工具列上方的小卡 */
+/* ⚙ 自訂作戰室角色面板：掛在工具列上方的小卡 */
 .warroom-stances-panel { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20; width: min(360px, 80vw); padding: 10px 12px; border: 1px solid rgba(255,196,77,.3); border-radius: 12px; background: rgba(14,20,34,.99); box-shadow: 0 16px 44px rgba(0,0,0,.5); animation: tooltip-fade .15s ease both; }
 .warroom-stances-panel header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .warroom-stances-panel header strong { color: #ffce7a; font-size: 11px; letter-spacing: .04em; }
@@ -6474,6 +6488,26 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .warroom-result__prio--P3 { background: rgba(0, 229, 255,.15); color: #8deeff; }
 .warroom-result__prio--P4 { background: rgba(132,171,190,.15); color: #aebdca; }
 .warroom-result__note { margin-top: 12px; color: #7d8ea3; font-size: 11px; }
+
+/* Explicit consent for the only mode that removes every approval boundary. */
+.auto-approve-confirm { position: fixed; inset: 0; z-index: 25020; display: grid; place-items: center; padding: 18px; background: rgba(4, 8, 16, .76); backdrop-filter: blur(4px); }
+.auto-approve-confirm__card { position: relative; width: min(540px, 100%); max-height: min(700px, calc(100vh - 36px)); overflow: auto; padding: 24px; border: 1px solid rgba(255, 91, 91, .5); border-radius: 16px; background: linear-gradient(180deg, rgba(40, 20, 29, .99), rgba(17, 18, 29, .99)); box-shadow: 0 32px 90px rgba(0, 0, 0, .66), 0 0 34px rgba(255, 46, 136, .12); color: #dce4ee; }
+.auto-approve-confirm__card header { padding-right: 28px; }
+.auto-approve-confirm__card header span { color: #ff9c9c; font: 700 9px var(--mono); letter-spacing: .16em; }
+.auto-approve-confirm__card h2 { margin: 5px 0 10px; color: #ffe2e2; font-size: 20px; }
+.auto-approve-confirm__card header p { margin: 0; color: #d5b6be; line-height: 1.6; font-size: 13px; }
+.auto-approve-confirm__close { position: absolute; top: 11px; right: 12px; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: #c7909b; font-size: 20px; cursor: pointer; }
+.auto-approve-confirm__close:hover, .auto-approve-confirm__close:focus-visible { background: rgba(255, 255, 255, .08); color: #fff; }
+.auto-approve-confirm__scope { display: grid; gap: 8px; margin: 18px 0 12px; padding: 12px; border: 1px solid rgba(255, 176, 176, .18); border-radius: 10px; background: rgba(0, 0, 0, .14); }
+.auto-approve-confirm__scope div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.auto-approve-confirm__scope dt { color: #ad8c96; font: 700 9px var(--mono); letter-spacing: .06em; }
+.auto-approve-confirm__scope dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: #f0dce1; font: 12px var(--mono); }
+.auto-approve-confirm__warning { margin: 0; color: #ffcab3; line-height: 1.55; font-size: 12px; }
+.auto-approve-confirm__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.auto-approve-confirm__actions button { min-height: 34px; padding: 0 12px; border: 1px solid rgba(168, 188, 211, .2); border-radius: 8px; background: rgba(255, 255, 255, .06); color: #c7d4e2; font: 700 11px var(--mono); cursor: pointer; }
+.auto-approve-confirm__actions .auto-approve-confirm__danger { border-color: rgba(255, 91, 91, .72); background: rgba(255, 59, 81, .18); color: #ffd5d5; }
+.auto-approve-confirm__actions button:hover, .auto-approve-confirm__actions button:focus-visible { border-color: rgba(207, 229, 248, .6); background: rgba(255, 255, 255, .12); }
+.auto-approve-confirm__actions .auto-approve-confirm__danger:hover, .auto-approve-confirm__actions .auto-approve-confirm__danger:focus-visible { border-color: #ff8c8c; background: rgba(255, 59, 81, .3); }
 
 /* 關鍵數字數據磚：用數字說話——大字數值、漲跌上色，放在裁決最上方 */
 .warroom-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 0 0 14px; }
@@ -6746,7 +6780,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .energy-hud { position: absolute; top: 9px; left: 50%; transform: translateX(-50%); }
   .top-bar__brand { font-size: 11px; letter-spacing: .13em; }
   .top-bar__room { max-width: 180px; }
-  .top-bar__group-label, .top-bar__mcp, .top-bar__update-wrap, .top-bar__agent > .top-bar__auto-approve { display: none; }
+  .top-bar__group-label, .top-bar__mcp, .top-bar__update-wrap, .top-bar__agent > .top-bar__auto-approve, .top-bar__agent > .top-bar__auto-approve-reset { display: none; }
   .top-bar__agent { min-width: 0; padding-left: 4px; }
   .top-bar__provider-select { width: 110px; max-width: 110px !important; flex-basis: 110px; }
   .top-bar__model-select { width: 112px; max-width: 112px !important; flex-basis: 112px; text-overflow: ellipsis; }

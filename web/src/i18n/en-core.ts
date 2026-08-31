@@ -6,8 +6,8 @@ export const enCore: Record<string, string> = {
   "選擇模型": "Choose model",
   "正在背景更新模型": "Refreshing models in background",
   "自動核准模式": "Auto-approve mode",
-  "安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了 rm -rf、sudo 等高風險 shell 指令，其他都直接放行。無限制：完全不設限、永不詢問——連 rm -rf、sudo 都放行，風險自負！":
-    "Safe: only read-only, verified-safe commands skip confirmation. Full: everything passes except high-risk shell commands like rm -rf or sudo. Unrestricted: no limits, never asks - even rm -rf and sudo go through. At your own risk!",
+  "安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了已辨識的高風險 Bash 指令，檔案變更、MCP 動作與其他指令都會直接放行。無限制：完全不設限、永不詢問——連 rm -rf、sudo 都放行，風險自負！":
+    "Safe: only read-only, verified-safe commands skip confirmation. Full: except for recognized high-risk Bash commands, file changes, MCP actions, and other commands are approved automatically. Unrestricted: no limits, never asks - even rm -rf and sudo go through. At your own risk!",
   "自動核准：關閉": "Auto-approve: off",
   "安全自動核准": "Safe auto-approve",
   "完全自動核准": "Full auto-approve",
@@ -24,6 +24,8 @@ export const enCore: Record<string, string> = {
   "安全": "Safe",
   "完全": "Full",
   "⚡ 無限制": "⚡ Unrestricted",
+  "回到安全": "Return to safe",
+  "立即回到安全自動核准": "Immediately return to safe auto-approve",
   "切換視覺主題：像素風 / 現代工作台": "Switch visual theme: Pixel / Modern workspace",
   "切換視覺主題": "Switch visual theme",
   "像素": "Pixel",
@@ -38,6 +40,7 @@ export const enCore: Record<string, string> = {
   "隊員細節": "Crew detail",
   "供應商": "Provider",
   "工作區": "Workspace",
+  "NPC": "NPC",
   "點選左側隊員查看細節": "Select a crew member to view details",
   "更新至 v{version}": "Update to v{version}",
   "辦公室功能：MCP、看板、營運、下班、重啟、導覽": "Office tools: MCP, kanban, ops, day report, restart, tour",

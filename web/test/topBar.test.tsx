@@ -126,6 +126,12 @@ test("shows the auto-approve toggle for Claude and reflects the worker's current
   const fullHtml = renderToStaticMarkup(<TopBar {...commonProps} active={full} />);
   assert.match(fullHtml, /top-bar__auto-approve--full/);
   assert.match(fullHtml, /<option value="full" selected="">/);
+  assert.match(fullHtml, /檔案變更、MCP 動作與其他指令都會直接放行/);
+
+  const invincible = { ...off, autoApproveMode: "invincible" as const };
+  const invincibleHtml = renderToStaticMarkup(<TopBar {...commonProps} active={invincible} />);
+  assert.match(invincibleHtml, /top-bar__auto-approve--invincible/);
+  assert.match(invincibleHtml, /回到安全/);
 });
 
 test("also shows the auto-approve control for Codex", () => {

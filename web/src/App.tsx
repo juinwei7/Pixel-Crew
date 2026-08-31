@@ -17,11 +17,14 @@ import { FocusControls } from "./components/FocusControls";
 import { FocusStudios } from "./components/FocusStudios";
 import { FocusPaneGrid } from "./components/FocusPaneGrid";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
+import { Modal } from "./components/Modal";
 import { hasSeenTour } from "./onboardingState";
 import { Office3D } from "./components/Office3D";
 import { RichText } from "./components/RichText";
+import { requiresAutoApproveConfirmation } from "./autoApproveSafety";
 import { theme } from "./theme";
 import { parseMcpToolName } from "./mcpToolName";
+import { discussionSubmission, toggleDiscussionMode, type DiscussionMode } from "./discussionMode";
 import { roundtablePrompt } from "./roundtablePrompt";
 import { apiRequest } from "./api";
 import { t } from "./i18n";
@@ -195,16 +198,15 @@ export function App() {
   const [newWorkerAccountId, setNewWorkerAccountId] = useState<string | null>(null);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  // 圓桌模式：開啟後，送出的訊息會被包成「讓這個 NPC 一次性扮演多角色討論並直接給結論」的提示，
-  // 成本 ≈ 一次普通提問（不像部門派工那樣開多個 agent 燒 token）。結果直接顯示在該 NPC 的工作日誌。
-  const [roundtableMode, setRoundtableMode] = useState(false);
-  // 目前正在「開圓桌」的 NPC id 清單，拿來在畫面上讓那位 NPC 冒出「🗣️ 圓桌討論中…」的對話泡
+  // 快速圓桌＝目前 NPC 單回合模擬多視角；作戰室＝2–4 個短命 Claude 同儕真的辯論。
+  // 兩者刻意分成不同入口，讓時間、Provider 與用量預期不會混在一起。
+  const [discussionMode, setDiscussionMode] = useState<DiscussionMode>(null);
+  // 目前正在「開作戰室」的 NPC id 清單，拿來在畫面上讓那位 NPC 冒出討論中的對話泡
   // （沿用場景既有的 speech bubble，不用另寫 pixi 動畫）。roundtableSeenBusy 用來避免競態：
   // 剛送出時 worker 還沒變 busy，要等它「忙過又變回閒置」才算討論結束、才清掉旗標。
   const [roundtableWorkerIds, setRoundtableWorkerIds] = useState<string[]>([]);
   const roundtableSeenBusy = useRef<Set<string>>(new Set());
-  // 圓桌＝一次性、不累積：每次開圓桌就「自動建立一個臨時 NPC（跑在便宜模型 Haiku）」在它身上討論，
-  // 下次再開圓桌、或關掉圓桌模式時，就把上一個臨時 NPC 刪掉——問完即丟、絕不堆積、也不污染常駐 NPC。
+  // 作戰室使用短命 NPC；結束後由後端自動拆除，不污染常駐 NPC。
   const roundtableTempIdRef = useRef<string | null>(null);
   const [warroomResult, setWarroomResult] = useState<WarRoomResult | null>(null);
   const [warroomRunning, setWarroomRunning] = useState(false);
@@ -213,10 +215,10 @@ export function App() {
   const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
   // 輸入框輪播小撇步：閒置時輪流提示隱藏功能（點會議桌、⚙ 自訂角色…），幫助發現功能。
   const composerTips = [
-    t("點底部會議桌可直接開圓桌"),
-    t("⚙ 可自訂圓桌上桌角色"),
+    t("點底部會議桌可直接開作戰室"),
+    t("⚙ 可自訂作戰室上桌角色"),
     t("📜 歷史能回看每場裁決（含圖表）"),
-    t("圓桌會依難度自動配模型與人數"),
+    t("作戰室會依難度自動配模型與人數"),
   ];
   const [tipIndex, setTipIndex] = useState(0);
   useEffect(() => {
@@ -225,13 +227,12 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ⚙ 自訂圓桌角色：每行「角色名｜立場描述」，存 localStorage；空白＝用預設（依難度自動配）。
+  // ⚙ 自訂作戰室角色：每行「角色名｜立場描述」，存 localStorage；空白＝用預設（依難度自動配）。
   // （曾有過使用者可按的「🔍研究」按鈕，後拆除：委派是 host NPC（大腦）的工具——使用者直接
   //   跟 NPC 講就好，由它決定要不要呼叫 /api/delegate 派研究員，按鈕只是繞過大腦的冗餘入口。）
   const [stancesOpen, setStancesOpen] = useState(false);
   const [stancesText, setStancesText] = useState(() => localStorage.getItem("warroom-stances") ?? "");
-  // 圓桌「⋯」更多選項選單：自訂角色／歷史原本是兩顆跟「🗣️ 圓桌」開關並排的獨立按鈕，
-  // 看起來像三個平行功能；實際上後兩個都是圓桌的子設定/回顧，收進選單裡讓主開關更醒目。
+  // 作戰室「⋯」更多選項選單：自訂角色／歷史是多 Agent 辯論的子設定與回顧。
   const [roundtableMenuOpen, setRoundtableMenuOpen] = useState(false);
   const roundtableMenuRef = useRef<HTMLDivElement>(null);
 
@@ -300,6 +301,12 @@ export function App() {
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [bossAssignmentOpen, setBossAssignmentOpen] = useState(false);
   const [pendingModelSwitch, setPendingModelSwitch] = useState<{ workerId: string; model: string } | null>(null);
+  const [pendingAutoApproveMode, setPendingAutoApproveMode] = useState<{
+    workerId: string;
+    workerName: string;
+    workspacePath: string;
+    mode: AutoApproveMode;
+  } | null>(null);
   const [modelSwitchSubmitting, setModelSwitchSubmitting] = useState(false);
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -334,8 +341,8 @@ export function App() {
   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
   const missionList = useMemo(() => Object.values(missions), [missions]);
   const departmentList = useMemo(() => Object.values(departments), [departments]);
-  // 臨時圓桌 NPC 忙過又變回閒置＝討論結束，把它頭上「🗣️ 圓桌討論中…」的氣泡旗標清掉；
-  // 還沒開始忙的先留著，避免剛送出就被清。（臨時 NPC 本身的刪除時機見 onSubmit／圓桌開關。）
+  // 臨時作戰室 NPC 忙過又變回閒置＝討論結束，把它頭上的討論氣泡旗標清掉；
+  // 還沒開始忙的先留著，避免剛送出就被清。
   useEffect(() => {
     if (roundtableWorkerIds.length === 0) return;
     const seen = roundtableSeenBusy.current;
@@ -476,9 +483,9 @@ export function App() {
     setSelectedDepartmentId(null);
     setBossMissionDetailId(null);
     setBossAssignmentOpen(false);
-    // 點任何 NPC＝回去跟他聊天，圓桌模式自動關閉（點會議桌才會再開圓桌）。
-    // 這樣「桌子＝開會、人＝聊天」的空間直覺才一致，不會忘了關圓桌結果把普通問題丟去辯論。
-    setRoundtableMode(false);
+    // 點任何 NPC＝回去跟他聊天，討論模式自動關閉（點會議桌才會再開作戰室）。
+    // 這樣「桌子＝開會、人＝聊天」的空間直覺才一致，不會忘了關模式把普通問題丟去討論。
+    setDiscussionMode(null);
     updatePreferences({ taskLogOpen: true, focusStudioLastWorkerIds: remembered });
     setComposerFocusRequest((request) => request + 1);
   }, [preferences.focusStudioLastWorkerIds, setActiveId, updatePreferences, workers]);
@@ -687,7 +694,7 @@ export function App() {
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
       const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
-        || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId);
+        || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
       if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
       if (layer === "command_palette") {
@@ -705,7 +712,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -913,15 +920,30 @@ export function App() {
     });
   }
 
-  function handleAutoApproveChange(mode: AutoApproveMode) {
-    if (!activeId) return;
-    void setAutoApproveMode(activeId, mode).then((error) => {
+  function applyAutoApproveMode(workerId: string, mode: AutoApproveMode) {
+    void setAutoApproveMode(workerId, mode).then((error) => {
       if (error) { notify(error, "error"); return; }
       if (mode === "off") notify(t("自動核准已關閉"));
       else if (mode === "safe") notify(t("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問"));
-      else if (mode === "full") notify(t("完全自動核准已開啟；rm -rf、sudo 等高風險指令仍會詢問"));
+      else if (mode === "full") notify(t("完全自動核准已開啟；除了已辨識的高風險 Bash 指令，檔案變更、MCP 動作與其他指令都會直接放行"));
       else notify(t("⚡ 無限制模式已開啟：完全不設限、永不詢問（連 rm -rf、sudo 都放行），風險自負！"), "info");
     });
+  }
+
+  function handleAutoApproveChange(mode: AutoApproveMode) {
+    if (!active) return;
+    if (requiresAutoApproveConfirmation(active.autoApproveMode, mode)) {
+      setPendingAutoApproveMode({ workerId: active.id, workerName: active.name, workspacePath: active.workspacePath, mode });
+      return;
+    }
+    applyAutoApproveMode(active.id, mode);
+  }
+
+  function confirmAutoApproveMode() {
+    if (!pendingAutoApproveMode) return;
+    const { workerId, mode } = pendingAutoApproveMode;
+    setPendingAutoApproveMode(null);
+    applyAutoApproveMode(workerId, mode);
   }
 
   async function requestServerRestart() {
@@ -971,9 +993,9 @@ export function App() {
         roundtableIds={roundtableIdSet}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
         onMeetingTableClick={() => {
-          setRoundtableMode(true);
+          setDiscussionMode("warroom");
           setComposerFocusRequest((request) => request + 1);
-          notify(t("🏛️ 圓桌模式已開啟——輸入問題送出即開始辯論"), "info");
+          notify(t("🏛️ 作戰室模式已開啟——輸入問題送出即召開多 Agent 辯論"), "info");
         }}
         onEmptyTap={() => { if (preferences.taskLogOpen) updatePreferences({ taskLogOpen: false }); }}
         onSelect={activateNpc}
@@ -1238,18 +1260,25 @@ export function App() {
         toolbar={<>
           <button
             type="button"
-            className={`composer-roundtable-toggle${roundtableMode ? " is-active" : ""}`}
-            aria-pressed={roundtableMode}
-            title={t("圓桌模式：開啟後送出的訊息會召開作戰室（多 NPC 圍桌辯論→裁決）")}
-            onClick={() => setRoundtableMode((on) => !on)}
-          >{t("🗣️ 圓桌")}{roundtableMode ? t("・開") : ""}</button>
+            className={`composer-roundtable-toggle${discussionMode === "roundtable" ? " is-active" : ""}`}
+            aria-pressed={discussionMode === "roundtable"}
+            title={t("快速圓桌：由目前 NPC 單回合模擬 2–4 個觀點並直接給結論；不會啟動其他 Agent")}
+            onClick={() => setDiscussionMode((mode) => toggleDiscussionMode(mode, "roundtable"))}
+          >{t("🗣️ 快速圓桌")}{discussionMode === "roundtable" ? t("・開") : ""}</button>
+          <button
+            type="button"
+            className={`composer-roundtable-toggle composer-roundtable-toggle--warroom${discussionMode === "warroom" ? " is-active" : ""}`}
+            aria-pressed={discussionMode === "warroom"}
+            title={t("作戰室：召集 2–4 位臨時 Claude NPC，進行 1–2 輪辯論再裁決；約需數分鐘並使用 Claude 用量")}
+            onClick={() => setDiscussionMode((mode) => toggleDiscussionMode(mode, "warroom"))}
+          >{t("🏛️ 作戰室")}{discussionMode === "warroom" ? t("・開") : ""}</button>
           <div className="composer-roundtable-more" ref={roundtableMenuRef}>
             <button
               type="button"
               className="composer-roundtable-toggle composer-roundtable-toggle--more"
               aria-expanded={roundtableMenuOpen}
-              aria-label={t("圓桌更多選項")}
-              title={t("圓桌更多選項：自訂角色、歷史")}
+              aria-label={t("作戰室更多選項")}
+              title={t("作戰室更多選項：自訂角色、歷史")}
               onClick={() => setRoundtableMenuOpen((open) => !open)}
             >⋯</button>
             {roundtableMenuOpen && <div className="composer-roundtable-menu" role="menu">
@@ -1258,7 +1287,7 @@ export function App() {
             </div>}
           </div>
           {stancesOpen && <div className="warroom-stances-panel">
-            <header><strong>{t("⚙ 自訂圓桌角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
+            <header><strong>{t("⚙ 自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea
               value={stancesText}
               rows={4}
@@ -1270,8 +1299,11 @@ export function App() {
         </>}
         onSubmit={async (command) => {
           if (!activeId) return t("沒有可用的人員");
-          const isWarroom = roundtableMode && Boolean(command.text.trim());
-          if (!isWarroom) return send(activeId, command);
+          const submissionMode = discussionSubmission(discussionMode, command.text);
+          if (submissionMode === "roundtable") {
+            return send(activeId, { ...command, text: roundtablePrompt(command.text) });
+          }
+          if (submissionMode !== "warroom") return send(activeId, command);
           // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個 🏛 角色 NPC 走到會議桌，兩輪辯論（表態→反駁）、
           // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
           if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return null; }
@@ -1424,6 +1456,30 @@ export function App() {
       {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
       </Suspense>
 
+      {pendingAutoApproveMode && <Modal
+        label={t("確認啟用無限制自動核准")}
+        overlayClassName="auto-approve-confirm"
+        cardClassName="auto-approve-confirm__card"
+        closeClassName="auto-approve-confirm__close"
+        closeLabel={t("取消啟用無限制模式")}
+        onClose={() => setPendingAutoApproveMode(null)}
+      >
+        <header>
+          <span>⚠ {t("高風險權限變更")}</span>
+          <h2>{t("啟用 ⚡ 無限制模式？")}</h2>
+          <p>{t("這會讓 {name} 略過所有核准，包含刪除檔案、提權 Bash 指令與 MCP 的外部動作。", { name: pendingAutoApproveMode.workerName })}</p>
+        </header>
+        <dl className="auto-approve-confirm__scope">
+          <div><dt>{t("NPC")}</dt><dd>{pendingAutoApproveMode.workerName}</dd></div>
+          <div><dt>{t("工作區")}</dt><dd title={pendingAutoApproveMode.workspacePath}>{pendingAutoApproveMode.workspacePath}</dd></div>
+        </dl>
+        <p className="auto-approve-confirm__warning">{t("此設定會持續套用到這位 NPC，直到你主動切回其他模式。")}</p>
+        <div className="auto-approve-confirm__actions">
+          <button type="button" onClick={() => setPendingAutoApproveMode(null)}>{t("取消")}</button>
+          <button type="button" className="auto-approve-confirm__danger" onClick={confirmAutoApproveMode}>{t("我了解風險，啟用")}</button>
+        </div>
+      </Modal>}
+
       {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />
         {t("🏛️ 作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
@@ -1456,7 +1512,7 @@ export function App() {
                     </div>}
               </>
             : warroomHistory.length === 0
-              ? <p className="warroom-result__note">{t("還沒有任何報告——開一場圓桌就會自動存檔到這裡。")}</p>
+              ? <p className="warroom-result__note">{t("還沒有任何報告——開一場作戰室就會自動存檔到這裡。")}</p>
               : <ul className="warroom-history__list">{warroomHistory.map((r) => (
                   <li key={r.file}>
                     <button type="button" className="warroom-history__item" onClick={() => {

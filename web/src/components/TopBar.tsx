@@ -224,13 +224,19 @@ export function TopBar({
           disabled={!active}
           onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
           aria-label={t("自動核准模式")}
-          title={t("安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了 rm -rf、sudo 等高風險 shell 指令，其他都直接放行。無限制：完全不設限、永不詢問——連 rm -rf、sudo 都放行，風險自負！")}
+          title={t("安全：只有唯讀與驗證安全的指令跳過詢問。完全：除了已辨識的高風險 Bash 指令，檔案變更、MCP 動作與其他指令都會直接放行。無限制：完全不設限、永不詢問——連 rm -rf、sudo 都放行，風險自負！")}
         >
           <option value="off">{t("自動核准：關閉")}</option>
           <option value="safe">{t("安全自動核准")}</option>
           <option value="full">{t("完全自動核准")}</option>
           <option value="invincible">{t("⚡ 無限制")}</option>
         </select>
+        {active?.autoApproveMode === "invincible" && <button
+          type="button"
+          className="top-bar__auto-approve-reset"
+          onClick={() => onAutoApprove("safe")}
+          title={t("立即回到安全自動核准")}
+        >🛡 {t("回到安全")}</button>}
       </div>
 
       <div ref={toolsRef} className="top-bar__mcp">
@@ -366,6 +372,11 @@ export function TopBar({
               <option value="invincible">{t("⚡ 無限制")}</option>
             </select>
           </label>
+          {active?.autoApproveMode === "invincible" && <button
+            type="button"
+            className="top-bar__auto-approve-reset"
+            onClick={() => onAutoApprove("safe")}
+          >🛡 {t("回到安全")}</button>}
           <button type="button" onClick={onOpenMcp}>{t("MCP 能力")} <strong>{connected}/{capabilities.mcpServers.length}</strong></button>
           {updateInfo?.updateAvailable && <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">{t("更新至 v{version}", { version: updateInfo.latestVersion ?? "" })}</a>}
         </div>
