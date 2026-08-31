@@ -975,7 +975,7 @@ export function App() {
           onFresh={() => commitModelSwitch(true)}
           onCancel={() => setPendingModelSwitch(null)}
         />}
-        {!bossAssignmentOpen && !selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={(approvalId, decision) => {
+        {!bossAssignmentOpen && !selectedDepartment && <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={(approvalId, decision) => {
           const owner = workerList.find((worker) => worker.turns.some((turn) => turn.items.some((item) => item.kind === "approval" && item.request.id === approvalId)));
           return owner ? resolveApproval(owner.id, approvalId, decision) : Promise.resolve(t("找不到需要核准的 NPC"));
         }} />}

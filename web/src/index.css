@@ -5208,6 +5208,10 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-studios__search button:hover { background: rgba(255,255,255,.08); color: #dce6ec; }
 .focus-studios__list { display: grid; gap: 7px; }
 .focus-studios__empty { margin: 0; padding: 12px 8px; border: 1px dashed rgba(143,177,196,.18); border-radius: 7px; color: #728492; font: 9px var(--mono); text-align: center; }
+.focus-studios__create { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 10px; border: 1px dashed rgba(143,177,196,.3); border-radius: 9px; background: rgba(255,255,255,.02); color: #91b7c8; text-align: left; cursor: pointer; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.focus-studios__create:hover { border-color: rgba(145,195,220,.55); background: rgba(145,195,220,.08); color: #d7e6ec; }
+.focus-studios__create-mark { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: rgba(255,255,255,.05); font: 13px/1 var(--mono); }
+.focus-studios__create-label { font: 11px var(--mono); }
 .focus-studios__studio {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
@@ -5247,6 +5251,8 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-studios--collapsed .focus-studios__name,
 .focus-studios--collapsed .focus-studios__meta,
 .focus-studios--collapsed .focus-studios__git { display: none; }
+.focus-studios--collapsed .focus-studios__create { display: grid; place-items: center; width: 42px; min-height: 42px; padding: 4px; border-radius: 8px; }
+.focus-studios--collapsed .focus-studios__create-label { display: none; }
 
 .holo-panel--focus .task-log-toolbar button:hover,
 .holo-panel--focus .task-log-toolbar button.active {
