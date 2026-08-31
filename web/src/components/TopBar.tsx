@@ -10,9 +10,17 @@ type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean };
 
 type ModelOption = { id: string; label: string; description?: string };
 
+export function canShowBackgroundServiceStop(
+  platform: string | undefined,
+  onShutdown: (() => void) | undefined,
+): boolean {
+  return platform === "win32" && typeof onShutdown === "function";
+}
+
 type Props = {
   active?: WorkerState;
   activeWorkspace: string;
+  platform?: string;
   capabilities: CapabilityState;
   auth: ProviderAuthState;
   wsReady: boolean;
@@ -34,6 +42,7 @@ type Props = {
   onOpenTour(): void;
   onOpenRemote(): void;
   onRestart(): void;
+  onShutdown?(): void;
   restartPending: boolean;
   onProvider(provider: ProviderId): void;
   onModel(model: string): void;
@@ -50,6 +59,7 @@ type Props = {
 export function TopBar({
   active,
   activeWorkspace,
+  platform,
   capabilities,
   auth,
   wsReady,
@@ -71,6 +81,7 @@ export function TopBar({
   onOpenTour,
   onOpenRemote,
   onRestart,
+  onShutdown,
   restartPending,
   onProvider,
   onModel,
@@ -96,6 +107,7 @@ export function TopBar({
   const connected = capabilities.mcpServers.filter((server) =>
     server.status === "connected" || server.status === "enabled"
   ).length;
+  const showBackgroundServiceStop = canShowBackgroundServiceStop(platform, onShutdown);
 
   useEffect(() => {
     if (!toolsOpen) return;
@@ -264,6 +276,14 @@ export function TopBar({
             >
               {restartPending ? t("⟳ 等空檔重啟中…") : t("⟳ 重啟伺服器")}
             </button>
+            {showBackgroundServiceStop && <button
+              type="button"
+              className="top-bar__menu-danger"
+              onClick={() => { setToolsOpen(false); onShutdown?.(); }}
+              title={t("停止 Windows 背景服務並關閉 Pixel Crew；進行中的 NPC 工作會中斷")}
+            >
+              {t("⏻ 關閉背景服務")}
+            </button>}
             <button type="button" onClick={() => { setToolsOpen(false); onOpenTour(); }} title={t("新手導覽：讓導覽貓帶你重新認識辦公室")}>
               {t("❓ 新手導覽")}
             </button>

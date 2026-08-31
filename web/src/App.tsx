@@ -775,6 +775,16 @@ export function App() {
     }
   }
 
+  async function requestServerShutdown() {
+    if (!window.confirm(t("確定要關閉背景服務？所有進行中的 NPC 工作都會中斷，之後可再雙擊 Pixel Crew 重新啟動。"))) return;
+    try {
+      await apiRequest<{ ok: boolean }>("/api/shutdown-server", { method: "POST" });
+      notify(t("背景服務正在關閉，這個頁面即將失去連線。"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("關閉服務請求失敗"), "error");
+    }
+  }
+
   return (
     <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
@@ -823,6 +833,7 @@ export function App() {
       <TopBar
         active={active}
         activeWorkspace={activeWorkspace}
+        platform={system?.platform}
         capabilities={activeCapabilities}
         auth={activeAuth}
         wsReady={wsReady}
@@ -844,6 +855,7 @@ export function App() {
         onOpenTour={openTour}
         onOpenRemote={() => setRemoteModalOpen(true)}
         onRestart={() => void requestServerRestart()}
+        onShutdown={() => void requestServerShutdown()}
         restartPending={restartPending}
         onProvider={(provider) => void changeProvider(provider)}
         onModel={handleModelChange}

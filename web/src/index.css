@@ -7559,6 +7559,8 @@ input:focus-visible {
 .top-bar__menu-toggle input { accent-color: var(--cyan); cursor: pointer; }
 .top-bar__lang--on { color: var(--cyan); font-weight: 700; }
 .top-bar__lang--off { opacity: 0.45; }
+.top-bar__more-menu .top-bar__menu-danger { color: #ff9bab; border-color: rgba(255, 91, 120, .32); }
+.top-bar__more-menu .top-bar__menu-danger:hover { background: rgba(255, 71, 104, .13); color: #ffd4da; }
 .top-bar__lang-sep { opacity: 0.3; margin: 0 1px; }
 
 /* 工作小窗（SAMS 風，像素版）：忙碌 NPC 頭上浮出的螢幕面板；web 站點顯示真實瀏覽器截圖。 */

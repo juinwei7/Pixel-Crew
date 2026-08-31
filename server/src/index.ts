@@ -2712,6 +2712,20 @@ app.post("/api/restart-server", (_req, res) => {
   res.json({ ok: true, message: t("將在所有 NPC 空檔時自動重啟並開新黑窗") });
 });
 
+// Windows' normal launcher deliberately runs without a persistent console or
+// reliable tray icon. Give the local UI a first-class stop control instead of
+// asking the owner to hunt down a Node process. Reply before tearing down the
+// listener so apiRequest receives a deterministic acknowledgement.
+app.post("/api/shutdown-server", (_req, res) => {
+  if (process.platform !== "win32") {
+    res.status(409).json({ error: t("背景服務關閉目前只適用 Windows") });
+    return;
+  }
+  res.json({ ok: true });
+  const timer = setTimeout(() => exitAfterShutdown("owner requested shutdown", 0), 200);
+  timer.unref();
+});
+
 // ── 遠端存取／手機控制（轉接站 sidecar）─────────────────────────────────────
 // 分工刻意：驗證/公開切換都在轉接站(_tsproxy.mjs, 8790)，本體只負責「把它拉起來」。
 const TSPROXY_PORT = 8790;
