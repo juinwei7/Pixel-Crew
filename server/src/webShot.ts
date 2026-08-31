@@ -188,7 +188,7 @@ async function getSession(): Promise<{ send: Send }> {
   const wsUrl = page?.webSocketDebuggerUrl;
   if (!wsUrl) throw new Error("拿不到 page 的 webSocketDebuggerUrl");
   const ws = new WebSocket(wsUrl, { perMessageDeflate: false });
-  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timeout: NodeJS.Timeout }>();
   let msgId = 0;
   // Unlike every CDP round trip below, this handshake previously had no
   // timeout. Headless Chrome can accept the TCP connection but never
@@ -206,20 +206,33 @@ async function getSession(): Promise<{ send: Send }> {
   ws.on("message", (raw) => {
     let msg: any; try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.id != null && pending.has(msg.id)) {
-      const p = pending.get(msg.id)!; pending.delete(msg.id);
+      const p = pending.get(msg.id)!; pending.delete(msg.id); clearTimeout(p.timeout);
       if (msg.error) p.reject(new Error(msg.error.message || "CDP error"));
       else p.resolve(msg.result);
     }
   });
-  ws.on("close", () => { pending.forEach((p) => p.reject(new Error("ws closed"))); pending.clear(); if (sess?.ws === ws) sess = null; });
+  ws.on("close", () => {
+    pending.forEach((p) => { clearTimeout(p.timeout); p.reject(new Error("ws closed")); });
+    pending.clear();
+    if (sess?.ws === ws) sess = null;
+  });
   ws.on("error", () => { if (sess?.ws === ws) sess = null; });
   const send: Send = (method, params) =>
     new Promise((resolve, reject) => {
       if (ws.readyState !== WebSocket.OPEN) return reject(new Error("page ws not open"));
       const id = ++msgId;
-      pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ id, method, params: params ?? {} }));
-      setTimeout(() => { if (pending.delete(id)) reject(new Error(`CDP ${method} timeout`)); }, NAV_TIMEOUT_MS + 3000);
+      const timeout = setTimeout(() => {
+        if (pending.delete(id)) reject(new Error(`CDP ${method} timeout`));
+      }, NAV_TIMEOUT_MS + 3000);
+      timeout.unref?.();
+      pending.set(id, { resolve, reject, timeout });
+      try {
+        ws.send(JSON.stringify({ id, method, params: params ?? {} }));
+      } catch (error) {
+        pending.delete(id);
+        clearTimeout(timeout);
+        reject(error as Error);
+      }
     });
   await send("Page.enable");
   await send("Emulation.setDeviceMetricsOverride", { width: VIEW_W, height: VIEW_H, deviceScaleFactor: VIEW_SCALE, mobile: false });
@@ -267,8 +280,14 @@ function targetUrl(query: string): string {
 
 // --- SSRF 防護：直連 URL 時，拒絕指向本機／內網／雲端 metadata 的位址 ---
 // webshot 會用 headless 瀏覽器「真的去導覽」呼叫端給的網址；不擋等於讓伺服器替人打內網。
-function isInternalIp(ip: string): boolean {
-  const v = ip.replace(/^::ffff:/i, "").toLowerCase(); // 拆 IPv4-mapped IPv6
+export function isInternalIp(ip: string): boolean {
+  // Normalise IPv6 first: the same address may arrive in compressed, dotted,
+  // or fully expanded form. In particular, `0:0:0:0:0:ffff:7f00:1` must be
+  // treated exactly like `::ffff:7f00:1` rather than slipping past the
+  // embedded-IPv4 check below.
+  const v = net.isIPv6(ip)
+    ? new URL(`http://[${ip}]/`).hostname.slice(1, -1).toLowerCase()
+    : ip.toLowerCase();
   if (net.isIPv4(v)) {
     const p = v.split(".").map(Number);
     if (p[0] === 0 || p[0] === 127 || p[0] === 10) return true;   // 未指定／loopback／私有
@@ -276,12 +295,27 @@ function isInternalIp(ip: string): boolean {
     if (p[0] === 192 && p[1] === 168) return true;                // 私有
     if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;    // 私有
     if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;   // CGNAT
+    if (p[0] === 192 && p[1] === 0) return true;                  // IETF special-purpose range
+    if (p[0] === 198 && (p[1] === 18 || p[1] === 19)) return true; // benchmark network
+    if ((p[0] === 192 && p[1] === 2) || (p[0] === 198 && p[1] === 51) || (p[0] === 203 && p[1] === 0)) return true; // documentation ranges
+    if (p[0] >= 224) return true;                                  // multicast／reserved
     return false;
   }
   if (net.isIPv6(v)) {
+    // IPv4-compatible and IPv4-mapped IPv6 can both encode a loopback or
+    // private IPv4 address. Browsers also accept packed forms like `::7f00:1`.
+    const ipv4Tail = /^(?:::ffff:|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(v);
+    if (ipv4Tail) {
+      const left = Number.parseInt(ipv4Tail[1], 16);
+      const right = Number.parseInt(ipv4Tail[2], 16);
+      return isInternalIp(`${left >> 8}.${left & 255}.${right >> 8}.${right & 255}`);
+    }
+    const dottedIpv4Tail = /^(?:::ffff:|::)(\d+\.\d+\.\d+\.\d+)$/i.exec(v);
+    if (dottedIpv4Tail) return isInternalIp(dottedIpv4Tail[1]);
     if (v === "::1" || v === "::") return true;                   // loopback／未指定
-    if (v.startsWith("fe80")) return true;                       // link-local
+    if (["fe8", "fe9", "fea", "feb"].some((prefix) => v.startsWith(prefix))) return true; // link-local /10
     if (v.startsWith("fc") || v.startsWith("fd")) return true;   // ULA 私有
+    if (v.startsWith("ff") || v.startsWith("2001:db8:")) return true; // multicast／documentation
     return false;
   }
   return false;
