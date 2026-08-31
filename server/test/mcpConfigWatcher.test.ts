@@ -38,7 +38,7 @@ test("an explicit claudeHome overrides homeDirectory for both Claude targets, in
     ],
   );
   // codexHome must not leak into the Claude targets, and vice versa.
-  assert.equal(targets.some((t) => t.path.includes("/config/codex")), true);
+  assert.equal(targets.some((t) => t.path === join("/config/codex", "config.toml")), true);
 });
 
 test("ignores Claude session telemetry and watches only MCP-relevant sections", async () => {
