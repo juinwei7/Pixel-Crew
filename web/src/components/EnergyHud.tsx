@@ -8,6 +8,12 @@ type Props = {
   totalCostUsd: number;
 };
 
+type FocusSubject = {
+  name: string;
+  provider: ProviderId;
+  model: string;
+};
+
 function headline(state: ProviderUsageState): number | null {
   const shared = state.windows.filter((window) => window.scope !== "model");
   if (shared.length === 0) return null;
@@ -106,7 +112,7 @@ export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
   );
 }
 
-export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude" }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId }) {
+export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude", activeSubject }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId; activeSubject?: FocusSubject }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -144,6 +150,11 @@ export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange
       </button>
       <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""}`} aria-label={t("工作用量詳情")}>
         <header><div><span>WORK ENERGY</span><strong>{t("用量與重置時間")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
+        {activeSubject && <div className="focus-energy__subject">
+          <span>FOCUS SUBJECT</span>
+          <strong>{activeSubject.name}</strong>
+          <small>{activeSubject.provider === "claude" ? "Claude" : "Codex"} · {activeSubject.model}</small>
+        </div>}
         {(["claude", "codex"] as ProviderId[]).map((provider) => {
           const state = usage[provider];
           return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;

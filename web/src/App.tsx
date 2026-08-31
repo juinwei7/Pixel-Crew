@@ -325,17 +325,20 @@ export function App() {
     activeCapabilities.models,
     active?.model,
   );
-  // 專注模式的選擇器同時是目前工作對象的資訊列：不能只寫 Codex／Claude，
-  // 否則讀者無法分辨這位 NPC 正用哪個模型。未指定模型時明說「預設模型」，
-  // 不假裝知道 CLI 在供應商端採用的實際預設值。
-  function focusWorkerLabel(worker: WorkerState, unread = false): string {
+  // 專注模式需要顯示真正的模型：未覆寫的 NPC 取 server 讀到的本機 provider
+  // 預設值，而非含混的「預設模型」。
+  function focusModelLabel(worker: WorkerState): string {
     const catalog = [
       ...(worker.provider === "claude" ? CLAUDE_MODEL_OPTIONS : []),
       ...(capabilitiesByWorkspace[worker.workspacePath]?.[worker.provider]?.models ?? []),
     ];
-    const model = worker.model
+    return worker.model
       ? catalog.find((candidate) => candidate.id === worker.model)?.label ?? worker.model
-      : t("預設模型");
+      : system?.providerDefaultModels?.[worker.provider] ?? t("預設模型");
+  }
+
+  function focusWorkerLabel(worker: WorkerState, unread = false): string {
+    const model = focusModelLabel(worker);
     return `${unread ? "● " : ""}${worker.name} · ${worker.provider === "claude" ? "Claude" : "Codex"} · ${model} · ${workerFocusStatus(worker)}`;
   }
   const decisionModelOptions = useMemo(() => {
@@ -871,7 +874,7 @@ export function App() {
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">
             {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label={t("日誌模式")}>
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
