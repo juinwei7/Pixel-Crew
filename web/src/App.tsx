@@ -842,8 +842,7 @@ export function App() {
               <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
               <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
             </div>
-            {!bossAssignmentOpen && (!selectedDepartment ? <label className="focus-worker-switch">
-              <span>NPC</span>
+            {!bossAssignmentOpen && (!selectedDepartment ? <div className="focus-worker-switch">
               <select aria-label={t("切換專心模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => activateNpc(event.target.value)}>
                 {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
                 {Object.values(departments).map((department) => <optgroup key={department.id} label={department.name}>{workerList.filter((worker) => worker.departmentId === department.id).map((worker) => {
@@ -853,10 +852,10 @@ export function App() {
                 })}</optgroup>)}
                 {workerList.filter((worker) => !worker.departmentId || !departments[worker.departmentId]).map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {workerFocusStatus(worker)}</option>)}
               </select>
-            </label> : <label className="focus-worker-switch focus-department-switch"><span>{t("部門")}</span><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
+            </div> : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
-            })}</select></label>)}
+            })}</select></div>)}
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
           {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} />}
           <div className="task-log-toolbar">

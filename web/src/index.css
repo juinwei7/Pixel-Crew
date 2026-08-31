@@ -5140,7 +5140,8 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 .focus-worker-switch {
   width: min(300px, 34vw);
-  min-width: 150px;
+  min-width: 0;
+  flex: 1 1 180px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -5153,6 +5154,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .focus-worker-switch select {
   min-width: 0;
   width: 100%;
+  flex: 1 1 auto;
   height: 34px;
   padding: 0 28px 0 10px;
   overflow: hidden;
@@ -5166,7 +5168,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   cursor: pointer;
 }
 
-.focus-context-switch { min-width: 0; display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.focus-context-switch { min-width: 0; display: flex; flex: 1 1 auto; align-items: center; gap: 8px; margin-right: auto; }
 .focus-context-switch__kind { display: flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid rgba(201,210,220,.12); border-radius: 8px; background: #151a21; }
 .focus-context-switch__kind button { min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: #788592; cursor: pointer; font: 9px var(--mono); }
 .focus-context-switch__kind button.active { background: rgba(255,255,255,.075); color: #e0e5ea; }
