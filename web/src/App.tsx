@@ -412,6 +412,27 @@ export function App() {
     setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
   }, []);
 
+  // A successful restart deliberately drops WebSocket and this state clears on
+  // reconnect. If the detached launcher cannot start, though, the server stays
+  // online; poll its small status endpoint so the menu never remains locked.
+  useEffect(() => {
+    if (!restartPending) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const status = await apiRequest<{ pending: boolean; error: string | null }>("/api/restart-server/status");
+        if (cancelled || status.pending) return;
+        setRestartPending(false);
+        if (status.error) notify(status.error, "error");
+      } catch {
+        // The expected successful path briefly takes the server offline.
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => { void check(); }, 3_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [notify, restartPending]);
+
   const activateNpc = useCallback((id: string) => {
     const worker = workers[id];
     const remembered = worker ? { ...preferences.focusStudioLastWorkerIds, [worker.workspacePath]: id } : preferences.focusStudioLastWorkerIds;
@@ -769,7 +790,7 @@ export function App() {
     try {
       await apiRequest<{ ok: boolean }>("/api/restart-server", { method: "POST" });
       setRestartPending(true);
-      notify(t("已排程重啟：等所有 NPC 空檔後自動重啟，新黑窗會自己開"), "info");
+      notify(t("已排程重啟：等所有 NPC 空檔後自動重啟背景服務"), "info");
     } catch (error) {
       notify(error instanceof Error ? error.message : t("重啟請求失敗"), "error");
     }
