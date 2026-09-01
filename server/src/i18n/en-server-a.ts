@@ -1,7 +1,7 @@
 /** server 端英文字典 A（index.ts 專用）。key=中文原文（或 "語境::原文"）。 */
 export const enServerA: Record<string, string> = {
   // self-update
-  "此安裝方式不支援一鍵更新，請下載 Windows Release ZIP": "This installation does not support one-click update; download the Windows Release ZIP instead",
+  "此安裝方式不支援一鍵更新，請下載最新版 Pixel Crew.exe": "This installation does not support one-click update; download the latest Pixel Crew.exe instead",
   "新版已在下載及安裝中": "The new version is already downloading and installing",
   "目前沒有可安裝的新版": "There is no newer version ready to install",
   "請先等所有 NPC 工作完成，再開始更新": "Wait for every NPC to finish before starting the update",

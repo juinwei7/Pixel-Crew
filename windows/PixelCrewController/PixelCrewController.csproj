@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Pixel Crew</AssemblyName>
+    <RootNamespace>PixelCrewController</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="../../PixelCrew/apple-touch-icon.png" Link="Assets/pixel-crew.png" />
+    <EmbeddedResource Include="$(PixelCrewPayload)" LogicalName="PixelCrewController.payload.zip" Condition="'$(PixelCrewPayload)' != '' and Exists('$(PixelCrewPayload)')" />
+  </ItemGroup>
+</Project>

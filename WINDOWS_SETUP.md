@@ -2,13 +2,9 @@
 
 Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 Codex 原生沙箱的建議環境；完整更新的 Windows 10 可使用，但 Codex 官方將其列為 best-effort。
 
-## 最快方式：免安裝 Release ZIP
+## 最快方式：單檔 Windows 應用
 
-1. [直接下載最新版 `pixel-crew-windows-x64.zip`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip)，並解壓縮到一般使用者可寫入的目錄，例如：
-
-   ```text
-   C:\Users\你的名字\Apps\Pixel Crew
-   ```
+1. [直接下載最新版 `Pixel Crew.exe`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe)。下載後只需雙擊這一個檔案；不需要解壓 ZIP，也不需要選擇 `.vbs` 或 `.cmd`。
 
 2. 至少安裝一個 AI CLI：
 
@@ -20,7 +16,7 @@ Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 
    irm https://chatgpt.com/codex/install.ps1 | iex
    ```
 
-3. 雙擊 `start-pixel-crew.vbs`。Pixel Crew 會在背景持續執行、不保留黑色 CMD/PowerShell 視窗，瀏覽器會自動前往 <http://127.0.0.1:8787>。若啟動失敗，會顯示錯誤並把細節寫到 `%LOCALAPPDATA%\Pixel Crew\logs`。
+3. 雙擊 `Pixel Crew.exe`。首次啟動會在你的 `%LOCALAPPDATA%\Pixel Crew\app` 私下安裝內附 runtime，之後以「Pixel Crew 控制中心」在背景管理本機服務。工作管理員會顯示清楚的 `Pixel Crew.exe`，右下角系統匣可開啟、重新啟動、停止、查看記錄與設定開機自動啟動；瀏覽器會自動前往 <http://127.0.0.1:8787>。若啟動失敗，會顯示錯誤與「查看詳細資料」，記錄位於 `%LOCALAPPDATA%\Pixel Crew\logs`。
 4. 第一次進入後點上方房間名稱，使用 Windows 原生資料夾選擇器選擇 repository。
 5. 如果 CLI 還沒登入，依介面提示在 PowerShell 執行：
 
@@ -30,7 +26,7 @@ Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 
    codex login
    ```
 
-這個 ZIP 已內含固定且經 SHA-256 驗證的 Windows x64 Node.js runtime 與 production dependencies；一般使用者不需要安裝 Node.js、npm、Git 或執行 dependency installer。
+這個單檔應用已內含固定且經 SHA-256 驗證的 Windows x64 Node.js runtime 與 production dependencies；一般使用者不需要安裝 Node.js、npm、Git 或執行 dependency installer。安裝完成後可刪除 Downloads 中原本的 `Pixel Crew.exe`。
 
 ## 從原始碼一鍵安裝
 
@@ -50,6 +46,8 @@ scripts\windows\setup-windows.cmd
 start-pixel-crew.vbs
 ```
 
+從原始碼執行時尚未產生 `Pixel Crew.exe`，因此啟動捷徑會相容地使用 PowerShell 背景啟動器；正式單檔 Windows 應用才附帶原生控制中心。
+
 也可讓 setup 一併安裝 provider CLI：
 
 ```powershell
@@ -65,7 +63,7 @@ git pull
 scripts\windows\setup-windows.cmd
 ```
 
-Release ZIP：偵測到新版後，程式右上角會出現「有新版」；按「下載並更新」會下載官方 ZIP、以同一 Release 的 SHA-256 清單驗證後，替換程式並自動重新開啟。更新只在所有 NPC 都空檔時允許開始；NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式目錄而消失。若想手動更新，仍可從上方固定連結下載新版並解壓到新目錄。
+單檔 Windows 應用：偵測到新版後，程式右上角會出現「有新版」；按「下載並更新」會下載官方 `Pixel Crew.exe`、以同一 Release 的 SHA-256 清單驗證後，由新檔替換 AppData 內的程式並自動重新開啟。更新只在所有 NPC 都空檔時允許開始；NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式而消失。若想手動更新，仍可從上方固定連結重新下載並雙擊新版單檔。
 
 ## 環境診斷
 
@@ -108,12 +106,20 @@ C:\Users\name\Projects\my-repo
 ### Port 8787 被占用
 
 ```powershell
-start-pixel-crew.cmd -Console -Port 8899
+start-pixel-crew.cmd -Port 8899
 ```
+
+正式單檔應用的原生控制中心不保留診斷主控台；請從系統匣選擇「查看記錄」。
 
 ### 如何完整移除
 
-刪除 Pixel Crew 程式目錄即可移除程式。若也要刪除所有 NPC、對話索引與角色資料，再刪除：
+先從系統匣選擇「停止」，再刪除下列目錄即可移除程式：
+
+```text
+%LOCALAPPDATA%\Pixel Crew\app
+```
+
+若也要刪除所有 NPC、對話索引與角色資料，再刪除：
 
 ```text
 %LOCALAPPDATA%\Pixel Crew
