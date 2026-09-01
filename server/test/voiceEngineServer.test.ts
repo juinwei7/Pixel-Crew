@@ -12,3 +12,9 @@ test("exposes a loopback-only base URL for the configured port", () => {
   const engine = new VoiceEngineServer("whisper-server", 8793, () => "/dev/null");
   assert.equal(engine.baseUrl, "http://127.0.0.1:8793");
 });
+
+test("becomes available when a verified local installer supplies whisper-server", () => {
+  const engine = new VoiceEngineServer(null, 8793, () => "/dev/null");
+  engine.setExecutable("C:\\Users\\test\\AppData\\Local\\Pixel Crew\\voice-engines\\whisper-cpp\\whisper-server.exe");
+  assert.equal(engine.available, true);
+});

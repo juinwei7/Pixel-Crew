@@ -2,6 +2,7 @@ import type { Express } from "express";
 import multer from "multer";
 import { VoiceEngineBusyError, VoiceEngineUnavailableError, VoiceTranscriber, VoiceTranscriptionError } from "./voiceTranscribe.js";
 import { VoiceModelManager } from "./voiceModel.js";
+import { VoiceEngineInstaller } from "./voiceEngineInstaller.js";
 import { t } from "../i18n.js";
 
 // 30 秒、16kHz、16-bit、單聲道 WAV ≈ 0.96 MB；留邊界給稍長的錄音與 WAV 標頭。
@@ -17,12 +18,18 @@ export function registerVoiceRoutes(input: {
   app: Express;
   modelManager: VoiceModelManager;
   transcriber: VoiceTranscriber;
+  engineInstaller: VoiceEngineInstaller;
 }): void {
-  const { app, modelManager, transcriber } = input;
+  const { app, modelManager, transcriber, engineInstaller } = input;
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AUDIO_BYTES } });
 
   app.get("/api/voice/status", (_req, res) => {
-    res.json({ engineAvailable: transcriber.engineAvailable, model: modelManager.getInfo() });
+    res.json({ engineAvailable: transcriber.engineAvailable, engineInstaller: engineInstaller.getInfo(), model: modelManager.getInfo() });
+  });
+
+  app.post("/api/voice/engine/install", (_req, res) => {
+    if (!engineInstaller.supported) { res.status(409).json({ error: t("此裝置不支援自動安裝語音轉寫引擎") }); return; }
+    res.json({ engineInstaller: engineInstaller.start() });
   });
 
   app.post("/api/voice/model/download", (_req, res) => {

@@ -204,7 +204,7 @@ Config file: `server/.env`
 
 ### Local voice input (optional)
 
-Voice input needs a compatible `whisper.cpp` `whisper-server` executable installed separately. Pixel Crew does not bundle the engine or its model: make the executable available on `PATH`, or set its absolute location in `server/.env`:
+On Windows x64, a missing engine opens a confirmation dialog. After consent, Pixel Crew downloads a pinned official `whisper.cpp` release, verifies its SHA-256, and installs it under `%LOCALAPPDATA%\Pixel Crew\voice-engines\whisper-cpp` without changing the system PATH or requiring administrator permission. macOS, Linux, and manually managed installations can make a compatible `whisper.cpp` `whisper-server` executable available on `PATH`, or set its absolute location in `server/.env`:
 
 ```dotenv
 WHISPER_SERVER_BIN=/absolute/path/to/whisper-server

@@ -235,7 +235,7 @@ npm run dev
 
 ### 本機語音輸入（選用）
 
-語音輸入需要另外安裝相容的 `whisper.cpp` `whisper-server` 執行檔。Pixel Crew 不會把引擎或模型包進主安裝檔：將執行檔放進 `PATH`，或在 `server/.env` 設定其絕對位置：
+Windows x64 版在找不到引擎時，會直接顯示確認視窗；確認後自動從官方 `whisper.cpp` 釘選 release 下載、SHA-256 驗證並安裝到 `%LOCALAPPDATA%\Pixel Crew\voice-engines\whisper-cpp`。不修改系統 PATH、也不需要系統管理員權限。macOS、Linux 與手動管理安裝仍可把相容的 `whisper.cpp` `whisper-server` 放進 `PATH`，或在 `server/.env` 設定絕對位置：
 
 ```dotenv
 WHISPER_SERVER_BIN=/absolute/path/to/whisper-server

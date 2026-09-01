@@ -12,11 +12,22 @@ export type VoiceModelState = {
   name: string;
   fileName: string;
 };
-export type VoiceStatusResponse = { engineAvailable: boolean; model: VoiceModelState };
+export type VoiceEngineInstallStatus = "not_supported" | "not_installed" | "downloading" | "ready" | "failed";
+export type VoiceEngineInstallState = {
+  status: VoiceEngineInstallStatus;
+  supported: boolean;
+  name: string;
+  bytesDownloaded: number;
+  totalBytes: number;
+  error: string | null;
+};
+export type VoiceStatusResponse = { engineAvailable: boolean; engineInstaller: VoiceEngineInstallState; model: VoiceModelState };
 
 export type VoiceInputPhase =
   | "idle"
   | "checking"
+  | "confirm-engine-install"
+  | "installing-engine"
   | "confirm-download"
   | "downloading"
   | "requesting-permission"
@@ -35,8 +46,10 @@ export function useVoiceInput(): {
   error: string | null;
   elapsedMs: number;
   model: VoiceModelState | null;
+  engineInstaller: VoiceEngineInstallState | null;
   supported: boolean;
   requestStart(): Promise<void>;
+  confirmEngineInstall(): void;
   confirmDownload(): void;
   stopAndTranscribe(): Promise<string | null>;
   cancel(): void;
@@ -45,6 +58,7 @@ export function useVoiceInput(): {
   const [error, setError] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [model, setModel] = useState<VoiceModelState | null>(null);
+  const [engineInstaller, setEngineInstaller] = useState<VoiceEngineInstallState | null>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -106,7 +120,15 @@ export function useVoiceInput(): {
       const status = await fetchStatus();
       if (!mountedRef.current || !status) return;
       setModel(status.model);
-      if (status.model.status === "downloading") {
+      setEngineInstaller(status.engineInstaller);
+      if (status.engineInstaller.status === "downloading") {
+        schedulePoll();
+      } else if (status.engineInstaller.status === "ready" && status.engineAvailable) {
+        setPhase(status.model.status === "ready" ? "idle" : "confirm-download");
+      } else if (status.engineInstaller.status === "failed") {
+        setPhase("error");
+        setError(status.engineInstaller.error || t("語音轉寫引擎安裝失敗"));
+      } else if (status.model.status === "downloading") {
         schedulePoll();
       } else if (status.model.status === "ready") {
         setPhase("idle");
@@ -125,16 +147,34 @@ export function useVoiceInput(): {
     const status = await fetchStatus();
     if (!mountedRef.current) return;
     if (!status || !status.engineAvailable) {
-      setPhase("error");
-      setError(t("找不到本機語音轉寫引擎"));
+      setEngineInstaller(status?.engineInstaller ?? null);
+      if (status?.engineInstaller.supported) {
+        setPhase("confirm-engine-install");
+      } else {
+        setPhase("error");
+        setError(t("找不到本機語音轉寫引擎"));
+      }
       return;
     }
+    setEngineInstaller(status.engineInstaller);
     setModel(status.model);
     if (status.model.status === "ready") {
       await beginRecording();
       return;
     }
     setPhase("confirm-download");
+  }
+
+  function confirmEngineInstall(): void {
+    setPhase("installing-engine");
+    void apiRequest<{ engineInstaller: VoiceEngineInstallState }>("/api/voice/engine/install", { method: "POST" })
+      .then((result) => { if (mountedRef.current) setEngineInstaller(result.engineInstaller); })
+      .catch((error) => {
+        if (!mountedRef.current) return;
+        setPhase("error");
+        setError(error instanceof Error ? error.message : t("語音轉寫引擎安裝失敗"));
+      });
+    schedulePoll();
   }
 
   function confirmDownload(): void {
@@ -249,7 +289,7 @@ export function useVoiceInput(): {
     setError(null);
   }
 
-  return { phase, error, elapsedMs, model, supported, requestStart, confirmDownload, stopAndTranscribe, cancel };
+  return { phase, error, elapsedMs, model, engineInstaller, supported, requestStart, confirmEngineInstall, confirmDownload, stopAndTranscribe, cancel };
 }
 
 async function decodeToMono16k(recorded: Blob): Promise<Float32Array> {
