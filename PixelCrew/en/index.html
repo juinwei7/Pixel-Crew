@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pixel Crew — Claude Code and Codex in One Pixel Office</title>
-<meta name="description" content="Pixel Crew 2.2.0 ships Windows as one double-clickable control center with tray controls, startup, and clear failure notices, while Claude Code and Codex collaborate locally.">
+<meta name="description" content="Pixel Crew 2.2.1 fixes repeated local Whisper model download confirmations and hardens Windows voice-engine installation, while Claude Code and Codex collaborate locally.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="../assets/style.css">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/en/">
-<meta property="og:title" content="Pixel Crew 2.2.0 — One-file Windows Control Center">
+<meta property="og:title" content="Pixel Crew 2.2.1 — Local Voice Download Fix">
 <meta property="og:description" content="A Boss NPC routes Consult, Review, and Mission work automatically. Handoffs and dangerous actions stay visible and approvable. No API key, local-first, MIT licensed.">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="en_US">
@@ -32,7 +32,7 @@
 <meta property="og:image:height" content="960">
 <meta property="og:image:alt" content="Pixel Crew's pixel office with several AI coding agents">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pixel Crew 2.2.0 — One-file Windows Control Center">
+<meta name="twitter:title" content="Pixel Crew 2.2.1 — Local Voice Download Fix">
 <meta name="twitter:description" content="A Boss NPC routes Consult, Review, and Mission work automatically. Local-first, no API key, MIT licensed.">
 <meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta name="twitter:image:alt" content="Pixel Crew's pixel office with several AI coding agents">
@@ -85,8 +85,8 @@
       "name": "Pixel Crew",
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
-      "softwareVersion": "2.2.0",
-      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.0",
+      "softwareVersion": "2.2.1",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.1",
       "datePublished": "2026-07-17",
       "dateModified": "2026-09-01",
       "applicationCategory": "DeveloperApplication",
@@ -138,7 +138,7 @@
       2-to-5-step Mission, every step visible and approvable.
     </p>
     <div class="hero-cta">
-      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ Download v2.2.0</a>
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ Download v2.2.1</a>
       <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub source</a>
     </div>
     <div class="hero-badges">
@@ -479,13 +479,13 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
-          <span class="release-version">v2.2.0</span>
+          <span class="release-version">v2.2.1</span>
           <time class="release-date" datetime="2026-09-01">2026.09.01</time>
           <span class="release-current">LATEST RELEASE</span>
         </div>
-        <h3>One-file Windows control center</h3>
-        <p>Windows users now download and double-click one Pixel Crew.exe. Its native control center is clearly named in Task Manager and provides tray controls for opening, restarting, stopping, logs, and automatic startup.</p>
-        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.0">Full v2.2.0 release notes ↗</a>
+        <h3>Local voice download fix</h3>
+        <p>Fixed repeated confirmation dialogs during Whisper model downloads, and let the Windows voice engine use the inbox tar extractor when PowerShell extraction is restricted.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.1">Full v2.2.1 release notes ↗</a>
       </article>
       <article class="release-card">
         <div class="release-meta">
