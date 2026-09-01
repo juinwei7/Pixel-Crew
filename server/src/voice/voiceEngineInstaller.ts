@@ -56,16 +56,43 @@ export function powerShellExtractionCommand(archivePath: string, destination: st
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
-function extractWithPowerShell(archivePath: string, destination: string): Promise<void> {
+function runExtractionCommand(command: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawnCli("powershell.exe", [
+    const child = spawnCli(command, args);
+    let stderr = "";
+    child.stdout.resume();
+    child.stderr.on("data", (chunk: Buffer | string) => { stderr += chunk.toString(); });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `${command} exited with code ${code ?? "unknown"}`));
+    });
+  });
+}
+
+async function extractWithPowerShell(archivePath: string, destination: string): Promise<void> {
+  try {
+    await runExtractionCommand("powershell.exe", [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-EncodedCommand", powerShellExtractionCommand(archivePath, destination),
     ]);
-    child.stdout.resume(); child.stderr.resume();
-    child.once("error", reject);
-    child.once("close", (code) => code === 0 ? resolve() : reject(new Error(t("語音轉寫引擎解壓失敗"))));
-  });
+  } catch (powerShellError) {
+    // Modern Windows includes bsdtar, which also understands ZIP files.  Some
+    // managed Windows builds remove or restrict Expand-Archive, so try this
+    // independent inbox extractor before giving up. The archive has already
+    // passed its pinned SHA-256 verification at this point.
+    rmSync(destination, { recursive: true, force: true });
+    mkdirSync(destination, { recursive: true, mode: 0o700 });
+    try {
+      await runExtractionCommand("tar.exe", ["-xf", archivePath, "-C", destination]);
+    } catch (tarError) {
+      const detail = [powerShellError, tarError]
+        .map((error) => (error as Error).message?.trim())
+        .filter(Boolean)
+        .join("; ");
+      throw new Error(detail ? `${t("語音轉寫引擎解壓失敗")}：${detail}` : t("語音轉寫引擎解壓失敗"));
+    }
+  }
 }
 
 export class VoiceEngineInstaller {
