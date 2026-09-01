@@ -394,6 +394,19 @@ export type BossTaskStage = {
   executionMode?: "research" | "project";
 };
 
+export type ExecutionProfile = "quick" | "standard" | "deep";
+export type ExecutionBudget = {
+  profile: ExecutionProfile;
+  label: string;
+  maxAgents: number;
+  maxStages: number;
+  maxMissionSteps: number;
+  estimatedAgentTurns: { min: number; max: number };
+  estimatedDurationMinutes: { min: number; max: number };
+  claudeUsd: { min: number; max: number };
+  codexQuota5hPercent: { min: number; max: number };
+};
+
 export type BossTask = {
   id: string;
   title: string;
@@ -408,6 +421,8 @@ export type BossTask = {
   idempotencyKey?: string | null;
   status: "discovering" | "ready" | "running" | "needs_input" | "needs_attention" | "synthesizing" | "completed" | "failed" | "cancelled";
   executionMode?: "research" | "project";
+  executionProfile?: ExecutionProfile;
+  executionBudget?: ExecutionBudget;
   messages: BossTaskMessage[];
   stages: BossTaskStage[];
   finalReport: string | null;
@@ -501,6 +516,7 @@ export type WorkerState = {
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
+  resumeCandidate?: { workerId: string; taskText: string; sessionId: string; interruptedAt: string; resetAt: string | null } | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

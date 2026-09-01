@@ -21,6 +21,7 @@ import { Modal } from "./components/Modal";
 import { hasSeenTour } from "./onboardingState";
 import { Office3D } from "./components/Office3D";
 import { RichText } from "./components/RichText";
+import { WarroomVerdictBody, type WarRoomResult } from "./components/WarroomVerdictBody";
 import { requiresAutoApproveConfirmation } from "./autoApproveSafety";
 import { theme } from "./theme";
 import { parseMcpToolName } from "./mcpToolName";
@@ -30,111 +31,6 @@ import { apiRequest } from "./api";
 import { t } from "./i18n";
 import type { ApprovalDecision, WorkerState } from "./types";
 
-type WarRoomAction = { priority: "P1" | "P2" | "P3" | "P4"; title: string; how: string };
-type WarRoomDispute = { point: string; ruling: string };
-type WarRoomMetric = { label: string; value: string; note?: string };
-type WarRoomChart = { type: "line" | "bar" | "donut"; title: string; labels: string[]; values: number[]; unit?: string };
-type WarRoomResult = { verdict: string; consensus: string[]; disputes: WarRoomDispute[]; actions: WarRoomAction[]; metrics?: WarRoomMetric[]; charts?: WarRoomChart[]; structured: boolean; costUsd?: number };
-
-// 手工 SVG 圖表：走勢(line)/長條(bar)/圓餅(donut)。不引圖表庫——輕量、跟介面同一套深色霓虹風。
-const CHART_COLORS = ["#00e5ff", "#ffb000", "#00ffa3", "#ff2e88", "#a855ff", "#93a5ba"];
-
-function WarroomChartView({ chart }: { chart: WarRoomChart }) {
-  const { type, labels, values, unit } = chart;
-  const fmt = (v: number) => `${Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ?? ""}`;
-
-  if (type === "donut") {
-    const total = values.reduce((sum, v) => sum + Math.abs(v), 0) || 1;
-    const R = 34, C = 2 * Math.PI * R;
-    let acc = 0;
-    return <div className="warroom-chart">
-      <h4>{chart.title}</h4>
-      <div className="warroom-chart__donut">
-        <svg viewBox="0 0 100 100" width="96" height="96">
-          {values.map((v, i) => {
-            const frac = Math.abs(v) / total;
-            const dash = frac * C;
-            const el = <circle key={i} cx="50" cy="50" r={R} fill="none" stroke={CHART_COLORS[i % CHART_COLORS.length]}
-              strokeWidth="13" strokeDasharray={`${dash} ${C - dash}`} strokeDashoffset={-acc * C}
-              transform="rotate(-90 50 50)" />;
-            acc += frac;
-            return el;
-          })}
-        </svg>
-        <ul>{labels.map((l, i) => <li key={i}><i style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />{l} <b>{fmt(values[i])}</b><em>{Math.round(Math.abs(values[i]) / total * 100)}%</em></li>)}</ul>
-      </div>
-    </div>;
-  }
-
-  const W = 280, H = 110, padX = 8, padTop = 16, padBottom = 22;
-  const vmax = Math.max(...values, 0), vmin = Math.min(...values, 0);
-  const span = vmax - vmin || 1;
-  const y = (v: number) => padTop + (vmax - v) / span * (H - padTop - padBottom);
-  const zeroY = y(0);
-
-  if (type === "bar") {
-    const bw = Math.min(28, (W - padX * 2) / values.length * 0.62);
-    const step = (W - padX * 2) / values.length;
-    return <div className="warroom-chart">
-      <h4>{chart.title}</h4>
-      <svg viewBox={`0 0 ${W} ${H}`} className="warroom-chart__svg">
-        <line x1={padX} y1={zeroY} x2={W - padX} y2={zeroY} stroke="rgba(147,165,186,.35)" strokeWidth="1" />
-        {values.map((v, i) => {
-          const x = padX + step * i + (step - bw) / 2;
-          const top = Math.min(y(v), zeroY), h = Math.max(2, Math.abs(y(v) - zeroY));
-          const color = v >= 0 ? "#00e5ff" : "#ff2e88";
-          return <g key={i}>
-            <rect x={x} y={top} width={bw} height={h} rx="2" fill={color} opacity="0.85" />
-            <text x={x + bw / 2} y={top - 3} textAnchor="middle" fontSize="7.5" fill="#cfdbea">{fmt(v)}</text>
-            <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize="7.5" fill="#7d93ab">{labels[i]?.slice(0, 6)}</text>
-          </g>;
-        })}
-      </svg>
-    </div>;
-  }
-
-  // line：折線＋漸層面積＋端點數值
-  const step = (W - padX * 2) / Math.max(1, values.length - 1);
-  const pts = values.map((v, i) => [padX + step * i, y(v)] as const);
-  const poly = pts.map(([px, py]) => `${px},${py}`).join(" ");
-  const area = `${padX},${H - padBottom} ${poly} ${W - padX},${H - padBottom}`;
-  const up = values[values.length - 1] >= values[0];
-  const lineColor = up ? "#00ffa3" : "#ff2e88";
-  return <div className="warroom-chart">
-    <h4>{chart.title}</h4>
-    <svg viewBox={`0 0 ${W} ${H}`} className="warroom-chart__svg">
-      <polygon points={area} fill={lineColor} opacity="0.1" />
-      <polyline points={poly} fill="none" stroke={lineColor} strokeWidth="1.8" strokeLinejoin="round" />
-      {pts.map(([px, py], i) => <circle key={i} cx={px} cy={py} r="2" fill={lineColor} />)}
-      <text x={pts[0][0]} y={pts[0][1] - 5} fontSize="7.5" fill="#cfdbea">{fmt(values[0])}</text>
-      <text x={pts[pts.length - 1][0]} y={pts[pts.length - 1][1] - 5} textAnchor="end" fontSize="7.5" fill="#cfdbea">{fmt(values[values.length - 1])}</text>
-      <text x={padX} y={H - 8} fontSize="7.5" fill="#7d93ab">{labels[0]}</text>
-      <text x={W - padX} y={H - 8} textAnchor="end" fontSize="7.5" fill="#7d93ab">{labels[labels.length - 1]}</text>
-    </svg>
-  </div>;
-}
-
-// 裁決內容的共用渲染：結束彈窗與 📜歷史都用這一份，保證兩邊長得一模一樣。
-// 最上方是「關鍵數字」數據磚——用數字說話，不讓數據埋在文字裡。
-function WarroomVerdictBody({ result }: { result: WarRoomResult }) {
-  const metrics = result.metrics ?? [];
-  const charts = result.charts ?? [];
-  return <>
-    {metrics.length > 0 && <div className="warroom-metrics">{metrics.map((m, i) => (
-      <div key={i} className="warroom-metric" style={{ "--i": i } as React.CSSProperties}>
-        <small>{m.label}</small>
-        <strong>{m.value}</strong>
-        {m.note && <em className={m.note.trim().startsWith("-") ? "is-down" : m.note.trim().startsWith("+") ? "is-up" : ""}>{m.note}</em>}
-      </div>
-    ))}</div>}
-    {charts.length > 0 && <div className="warroom-charts">{charts.map((c, i) => <WarroomChartView key={i} chart={c} />)}</div>}
-    <p className="warroom-result__verdict">{result.verdict}</p>
-    {result.consensus.length > 0 && <section><h3>{t("✅ 共識")}</h3><ul>{result.consensus.map((c, i) => <li key={i}>{c}</li>)}</ul></section>}
-    {result.disputes.length > 0 && <section><h3>{t("⚖️ 分歧與裁決")}</h3><ul>{result.disputes.map((d, i) => <li key={i}><strong>{d.point}</strong> → {d.ruling}</li>)}</ul></section>}
-    {result.actions.length > 0 && <section><h3>{t("➡️ 可執行下一步")}</h3><ol>{result.actions.map((a, i) => <li key={i}><span className={`warroom-result__prio warroom-result__prio--${a.priority}`}>{a.priority}</span> <strong>{a.title}</strong>{a.how && <small>{a.how}</small>}</li>)}</ol></section>}
-    {!result.structured && <p className="warroom-result__note">{t("（NPC 未回傳結構化格式，以上為原始裁決文字）")}</p>}
-  </>;
-}
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnread } from "./crew";
 import { buildFocusStudios, focusStudioWorkers, studioWorkerId } from "./focusStudios";
@@ -1189,6 +1085,12 @@ export function App() {
           onFresh={() => commitModelSwitch(true)}
           onCancel={() => setPendingModelSwitch(null)}
         />}
+        {!bossAssignmentOpen && !selectedDepartment && active?.resumeCandidate && <div className="resume-candidate" role="status">
+          <strong>{t("發現重啟前未完成的工作")}</strong>
+          <p>{active.resumeCandidate.taskText}</p>
+          <small>{t("系統不會自動重送，避免重複執行。請選擇下一步。")}</small>
+          <div><button type="button" onClick={() => void apiRequest(`/api/workers/${encodeURIComponent(active.id)}/resume-candidate`, { method: "POST" }).catch((error) => notify(error instanceof Error ? error.message : t("無法恢復工作"), "error"))}>{t("繼續工作")}</button><button type="button" onClick={() => void apiRequest(`/api/workers/${encodeURIComponent(active.id)}/resume-candidate`, { method: "DELETE" }).catch((error) => notify(error instanceof Error ? error.message : t("無法停止恢復工作"), "error"))}>{t("停止並保留紀錄")}</button></div>
+        </div>}
         {!bossAssignmentOpen && !selectedDepartment && (taskFocusMode && focusPanes.length > 1 ? <FocusPaneGrid
           panes={focusPanes}
           focusedPaneId={focusedPaneId}

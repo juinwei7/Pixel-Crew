@@ -26,6 +26,9 @@ export function BackupModal({ notify, onClose }: Props) {
   const [validated, setValidated] = useState<ValidateResult | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [commitOutcome, setCommitOutcome] = useState<{ ok: boolean; text: string } | null>(null);
+  const [exportPassword, setExportPassword] = useState("");
+  const [importPassword, setImportPassword] = useState("");
+  const [exportingEncrypted, setExportingEncrypted] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // A restore commit is a real, in-flight server-side operation once fired —
@@ -59,6 +62,7 @@ export function BackupModal({ notify, onClose }: Props) {
     try {
       const formData = new FormData();
       formData.append("backup", file);
+      if (importPassword) formData.append("password", importPassword);
       const result = await apiUpload<ValidateResult>("/api/backup/import/validate", formData, { timeoutMs: 120000 });
       setValidated(result);
     } catch (uploadError) {
@@ -67,6 +71,23 @@ export function BackupModal({ notify, onClose }: Props) {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  async function downloadEncryptedBackup() {
+    if (exportPassword.length < 12) { setError(t("備份密碼至少需要 12 個字元")); return; }
+    setExportingEncrypted(true);
+    setError(null);
+    try {
+      const response = await fetch(apiAssetUrl("/api/backup/export"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: exportPassword }),
+      });
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? t("無法建立加密備份"));
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = `pixel-crew-backup-${new Date().toISOString().slice(0, 10)}.pcbak`;
+      anchor.click(); URL.revokeObjectURL(url); setExportPassword("");
+    } catch (exportError) { setError((exportError as Error).message); }
+    finally { setExportingEncrypted(false); }
   }
 
   async function commit() {
@@ -108,11 +129,16 @@ export function BackupModal({ notify, onClose }: Props) {
         <section className="backup-modal__section">
           <h3>{t("匯出備份")}</h3>
           <p className="backup-modal__hint">
-            {t("將所有工人、對話紀錄與角色圖片打包成一個檔案，可用系統工具自行檢查。匯出備份不會中斷正在執行的工人。")}
+            {t("包含工人、對話紀錄、部門任務、設定與角色圖片；不包含 Provider 私有認證 home 或工作區專案檔案。未加密檔可用系統工具檢查。匯出不會中斷正在執行的工人。")}
           </p>
           <a className="backup-modal__export" href={apiAssetUrl("/api/backup/export")} download>
             {t("下載備份（.tar.gz）")}
           </a>
+          <details className="backup-modal__encryption">
+            <summary>{t("跨裝置傳輸：以密碼加密備份（選填）")}</summary>
+            <p className="backup-modal__hint">{t("使用 AES-256-GCM 加密，密碼不會被保存，遺失後無法還原。")}</p>
+            <div><input className="backup-modal__input" type="password" autoComplete="new-password" value={exportPassword} onChange={(event) => setExportPassword(event.target.value)} placeholder={t("至少 12 個字元")} /><button type="button" className="backup-modal__export" disabled={exportingEncrypted} onClick={() => void downloadEncryptedBackup()}>{exportingEncrypted ? t("建立中…") : t("下載加密備份（.pcbak）")}</button></div>
+          </details>
         </section>
 
         <section className="backup-modal__section">
@@ -123,15 +149,16 @@ export function BackupModal({ notify, onClose }: Props) {
             </div>
           ) : !validated ? (
             <>
-              <p className="backup-modal__hint">{t("選擇先前匯出的備份檔案（.tar.gz），系統會先驗證內容再詢問是否還原。")}</p>
+              <p className="backup-modal__hint">{t("選擇先前匯出的備份檔案（.tar.gz 或加密 .pcbak），系統會先在隔離區驗證內容再詢問是否還原。")}</p>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".gz,application/gzip"
+                accept=".gz,.pcbak,application/gzip,application/octet-stream"
                 aria-label={t("選擇備份檔案")}
                 disabled={uploading}
                 onChange={() => void handleFileSelected()}
               />
+              <input className="backup-modal__input" type="password" autoComplete="current-password" value={importPassword} onChange={(event) => setImportPassword(event.target.value)} placeholder={t("若是 .pcbak 加密備份，請輸入密碼")} />
               {uploading && <div className="backup-modal__hint" aria-live="polite">{t("正在上傳並檢查備份檔案…")}</div>}
             </>
           ) : (

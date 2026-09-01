@@ -126,6 +126,12 @@ test("validates a multi-department acyclic graph and rejects a cycle", () => {
   assert.equal(cycle, null);
 });
 
+test("selected execution boundary rejects a graph beyond its stage ceiling", () => {
+  const fourStages = `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"too broad for standard","rationale":["four owners"],"stages":[{"id":"a","departmentId":"pm","title":"A","objective":"A","acceptanceCriteria":["A"],"dependsOn":[]},{"id":"b","departmentId":"eng","title":"B","objective":"B","acceptanceCriteria":["B"],"dependsOn":["a"]},{"id":"c","departmentId":"qa","title":"C","objective":"C","acceptanceCriteria":["C"],"dependsOn":["b"]},{"id":"d","departmentId":"pm","title":"D","objective":"D","acceptanceCriteria":["D"],"dependsOn":["c"]}]}</boss_task_decision>`;
+  assert.match(explainBossTaskDecisionFailure(fourStages, candidates, "standard") ?? "", /1 to 3/);
+  assert.match(explainBossTaskDecisionFailure(fourStages, candidates, "quick") ?? "", /1 to 1/);
+});
+
 test("research is one department answer workflow and duplicate department stages are rejected", () => {
   const research = parseBossTaskDecision(
     `<boss_task_decision>{"status":"ready","executionMode":"research","summary":"Current evidence and conditional conclusion","rationale":["Decision support"],"stages":[{"id":"market-research","departmentId":"pm","title":"Evaluate the market setup","objective":"Check current evidence, contrary cases, and answer the owner","acceptanceCriteria":["Sources and dates are explicit","Conclusion is conditional"],"dependsOn":[]}]}</boss_task_decision>`,

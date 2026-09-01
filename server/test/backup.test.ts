@@ -7,6 +7,7 @@ import { deflateSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { AvatarStore } from "../src/avatarStore.js";
 import { stageExportDirectory } from "../src/backupExport.js";
+import { commitBackupRestore } from "../src/backupRestoreCommit.js";
 import {
   BackupValidationError,
   extractAndValidateBackup,
@@ -15,6 +16,29 @@ import {
   swapInRestoredData,
 } from "../src/backupImport.js";
 import { LocalStore } from "../src/store.js";
+
+function createResponseHarness(): {
+  response: any;
+  statusCode: () => number | undefined;
+  body: () => unknown;
+} {
+  let currentStatus: number | undefined;
+  let currentBody: unknown;
+  const listeners = new Map<string, () => void>();
+  const response = {
+    status(code: number) { currentStatus = code; return response; },
+    json(payload: unknown) {
+      currentBody = payload;
+      listeners.get("finish")?.();
+      return response;
+    },
+    once(event: string, listener: () => void) {
+      listeners.set(event, listener);
+      return response;
+    },
+  };
+  return { response, statusCode: () => currentStatus, body: () => currentBody };
+}
 
 function makePng(width: number, height: number): Buffer {
   const header = Buffer.alloc(13);
@@ -287,6 +311,60 @@ test("rollback restores both the original DB and avatars after a mid-swap failur
 
     assert.equal(readFileSync(dbPath, "utf8"), "ORIGINAL_DB_CONTENT");
     assert.equal(readFileSync(join(avatarDir, "original.txt"), "utf8"), "ORIGINAL_AVATAR_CONTENT");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restore commit snapshots, swaps data, clears the pending import, then exits after the response", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pixel-crew-backup-commit-"));
+  try {
+    const dbPath = join(root, "cockpit.sqlite");
+    const avatarDir = join(root, "avatars");
+    const stagingDir = join(root, "staging");
+    writeFileSync(dbPath, "ORIGINAL_DB_CONTENT");
+    mkdirSync(avatarDir);
+    writeFileSync(join(avatarDir, "original.txt"), "ORIGINAL_AVATAR_CONTENT");
+    mkdirSync(join(stagingDir, "db"), { recursive: true });
+    mkdirSync(join(stagingDir, "avatars"));
+    writeFileSync(join(stagingDir, "db", "cockpit.sqlite"), "RESTORED_DB_CONTENT");
+    writeFileSync(join(stagingDir, "avatars", "restored.txt"), "RESTORED_AVATAR_CONTENT");
+
+    const harness = createResponseHarness();
+    const calls: string[] = [];
+    let exitCode: number | undefined;
+    await commitBackupRestore({
+      response: harness.response,
+      importToken: "valid-import",
+      confirmPhrase: "RESTORE",
+      pending: { stagingDir },
+      maintenance: false,
+      setMaintenance: (value) => calls.push(`maintenance:${value}`),
+      stopWorkers: () => calls.push("stopWorkers"),
+      flush: () => calls.push("flush"),
+      checkpoint: () => calls.push("checkpoint"),
+      closeStore: () => calls.push("closeStore"),
+      discardPending: (token) => calls.push(`discard:${token}`),
+      dataDirectory: root,
+      dbPath,
+      avatarDir,
+      exit: (code) => { exitCode = code; },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(harness.statusCode(), 200);
+    assert.deepEqual(harness.body(), {
+      ok: true,
+      message: "還原完成，請重新啟動 Pixel Crew",
+      preRestoreSnapshot: (harness.body() as { preRestoreSnapshot: string }).preRestoreSnapshot,
+    });
+    assert.deepEqual(calls, [
+      "maintenance:true", "stopWorkers", "flush", "checkpoint", "closeStore", "discard:valid-import",
+    ]);
+    assert.equal(exitCode, 0);
+    assert.equal(readFileSync(dbPath, "utf8"), "RESTORED_DB_CONTENT");
+    assert.equal(readFileSync(join(avatarDir, "restored.txt"), "utf8"), "RESTORED_AVATAR_CONTENT");
+    assert.equal(existsSync(join(root, ".last-restore-result.json")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

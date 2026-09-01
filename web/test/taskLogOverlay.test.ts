@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+function readStylesheet(url: URL): string {
+  const source = readFileSync(url, "utf8");
+  return source.replace(/@import\s+["'](.+?)["'];?/g, (_statement, specifier: string) => readStylesheet(new URL(specifier, url)));
+}
+
+// index.css is deliberately a small ordered entrypoint. Follow its local
+// imports here so these layout invariants keep testing the real final cascade.
+const css = readStylesheet(new URL("../src/index.css", import.meta.url));
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("side panels remain overlays while map controls avoid the visible task panel", () => {

@@ -1,6 +1,7 @@
 import type { ProviderId } from "./providers/types.js";
 import type { AssignmentDecisionCandidate } from "./assignmentDecision.js";
 import { t } from "./i18n.js";
+import { executionBudgetFor, type ExecutionBudget, type ExecutionProfile } from "./executionBudget.js";
 
 export type BossTaskStatus =
   | "discovering"
@@ -15,6 +16,7 @@ export type BossTaskStatus =
 
 export type BossTaskMessageRole = "boss" | "decision_model" | "system" | "report";
 export type BossExecutionMode = "research" | "project";
+export type { ExecutionBudget, ExecutionProfile } from "./executionBudget.js";
 
 export type BossTaskMessage = {
   id: string;
@@ -54,6 +56,8 @@ export type BossTask = {
   idempotencyKey?: string | null;
   status: BossTaskStatus;
   executionMode?: BossExecutionMode;
+  executionProfile?: ExecutionProfile;
+  executionBudget?: ExecutionBudget;
   messages: BossTaskMessage[];
   historyClearedAt?: string | null;
   stages: BossTaskStage[];
@@ -90,10 +94,11 @@ function bounded(value: unknown, max: number): string {
 }
 
 export function bossTaskDecisionPrompt(input: {
-  task: Pick<BossTask, "objective" | "acceptanceCriteria" | "workspacePath" | "messages">;
+  task: Pick<BossTask, "objective" | "acceptanceCriteria" | "workspacePath" | "messages" | "executionProfile" | "executionBudget">;
   candidates: AssignmentDecisionCandidate[];
 }): string {
   const clarificationLimit = 3;
+  const budget = input.task.executionBudget ?? executionBudgetFor(input.task.executionProfile);
   const clarificationCount = input.task.messages.filter((message) => message.role === "decision_model").length;
   const clarificationRemaining = Math.max(0, clarificationLimit - clarificationCount);
   const catalog = input.candidates.map((candidate) => ({
@@ -118,6 +123,8 @@ export function bossTaskDecisionPrompt(input: {
   return `Boss Task · Discovery and Department Orchestration
 
 You are the Boss's decision model. Determine whether the request is sufficiently specific to assign safely, then either ask one blocking clarification question or produce a multi-department execution graph.
+
+Execution boundary selected by the owner: ${budget.label} (${budget.profile}). This is a hard ceiling: use no more than ${budget.maxStages} department stage(s). Each stage will be limited to ${budget.maxAgents} participating NPC(s) and ${budget.maxMissionSteps} planned work step(s). Prefer a smaller plan; do not evade the ceiling by inventing extra stages.
 
 Rules:
 - Do not use tools, files, shell commands, MCP, web access, or background agents.
@@ -190,6 +197,7 @@ type BossTaskDecisionResult =
 function evaluateBossTaskDecision(
   text: string,
   candidates: AssignmentDecisionCandidate[],
+  boundary: ExecutionProfile | ExecutionBudget = "standard",
 ): BossTaskDecisionResult {
   const match = text.match(/<boss_task_decision>\s*([\s\S]*?)\s*<\/boss_task_decision>/i);
   if (!match) return { ok: false, reason: "Missing a <boss_task_decision>...</boss_task_decision> block." };
@@ -215,7 +223,8 @@ function evaluateBossTaskDecision(
   const executionMode: BossExecutionMode = value.executionMode;
   const summary = bounded(value.summary, 1_000);
   if (!summary) return { ok: false, reason: "Ready form is missing a non-empty \"summary\"." };
-  if (!Array.isArray(value.stages) || value.stages.length < 1 || value.stages.length > 8) return { ok: false, reason: "Ready form needs a \"stages\" array with 1 to 8 entries." };
+  const maxStages = typeof boundary === "string" ? executionBudgetFor(boundary).maxStages : boundary.maxStages;
+  if (!Array.isArray(value.stages) || value.stages.length < 1 || value.stages.length > maxStages) return { ok: false, reason: `Ready form needs a "stages" array with 1 to ${maxStages} entries for the selected execution boundary.` };
   if (executionMode === "research" && value.stages.length !== 1) {
     return { ok: false, reason: "Research execution requires exactly one department stage containing evidence, risk analysis, and the owner-facing conclusion." };
   }
@@ -277,8 +286,9 @@ function evaluateBossTaskDecision(
 export function parseBossTaskDecision(
   text: string,
   candidates: AssignmentDecisionCandidate[],
+  boundary: ExecutionProfile | ExecutionBudget = "standard",
 ): BossTaskDecision | null {
-  const result = evaluateBossTaskDecision(text, candidates);
+  const result = evaluateBossTaskDecision(text, candidates, boundary);
   return result.ok ? result.decision : null;
 }
 
@@ -288,8 +298,9 @@ export function parseBossTaskDecision(
 export function explainBossTaskDecisionFailure(
   text: string,
   candidates: AssignmentDecisionCandidate[],
+  boundary: ExecutionProfile | ExecutionBudget = "standard",
 ): string | null {
-  const result = evaluateBossTaskDecision(text, candidates);
+  const result = evaluateBossTaskDecision(text, candidates, boundary);
   return result.ok ? null : result.reason;
 }
 

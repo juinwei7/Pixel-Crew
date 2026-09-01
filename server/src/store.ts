@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { RunnerEvent } from "./claudeRunner.js";
@@ -14,6 +15,9 @@ import type { AttachmentRecord } from "./attachmentRepository.js";
 import type { DepartmentMessage, DepartmentThread } from "./departmentThread.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { t } from "./i18n.js";
+import { createMigrationSnapshot, DatabaseMigrationRunner } from "./databaseMigrations.js";
+import { storeMigrations } from "./storeMigrations.js";
+import type { DiagnosticEvent, DiagnosticEventKind } from "./diagnostics.js";
 
 function normalizeAutoApproveMode(value: unknown): AutoApproveMode {
   // 記得把新檔位列進來：漏了的話，使用者選的模式在 server 重啟、從資料庫載回時會被洗成 off
@@ -68,6 +72,9 @@ function missionFromRow(row: Record<string, unknown>): DepartmentMission {
     parentMissionId: row.parent_mission_id == null ? null : String(row.parent_mission_id),
     sourceMessageId: row.source_message_id == null ? null : String(row.source_message_id),
     executionMode: row.execution_mode === "research" ? "research" : "project",
+    executionProfile: row.execution_profile === "quick" || row.execution_profile === "deep" ? row.execution_profile : "standard",
+    maxPlanSteps: row.max_plan_steps == null ? 4 : Number(row.max_plan_steps),
+    memberWorkerIds: jsonValue<string[]>(row.member_worker_ids_json, []),
     origin: row.mission_origin === "boss" ? "boss" : "department",
     status: normalizedStatus,
     planSummary: row.plan_summary == null ? null : String(row.plan_summary),
@@ -170,6 +177,8 @@ export type ProviderAccount = {
   updatedAt: string;
 };
 
+export type ResumeCandidate = { workerId: string; taskText: string; sessionId: string; interruptedAt: string; resetAt: string | null };
+
 export class LocalStore {
   private readonly db: DatabaseSync;
   private readonly path: string;
@@ -183,8 +192,20 @@ export class LocalStore {
   constructor(path: string) {
     this.path = path;
     const directory = dirname(path);
+    const databaseExisted = existsSync(path);
     ensurePrivateDirectorySync(directory);
     this.db = new DatabaseSync(path);
+    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    const migrationLedgerExists = Boolean(this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+    ).get());
+    const appliedMigrationVersions = migrationLedgerExists
+      ? new Set((this.db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>).map((row) => row.version))
+      : new Set<number>();
+    const firstPendingMigration = storeMigrations.find(({ version }) => !appliedMigrationVersions.has(version));
+    const migrationSnapshotPath = databaseExisted && firstPendingMigration
+      ? createMigrationSnapshot(this.db, this.path, firstPendingMigration.version, protectFileSync)
+      : null;
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -354,6 +375,9 @@ export class LocalStore {
         max_corrections INTEGER NOT NULL DEFAULT 2,
         execution_mode TEXT NOT NULL DEFAULT 'project',
         mission_origin TEXT NOT NULL DEFAULT 'department',
+        execution_profile TEXT NOT NULL DEFAULT 'standard',
+        max_plan_steps INTEGER NOT NULL DEFAULT 4,
+        member_worker_ids_json TEXT NOT NULL DEFAULT '[]',
         error TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         started_at TEXT,
@@ -439,6 +463,22 @@ export class LocalStore {
       CREATE INDEX IF NOT EXISTS audit_events_department_created
         ON audit_events(department_id, created_at DESC);
 
+      CREATE TABLE IF NOT EXISTS diagnostic_events (
+        id TEXT PRIMARY KEY,
+        event_kind TEXT NOT NULL CHECK (event_kind IN ('websocket_reconnect', 'ui_long_task', 'fps_sample', 'approval_wait')),
+        value REAL NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS diagnostic_events_created ON diagnostic_events(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS worker_resume_candidates (
+        worker_id TEXT PRIMARY KEY REFERENCES workers(id) ON DELETE CASCADE,
+        task_text TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        interrupted_at TEXT NOT NULL,
+        reset_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS provider_checkpoints (
         worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
         provider TEXT NOT NULL,
@@ -456,8 +496,10 @@ export class LocalStore {
       );
 
     `);
-    this.migrateCollaborationTasks();
-    this.migrateCodexAccountsToUnifiedAccounts();
+    new DatabaseMigrationRunner(
+      this.db,
+      () => migrationSnapshotPath,
+    ).migrate(storeMigrations);
     // 這三句用綁定參數（而非把中文字面值烤進 SQL 字串）才能讓 COALESCE 預設訊息吃到 t()。
     this.db.prepare(`
       UPDATE provider_handoffs
@@ -474,161 +516,6 @@ export class LocalStore {
       SET status = 'failed', error = COALESCE(error, ?), completed_at = CURRENT_TIMESTAMP
       WHERE status IN ('planning', 'executing', 'reviewing')
     `).run(t("伺服器重啟，Department Mission 已中止"));
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN attention_reason TEXT");
-    } catch {
-      // Existing databases already migrated to owner-controlled Mission attention.
-    }
-    try {
-      this.db.exec("ALTER TABLE boss_tasks ADD COLUMN title TEXT");
-    } catch {
-      // Existing databases already migrated to editable Boss task titles.
-    }
-    try {
-      this.db.exec("ALTER TABLE boss_tasks ADD COLUMN archived_at TEXT");
-    } catch {
-      // Existing databases already migrated to archivable Boss task records.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN department_id TEXT");
-    } catch {
-      // Existing databases already migrated to explicit Mission departments.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN plan_approved_at TEXT");
-    } catch {
-      // Existing databases already migrated to explicit plan approval.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN owner_guidance TEXT");
-    } catch {
-      // Existing databases already migrated to owner guidance.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN format_repair_count INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // Existing databases already migrated to bounded format repair.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN attachment_ids_json TEXT NOT NULL DEFAULT '[]'");
-    } catch {
-      // Existing databases already migrated to persistent Mission attachments.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN parent_mission_id TEXT");
-    } catch {
-      // Existing databases already migrated to auditable follow-up Missions.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN source_message_id TEXT");
-    } catch {
-      // Existing databases already migrated to thread-linked Missions.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN delegated_sessions_json TEXT NOT NULL DEFAULT '[]'");
-    } catch {
-      // Existing databases already migrated to task-owned provider sessions.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN execution_events_json TEXT NOT NULL DEFAULT '[]'");
-    } catch {
-      // Existing databases already migrated to Mission-owned runner activity.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'project'");
-    } catch {
-      // Existing databases already migrated to bounded research/project execution.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_missions ADD COLUMN mission_origin TEXT NOT NULL DEFAULT 'department'");
-    } catch {
-      // Existing databases already migrated to explicit Boss/department ownership.
-    }
-    try {
-      this.db.exec("ALTER TABLE department_threads ADD COLUMN history_cleared_at TEXT");
-    } catch {
-      // Existing databases already migrated to resettable visible department history.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
-    } catch {
-      // Existing databases already migrated to the provider-aware schema.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN workspace_path TEXT");
-    } catch {
-      // Existing databases already migrated to workspace-aware workers.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_id TEXT");
-    } catch {
-      // Existing databases already migrated to avatar-aware workers.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_kind TEXT");
-    } catch {
-      // Existing databases already migrated to avatar source selection.
-    }
-    this.db.exec("UPDATE workers SET avatar_kind = CASE WHEN avatar_id IS NULL THEN 'preset' ELSE 'custom' END WHERE avatar_kind IS NULL");
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN avatar_preset_id TEXT NOT NULL DEFAULT 'classic'");
-    } catch {
-      // Existing databases already migrated to official avatar presets.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN persona TEXT");
-    } catch {
-      // Existing databases already migrated to persona-aware workers.
-    }
-    try {
-      this.db.exec("ALTER TABLE provider_checkpoints ADD COLUMN workspace_path TEXT");
-    } catch {
-      // Existing databases already migrated to workspace-scoped checkpoints.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0");
-    } catch {
-      // Existing databases already migrated to auto-approve-aware workers.
-    }
-    try {
-      // Superseded by the three-state auto_approve_mode below (off/safe/full);
-      // kept only as the source for the one-time backfill of it.
-      this.db.exec("ALTER TABLE workers ADD COLUMN auto_approve_mode TEXT");
-    } catch {
-      // Existing databases already migrated to graded auto-approve modes.
-    }
-    this.db.exec("UPDATE workers SET auto_approve_mode = CASE WHEN auto_approve = 1 THEN 'safe' ELSE 'off' END WHERE auto_approve_mode IS NULL");
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN sort_order INTEGER");
-    } catch {
-      // Existing databases already migrated to user-ordered workers.
-    }
-    this.db.exec(`
-      UPDATE workers SET sort_order = (
-        SELECT COUNT(*) FROM workers w2
-        WHERE w2.created_at < workers.created_at
-          OR (w2.created_at = workers.created_at AND w2.rowid < workers.rowid)
-      ) WHERE sort_order IS NULL
-    `);
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN department_id TEXT");
-    } catch {
-      // Existing databases already migrated to explicit departments.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN codex_account_id TEXT");
-    } catch {
-      // Existing databases already migrated to per-worker Codex accounts.
-    }
-    try {
-      this.db.exec("ALTER TABLE workers ADD COLUMN account_id TEXT");
-    } catch {
-      // Existing databases already migrated to the provider-agnostic account_id column.
-    }
-    // One-time backfill from the old Codex-only column into the generic one —
-    // idempotent (only fills rows where account_id hasn't been set yet), so it's
-    // safe to run on every boot rather than gating it behind the ALTER's try/catch.
-    this.db.exec("UPDATE workers SET account_id = codex_account_id WHERE codex_account_id IS NOT NULL AND account_id IS NULL");
     this.db.prepare(`
       INSERT INTO departments (id, name, purpose, workspace_path, lead_worker_id)
       SELECT 'legacy-' || lower(hex(randomblob(16))), workspace_path,
@@ -893,6 +780,36 @@ export class LocalStore {
       payload: jsonValue(row.payload_json, {}),
       createdAt: String(row.created_at),
     }));
+  }
+
+  saveDiagnosticEvent(event: DiagnosticEvent & { id: string }): boolean {
+    return this.safeWrite("save diagnostic event", () => {
+      this.db.prepare("INSERT INTO diagnostic_events (id, event_kind, value, created_at) VALUES (?, ?, ?, ?)")
+        .run(event.id, event.kind, event.value, event.createdAt);
+    });
+  }
+
+  listDiagnosticEvents(limit = 2_000): DiagnosticEvent[] {
+    const rows = this.db.prepare("SELECT event_kind, value, created_at FROM diagnostic_events ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(Math.max(1, Math.min(5_000, limit))) as Array<{ event_kind: DiagnosticEventKind; value: number; created_at: string }>;
+    return rows.map((row) => ({ kind: row.event_kind, value: Number(row.value), createdAt: row.created_at }));
+  }
+
+  saveResumeCandidate(candidate: ResumeCandidate): boolean {
+    return this.safeWrite("save resume candidate", () => {
+      this.db.prepare(`INSERT INTO worker_resume_candidates (worker_id, task_text, session_id, interrupted_at, reset_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(worker_id) DO UPDATE SET task_text=excluded.task_text, session_id=excluded.session_id, interrupted_at=excluded.interrupted_at, reset_at=excluded.reset_at`)
+        .run(candidate.workerId, candidate.taskText, candidate.sessionId, candidate.interruptedAt, candidate.resetAt);
+    });
+  }
+
+  getResumeCandidate(workerId: string): ResumeCandidate | null {
+    const row = this.db.prepare("SELECT * FROM worker_resume_candidates WHERE worker_id = ?").get(workerId) as Record<string, unknown> | undefined;
+    return row ? { workerId: String(row.worker_id), taskText: String(row.task_text), sessionId: String(row.session_id), interruptedAt: String(row.interrupted_at), resetAt: row.reset_at == null ? null : String(row.reset_at) } : null;
+  }
+
+  deleteResumeCandidate(workerId: string): boolean {
+    return this.safeWrite("delete resume candidate", () => { this.db.prepare("DELETE FROM worker_resume_candidates WHERE worker_id = ?").run(workerId); });
   }
 
   deleteDepartment(id: string): boolean {
@@ -1393,8 +1310,9 @@ export class LocalStore {
           max_corrections, error, created_at, started_at, completed_at,
           attention_reason, plan_approved_at, owner_guidance, format_repair_count,
           attachment_ids_json, parent_mission_id, source_message_id,
-          delegated_sessions_json, execution_events_json, execution_mode, mission_origin
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          delegated_sessions_json, execution_events_json, execution_mode, mission_origin,
+          execution_profile, max_plan_steps, member_worker_ids_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           plan_summary = excluded.plan_summary,
@@ -1416,6 +1334,9 @@ export class LocalStore {
           , execution_events_json = excluded.execution_events_json
           , execution_mode = excluded.execution_mode
           , mission_origin = excluded.mission_origin
+          , execution_profile = excluded.execution_profile
+          , max_plan_steps = excluded.max_plan_steps
+          , member_worker_ids_json = excluded.member_worker_ids_json
       `).run(
         mission.id, mission.departmentId ?? null, mission.workspacePath, mission.bossWorkerId, mission.objective,
         JSON.stringify(mission.acceptanceCriteria), mission.status, mission.planSummary,
@@ -1426,6 +1347,7 @@ export class LocalStore {
         JSON.stringify(mission.attachmentIds ?? []), mission.parentMissionId ?? null, mission.sourceMessageId ?? null,
         JSON.stringify(mission.delegatedSessions ?? []), JSON.stringify(mission.executionEvents ?? []),
         mission.executionMode ?? "project", mission.origin ?? "department",
+        mission.executionProfile ?? "standard", mission.maxPlanSteps ?? 4, JSON.stringify(mission.memberWorkerIds ?? []),
       );
     });
   }
@@ -1562,109 +1484,6 @@ export class LocalStore {
     return this.safeWrite("delete provider checkpoint", () => {
       this.db.prepare("DELETE FROM provider_checkpoints WHERE worker_id = ? AND provider = ?").run(workerId, provider);
     });
-  }
-
-  // SQLite can't ALTER a CHECK constraint in place, so adding the 'returning'
-  // status and continuation_result column to collaboration_tasks needs a full
-  // rebuild instead of the idempotent ALTER-TABLE pattern used elsewhere.
-  private migrateCollaborationTasks(): void {
-    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'collaboration_tasks'").get() as { sql?: string } | undefined;
-    const schema = row?.sql ?? "";
-    if (schema.includes("'returning'") && schema.includes("continuation_result")) return;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      this.db.exec(`
-        DROP INDEX IF EXISTS collaboration_tasks_source_created;
-        DROP INDEX IF EXISTS collaboration_tasks_target_created;
-        ALTER TABLE collaboration_tasks RENAME TO collaboration_tasks_legacy;
-        CREATE TABLE collaboration_tasks (
-          id TEXT PRIMARY KEY,
-          source_worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-          target_worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
-          workspace_path TEXT NOT NULL,
-          mode TEXT NOT NULL CHECK (mode IN ('consult', 'review')),
-          objective TEXT NOT NULL,
-          acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
-          status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'returning', 'completed', 'failed', 'cancelled')),
-          source_context_json TEXT NOT NULL DEFAULT '{}',
-          base_commit TEXT,
-          result_json TEXT,
-          continuation_result TEXT,
-          error TEXT,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          started_at TEXT,
-          completed_at TEXT,
-          adopted_at TEXT,
-          handled_at TEXT
-        );
-        INSERT INTO collaboration_tasks (
-          id, source_worker_id, target_worker_id, workspace_path, mode, objective,
-          acceptance_criteria_json, status, source_context_json, base_commit, result_json,
-          continuation_result, error, created_at, started_at, completed_at, adopted_at, handled_at
-        )
-        SELECT
-          id, source_worker_id, target_worker_id, workspace_path, mode, objective,
-          acceptance_criteria_json, status, source_context_json, base_commit, result_json,
-          NULL, error, created_at, started_at, completed_at, adopted_at, handled_at
-        FROM collaboration_tasks_legacy;
-        DROP TABLE collaboration_tasks_legacy;
-        CREATE INDEX collaboration_tasks_source_created
-          ON collaboration_tasks(source_worker_id, created_at DESC);
-        CREATE INDEX collaboration_tasks_target_created
-          ON collaboration_tasks(target_worker_id, created_at DESC);
-      `);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  // Unifies the old Codex-only codex_accounts table into a provider-agnostic
-  // accounts table (adds a `provider` column, renames codex_home -> home_dir)
-  // so Claude can share the same named-account subsystem instead of a
-  // duplicated parallel table. No RENAME COLUMN precedent exists in this
-  // codebase (untested in node:sqlite), so this reuses the same
-  // rebuild-via-rename pattern as migrateCollaborationTasks() rather than
-  // risking an untested ALTER TABLE ... RENAME COLUMN.
-  private migrateCodexAccountsToUnifiedAccounts(): void {
-    const unified = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").get();
-    if (unified) return; // already unified, or a fresh install that will create it below.
-    const legacy = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'codex_accounts'").get();
-    if (!legacy) {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS accounts (
-          id TEXT PRIMARY KEY,
-          provider TEXT NOT NULL,
-          label TEXT NOT NULL,
-          home_dir TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-      return;
-    }
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      this.db.exec(`
-        ALTER TABLE codex_accounts RENAME TO accounts_legacy;
-        CREATE TABLE accounts (
-          id TEXT PRIMARY KEY,
-          provider TEXT NOT NULL,
-          label TEXT NOT NULL,
-          home_dir TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        INSERT INTO accounts (id, provider, label, home_dir, created_at, updated_at)
-        SELECT id, 'codex', label, codex_home, created_at, updated_at FROM accounts_legacy;
-        DROP TABLE accounts_legacy;
-      `);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
   }
 
   private flushEvents(): void {

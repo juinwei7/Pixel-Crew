@@ -6,6 +6,7 @@ import type { WorkerState } from "../types";
 
 type CostRow = { day: string; workerId: string; workerName: string; costUsd: number };
 type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null };
+type Diagnostics = { enabled: boolean; diagnostics: { generatedAt: string; scope: string; privacy: string; missions: { total: number; completed: number; failed: number; successRate: number | null; failuresByReason: Array<{ reason: string; count: number }> }; responsiveness: { websocketReconnects: number; longUiTasks: number; medianFps: number | null; fpsBand: string; medianApprovalWaitSeconds: number | null } } };
 
 type Props = {
   workers: WorkerState[];
@@ -14,7 +15,7 @@ type Props = {
 };
 
 export function OpsModal({ workers, notify, onClose }: Props) {
-  const [tab, setTab] = useState<"costs" | "schedules">("costs");
+  const [tab, setTab] = useState<"costs" | "schedules" | "diagnostics">("costs");
   const [costs, setCosts] = useState<CostRow[] | null>(null);
   const [today, setToday] = useState("");
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
@@ -24,6 +25,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   // 每日預算草稿：workerId → 輸入框文字（"" = 無上限）。
   const [budgets, setBudgets] = useState<Record<string, string>>({});
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
 
   const loadCosts = useCallback(async () => {
     try {
@@ -59,6 +61,11 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   }, [notify]);
 
   useEffect(() => { void loadCosts(); void loadSchedules(); }, [loadCosts, loadSchedules]);
+  const loadDiagnostics = useCallback(async () => {
+    try { setDiagnostics(await apiRequest<Diagnostics>("/api/diagnostics")); }
+    catch (error) { notify(error instanceof Error ? error.message : t("讀取本機診斷失敗"), "error"); }
+  }, [notify]);
+  useEffect(() => { if (tab === "diagnostics") void loadDiagnostics(); }, [tab, loadDiagnostics]);
 
   const dayTotals = useMemo(() => {
     const map = new Map<string, number>();
@@ -112,6 +119,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
         <div className="ops-modal__tabs" role="tablist">
           <button type="button" role="tab" className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("💰 成本日報")}</button>
           <button type="button" role="tab" className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("⏰ 排程任務")}</button>
+          <button type="button" role="tab" className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("📈 本機診斷")}</button>
         </div>
 
         {tab === "costs" && (
@@ -203,6 +211,21 @@ export function OpsModal({ workers, notify, onClose }: Props) {
             )}
           </div>
         )}
+        {tab === "diagnostics" && <div className="ops-modal__body">
+          {diagnostics === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : <>
+            <p className="ops-diagnostics__privacy">{t("只儲存在此裝置，不會上傳。診斷包不含 prompt、路徑、模型或工具輸出。")}</p>
+            <div className="ops-diagnostics__grid">
+              <div><small>{t("Mission 成功率")}</small><strong>{diagnostics.diagnostics.missions.successRate == null ? "—" : `${diagnostics.diagnostics.missions.successRate}%`}</strong></div>
+              <div><small>{t("完成／失敗")}</small><strong>{diagnostics.diagnostics.missions.completed}／{diagnostics.diagnostics.missions.failed}</strong></div>
+              <div><small>{t("WebSocket 重連")}</small><strong>{diagnostics.diagnostics.responsiveness.websocketReconnects}</strong></div>
+              <div><small>{t("3D FPS 分級")}</small><strong>{diagnostics.diagnostics.responsiveness.fpsBand === "unknown" ? "—" : diagnostics.diagnostics.responsiveness.fpsBand}</strong></div>
+            </div>
+            <h3>{t("Mission 失敗原因")}</h3>
+            {diagnostics.diagnostics.missions.failuresByReason.length === 0 ? <p className="ops-modal__empty">{t("尚無失敗紀錄。")}</p> : <ul className="ops-diagnostics__reasons">{diagnostics.diagnostics.missions.failuresByReason.map((entry) => <li key={entry.reason}><span>{entry.reason}</span><strong>{entry.count}</strong></li>)}</ul>}
+            <p className="ops-diagnostics__meta">{t("長 UI 工作：{count}；中位 FPS：{fps}；核准中位等待：{wait} 秒", { count: diagnostics.diagnostics.responsiveness.longUiTasks, fps: diagnostics.diagnostics.responsiveness.medianFps ?? "—", wait: diagnostics.diagnostics.responsiveness.medianApprovalWaitSeconds ?? "—" })}</p>
+            <a className="ops-diagnostics__export" href="/api/diagnostics/export" download>{t("匯出去識別化診斷包 (.json)")}</a>
+          </>}
+        </div>}
     </Modal>
   );
 }

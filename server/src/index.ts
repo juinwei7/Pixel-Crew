@@ -29,10 +29,11 @@ import {
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
 } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
+import { executionBudgetFor, normalizeExecutionProfile } from "./executionBudget.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
 import { buildCodexMcpAddArgs, CodexCapabilityRegistry, DEFAULT_CODEX_SLASH_COMMANDS, isValidCodexCommandName, MAX_CUSTOM_CODEX_SLASH_COMMANDS } from "./codexCapabilities.js";
 import { McpLoginTracker } from "./mcpLogin.js";
-import { LocalStore, type ProviderAccount, type PersistedWorker } from "./store.js";
+import { LocalStore, type PersistedWorker, type ResumeCandidate } from "./store.js";
 import { ClaudeAuthProvider } from "./providers/claudeAuth.js";
 import { CodexAuthProvider } from "./providers/codexAuth.js";
 import { AccountRegistry } from "./accountRegistry.js";
@@ -43,26 +44,24 @@ import { migrateAmbientClaudeHome } from "./claudeHomeMigration.js";
 import { CodexSession, codexChildEnv } from "./codexRunner.js";
 import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
 import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./providers/types.js";
-import { deleteProjectCommand, listProjectCommands, saveProjectCommand } from "./commandLibrary.js";
 import { UpdateChecker, readCurrentVersion } from "./updateCheck.js";
-import { deleteProjectSkill, listProjectSkills, saveProjectSkill } from "./skillLibrary.js";
+import { registerWorkflowLibraryRoutes } from "./workflowLibraryRoutes.js";
 import { isAllowedLocalRequest, isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
 import { AvatarStore, AvatarValidationError } from "./avatarStore.js";
 import { captureWebShot, shutdownWebShot } from "./webShot.js";
 import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
-import { stageExportDirectory } from "./backupExport.js";
+import { writeBackupExport } from "./backupTransport.js";
+import { registerBackupImportTransport } from "./backupImportTransport.js";
+import { commitBackupRestore } from "./backupRestoreCommit.js";
+import { registerOperationalSettingsRoutes } from "./operationalSettingsRoutes.js";
+import { registerReportingRoutes } from "./reportingRoutes.js";
+import { registerScheduleRoutes } from "./scheduleRoutes.js";
+import { registerAccountRoutes } from "./accountRoutes.js";
+import { registerApprovalRoutes } from "./approvalRoutes.js";
 import {
-  BackupValidationError,
-  extractAndValidateBackup,
   readAndClearRestoreMarker,
-  restoreFromSnapshot,
-  snapshotCurrentData,
-  swapInRestoredData,
-  writeRestoreMarker,
 } from "./backupImport.js";
-import multer from "multer";
-import * as tar from "tar";
 import { ProviderUsageRegistry } from "./providerUsage.js";
 import {
   composePersonaPrompt,
@@ -169,7 +168,7 @@ import {
 } from "./departmentThread.js";
 import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
-import { buildDayReport, localDay, resolveReportDay } from "./dayReport.js";
+import { localDay } from "./dayReport.js";
 import { decideBrainSwap, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
@@ -442,6 +441,7 @@ type Worker = {
   // in the provider-agnostic `accounts` table whose `provider` must match
   // runner.provider.
   accountId: string | null;
+  resumeCandidate: ResumeCandidate | null;
 };
 
 const workers = new Map<string, Worker>();
@@ -512,6 +512,7 @@ function workerSummary(w: Worker) {
     persona: w.persona,
     autoApproveMode: w.autoApproveMode,
     handoff: w.handoff,
+    resumeCandidate: w.resumeCandidate,
     collaborationIds,
     missionIds,
   };
@@ -902,9 +903,12 @@ function finishCollaboration(worker: Worker, event: RunnerEvent): void {
 }
 
 function missionMembers(mission: DepartmentMission): Worker[] {
-  return [...workers.values()].filter((worker) => mission.departmentId
+  const eligible = [...workers.values()].filter((worker) => mission.departmentId
     ? worker.departmentId === mission.departmentId
     : sameWorkspacePath(worker.runner.workspacePath, mission.workspacePath));
+  if (!mission.memberWorkerIds || mission.memberWorkerIds.length === 0) return eligible;
+  const selected = new Set(mission.memberWorkerIds);
+  return eligible.filter((worker) => selected.has(worker.id));
 }
 
 function failMission(mission: DepartmentMission, message: unknown): void {
@@ -1161,6 +1165,7 @@ function finishMission(
       mission.bossWorkerId,
       new Set(mission.attachmentIds ?? []),
       mission.executionMode ?? "project",
+      mission.maxPlanSteps,
     );
     if (!parsed.plan) {
       if ((mission.formatRepairCount ?? 0) < 1) {
@@ -1550,7 +1555,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
 // ── 撞用量上限自動恢復 ──────────────────────────────────────────────────────
 // 回合因訂閱用量上限失敗（訊息帶 "resets 2:50pm"）→ 排一次性計時器，重置時刻
 // 過後叫 NPC 繼續被中斷的工作。單發 setTimeout、fire 前多重守門，無輪詢；
-// 伺服器重啟會遺失排程（提示訊息有講明）。⚙ 功能選單可整個關掉。
+// 重啟時不自動重送，改由持久化的 resume candidate 交給使用者決定。
 const limitResumeTimers = new Map<string, NodeJS.Timeout>();
 // 前端排隊訊息撞上限會被吞：/message 送出時記下「開啟這回合的聊天指示」，回合
 // 正常結束就清掉；撞上限失敗則累積進 limitSwallowedTexts，重置後連同原文重新
@@ -1567,6 +1572,10 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
     // 連同累積清單一起清掉，才不會之後又被重送一次。
     limitTurnText.delete(worker.id);
     limitSwallowedTexts.delete(worker.id);
+    if (worker.resumeCandidate?.resetAt) {
+      store.deleteResumeCandidate(worker.id);
+      worker.resumeCandidate = null;
+    }
   }
   if (!text) return;
   if (!appSettings.get().limitResumeEnabled) { limitTurnText.delete(worker.id); return; }
@@ -1585,6 +1594,11 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
     limitTurnText.delete(worker.id);
   }
   const fireAt = resetAt.getTime() + 3 * 60_000; // 過重置點 3 分鐘再戳，避免踩線又失敗
+  const taskText = (limitSwallowedTexts.get(worker.id) ?? []).at(-1) ?? lastUnfinishedTask(worker.history);
+  if (taskText) {
+    worker.resumeCandidate = { workerId: worker.id, taskText, sessionId: worker.runner.getPersistenceState().sessionId, interruptedAt: new Date().toISOString(), resetAt: new Date(fireAt).toISOString() };
+    store.saveResumeCandidate(worker.resumeCandidate);
+  }
   const existing = limitResumeTimers.get(worker.id);
   if (existing) clearTimeout(existing);
   const fireLabel = new Date(fireAt).toTimeString().slice(0, 5);
@@ -1653,6 +1667,7 @@ function createWorker(
     handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
     departmentId: persisted?.departmentId ?? departmentId,
     accountId: persisted?.accountId ?? accountId,
+    resumeCandidate: persisted ? store.getResumeCandidate(id) : null,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -1694,6 +1709,13 @@ function createWorker(
     }
   }
   if (persisted && hasUnfinishedTurn(worker.history)) {
+    if (!worker.resumeCandidate) {
+      const taskText = lastUnfinishedTask(worker.history);
+      if (taskText) {
+        worker.resumeCandidate = { workerId: id, taskText, sessionId: worker.runner.getPersistenceState().sessionId, interruptedAt: new Date().toISOString(), resetAt: null };
+        store.saveResumeCandidate(worker.resumeCandidate);
+      }
+    }
     record(worker, { type: "error", message: t("伺服器已重啟，上一個未完成的回合已中止") });
   }
   if (!persisted && options.broadcast !== false) broadcast({ type: "worker_added", worker: workerSummary(worker) });
@@ -2047,6 +2069,14 @@ function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
     if (type === "user_message") return true;
   }
   return false;
+}
+
+function lastUnfinishedTask(events: RunnerEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.type === "user_message") return event.text.trim().slice(0, 12_000) || null;
+  }
+  return null;
 }
 
 function providerLabel(provider: ProviderId): string {
@@ -2520,95 +2550,12 @@ app.get("/api/capabilities", (req, res) => {
   }
 });
 
-app.get("/api/commands", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
-    res.json({ commands: await listProjectCommands(workspacePath), workspacePath });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法讀取專案指令") });
-  }
-});
-
-app.put("/api/commands", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
-    const command = await saveProjectCommand(
-      workspacePath,
-      String(req.body?.name ?? ""),
-      String(req.body?.content ?? ""),
-      req.body?.originalName ? String(req.body.originalName) : undefined,
-    );
-    restartIdleWorkers("claude", workspacePath);
-    void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
-      console.error("failed to refresh Claude capabilities after saving a command", error);
-    });
-    // CommandCenter's own list view refetches on `workflowRevisions` changes,
-    // which otherwise only update on WorkflowLibraryWatcher's ~1.5s poll —
-    // rescan now so the tab that just saved (and any other open tab) reflect
-    // it immediately instead of waiting out the interval.
-    void workflowWatcher.scanNow();
-    res.json({ command });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法儲存專案指令") });
-  }
-});
-
-app.delete("/api/commands", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
-    await deleteProjectCommand(workspacePath, String(req.body?.name ?? ""));
-    restartIdleWorkers("claude", workspacePath);
-    void claudeCapabilitiesFor(workspacePath).refresh(true).catch((error) => {
-      console.error("failed to refresh Claude capabilities after deleting a command", error);
-    });
-    void workflowWatcher.scanNow();
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法刪除專案指令") });
-  }
-});
-
-app.get("/api/skills", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.query.workspacePath);
-    res.json({ skills: await listProjectSkills(workspacePath), workspacePath });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法讀取 Codex Skills") });
-  }
-});
-
-app.put("/api/skills", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
-    const skill = await saveProjectSkill(
-      workspacePath,
-      String(req.body?.name ?? ""),
-      String(req.body?.content ?? ""),
-      req.body?.originalName ? String(req.body.originalName) : undefined,
-    );
-    restartIdleWorkers("codex", workspacePath);
-    // Codex skills aren't part of CodexCapabilityRegistry (they're `$`
-    // triggered, not part of the fixed slash-command set) — the only signal
-    // any tab's CodexSkillCenter has for "the list changed" is
-    // WorkflowLibraryWatcher's revision counter, so rescan now instead of
-    // waiting out its ~1.5s poll.
-    void workflowWatcher.scanNow();
-    res.json({ skill });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法儲存 Codex Skill") });
-  }
-});
-
-app.delete("/api/skills", async (req, res) => {
-  try {
-    const workspacePath = normalizeManagedWorkspacePath(req.body?.workspacePath);
-    await deleteProjectSkill(workspacePath, String(req.body?.name ?? ""));
-    restartIdleWorkers("codex", workspacePath);
-    void workflowWatcher.scanNow();
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message || t("無法刪除 Codex Skill") });
-  }
+registerWorkflowLibraryRoutes({
+  app,
+  normalizeWorkspacePath: normalizeManagedWorkspacePath,
+  restartIdleWorkers,
+  claudeCapabilitiesFor,
+  scanWorkflowLibrary: () => workflowWatcher.scanNow(),
 });
 
 app.get("/api/auth", (_req, res) => {
@@ -2840,87 +2787,20 @@ app.post("/api/remote-access/api/*", async (req, res) => {
   res.status(up.status).type("application/json").send(up.text);
 });
 
-// ── 成本日報 ────────────────────────────────────────────────────────────────
-app.get("/api/costs", (req, res) => {
-  const days = Math.min(60, Math.max(1, Number(req.query.days ?? 14) || 14));
-  const since = new Date();
-  since.setDate(since.getDate() - (days - 1));
-  const budgets = [...workers.values()]
-    .map((worker) => ({ workerId: worker.id, dailyUsd: getExtras(worker.id).dailyBudgetUsd }))
-    .filter((entry) => entry.dailyUsd != null);
-  res.json({ costs: store.listDailyCosts(localDay(since)), today: localDay(), budgets });
+// ── 成本日報與一日回放 ───────────────────────────────────────────────────────
+registerReportingRoutes({
+  app,
+  store,
+  workerIds: () => workers.keys(),
+  workerName: (workerId) => workers.get(workerId)?.runner.name,
+  dailyBudget: (workerId) => getExtras(workerId).dailyBudgetUsd,
 });
 
-// ── 下班報告＋一日回放 ──────────────────────────────────────────────────────
-// 彙整某天（預設今天）的花費、回合數、錯誤、完成的任務，加上事件時間軸給前端回放。
-app.get("/api/day-report", (req, res) => {
-  // 彙整邏輯抽在 dayReport.ts 的 buildDayReport（純函式）；這裡只做資料讀取。
-  const today = localDay();
-  const day = resolveReportDay(req.query.day, today);
-  res.json(buildDayReport({
-    day,
-    today,
-    dailyCosts: store.listDailyCosts(day),
-    dayEvents: store.listDayEvents(day),
-    bossTasks: store.listBossTasks(),
-    missions: store.listDepartmentMissions(),
-    workerName: (workerId) => workers.get(workerId)?.runner.name,
-    dailyBudget: (workerId) => getExtras(workerId).dailyBudgetUsd,
-  }));
-});
+// ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
+registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
 
-// ── 排程任務 ────────────────────────────────────────────────────────────────
-app.get("/api/schedules", (_req, res) => {
-  res.json({ schedules: store.listSchedules() });
-});
-
-app.post("/api/schedules", (req, res) => {
-  const workerId = String(req.body?.workerId ?? "");
-  const time = String(req.body?.time ?? "");
-  const prompt = String(req.body?.prompt ?? "").trim();
-  if (!workers.has(workerId)) { res.status(400).json({ error: "unknown worker" }); return; }
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
-  if (!prompt) { res.status(400).json({ error: t("請提供要執行的指示") }); return; }
-  store.addSchedule(randomUUID(), workerId, time, prompt);
-  res.json({ ok: true, schedules: store.listSchedules() });
-});
-
-app.patch("/api/schedules/:id", (req, res) => {
-  const fields: { time?: string; prompt?: string; enabled?: boolean } = {};
-  if (req.body?.time !== undefined) {
-    const time = String(req.body.time);
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
-    fields.time = time;
-  }
-  if (req.body?.prompt !== undefined) {
-    const prompt = String(req.body.prompt).trim();
-    if (!prompt) { res.status(400).json({ error: t("指示不可為空") }); return; }
-    fields.prompt = prompt;
-  }
-  if (req.body?.enabled !== undefined) fields.enabled = Boolean(req.body.enabled);
-  store.updateSchedule(req.params.id, fields);
-  res.json({ ok: true, schedules: store.listSchedules() });
-});
-
-app.delete("/api/schedules/:id", (req, res) => {
-  store.deleteSchedule(req.params.id);
-  res.json({ ok: true, schedules: store.listSchedules() });
-});
-
-// ── 全域功能開關（⚙ 功能選單）────────────────────────────────────────────────
-app.get("/api/app-settings", (_req, res) => {
-  res.json({ settings: appSettings.get() });
-});
-
-app.post("/api/app-settings", (req, res) => {
-  const patch: Record<string, boolean | string> = {};
-  if (typeof req.body?.brainSwapEnabled === "boolean") patch.brainSwapEnabled = req.body.brainSwapEnabled;
-  if (typeof req.body?.limitResumeEnabled === "boolean") patch.limitResumeEnabled = req.body.limitResumeEnabled;
-  if (req.body?.lang === "zh" || req.body?.lang === "en") patch.lang = req.body.lang;
-  const settings = appSettings.update(patch);
-  setLang(settings.lang);
-  res.json({ settings });
-});
+// ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
+registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
 
 // 每 30 秒掃一次：到點、今天沒跑過、NPC 空檔 → 送出排程指示。
 // NPC 在忙就先不標記，30 秒後再試（同一天內補跑）。
@@ -3026,111 +2906,33 @@ app.post("/api/workers", (req, res) => {
   }
 });
 
-app.get("/api/accounts", (_req, res) => {
-  const accounts = store.listAccounts().map((account) => ({
-    ...account,
-    auth: accountRegistry.stateFor(account.id),
-  }));
-  res.json({ accounts });
-});
-
-app.post("/api/accounts", (req, res) => {
-  const provider: ProviderId = req.body?.provider === "codex" ? "codex" : "claude";
-  const label = String(req.body?.label ?? "").trim();
-  if (!label) { res.status(400).json({ error: t("請輸入帳號名稱") }); return; }
-  const id = randomUUID();
-  const homeDir = join(config.dataDirectory, "accounts", id);
-  ensurePrivateDirectorySync(homeDir);
-  const now = new Date().toISOString();
-  const account: ProviderAccount = { id, provider, label, homeDir, createdAt: now, updatedAt: now };
-  if (!store.saveAccount(account)) {
-    res.status(500).json({ error: t("儲存帳號失敗") });
-    return;
-  }
-  res.json({ account, auth: accountRegistry.stateFor(id) });
-});
-
-app.delete("/api/accounts/:id", (req, res) => {
-  const account = store.getAccount(req.params.id);
-  const busyWorkers = account
-    ? [...workers.values()].filter((worker) => worker.accountId === account.id && worker.runner.busy)
-    : [];
-  if (busyWorkers.length > 0) {
-    res.status(409).json({ error: t("以下 NPC 正在使用這個帳號工作，請等工作結束再刪除：{names}", { names: busyWorkers.map((worker) => worker.runner.name).join("、") }) });
-    return;
-  }
-  // Do this before deleting its home directory: an in-flight OAuth child can
-  // otherwise recreate credentials after the account has been removed.
-  if (account) accountLoginTrackerFor(account.provider).cancel(account.id);
-  const { deleted, orphanedWorkerIds } = store.deleteAccount(req.params.id);
-  if (!deleted) { res.status(500).json({ error: t("刪除帳號失敗") }); return; }
-  accountRegistry.invalidate(req.params.id);
-  if (account) {
-    try {
-      rmSync(account.homeDir, { recursive: true, force: true });
-    } catch (error) {
-      console.warn(`[accounts] failed to remove ${account.homeDir}:`, (error as Error).message);
+registerAccountRoutes({
+  app,
+  store,
+  dataDirectory: config.dataDirectory,
+  accountAuth: (accountId) => accountRegistry.stateFor(accountId),
+  busyWorkerNames: (accountId) => [...workers.values()]
+    .filter((worker) => worker.accountId === accountId && worker.runner.busy)
+    .map((worker) => worker.runner.name),
+  cancelAccountLogin: (provider, accountId) => accountLoginTrackerFor(provider).cancel(accountId),
+  invalidateAccountAuth: (accountId) => accountRegistry.invalidate(accountId),
+  onAccountDeleted: (_accountId, orphanedWorkerIds) => {
+    for (const workerId of orphanedWorkerIds) {
+      const worker = workers.get(workerId);
+      if (!worker) continue;
+      worker.accountId = null;
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
     }
-  }
-  for (const workerId of orphanedWorkerIds) {
-    const worker = workers.get(workerId);
-    if (!worker) continue;
-    worker.accountId = null;
-    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
-  }
-  res.json({ ok: true, orphanedWorkerIds });
-});
-
-app.post("/api/accounts/:id/refresh", async (req, res) => {
-  const account = store.getAccount(req.params.id);
-  if (!account) { res.status(404).json({ error: "unknown account" }); return; }
-  const auth = await accountRegistry.refresh(account.id);
-  if (auth) {
-    broadcast({ type: "account_auth_updated", accountId: account.id, auth });
-    if (auth.status === "authenticated") restartIdleWorkersForAccount(account.id);
-  }
-  res.json({ auth });
-});
-
-app.post("/api/accounts/:id/login", (req, res) => {
-  const account = store.getAccount(req.params.id);
-  if (!account) { res.status(404).json({ error: "unknown account" }); return; }
-  if (account.provider === "codex") {
-    const mode: CodexAccountLoginMode = req.body?.mode === "api-key" ? "api-key" : "oauth";
-    const apiKey = mode === "api-key" ? String(req.body?.apiKey ?? "").trim() : undefined;
-    if (mode === "api-key" && !apiKey) { res.status(400).json({ error: t("請輸入 API key") }); return; }
-    const { state, alreadyRunning } = codexAccountLoginTracker.start(account.id, account.homeDir, mode, apiKey);
-    res.status(alreadyRunning ? 200 : 202).json({ state });
-    return;
-  }
-  // Claude has no api-key login mode — browser OAuth + paste-code-back only.
-  const { state, alreadyRunning } = claudeAccountLoginTracker.start(account.id, account.homeDir);
-  res.status(alreadyRunning ? 200 : 202).json({ state });
-});
-
-app.get("/api/accounts/:id/login", (req, res) => {
-  const account = store.getAccount(req.params.id);
-  const state = account ? accountLoginTrackerFor(account.provider).get(req.params.id) : undefined;
-  res.json({ state: state ?? null });
-});
-
-app.post("/api/accounts/:id/login/code", (req, res) => {
-  const account = store.getAccount(req.params.id);
-  if (!account || account.provider !== "claude") {
-    res.status(400).json({ error: t("這個帳號不需要輸入驗證碼") });
-    return;
-  }
-  const code = String(req.body?.code ?? "").trim();
-  if (!code) { res.status(400).json({ error: t("請輸入驗證碼") }); return; }
-  const ok = claudeAccountLoginTracker.submitCode(account.id, code);
-  if (!ok) { res.status(409).json({ error: t("目前沒有等待驗證碼的登入流程") }); return; }
-  res.json({ ok: true });
-});
-
-app.post("/api/accounts/:id/login/cancel", (req, res) => {
-  const account = store.getAccount(req.params.id);
-  const cancelled = account ? accountLoginTrackerFor(account.provider).cancel(req.params.id) : false;
-  res.json({ ok: cancelled });
+  },
+  refreshAccountAuth: (accountId) => accountRegistry.refresh(accountId),
+  onAccountAuthUpdated: (accountId, auth) => {
+    broadcast({ type: "account_auth_updated", accountId, auth });
+    if (auth.status === "authenticated") restartIdleWorkersForAccount(accountId);
+  },
+  startCodexLogin: (accountId, homeDir, mode, apiKey) => codexAccountLoginTracker.start(accountId, homeDir, mode, apiKey),
+  startClaudeLogin: (accountId, homeDir) => claudeAccountLoginTracker.start(accountId, homeDir),
+  accountLoginState: (provider, accountId) => accountLoginTrackerFor(provider).get(accountId),
+  submitClaudeLoginCode: (accountId, code) => claudeAccountLoginTracker.submitCode(accountId, code),
 });
 
 // Separate namespace from /api/accounts/:id/login — the default slot isn't
@@ -3529,145 +3331,44 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
   }
 });
 
-app.get("/api/backup/export", async (_req, res) => {
-  const stagingDir = join(config.dataDirectory, `.export-${randomUUID()}`);
-  try {
-    // Force the ~150ms debounce queue to disk and the WAL back into the
-    // main file, so a plain copy of dbPath alone is a complete snapshot.
-    store.flush();
-    store.checkpoint();
-    stageExportDirectory({ dbPath: config.dbPath, avatarDir: config.avatarDir }, stagingDir);
-    const filename = `pixel-crew-backup-${new Date().toISOString().slice(0, 10)}.tar.gz`;
-    res.set({
-      "Content-Type": "application/gzip",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "X-Content-Type-Options": "nosniff",
-    });
-    const stream = tar.create({ gzip: true, cwd: stagingDir, portable: true } as any, ["manifest.json", "db", "avatars"]);
-    stream.on("error", (err: unknown) => {
-      console.warn("Backup export stream failed:", (err as Error).message);
-      res.destroy(err as Error);
-    });
-    res.on("close", () => rmSync(stagingDir, { recursive: true, force: true }));
-    (stream as unknown as NodeJS.ReadableStream).pipe(res);
-  } catch (error) {
-    rmSync(stagingDir, { recursive: true, force: true });
-    console.warn("Backup export failed:", (error as Error).message);
-    if (!res.headersSent) res.status(500).json({ error: t("無法建立備份檔案") });
-    else res.destroy();
-  }
+async function exportBackup(res: express.Response, password?: string): Promise<void> {
+  await writeBackupExport({
+    response: res, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir,
+    id: randomUUID(), password, flush: () => store.flush(), checkpoint: () => store.checkpoint(),
+  });
+}
+
+app.get("/api/backup/export", async (_req, res) => { await exportBackup(res); });
+app.post("/api/backup/export", async (req, res) => {
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!password) { res.status(400).json({ error: t("請輸入備份密碼") }); return; }
+  try { await exportBackup(res, password); }
+  catch (error) { res.status(400).json({ error: (error as Error).message }); }
 });
 
-const uploadBackup = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => {
-      try {
-        const dir = join(config.dataDirectory, `.import-upload-${randomUUID()}`);
-        ensurePrivateDirectorySync(dir);
-        cb(null, dir);
-      } catch (error) {
-        cb(error as Error, "");
-      }
-    },
-    filename: (_req, _file, cb) => cb(null, "upload.tar.gz"),
-  }),
-  limits: { fileSize: 500 * 1024 * 1024 },
-});
-
-app.post("/api/backup/import/validate", uploadBackup.single("backup"), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: t("缺少備份檔案") });
-    return;
-  }
-  const uploadDir = dirname(req.file.path);
-  const stagingDir = join(config.dataDirectory, `.import-staged-${randomUUID()}`);
-  try {
-    const result = await extractAndValidateBackup(req.file.path, stagingDir);
+registerBackupImportTransport({
+  app,
+  dataDirectory: config.dataDirectory,
+  createPending(stagingDir) {
     const token = randomUUID();
     pendingImports.set(token, { stagingDir, createdAt: Date.now() });
-    // Auto-discard an abandoned validation (uploaded but never confirmed)
-    // so its staging directory doesn't linger indefinitely.
     setTimeout(() => discardPendingImport(token), 10 * 60_000).unref();
-    res.json({ importToken: token, ...result });
-  } catch (error) {
-    rmSync(stagingDir, { recursive: true, force: true });
-    const message = error instanceof BackupValidationError ? error.message : t("備份檔案驗證失敗");
-    res.status(400).json({ error: message });
-  } finally {
-    rmSync(uploadDir, { recursive: true, force: true });
-  }
-});
-
-app.delete("/api/backup/import/:token", (req, res) => {
-  discardPendingImport(req.params.token);
-  res.status(204).end();
+    return token;
+  },
+  discardPending: discardPendingImport,
 });
 
 app.post("/api/backup/import/commit", async (req, res) => {
   const importToken = req.body?.importToken;
-  const confirmPhrase = req.body?.confirmPhrase;
   const pending = typeof importToken === "string" ? pendingImports.get(importToken) : undefined;
-  if (!pending) {
-    res.status(410).json({ error: t("備份檢查已過期，請重新上傳") });
-    return;
-  }
-  if (confirmPhrase !== "RESTORE") {
-    res.status(400).json({ error: t("確認文字不正確") });
-    return;
-  }
-  if (maintenanceMode) {
-    res.status(409).json({ error: t("已有還原正在進行") });
-    return;
-  }
-
-  maintenanceMode = true;
-  for (const worker of workers.values()) worker.runner.stop();
-  for (const client of wss.clients) client.terminate();
-
-  const paths = { dbPath: config.dbPath, avatarDir: config.avatarDir };
-  const snapshotDir = join(config.dataDirectory, `pre-restore-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-  let exitCode = 0;
-  let responseBody: { ok: boolean; message: string; preRestoreSnapshot?: string };
-  try {
-    // Checkpoint-then-close is the real point of no return: once the live
-    // DB handle is gone, this process cannot safely keep serving anything
-    // that depends on `store`, whether the swap that follows succeeds or
-    // has to roll back — both outcomes past this point end in process exit.
-    store.flush();
-    store.checkpoint();
-    store.close();
-    try {
-      snapshotCurrentData(paths, snapshotDir);
-      try {
-        swapInRestoredData(paths, pending.stagingDir);
-        writeRestoreMarker(config.dataDirectory, { success: true, at: new Date().toISOString(), snapshotDir });
-        responseBody = { ok: true, message: t("還原完成，請重新啟動 Pixel Crew"), preRestoreSnapshot: snapshotDir };
-      } catch (swapError) {
-        restoreFromSnapshot(paths, snapshotDir);
-        writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (swapError as Error).message, snapshotDir });
-        exitCode = 1;
-        responseBody = { ok: false, message: t("還原失敗，已還原成原本的資料，請重新啟動 Pixel Crew 後再試一次") };
-      }
-    } catch (error) {
-      writeRestoreMarker(config.dataDirectory, { success: false, at: new Date().toISOString(), message: (error as Error).message, snapshotDir: null });
-      exitCode = 1;
-      responseBody = { ok: false, message: t("還原失敗，請重新啟動 Pixel Crew 後再試一次") };
-    }
-  } finally {
-    discardPendingImport(importToken);
-  }
-  let exitScheduled = false;
-  const scheduleExit = () => {
-    if (exitScheduled) return;
-    exitScheduled = true;
-    setImmediate(() => process.exit(exitCode));
-  };
-  // `finish` is the normal response-completed path; `close` covers a client
-  // disconnect after the live store has already been closed/swapped. Either
-  // way this process must relaunch before it can safely serve more requests.
-  res.once("finish", scheduleExit);
-  res.once("close", scheduleExit);
-  res.status(exitCode === 0 ? 200 : 500).json(responseBody);
+  await commitBackupRestore({
+    response: res, importToken, confirmPhrase: req.body?.confirmPhrase, pending, maintenance: maintenanceMode,
+    setMaintenance: (value) => { maintenanceMode = value; },
+    stopWorkers: () => { for (const worker of workers.values()) worker.runner.stop(); for (const client of wss.clients) client.terminate(); },
+    flush: () => store.flush(), checkpoint: () => store.checkpoint(), closeStore: () => store.close(),
+    discardPending: discardPendingImport, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir,
+    exit: (code) => process.exit(code),
+  });
 });
 
 app.put("/api/workers/:id/avatar-preset", (req, res) => {
@@ -3768,10 +3469,16 @@ function launchDepartmentMission(
     sourceMessageId?: string | null;
     executionMode?: MissionExecutionMode;
     origin?: DepartmentMission["origin"];
+    executionProfile?: DepartmentMission["executionProfile"];
+    maxAgents?: number;
+    maxPlanSteps?: number;
   } = {},
 ): { mission?: DepartmentMission; error?: string } {
   const now = new Date().toISOString();
   const attachmentIds = [...new Set(options.attachmentIds ?? [])];
+  const requestedBudget = options.executionProfile ? executionBudgetFor(options.executionProfile) : null;
+  const cappedMembers = [boss, ...members.filter((member) => member.id !== boss.id)]
+    .slice(0, Math.max(1, Math.min(options.maxAgents ?? requestedBudget?.maxAgents ?? members.length, requestedBudget?.maxAgents ?? members.length)));
   const mission: DepartmentMission = {
     id: randomUUID(),
     departmentId: boss.departmentId,
@@ -3798,6 +3505,9 @@ function launchDepartmentMission(
     sourceMessageId: options.sourceMessageId ?? null,
     executionMode: options.executionMode ?? "project",
     origin: options.origin ?? "department",
+    executionProfile: requestedBudget?.profile ?? "standard",
+    maxPlanSteps: Math.max(2, Math.min(options.maxPlanSteps ?? requestedBudget?.maxMissionSteps ?? 4, requestedBudget?.maxMissionSteps ?? 4)),
+    memberWorkerIds: cappedMembers.map((member) => member.id),
   };
   activeMissions.set(mission.id, mission);
   if (!store.saveDepartmentMission(mission)) {
@@ -3818,7 +3528,7 @@ function launchDepartmentMission(
     objective: mission.objective,
     acceptanceCriteria: mission.acceptanceCriteria,
     workspacePath: mission.workspacePath,
-    members: members.map((member) => ({
+    members: cappedMembers.map((member) => ({
       id: member.id,
       name: member.runner.name,
       role: member.persona?.role || null,
@@ -3826,6 +3536,7 @@ function launchDepartmentMission(
     })),
     attachments: attachmentMetadata,
     executionMode: mission.executionMode ?? "project",
+    maxPlanSteps: mission.maxPlanSteps,
   });
   const planningAttachments = attachmentRepository.load(attachmentIds);
   attachmentRepository.markDelivery(attachmentIds, mission.id, boss.id, "pending");
@@ -4446,15 +4157,15 @@ async function decideBossTask(task: BossTask): Promise<void> {
   let output = "";
   try {
     output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
-    let decision = parseBossTaskDecision(output, candidates);
+    let decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     const clarificationPastBudget = decision?.status === "clarification" && clarificationBudget.remaining === 0;
     if (!decision || clarificationPastBudget) {
       const reason = clarificationPastBudget
         ? "You asked another clarification question, but the clarification budget is exhausted."
-        : explainBossTaskDecisionFailure(output, candidates) ?? "The response did not match the required format.";
+        : explainBossTaskDecisionFailure(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile)) ?? "The response did not match the required format.";
       const repair = `${prompt}\n\nYour previous response was invalid: ${reason}${clarificationPastBudget ? " You must produce a ready execution graph from the existing answers." : ""} Return one corrected <boss_task_decision> block only.`;
       output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
-      decision = parseBossTaskDecision(output, candidates);
+      decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     }
     if (!decision || (decision.status === "clarification" && clarificationBudget.remaining === 0)) {
       throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
@@ -4592,6 +4303,9 @@ function advanceBossTask(task: BossTask): void {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
     origin: "boss",
+    executionProfile: task.executionProfile,
+    maxAgents: task.executionBudget?.maxAgents,
+    maxPlanSteps: task.executionBudget?.maxMissionSteps,
   });
   if (!launched.mission || launched.error) {
     task.status = "needs_attention";
@@ -4668,6 +4382,11 @@ app.post("/api/boss-tasks", async (req, res) => {
   if (!attachmentRecordsForPersist) return;
   const attachmentIds = attachmentRecordsForPersist.map((attachment) => attachment.id);
   const now = new Date().toISOString();
+  const executionProfile = normalizeExecutionProfile(req.body?.executionProfile);
+  const executionBudget = executionBudgetFor(executionProfile, {
+    maxAgents: req.body?.maxAgents,
+    maxMissionSteps: req.body?.maxMissionSteps,
+  });
   const task: BossTask = {
     id: randomUUID(),
     title: objective.slice(0, 120),
@@ -4681,6 +4400,8 @@ app.post("/api/boss-tasks", async (req, res) => {
     clientMessageId,
     idempotencyKey,
     status: "discovering",
+    executionProfile,
+    executionBudget,
     messages: [bossTaskMessage("boss", objective, attachmentIds, clientMessageId, idempotencyKey)],
     stages: [],
     finalReport: null,
@@ -6210,6 +5931,10 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.json({ ok: true, cleaned: true });
     return;
   }
+  if (worker.resumeCandidate) {
+    store.deleteResumeCandidate(worker.id);
+    worker.resumeCandidate = null;
+  }
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   record(worker, { type: "user_message", text: [message, imageLabels, documentLabels].filter(Boolean).join("\n") });
@@ -6226,75 +5951,66 @@ app.post("/api/workers/:id/message", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/workers/:id/approvals/:approvalId", (req, res) => {
+app.post("/api/workers/:id/resume-candidate", (req, res) => {
   const worker = requireWorker(res, req.params.id);
   if (!worker) return;
-  const requested = String(req.body?.decision ?? "");
-  const decision = requested === "allow_once" || requested === "allow_session" || requested === "deny"
-    ? requested
-    : null;
-  if (!decision) {
-    res.status(400).json({ error: "unknown approval decision" });
-    return;
+  const candidate = worker.resumeCandidate;
+  if (!candidate) { res.status(410).json({ error: t("沒有等待恢復的工作") }); return; }
+  if (!workerProviderReady(worker) || worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) {
+    res.status(409).json({ error: t("NPC 目前無法恢復此工作") }); return;
   }
-  if (!worker.runner.resolveApproval(req.params.approvalId, decision)) {
-    res.status(409).json({ error: t("核准要求已失效或已處理") });
-    return;
-  }
-  res.json({ ok: true });
-});
-
-app.post("/api/missions/:id/approvals/:approvalId", (req, res) => {
-  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) {
-    res.status(404).json({ error: t("找不到 Department Mission") });
-    return;
-  }
-  const requested = String(req.body?.decision ?? "");
-  const decision = requested === "allow_once" || requested === "allow_session" || requested === "deny"
-    ? requested
-    : null;
-  if (!decision) {
-    res.status(400).json({ error: "unknown approval decision" });
-    return;
-  }
-  for (const [key, handle] of missionRunners) {
-    if (!key.startsWith(`${mission.id}\0`)) continue;
-    if (!handle.runner.resolveApproval(req.params.approvalId, decision)) continue;
+  if (candidate.resetAt && new Date(candidate.resetAt).getTime() > Date.now()) { res.status(409).json({ error: t("此工作需等用量重置後才能繼續") }); return; }
+  const prompt = t("【重新啟動後繼續原任務】伺服器重啟前的原始指示如下。請先檢查目前對話與工作區的實際進度，避免重複執行；然後從未完成處繼續，完成後回報。\n\n{task}", { task: candidate.taskText });
+  record(worker, { type: "user_message", text: prompt });
+  try {
+    worker.runner.send(prompt, [], []);
+    store.deleteResumeCandidate(worker.id);
+    worker.resumeCandidate = null;
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+    broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     res.json({ ok: true });
-    return;
+  } catch (error) {
+    record(worker, { type: "error", message: (error as Error).message || t("無法恢復工作") });
+    res.status(500).json({ error: (error as Error).message || t("無法恢復工作") });
   }
-  res.status(409).json({ error: t("核准要求已失效、已處理，或任務 session 已中止") });
 });
 
-app.post("/internal/claude-approval", async (req, res) => {
-  const header = String(req.headers.authorization ?? "");
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token || token.length > 100) {
-    res.status(401).json({ message: "Invalid approval bridge token" });
-    return;
-  }
-  for (const worker of workers.values()) {
-    const pending = worker.runner.handleApprovalBridge(token, req.body);
-    if (!pending) continue;
-    try {
-      res.json(await pending);
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message || "Approval bridge failed" });
+app.delete("/api/workers/:id/resume-candidate", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  store.deleteResumeCandidate(worker.id);
+  worker.resumeCandidate = null;
+  record(worker, { type: "user_message", text: t("已停止恢復重啟前未完成的工作") });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  res.status(204).end();
+});
+
+registerApprovalRoutes({
+  app,
+  resolveWorkerApproval: (workerId, approvalId, decision) => {
+    const worker = workers.get(workerId);
+    if (!worker) return "not_found";
+    return worker.runner.resolveApproval(approvalId, decision) ? "resolved" : "unavailable";
+  },
+  resolveMissionApproval: (missionId, approvalId, decision) => {
+    const mission = activeMissions.get(missionId) ?? store.getDepartmentMission(missionId);
+    if (!mission) return "not_found";
+    for (const [key, handle] of missionRunners) {
+      if (key.startsWith(`${mission.id}\0`) && handle.runner.resolveApproval(approvalId, decision)) return "resolved";
     }
-    return;
-  }
-  for (const handle of missionRunners.values()) {
-    const pending = handle.runner.handleApprovalBridge(token, req.body);
-    if (!pending) continue;
-    try {
-      res.json(await pending);
-    } catch (error) {
-      res.status(500).json({ message: (error as Error).message || "Approval bridge failed" });
+    return "unavailable";
+  },
+  findBridgeResponse: async (token, payload) => {
+    for (const worker of workers.values()) {
+      const pending = worker.runner.handleApprovalBridge(token, payload);
+      if (pending) return { found: true, response: await pending };
     }
-    return;
-  }
-  res.status(404).json({ message: "Approval bridge is no longer active" });
+    for (const handle of missionRunners.values()) {
+      const pending = handle.runner.handleApprovalBridge(token, payload);
+      if (pending) return { found: true, response: await pending };
+    }
+    return { found: false };
+  },
 });
 
 app.post("/api/workers/:id/model", (req, res) => {

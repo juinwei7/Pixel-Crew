@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { BossTask, CommandSubmission, ProviderId } from "../types";
+import type { BossTask, CommandSubmission, ExecutionProfile, ProviderId } from "../types";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 
@@ -17,6 +17,9 @@ type Props = {
     workspacePath: string;
     decisionProvider?: ProviderId;
     decisionModel?: string;
+    executionProfile?: ExecutionProfile;
+    maxAgents?: number;
+    maxMissionSteps?: number;
     images?: CommandSubmission["images"];
     documents?: CommandSubmission["documents"];
     clientMessageId?: string;
@@ -68,6 +71,9 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
   const [titleDraft, setTitleDraft] = useState("");
   const [criteria, setCriteria] = useState("");
   const [decisionKey, setDecisionKey] = useState("");
+  const [executionProfile, setExecutionProfile] = useState<ExecutionProfile>("standard");
+  const [maxAgents, setMaxAgents] = useState(4);
+  const [maxMissionSteps, setMaxMissionSteps] = useState(3);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const restoredSelection = useRef(false);
@@ -128,6 +134,9 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
         workspacePath,
         decisionProvider: decision?.provider,
         decisionModel: decision?.model,
+        executionProfile,
+        maxAgents,
+        maxMissionSteps,
         images: submission.images,
         documents: submission.documents,
         clientMessageId: submission.clientMessageId,
@@ -205,6 +214,21 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
     focusMode={focusMode}
     leading={composerHost ? <span className="command-composer__target">BOSS</span> : undefined}
     toolbar={(!selected || newTask) && <div className="boss-task-composer__setup">
+      <details><summary>{t("執行邊界與估算")} <span>{t("開始前設定")}</span></summary><div><label><span>{t("執行級別")}</span><select value={executionProfile} onChange={(event) => {
+        const profile = event.target.value as ExecutionProfile;
+        setExecutionProfile(profile);
+        if (profile === "quick") { setMaxAgents(2); setMaxMissionSteps(2); }
+        else if (profile === "deep") { setMaxAgents(6); setMaxMissionSteps(4); }
+        else { setMaxAgents(4); setMaxMissionSteps(3); }
+      }}>
+        <option value="quick">{t("快速 · 最少協作")}</option>
+        <option value="standard">{t("標準 · 平衡範圍")}</option>
+        <option value="deep">{t("深度 · 複雜任務")}</option>
+      </select></label><label><span>{t("最多 NPC")}</span><input type="number" min={1} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 6 : 4} value={maxAgents} onChange={(event) => setMaxAgents(Number(event.target.value))} /></label><label><span>{t("每 Mission 最多步驟")}</span><input type="number" min={2} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 4 : 3} value={maxMissionSteps} onChange={(event) => setMaxMissionSteps(Number(event.target.value))} /></label><small>{executionProfile === "quick"
+        ? t("上限：2 位 NPC、1 個部門階段、每 Mission 2 步；約 2–10 分鐘。")
+        : executionProfile === "deep"
+          ? t("上限：6 位 NPC、5 個部門階段、每 Mission 4 步；約 30–90 分鐘。")
+          : t("上限：4 位 NPC、3 個部門階段、每 Mission 3 步；約 10–35 分鐘。")}</small><small>{t("預估：Claude 約 US$ 0.02–2.00；Codex 約影響 5 小時 quota 1–30%。實際依工作內容與模型而變，非保證值；超過上限會停止派工，不會靜默擴張。")}</small></div></details>
       <details><summary>{t("進階設定")} <span>{t("選填")}</span></summary><div><label><span>{t("決策模型")}</span><select value={decisionKey} onChange={(event) => {
         setDecisionKey(event.target.value);
         try { localStorage.setItem(`pixel-crew:boss-decision-model:${workspacePath}`, event.target.value); } catch { /* unavailable */ }
@@ -273,6 +297,10 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
           <span>{selected.executionMode === "research" && selected.status === "running" ? t("快速研究中") : statusLabel[selected.status]}</span>
           <small>{selected.decisionProvider} · {selected.decisionModel}</small>
         </div>
+        {selected.executionBudget && <p className="boss-task-desk__budget">{t("{profile}邊界 · 最多 {agents} 位 NPC / {stages} 階段 / 每 Mission {steps} 步 · 預估 {min}–{max} 分鐘", {
+          profile: selected.executionBudget.label, agents: selected.executionBudget.maxAgents, stages: selected.executionBudget.maxStages,
+          steps: selected.executionBudget.maxMissionSteps, min: selected.executionBudget.estimatedDurationMinutes.min, max: selected.executionBudget.estimatedDurationMinutes.max,
+        })}</p>}
         <div className="boss-task-desk__messages">
           {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}`}>
             <span>{entry.role === "boss" ? t("老闆") : entry.role === "decision_model" ? t("決策模型") : entry.role === "report" ? t("最終報告") : "Pixel Crew"}</span>

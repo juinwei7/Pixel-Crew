@@ -14,7 +14,7 @@ test("normalize：空值與垃圾輸入回預設", () => {
 test("normalize：合法布林值保留", () => {
   assert.deepEqual(
     normalizeAppSettings({ brainSwapEnabled: false, limitResumeEnabled: true }),
-    { brainSwapEnabled: false, limitResumeEnabled: true, lang: "zh" },
+    { brainSwapEnabled: false, limitResumeEnabled: true, diagnosticsEnabled: true, lang: "zh" },
   );
 });
 
