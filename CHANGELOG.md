@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-09-01
+
+### Fixed
+
+- Made Focus Reader, remote access, workflow management, and supporting dialogs fit phone-sized viewports with touch-friendly controls.
+- Surface local relay startup failures in Remote Access instead of reporting only a generic failure.
+
 ## [2.1.0] - 2026-09-01
 
 ### Added
@@ -117,7 +124,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.3...v2.0.0
