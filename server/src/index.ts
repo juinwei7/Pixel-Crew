@@ -59,6 +59,10 @@ import { registerReportingRoutes } from "./reportingRoutes.js";
 import { registerScheduleRoutes } from "./scheduleRoutes.js";
 import { registerAccountRoutes } from "./accountRoutes.js";
 import { registerApprovalRoutes } from "./approvalRoutes.js";
+import { VoiceModelManager } from "./voice/voiceModel.js";
+import { VoiceEngineServer } from "./voice/voiceEngineServer.js";
+import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.js";
+import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -3367,6 +3371,15 @@ app.post("/api/backup/export", async (req, res) => {
   try { await exportBackup(res, password); }
   catch (error) { res.status(400).json({ error: (error as Error).message }); }
 });
+
+const voiceModelManager = new VoiceModelManager(config.voiceModelsDir);
+const voiceEngineServer = new VoiceEngineServer(
+  resolveWhisperBinary([...new Set([config.whisperServerBin, "whisper-server"])]),
+  config.voiceServerPort,
+  () => voiceModelManager.modelPath,
+);
+const voiceTranscriber = new VoiceTranscriber(voiceEngineServer);
+registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber });
 
 registerBackupImportTransport({
   app,
@@ -7349,6 +7362,7 @@ async function shutdown(signal: string): Promise<void> {
   workflowWatcher.stop();
   mcpConfigWatcher.stop();
   void shutdownWebShot();
+  await voiceEngineServer.stop();
   for (const worker of workers.values()) worker.runner.stop();
   for (const handle of missionRunners.values()) handle.runner.stop();
   missionRunners.clear();

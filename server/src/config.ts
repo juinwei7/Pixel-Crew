@@ -71,6 +71,10 @@ export const config = {
   // from ambient ~/.claude.json so Pixel Crew's own login never depends on
   // (or overwrites) whatever the terminal's own `claude auth login` has.
   defaultClaudeHome: join(dirname(dbPath), "claude-home"),
+  // whisper-server 常駐子行程；模型只在啟動時載入一次，見 voiceEngineServer.ts。
+  whisperServerBin: process.env.WHISPER_SERVER_BIN?.trim() || "whisper-server",
+  voiceServerPort: Number(process.env.VOICE_SERVER_PORT ?? 8793),
+  voiceModelsDir: join(dirname(dbPath), "voice-models"),
   webDistPath: process.env.WEB_DIST_PATH?.trim() || fileURLToPath(new URL("../../web/dist", import.meta.url)),
   production: process.env.NODE_ENV === "production" || process.argv.includes("--serve-web"),
 };

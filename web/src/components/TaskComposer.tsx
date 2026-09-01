@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { composerTextareaHeight, newClientMessageIdentity, shouldSubmitComposerKey } from "../composerCore";
+import { composerTextareaHeight, insertVoiceTranscript, newClientMessageIdentity, shouldSubmitComposerKey } from "../composerCore";
 import { composerEnterAction } from "../commandInteraction";
 import {
   documentBadge,
@@ -20,6 +20,7 @@ import { useComposerHistory } from "../hooks/useComposerHistory";
 import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalette";
 import { useComposerSessionExtras } from "../hooks/useComposerSessionExtras";
 import { useGlobalFileDrop } from "../hooks/useGlobalFileDrop";
+import { VoiceInputButton } from "./VoiceInputButton";
 import type { CapabilityState, CommandSubmission, ProviderId, WorkerState } from "../types";
 import { t } from "../i18n";
 
@@ -62,12 +63,13 @@ type Props = {
   persistExtras?: boolean;
   globalDrop?: boolean;
   dropTargetLabel?: string;
+  voiceEnabled?: boolean;
 };
 
 export function TaskComposer({
   draftKey, placeholder, submitLabel, busyLabel = t("處理中…"), disabled = false, working = false, toolbar, leading, onSubmit,
   layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
-  persistExtras = false, globalDrop = false, dropTargetLabel,
+  persistExtras = false, globalDrop = false, dropTargetLabel, voiceEnabled = false,
 }: Props) {
   const dock = layout === "dock";
   const [draftValue, setDraftValue] = useComposerDraft(draftKey);
@@ -416,6 +418,10 @@ export function TaskComposer({
         {leading}
         {fileInput}
         <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title={t("附加圖片或文件")} aria-label={t("附加圖片或文件")}>＋</button>
+        {voiceEnabled && !disabled && <VoiceInputButton onTranscript={(text) => {
+          setDraftValue((current) => insertVoiceTranscript(current, text));
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }} />}
         <span className="command-composer__prompt">›</span>
         {textareaField}
         {error && <span className="command-composer__error" role="alert">{error}</span>}

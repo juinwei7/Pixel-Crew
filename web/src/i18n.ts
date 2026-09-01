@@ -6,6 +6,7 @@ import { enModalsD } from "./i18n/en-modals-d";
 import { enApp } from "./i18n/en-app";
 import { enRoot } from "./i18n/en-root";
 import { enRemoteAccess } from "./i18n/en-remote-access";
+import { enVoiceInput } from "./i18n/en-voice-input";
 
 export type Lang = "zh" | "en";
 
@@ -25,7 +26,7 @@ function detect(): Lang {
 export const lang: Lang = detect();
 
 const dict: Record<string, string> = lang === "en"
-  ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess }
+  ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess, ...enVoiceInput }
   : {};
 
 function interpolate(text: string, params?: Record<string, string | number>): string {

@@ -13,12 +13,13 @@ const common = {
   onBrowse: async () => ({ canceled: true }),
 };
 
-test("first launch requires a dedicated workspace and cannot be dismissed", () => {
+test("first launch lets a non-technical user begin immediately without choosing a project", () => {
   const html = renderToStaticMarkup(<WorkspacePicker {...common} required />);
-  assert.match(html, /先設定安全工作區/);
-  assert.match(html, /不會直接使用你的整個使用者目錄/);
-  assert.match(html, /使用 Pixel Crew 專用工作區/);
-  assert.match(html, /\/Users\/wei\/Pixel Crew Workspace/);
+  assert.match(html, /準備開始，想處理什麼？/);
+  assert.match(html, /你不需要先準備專案/);
+  assert.match(html, /直接開始/);
+  assert.match(html, /我要處理現有專案/);
+  assert.match(html, /進階：直接輸入專案位置/);
   assert.doesNotMatch(html, /aria-label="關閉"/);
   assert.doesNotMatch(html, />取消</);
 });
