@@ -29,6 +29,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   const [error, setError] = useState<string | null>(null);
   const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
   const creating = required || mode === "create";
+  const title = required ? t("準備開始，想處理什麼？") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置");
 
   useEffect(() => setPath(currentPath), [currentPath]);
   // ×／Esc 共用同一個關閉入口：首次設定（required）永遠不准關，其餘忙碌中不准關。
@@ -68,7 +69,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
 
   return (
     <Modal
-      label={required ? t("先設定安全工作區") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置")}
+      label={title}
       overlayClassName="workspace-picker"
       cardClassName="workspace-picker__card"
       closeClassName="workspace-picker__close"
@@ -85,10 +86,10 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         <header className="workspace-picker__header">
           <div className="workspace-picker__glyph" aria-hidden="true" />
           <div>
-            <div className="workspace-picker__eyebrow">{required ? "FIRST ROOM SETUP" : creating ? "NEW CREW STATION" : "ENTER A ROOM"}</div>
-            <h2>{required ? t("先設定安全工作區") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置")}</h2>
+            <div className="workspace-picker__eyebrow">{required ? "LET'S GET STARTED" : creating ? "NEW CREW STATION" : "ENTER A ROOM"}</div>
+            <h2>{title}</h2>
             <p>{required
-              ? t("Pixel Crew 不會直接使用你的整個使用者目錄。請選擇專案，或使用已建立的專用工作區。")
+              ? t("你不需要先準備專案。直接開始就能交辦事情；若要處理現有檔案，再選擇它所在的資料夾。")
               : creating
                 ? t("先選擇一個本機資料夾作為新 NPC 的房間；確認後才會建立人員與工位。")
                 : t("一個資料夾就是一間工作房間；目前 NPC 會直接搬到新位置。")}</p>
@@ -98,8 +99,8 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         {required && (
           <button type="button" className="workspace-picker__default" disabled={pending} onClick={() => void choose(currentPath)}>
             <span className="workspace-picker__default-mark" aria-hidden="true">✓</span>
-            <span><strong>{t("使用 Pixel Crew 專用工作區")}</strong><small>{currentPath}</small></span>
-            <b>{t("建議")}</b>
+            <span><strong>{t("直接開始")}</strong><small>{t("還沒有現成專案也沒關係，Pixel Crew 會準備工作空間")}</small></span>
+            <b>{t("最簡單")}</b>
           </button>
         )}
 
@@ -153,16 +154,16 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         >
           <span className="workspace-picker__browse-icon" aria-hidden="true" />
           <span className="workspace-picker__browse-copy">
-            <strong>{pending ? t("正在開啟…") : t("從系統選擇資料夾")}</strong>
-            <small>{t("瀏覽這台電腦上的專案")}</small>
+            <strong>{pending ? t("正在開啟…") : required ? t("我要處理現有專案") : t("從系統選擇資料夾")}</strong>
+            <small>{required ? t("選擇網站、文件或其他檔案所在的資料夾") : t("瀏覽這台電腦上的專案")}</small>
           </span>
           <span className="workspace-picker__browse-arrow" aria-hidden="true">→</span>
         </button>
 
-        <div className="workspace-picker__divider"><span>{required ? t("或指定現有專案") : t("或貼上完整路徑")}</span></div>
+        <div className="workspace-picker__divider"><span>{required ? t("進階：直接輸入專案位置") : t("或貼上完整路徑")}</span></div>
 
         <label className="workspace-picker__label" htmlFor="workspace-path">
-          {t("本機絕對路徑")}
+          {required ? t("專案資料夾位置") : t("本機絕對路徑")}
         </label>
         <div className="workspace-picker__path-row">
           <input
@@ -203,7 +204,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         <div className="workspace-picker__actions">
           {!required && <button type="button" onClick={onClose} disabled={pending}>{t("取消")}</button>}
           <button type="submit" className="workspace-picker__confirm" disabled={pending || !path.trim()}>
-            {pending ? t("請稍候…") : creating ? t("在此建立工位") : resetsConversation ? t("搬遷並重設對話") : t("搬到此位置")}
+            {pending ? t("請稍候…") : required ? t("用這個位置開始") : creating ? t("在此建立工位") : resetsConversation ? t("搬遷並重設對話") : t("搬到此位置")}
           </button>
         </div>
       </form>

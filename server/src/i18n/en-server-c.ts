@@ -225,4 +225,19 @@ export const enServerC: Record<string, string> = {
   "從既有工作位置自動建立": "Auto-created from an existing workspace",
   "上次 LLM 交接未完成，已保留原本的工作階段": "The last LLM handover didn't finish, the original session was kept",
   "交接未完成": "Handover incomplete",
+
+  // voice/voiceModel.ts, voiceTranscribe.ts, voiceEngineServer.ts, voiceRoutes.ts
+  "模型下載連線失敗（HTTP {status}）": "Model download connection failed (HTTP {status})",
+  "模型檔完整性驗證失敗，已刪除不完整檔案": "Model file integrity check failed; the incomplete file was deleted",
+  "模型下載失敗": "Model download failed",
+  "找不到本機語音轉寫引擎": "Local voice transcription engine not found",
+  "目前已有語音轉寫在處理中，請稍候": "A voice transcription is already in progress, please wait",
+  "語音轉寫失敗（引擎回應 {status}）": "Voice transcription failed (engine responded {status})",
+  "語音轉寫失敗": "Voice transcription failed",
+  "語音轉寫引擎啟動失敗": "The voice transcription engine failed to start",
+  "語音轉寫引擎啟動逾時": "The voice transcription engine timed out while starting",
+  "語音模型尚未下載完成": "The voice model has not finished downloading",
+  "錄音資料格式不正確": "The recording data is not in a valid format",
+  "沒有偵測到語音，可重試": "No speech was detected, you can try again",
+  "語音轉寫失敗，請重試": "Voice transcription failed, please try again",
 };

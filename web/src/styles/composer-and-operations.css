@@ -267,6 +267,46 @@
 }
 .command-composer__queue { flex: none; padding: 4px 7px; border: 1px solid rgba(255,203,91,.2); border-radius: 999px; background: rgba(255,203,91,.07); color: #e4bd63; font: 700 9px var(--mono); white-space: nowrap; }
 .command-composer__queue { cursor: pointer; }
+
+.voice-input { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.voice-input__mic {
+  width: 32px; height: 32px; flex: none; padding: 0; border: 1px solid rgba(0, 229, 255,.16); border-radius: 8px;
+  background: rgba(0, 229, 255,.045); color: #8deeff; cursor: pointer; font-size: 15px;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
+}
+.voice-input__mic:hover:not(:disabled) { border-color: rgba(0, 229, 255,.38); background: rgba(0, 229, 255,.1); transform: translateY(-1px); }
+.voice-input__mic:active:not(:disabled) { transform: translateY(0) scale(.97); }
+.voice-input__mic:disabled { opacity: .5; cursor: default; }
+.voice-input__mic--recording {
+  border-color: rgba(255, 46, 136,.4); background: rgba(255, 46, 136,.14); color: #ff8fa5;
+  animation: voice-input-pulse 1.4s ease-in-out infinite;
+}
+@keyframes voice-input-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 46, 136,.35); } 50% { box-shadow: 0 0 0 5px rgba(255, 46, 136,0); } }
+.voice-input__timer { font: 700 10px var(--mono); color: #ff9aae; white-space: nowrap; }
+.voice-input__cancel {
+  width: 19px; height: 19px; padding: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
+  background: rgba(5,10,20,.88); color: #d8e7f8; cursor: pointer; line-height: 16px;
+}
+.voice-input__cancel:hover { border-color: rgba(255, 46, 136,.5); color: #ff8fa5; }
+.voice-input__panel {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; width: 260px; padding: 12px 13px;
+  border: 1px solid rgba(0, 229, 255,.28); border-radius: 10px; background: rgba(5,11,23,.98);
+  box-shadow: 0 10px 28px rgba(0,0,0,.4); color: #cfe6f5;
+}
+.voice-input__panel strong { display: block; margin-bottom: 6px; color: #8deeff; font-size: 12px; }
+.voice-input__panel p { margin: 0 0 10px; font-size: 11px; line-height: 1.5; color: #a9bdd4; }
+.voice-input__panel-actions { display: flex; gap: 8px; }
+.voice-input__panel-actions button {
+  flex: 1; padding: 6px 0; border: 1px solid rgba(0, 229, 255,.26); border-radius: 7px;
+  background: rgba(0, 229, 255,.08); color: #8deeff; cursor: pointer; font: 700 11px var(--mono);
+}
+.voice-input__panel-actions button:last-child { border-color: rgba(255,255,255,.14); background: transparent; color: #a9bdd4; }
+.voice-input__progress { height: 5px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+.voice-input__progress div { height: 100%; background: rgba(0, 229, 255,.6); transition: width .2s ease; }
+.voice-input__error {
+  position: absolute; right: 0; bottom: calc(100% + 7px); max-width: 260px; padding: 7px 9px;
+  border: 1px solid rgba(255, 46, 136,.28); border-radius: 7px; background: rgba(30,8,17,.96); color: #ff9aae; font-size: 10px;
+}
 .command-composer__queue[aria-expanded="true"] { border-color: rgba(255,203,91,.38); background: rgba(255,203,91,.13); }
 .command-queue { position: absolute; right: 0; bottom: calc(100% + 10px); left: 0; max-height: min(52vh, 420px); overflow: auto; padding: 10px; border: 1px solid rgba(132,171,190,.2); border-radius: 13px; background: rgba(11,18,29,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); color: #aebdca; }
 .command-composer--attachments .command-queue { bottom: calc(100% + 78px); }

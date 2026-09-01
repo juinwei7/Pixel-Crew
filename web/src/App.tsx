@@ -1151,6 +1151,7 @@ export function App() {
         busy={Boolean(active?.busy)}
         queueEnabled
         persistExtras
+        voiceEnabled
         globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !codexCommandsModalOpen && !accountsModalOpen}
         dropTargetLabel={active?.name}
         palette={{
