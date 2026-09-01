@@ -67,7 +67,7 @@ macOS users can install the self-contained app without Node.js or npm:
 curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
 ```
 
-Windows x64 users can download the [self-contained ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip), extract it, and double-click `start-pixel-crew.vbs`. It keeps the local service in the background without a persistent console window; Node.js and npm are bundled.
+Windows x64 users can download and double-click the single-file [Pixel Crew.exe](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe). It privately installs its bundled runtime under the current user's AppData, then its native Control Center owns the local service and tray controls without a persistent console window.
 
 For source development on any platform:
 
@@ -83,7 +83,7 @@ Open <http://localhost:5173> in development. A production build runs the UI, API
 
 ### Windows quick install
 
-[Download the self-contained Windows x64 ZIP](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/pixel-crew-windows-x64.zip), extract it, and double-click `start-pixel-crew.vbs`. The service stays in the background without a persistent console window; no separate Node.js, npm, or Git install is required.
+[Download the single-file Windows x64 app](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe) and double-click it. The native Control Center keeps the service in the background without a persistent console window; no separate Node.js, npm, or Git install is required.
 
 Full setup, updating, and troubleshooting steps are in the [Windows setup guide](./WINDOWS_SETUP.md).
 

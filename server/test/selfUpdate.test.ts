@@ -5,7 +5,7 @@ import { bundledWindowsRoot, releaseVersion, windowsReleaseAssetUrl } from "../s
 test("only recognizes the complete bundled Windows release layout", () => {
   const root = "C:\\Users\\Ada\\Apps\\Pixel Crew";
   const files = new Set([
-    `${root}\\start-pixel-crew.vbs`,
+    `${root}\\Pixel Crew.exe`,
     `${root}\\server\\dist\\index.js`,
     `${root}\\web\\dist\\index.html`,
     `${root}\\scripts\\windows\\self-update.ps1`,
@@ -26,7 +26,7 @@ test("release download URLs accept only exact stable semver versions", () => {
   assert.equal(releaseVersion("2.1.1-beta"), null);
   assert.equal(
     windowsReleaseAssetUrl("2.1.1"),
-    "https://github.com/juinwei7/Pixel-Crew/releases/download/v2.1.1/pixel-crew-windows-x64.zip",
+    "https://github.com/juinwei7/Pixel-Crew/releases/download/v2.1.1/Pixel%20Crew.exe",
   );
   assert.throws(() => windowsReleaseAssetUrl("../../latest"), /Invalid release version/);
 });

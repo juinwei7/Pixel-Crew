@@ -123,17 +123,17 @@ jobs:
       - name: Build self-contained Windows bundle
         run: npm run package:windows -- --runtime "$env:NODE_RUNTIME"
 
-      - name: Archive Windows bundle
+      - name: Stage single-file Windows app
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release/assets | Out-Null
-          Compress-Archive -LiteralPath "release/windows/x64/Pixel Crew" `
-            -DestinationPath "release/assets/pixel-crew-windows-x64.zip"
+          Copy-Item -LiteralPath "release/windows/x64/Pixel Crew.exe" `
+            -Destination "release/assets/Pixel Crew.exe"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pixel-crew-windows-x64
-          path: release/assets/pixel-crew-windows-x64.zip
+          path: release/assets/Pixel Crew.exe
 
   publish:
     name: Publish release
@@ -184,27 +184,22 @@ jobs:
           name: pixel-crew-windows-x64
           path: release/assets
 
-      - name: Create portable release assets
+      - name: Create release checksums
         shell: bash
         run: |
           mkdir -p release/assets
-          tar -czf "release/assets/pixel-crew-${GITHUB_REF_NAME}-portable.tar.gz" -C release pixel-crew
-          cd release
-          zip -r "assets/pixel-crew-${GITHUB_REF_NAME}-portable.zip" pixel-crew
-          cd assets
-          cp ../pixel-crew/install-pixel-crew-macos.sh .
-          sha256sum *.tar.gz *.zip *.sh > SHA256SUMS.txt
+          cp release/pixel-crew/install-pixel-crew-macos.sh release/assets/
+          cd release/assets
+          sha256sum *.tar.gz *.sh *.exe > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           generate_release_notes: true
           files: |
-            release/assets/pixel-crew-${{ github.ref_name }}-portable.tar.gz
-            release/assets/pixel-crew-${{ github.ref_name }}-portable.zip
             release/assets/pixel-crew-macos-arm64.tar.gz
             release/assets/pixel-crew-macos-x64.tar.gz
-            release/assets/pixel-crew-windows-x64.zip
+            release/assets/Pixel Crew.exe
             release/assets/install-pixel-crew-macos.sh
             release/assets/SHA256SUMS.txt
 

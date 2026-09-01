@@ -2668,7 +2668,7 @@ function launchRestartHelper(command: string, args: string[]): void {
 
 async function launchWindowsSelfUpdate(version: string): Promise<void> {
   const root = bundledWindowsRoot(process.platform, process.execPath, existsSync);
-  if (!root) throw new Error(t("此安裝方式不支援一鍵更新，請下載 Windows Release ZIP"));
+  if (!root) throw new Error(t("此安裝方式不支援一鍵更新，請下載最新版 Pixel Crew.exe"));
   const helperSource = join(root, "scripts", "windows", "self-update.ps1");
   const helperDir = mkdtempSync(join(tmpdir(), "pixel-crew-update-launch-"));
   const helper = join(helperDir, "self-update.ps1");
@@ -2777,7 +2777,7 @@ app.post("/api/update/apply", async (_req, res) => {
     return;
   }
   if (!info.oneClickAvailable) {
-    res.status(409).json({ error: t("此安裝方式不支援一鍵更新，請下載 Windows Release ZIP") });
+    res.status(409).json({ error: t("此安裝方式不支援一鍵更新，請下載最新版 Pixel Crew.exe") });
     return;
   }
   if ([...workers.values()].some((worker) => workerSummary(worker).busy)) {

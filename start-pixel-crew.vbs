@@ -3,10 +3,15 @@
 ' for compatibility with Windows Script Host on localized Windows installs.
 Option Explicit
 
-Dim shell, here, argument, command
+Dim shell, here, argument, command, controller
 Set shell = CreateObject("WScript.Shell")
 here = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\"))
-command = "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(here & "scripts\windows\start-pixel-crew.ps1") & " -Background"
+controller = here & "Pixel Crew.exe"
+If CreateObject("Scripting.FileSystemObject").FileExists(controller) Then
+  command = Quote(controller)
+Else
+  command = "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " & Quote(here & "scripts\windows\start-pixel-crew.ps1") & " -Background"
+End If
 For Each argument In WScript.Arguments
   command = command & " " & Quote(argument)
 Next

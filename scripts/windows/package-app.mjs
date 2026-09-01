@@ -25,6 +25,7 @@ async function main() {
 
   const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
   const options = parseArgs(process.argv.slice(2));
+  const controllerProject = join(root, "windows", "PixelCrewController", "PixelCrewController.csproj");
   const runtimeRoot = resolveRequired(options.runtime, "--runtime is required");
   const runtimeNode = join(runtimeRoot, "node.exe");
   const runtimeLicense = join(runtimeRoot, "LICENSE");
@@ -40,15 +41,19 @@ async function main() {
   }
 
   const portableRoot = join(root, "release", "pixel-crew");
+  await requireFile(controllerProject, "Pixel Crew control center project");
   await requireFile(join(portableRoot, "server", "dist", "index.js"), "packaged server");
   await requireFile(join(portableRoot, "web", "dist", "index.html"), "packaged web app");
 
   const outputRoot = resolve(options.output ?? join(root, "release", "windows", "x64"));
-  const bundle = join(outputRoot, "Pixel Crew");
-  const bundledRuntime = join(bundle, "runtime");
+  const payloadRoot = join(outputRoot, "payload");
+  const payloadArchive = join(outputRoot, "pixel-crew-payload.zip");
+  const publishRoot = join(outputRoot, "publish");
+  const outputExecutable = join(outputRoot, "Pixel Crew.exe");
+  const bundledRuntime = join(payloadRoot, "runtime");
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(outputRoot, { recursive: true });
-  await cp(portableRoot, bundle, { recursive: true });
+  await cp(portableRoot, payloadRoot, { recursive: true });
   await mkdir(bundledRuntime, { recursive: true });
   await cp(runtimeNode, join(bundledRuntime, "node.exe"));
   await cp(runtimeLicense, join(bundledRuntime, "LICENSE"));
@@ -61,17 +66,51 @@ async function main() {
     "scripts/windows/setup-windows.cmd",
     "scripts/windows/setup-windows.ps1",
   ]) {
-    await rm(join(bundle, path), { force: true });
+    await rm(join(payloadRoot, path), { force: true });
   }
 
   const command = "npm.cmd ci --omit=dev --workspace server --include-workspace-root --ignore-scripts";
   execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], {
-    cwd: bundle,
+    cwd: payloadRoot,
     stdio: "inherit",
   });
+  await rm(join(payloadRoot, "scripts", "windows", "pixel-crew-tray.ps1"), { force: true });
+  await rm(join(payloadRoot, "scripts", "windows", "start-pixel-crew.ps1"), { force: true });
+  await auditBundle(payloadRoot, payloadRoot);
 
-  await auditBundle(bundle, bundle);
-  console.log(`Windows x64 bundle staged at ${bundle}`);
+  execFileSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+    "-File", join(root, "scripts", "windows", "create-payload.ps1"),
+    "-Source", payloadRoot,
+    "-Output", payloadArchive,
+  ], { cwd: root, stdio: "inherit" });
+  await requireFile(payloadArchive, "Pixel Crew embedded payload");
+
+  // The only user-facing Windows release file is this self-contained EXE. Its
+  // managed payload is extracted privately into LocalAppData on first launch.
+  execFileSync("dotnet", [
+    "publish", controllerProject,
+    "--configuration", "Release",
+    "--runtime", "win-x64",
+    "--self-contained", "true",
+    "--output", publishRoot,
+    "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
+    "-p:DebugType=None",
+    "-p:DebugSymbols=false",
+    `-p:PixelCrewPayload=${payloadArchive}`,
+  ], { cwd: root, stdio: "inherit" });
+  const publishedExecutable = join(publishRoot, "Pixel Crew.exe");
+  await requireFile(publishedExecutable, "Pixel Crew control center executable");
+  if (readPeMachine(await readFile(publishedExecutable)) !== PE_MACHINE_X64) {
+    throw new Error("Pixel Crew control center is not a Windows x64 executable");
+  }
+  await cp(publishedExecutable, outputExecutable);
+  await rm(payloadRoot, { recursive: true, force: true });
+  await rm(payloadArchive, { force: true });
+  await rm(publishRoot, { recursive: true, force: true });
+  await auditSingleFileRelease(outputRoot);
+  console.log(`Single-file Windows x64 release staged at ${outputExecutable}`);
 }
 
 function parseArgs(args) {
@@ -112,6 +151,13 @@ async function auditBundle(directory, bundleRoot) {
     if (/^(\.env(?:\..*)?|\.DS_Store)$/.test(name) || /\.(sqlite(?:-(?:wal|shm))?|log)$/i.test(name)) {
       throw new Error(`Windows bundle contains forbidden local file: ${relative(bundleRoot, path)}`);
     }
+  }
+}
+
+async function auditSingleFileRelease(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  if (entries.length !== 1 || entries[0].name !== "Pixel Crew.exe" || !entries[0].isFile()) {
+    throw new Error("Windows release must contain exactly one user-facing Pixel Crew.exe");
   }
 }
 

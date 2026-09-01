@@ -2,9 +2,9 @@ import { win32 } from "node:path";
 
 const RELEASE_OWNER = "juinwei7";
 const RELEASE_REPOSITORY = "Pixel-Crew";
-const WINDOWS_ASSET = "pixel-crew-windows-x64.zip";
+const WINDOWS_ASSET = "Pixel Crew.exe";
 
-/** A one-click update is deliberately restricted to the signed, bundled
+/** A one-click update is deliberately restricted to the verified, bundled
  * Windows layout. Source checkouts continue to use their normal git workflow. */
 export function bundledWindowsRoot(
   platform: NodeJS.Platform,
@@ -16,7 +16,7 @@ export function bundledWindowsRoot(
   if (win32.basename(runtime).toLowerCase() !== "runtime") return null;
   const root = win32.dirname(runtime);
   const required = [
-    win32.join(root, "start-pixel-crew.vbs"),
+    win32.join(root, "Pixel Crew.exe"),
     win32.join(root, "server", "dist", "index.js"),
     win32.join(root, "web", "dist", "index.html"),
     win32.join(root, "scripts", "windows", "self-update.ps1"),
@@ -32,5 +32,5 @@ export function releaseVersion(value: string | null | undefined): string | null 
 export function windowsReleaseAssetUrl(version: string): string {
   const validVersion = releaseVersion(version);
   if (!validVersion) throw new Error("Invalid release version");
-  return `https://github.com/${RELEASE_OWNER}/${RELEASE_REPOSITORY}/releases/download/v${validVersion}/${WINDOWS_ASSET}`;
+  return `https://github.com/${RELEASE_OWNER}/${RELEASE_REPOSITORY}/releases/download/v${validVersion}/${encodeURIComponent(WINDOWS_ASSET)}`;
 }
