@@ -230,12 +230,10 @@ export function useVoiceInput(): {
   async function beginRecording(): Promise<void> {
     setPhase("requesting-permission");
     try {
-      // 關掉自動增益：AGC 會把安靜環境的背景雜訊自動放大到目標音量，讓
-      // hasAudibleSpeech() 的音量門檻在真實麥克風上失去意義（純數位靜音檔測試
-      // 測不出這個問題，因為那裡沒有 AGC 在運作）。關掉後錄到的是麥克風的原始
-      // 音量，安靜就是安靜。
+      // Windows 裝置的原始輸入常偏小；讓瀏覽器套用 AGC，配合較低的靜音門檻，
+      // 避免說話錄得到、卻被誤判成沒有偵測到語音。
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { autoGainControl: false, noiseSuppression: true, echoCancellation: true },
+        audio: { autoGainControl: true, noiseSuppression: true, echoCancellation: true },
       });
       if (!mountedRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
@@ -254,11 +252,8 @@ export function useVoiceInput(): {
       }, 200);
       setPhase("recording");
     } catch (cause) {
-      const name = (cause as Error).name;
       setPhase("error");
-      setError(name === "NotAllowedError" || name === "SecurityError"
-        ? t("麥克風權限遭拒，請在瀏覽器或系統設定開啟後重試")
-        : t("無法啟動麥克風，請重試"));
+      setError(microphoneErrorMessage(cause));
       releaseStream();
     }
   }
@@ -334,6 +329,16 @@ export function useVoiceInput(): {
   }
 
   return { phase, error, elapsedMs, model, engineInstaller, supported, requestStart, confirmEngineInstall, confirmDownload, stopAndTranscribe, cancel };
+}
+
+export function microphoneErrorMessage(cause: unknown): string {
+  const name = (cause as Error).name;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return t("麥克風權限遭拒，請在瀏覽器或 Windows 的隱私權設定開啟後重試");
+  }
+  if (name === "NotFoundError") return t("沒有找到可用的麥克風，請確認已連接並在 Windows 設為輸入裝置");
+  if (name === "NotReadableError" || name === "TrackStartError") return t("麥克風正被其他程式使用，請關閉 Teams、Discord 或錄音軟體後重試");
+  return t("無法啟動麥克風，請重試");
 }
 
 async function decodeToMono16k(recorded: Blob): Promise<Float32Array> {

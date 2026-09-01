@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
-<meta name="description" content="Pixel Crew 2.2.1 修正本機 Whisper 語音模型下載時重複跳出確認視窗的問題，也強化 Windows 語音引擎安裝；Claude Code 與 Codex 仍可在本機像素辦公室協作。">
+<meta name="description" content="Pixel Crew 2.2.2 改善 Windows 的本機 Whisper 麥克風錄音，支援較小聲的語音並清楚說明權限、裝置與被占用問題；Claude Code 與 Codex 仍可在本機像素辦公室協作。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="assets/style.css">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/">
-<meta property="og:title" content="Pixel Crew 2.2.1 — 本機語音下載修正">
+<meta property="og:title" content="Pixel Crew 2.2.2 — Windows 麥克風錄音修正">
 <meta property="og:description" content="部門主管自動路由 Consult、Review 與 Mission，交接與危險動作核准全程可見。無 API key、local-first、MIT 開源。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
@@ -32,7 +32,7 @@
 <meta property="og:image:height" content="960">
 <meta property="og:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pixel Crew 2.2.1 — 本機語音下載修正">
+<meta name="twitter:title" content="Pixel Crew 2.2.2 — Windows 麥克風錄音修正">
 <meta name="twitter:description" content="Boss NPC 自動路由 Consult、Review 與 Mission。Local-first、無 API key、MIT 開源。">
 <meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta name="twitter:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
@@ -85,8 +85,8 @@
       "name": "Pixel Crew",
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
-      "softwareVersion": "2.2.1",
-      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.1",
+      "softwareVersion": "2.2.2",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.2",
       "datePublished": "2026-07-17",
       "dateModified": "2026-09-01",
       "applicationCategory": "DeveloperApplication",
@@ -137,7 +137,7 @@
       部門主管會自己決定找誰 Consult、找誰 Review，或啟動一段 2 到 5 步的 Mission，每一步都留在你看得見、能核准的地方。
     </p>
     <div class="hero-cta">
-      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.2.1</a>
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.2.2</a>
       <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub 原始碼</a>
     </div>
     <div class="hero-badges">
@@ -471,13 +471,13 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
-          <span class="release-version">v2.2.1</span>
+          <span class="release-version">v2.2.2</span>
           <time class="release-date" datetime="2026-09-01">2026.09.01</time>
           <span class="release-current">LATEST RELEASE</span>
         </div>
-        <h3>本機語音下載修正</h3>
-        <p>修正 Whisper 模型下載時反覆跳出確認視窗的問題，並讓 Windows 的本機語音引擎在 PowerShell 解壓受限時可改用系統內建 tar 完成安裝。</p>
-        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.1">完整 v2.2.1 發布內容 ↗</a>
+        <h3>Windows 麥克風錄音修正</h3>
+        <p>改善本機 Whisper 的 Windows 麥克風錄音，支援較小聲的語音；如權限遭拒、找不到裝置或被其他程式占用，現在會直接說明原因。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.2">完整 v2.2.2 發布內容 ↗</a>
       </article>
       <article class="release-card">
         <div class="release-meta">

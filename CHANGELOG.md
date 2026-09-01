@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-09-01
+
+### Fixed
+
+- Improve Windows microphone capture for local voice input by enabling browser gain control, accepting quieter speech, and explaining the specific permission, device, or in-use failure.
+
 ## [2.2.1] - 2026-09-01
 
 ### Fixed
@@ -143,7 +149,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.1...v2.1.2
