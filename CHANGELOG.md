@@ -5,17 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-01
+
 ### Added
 
 - Added managed, per-NPC provider accounts for both Codex and Claude Code. Named accounts use isolated local CLI homes, support browser login (plus Codex's API-key flow), and cannot replace a worker's active native conversation without an explicit reset.
 - Added Codex thread goals through `/goal`, including set, inspect, and clear operations, and added a command manager that distinguishes real built-ins from custom text-only palette entries.
 - Added a Focus workbench: split the reader into up to four panes, cycle panes with `Alt+[` / `Alt+]`, and keep workspace/provider/model context visible alongside the existing read-only Git summary.
 - Added a hidden Windows launcher and tray controls for open, restart, stop, and logs; background startup now records actionable diagnostics instead of leaving a persistent console window.
+- Added optional local voice input for NPC composers: browser-recorded audio is transcribed by a local Whisper engine into an editable Traditional Chinese draft, with a one-time verified model download and no automatic send.
 
 ### Changed
 
 - Improved Focus Studios, responsive reader layouts, model visibility, and the modern workspace shell.
 - Hardened the local runtime against planned restarts, stalled background work, optional dialog timing, and screenshot-browser failures.
+- Simplified first launch so people can begin immediately in Pixel Crew's managed workspace or choose an existing project when they need one.
 
 ### Fixed
 
@@ -113,7 +117,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.3...v2.0.0
 [1.0.3]: https://github.com/juinwei7/Pixel-Crew/compare/v1.0.2...v1.0.3

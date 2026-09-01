@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pixel Crew — 把 Claude Code 與 Codex 變成一間像素辦公室</title>
-<meta name="description" content="Pixel Crew 2.0.1：讓 Claude Code 與 Codex 組成能互相協作的部門，Boss Desk 自動路由 Consult、Review 與跨部門 Mission。Local-first、不需要 API key、MIT 開源。">
+<meta name="description" content="Pixel Crew 2.1.0：讓 Claude Code 與 Codex 組成能互相協作的部門，並加入帳號隔離、Focus 工作台與選用本機語音輸入。Local-first、不需要 API key、MIT 開源。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -20,7 +20,7 @@
 <link rel="stylesheet" href="assets/style.css">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/">
-<meta property="og:title" content="Pixel Crew 2.0.1 — 像素辦公室裡的部門與協作">
+<meta property="og:title" content="Pixel Crew 2.1.0 — 像素辦公室裡的部門與協作">
 <meta property="og:description" content="部門主管自動路由 Consult、Review 與 Mission，交接與危險動作核准全程可見。無 API key、local-first、MIT 開源。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
@@ -32,7 +32,7 @@
 <meta property="og:image:height" content="960">
 <meta property="og:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Pixel Crew 2.0.1 — 像素辦公室裡的部門與協作">
+<meta name="twitter:title" content="Pixel Crew 2.1.0 — 像素辦公室裡的部門與協作">
 <meta name="twitter:description" content="Boss NPC 自動路由 Consult、Review 與 Mission。Local-first、無 API key、MIT 開源。">
 <meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
 <meta name="twitter:image:alt" content="Pixel Crew 像素辦公室中的多個 AI coding agents">
@@ -85,8 +85,8 @@
       "name": "Pixel Crew",
       "url": "https://pixelcrew.weibuilds.com/",
       "downloadUrl": "https://github.com/juinwei7/Pixel-Crew/releases/latest",
-      "softwareVersion": "2.0.1",
-      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1",
+      "softwareVersion": "2.1.0",
+      "releaseNotes": "https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.0",
       "datePublished": "2026-07-17",
       "dateModified": "2026-09-01",
       "applicationCategory": "DeveloperApplication",
@@ -137,7 +137,7 @@
       部門主管會自己決定找誰 Consult、找誰 Review，或啟動一段 2 到 5 步的 Mission，每一步都留在你看得見、能核准的地方。
     </p>
     <div class="hero-cta">
-      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.0.1</a>
+      <a class="btn btn--primary" href="https://github.com/juinwei7/Pixel-Crew/releases/latest">⬇ 下載 v2.1.0</a>
       <a class="btn" href="https://github.com/juinwei7/Pixel-Crew">GitHub 原始碼</a>
     </div>
     <div class="hero-badges">
@@ -471,13 +471,13 @@
     <div class="release-list">
       <article class="release-card release-card--latest">
         <div class="release-meta">
-          <span class="release-version">開發中</span>
+          <span class="release-version">v2.1.0</span>
           <time class="release-date" datetime="2026-09-01">2026.09.01</time>
-          <span class="release-current">SOURCE</span>
+          <span class="release-current">LATEST RELEASE</span>
         </div>
-        <h3>帳號隔離、可控成本與可安全重開的交辦</h3>
-        <p>8/28 以後的 source 更新加入每位 NPC 可指定的 Claude Code／Codex 帳號、<code>/goal</code>、最多四窗格 Focus Reader，以及可預覽並強制限制的多 Agent 執行邊界。HUD 可分帳號讀取用量；Boss Desk 顯示即時部門步驟，並能只針對連結的 Mission／NPC 清空重派。SQLite 升級可留下快照與稽核紀錄；備份可選 AES-256-GCM 加密；本機診斷與 bundle 預算則持續守住效能。這些內容仍在開發中，正式下載維持以下 v2.0.1。</p>
-        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">查看開發中變更 ↗</a>
+        <h3>帳號隔離、Focus 工作台與本機語音輸入</h3>
+        <p>每位 NPC 現在可指定 Claude Code／Codex 帳號，並可使用 <code>/goal</code>、最多四窗格 Focus Reader 與可預覽並強制限制的多 Agent 執行邊界。HUD 會分帳號讀取用量；Boss Desk 顯示即時部門步驟，並能只針對連結的 Mission／NPC 清空重派。另加入選用的本機語音輸入：模型下載後可離線把語音轉成可編輯草稿，不會自動送出。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.0">完整 v2.1.0 發布內容 ↗</a>
       </article>
       <article class="release-card release-card--latest">
         <div class="release-meta">
