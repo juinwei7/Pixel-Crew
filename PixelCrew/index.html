@@ -172,8 +172,8 @@
     <div class="launch-head">
       <div>
         <span class="eyebrow">IN DEVELOPMENT <i>·</i> SINCE 2026.08.28</span>
-        <h2>把帳號、目標與長篇 AI 產出，收進更可靠的工作台。</h2>
-        <p>8 月 28 日以後的開發更新，重點放在真正每天會遇到的事情：讓不同登入帳號安全地分給不同 NPC、在 Codex thread 中維持明確目標、把 Focus Reader 變成可比較多份報告的工作台，並讓本機服務與 Windows 啟動更不容易卡住。</p>
+        <h2>把帳號、目標與長篇 AI 產出，收進有邊界、可恢復的工作台。</h2>
+        <p>8 月 28 日以後的開發更新，重點放在每天真正會遇到的事情：安全地分配登入帳號、保留 Codex 目標、比較多份報告，並把多 Agent 成本、長任務恢復、資料升級與本機診斷變成清楚可控的流程。</p>
       </div>
       <div class="launch-meta">
         <span class="launch-version">DEV</span>
@@ -189,6 +189,10 @@
       <article class="upgrade-card"><span class="index">04 / STUDIOS</span><b>切工作資料夾，不打斷閱讀</b><p>可收合的工作室欄保留每個本機 workspace 最後看的 NPC，並以 <code>Alt+1</code>–<code>Alt+9</code> 快速切換。branch、commit、dirty files 與 ahead/behind 全部是只讀摘要，絕不 fetch、checkout、commit 或 push。</p></article>
       <article class="upgrade-card"><span class="index">05 / WINDOWS</span><b>背景啟動，仍能隨時掌握服務</b><p>Windows 版預設由 <code>start-pixel-crew.vbs</code> 隱藏啟動，不留黑色主控台；系統匣可開啟、重啟、停止和查看 logs。若啟動失敗，診斷會留在本機而不是消失在視窗裡。</p></article>
       <article class="upgrade-card"><span class="index">06 / RESILIENCE</span><b>把容易卡住的本機細節補強</b><p>計畫性重啟、卡住的背景活動、延後顯示的選擇視窗與截圖瀏覽器都經過加固；遠端分享的通行碼，以及截圖前往的 URL，也增加了更嚴格的安全處理。</p></article>
+      <article class="upgrade-card"><span class="index">07 / BOUNDED WORK</span><b>開始前先看得見多 Agent 的邊界</b><p>Boss Desk 可選快速／標準／深度，預覽 Agent 回合、時間區間和 Claude 預估費用或 Codex 五小時 quota 影響；Agent、人工作業階段與 Mission 步數都有硬上限，超出即暫停。</p></article>
+      <article class="upgrade-card"><span class="index">08 / RECOVERY</span><b>服務重啟後，知道從哪一步安全接回</b><p>Mission 與 Boss 工作會保存可恢復候選與原因。重新執行前會檢查 session／worker 狀態，讓失敗或暫停的長任務有明確的續跑點，而不是默默重做。</p></article>
+      <article class="upgrade-card"><span class="index">09 / LOCAL DATA</span><b>升級可回溯，備份可加密</b><p>SQLite migration 會在升級前建立一致性快照，並保存每次成功或失敗的紀錄。備份不含 provider 認證或專案檔；跨裝置帶走時可選 AES-256-GCM 密碼加密。</p></article>
+      <article class="upgrade-card"><span class="index">10 / OPERATIONS</span><b>只留在本機的診斷與效能護欄</b><p>營運面板可關閉、絕不上傳地記錄成功率、核准等待、Mission 失敗、WebSocket 重連、UI 長任務與 FPS；CI 也替主要 bundle 與 lazy chunk 設下預算。</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
@@ -471,8 +475,8 @@
           <time class="release-date" datetime="2026-09-01">2026.09.01</time>
           <span class="release-current">SOURCE</span>
         </div>
-        <h3>帳號隔離、Codex 目標與 Focus 工作台</h3>
-        <p>8/28 以後的 source 更新加入每位 NPC 可指定的 Claude Code／Codex 帳號、<code>/goal</code> thread 目標與最多四窗格的 Focus Reader；同時補強 Windows 背景服務、重啟生命週期與遠端／截圖安全處理。這些內容仍在開發中，正式下載維持以下 v2.0.1。</p>
+        <h3>帳號隔離、可控成本與更可靠的本機資料</h3>
+        <p>8/28 以後的 source 更新加入每位 NPC 可指定的 Claude Code／Codex 帳號、<code>/goal</code>、最多四窗格 Focus Reader，以及可預覽並強制限制的多 Agent 執行邊界。長任務可安全續跑；SQLite 升級可留下快照與稽核紀錄；備份可選 AES-256-GCM 加密；本機診斷與 bundle 預算則持續守住效能。這些內容仍在開發中，正式下載維持以下 v2.0.1。</p>
         <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">查看開發中變更 ↗</a>
       </article>
       <article class="release-card release-card--latest">
