@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VoiceEngineInstaller, type VoiceEngineRelease } from "../src/voice/voiceEngineInstaller.js";
+import { VoiceEngineInstaller, powerShellExtractionCommand, type VoiceEngineRelease } from "../src/voice/voiceEngineInstaller.js";
 
 function tmpEnginesDir(): string {
   return mkdtempSync(join(tmpdir(), "voice-engine-installer-test-"));
@@ -16,7 +16,7 @@ function releaseFor(bytes: Buffer): VoiceEngineRelease {
     url: "https://github.com/ggml-org/whisper.cpp/releases/download/test/whisper-bin-x64.zip",
     sha256: createHash("sha256").update(bytes).digest("hex"),
     bytes: bytes.length,
-    executable: "whisper-server.exe",
+    executable: "Release/whisper-server.exe",
   };
 }
 
@@ -45,7 +45,10 @@ test("Windows x64 installer verifies, extracts, and activates whisper-server wit
     dir,
     (path) => { installed = path; },
     async () => response(bytes),
-    async (_archive, destination) => { writeFileSync(join(destination, "whisper-server.exe"), "binary"); },
+    async (_archive, destination) => {
+      mkdirSync(join(destination, "Release"));
+      writeFileSync(join(destination, "Release", "whisper-server.exe"), "binary");
+    },
     "win32", "x64", releaseFor(bytes),
   );
 
@@ -54,10 +57,21 @@ test("Windows x64 installer verifies, extracts, and activates whisper-server wit
   await waitForDone(installer);
 
   assert.equal(installer.getInfo().status, "ready");
-  assert.equal(installed, join(dir, "whisper-cpp", "whisper-server.exe"));
+  assert.equal(installed, join(dir, "whisper-cpp", "Release", "whisper-server.exe"));
   assert.ok(existsSync(installed));
   assert.deepEqual(readdirSync(dir), ["whisper-cpp"]);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("PowerShell extraction command preserves paths containing spaces and apostrophes", () => {
+  const command = Buffer.from(
+    powerShellExtractionCommand("C:\\Users\\Jane O'Connor\\engine.zip", "C:\\Users\\Jane O'Connor\\staging"),
+    "base64",
+  ).toString("utf16le");
+  assert.match(command, /\$ErrorActionPreference = 'Stop'/);
+  assert.match(command, /C:\\Users\\Jane O''Connor\\engine\.zip/);
+  assert.match(command, /C:\\Users\\Jane O''Connor\\staging/);
+  assert.doesNotMatch(command, /\$args/);
 });
 
 test("rejects a tampered engine archive and removes all temporary files", async () => {
