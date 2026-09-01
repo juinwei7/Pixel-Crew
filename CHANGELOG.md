@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-01
+
+### Added
+
+- Shipped Windows as one double-clickable `Pixel Crew.exe`: a native control center with a recognizable Task Manager name, tray controls, clear error notifications, automatic startup, and private per-user installation without administrator rights.
+
 ## [2.1.2] - 2026-09-01
 
 ### Fixed
@@ -130,7 +136,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.0.1...v2.1.0
