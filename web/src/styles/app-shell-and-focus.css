@@ -367,6 +367,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .energy-detail header button { min-height: 34px; padding: 6px 11px; border: 1px solid rgba(0, 229, 255,.18); border-radius: 7px; background: rgba(0, 229, 255,.055); color: var(--cyan); font-size: 11px; cursor: pointer; }
 .energy-detail header button:disabled { opacity: .45; }
 .energy-detail section { padding: 14px 2px 5px; }
+.energy-detail section.energy-detail__account { margin-top: 7px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.065); }
 .energy-detail h3 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 9px; color: #c9d9eb; font: 700 13px var(--mono); }
 .energy-detail h3 small { color: #607590; font: 9px var(--mono); }
 .energy-detail__window { display: grid; grid-template-columns: minmax(120px,1fr) 110px 36px; align-items: center; gap: 10px; padding: 9px 7px; color: #00ffa3; border-radius: 7px; }
@@ -1822,4 +1823,3 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
     padding-left: 18px;
   }
 }
-

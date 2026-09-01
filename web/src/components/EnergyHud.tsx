@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { lang, t } from "../i18n";
-import type { ProviderId, ProviderUsageState, UsageWindow } from "../types";
+import type { AccountWithAuth, ProviderId, ProviderUsageState, UsageWindow } from "../types";
 
 type Props = {
   usage: Record<ProviderId, ProviderUsageState>;
+  accountUsage?: Record<string, ProviderUsageState>;
+  accounts?: AccountWithAuth[];
   onRefresh(): Promise<string | null>;
   totalCostUsd: number;
 };
@@ -59,7 +61,23 @@ function WindowRow({ window }: { window: UsageWindow }) {
   );
 }
 
-export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
+function UsageDetails({ usage, accountUsage = {}, accounts = [] }: Pick<Props, "usage" | "accountUsage" | "accounts">) {
+  return <>
+    {(["claude", "codex"] as ProviderId[]).map((provider) => {
+      const state = usage[provider];
+      return <section key={`default-${provider}`}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{t("共用登入")} · {state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
+    })}
+    {accounts.map((account) => {
+      const state = accountUsage[account.id];
+      const authenticated = account.auth?.status === "authenticated";
+      const label = `${account.provider === "claude" ? "Claude Code" : "Codex"} · ${account.label}`;
+      const status = !authenticated ? t("尚未登入") : state?.source === "cache" ? t("快取") : state?.updatedAt ? t("即時") : t("尚無資料");
+      return <section key={account.id} className="energy-detail__account"><h3>{label}<small>{status}</small></h3>{state?.windows.length ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{!authenticated ? t("尚未登入") : state?.loading ? t("正在讀取工作能量…") : state?.error || t("Provider 沒有提供用量資料")}</p>}{state?.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
+    })}
+  </>;
+}
+
+export function EnergyHud({ usage, accountUsage = {}, accounts = [], onRefresh, totalCostUsd }: Props) {
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,20 +117,17 @@ export function EnergyHud({ usage, onRefresh, totalCostUsd }: Props) {
       </button>
       {open && (
         <div className="energy-detail">
-          <header><div><span>OFFICE POWER</span><strong>{t("全域工作能量")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
-          {(["claude", "codex"] as ProviderId[]).map((provider) => {
-            const state = usage[provider];
-            return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
-          })}
+          <header><div><span>OFFICE POWER</span><strong>{t("帳號工作能量")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
+          <UsageDetails usage={usage} accountUsage={accountUsage} accounts={accounts} />
           {error && <div className="energy-detail__error">{error}</div>}
-          <footer>{t("帳號共用 · 不隨房間或 NPC 切換 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
+          <footer>{t("每個帳號分開顯示 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
         </div>
       )}
     </div>
   );
 }
 
-export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude", activeSubject, anchored = false }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId; activeSubject?: FocusSubject; anchored?: boolean }) {
+export function FocusEnergy({ usage, accountUsage = {}, accounts = [], onRefresh, totalCostUsd, open, onOpenChange, activeProvider = "claude", activeSubject, anchored = false }: Props & { open: boolean; onOpenChange(open: boolean): void; activeProvider?: ProviderId; activeSubject?: FocusSubject; anchored?: boolean }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -155,12 +170,9 @@ export function FocusEnergy({ usage, onRefresh, totalCostUsd, open, onOpenChange
           <strong>{activeSubject.name}</strong>
           <small>{activeSubject.provider === "claude" ? "Claude" : "Codex"} · {activeSubject.model}</small>
         </div>}
-        {(["claude", "codex"] as ProviderId[]).map((provider) => {
-          const state = usage[provider];
-          return <section key={provider}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
-        })}
+        <UsageDetails usage={usage} accountUsage={accountUsage} accounts={accounts} />
         {error && <div className="energy-detail__error">{error}</div>}
-        <footer>{t("帳號共用 · 不隨 NPC 切換 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
+        <footer>{t("每個帳號分開顯示 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
       </aside>
     </div>
   );
