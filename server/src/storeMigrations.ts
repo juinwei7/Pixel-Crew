@@ -168,4 +168,21 @@ export const storeMigrations: readonly DatabaseMigration[] = [
       task_text TEXT NOT NULL, session_id TEXT NOT NULL, interrupted_at TEXT NOT NULL, reset_at TEXT
     )`),
   },
+  {
+    // Managed provider accounts introduced a private CLAUDE_CONFIG_DIR. A
+    // Claude session id can only resume from the config home that created it,
+    // so existing conversations must remain on the ambient home after upgrade.
+    version: 7,
+    name: "preserve-legacy-claude-session-home",
+    up: (db) => {
+      addColumnIfMissing(db, "workers", "claude_home_mode TEXT NOT NULL DEFAULT 'managed'");
+      db.exec(`
+        UPDATE workers
+        SET claude_home_mode = 'legacy'
+        WHERE provider = 'claude'
+          AND completed_turns > 0
+          AND account_id IS NULL
+      `);
+    },
+  },
 ];

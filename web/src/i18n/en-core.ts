@@ -61,6 +61,8 @@ export const enCore: Record<string, string> = {
   "Pixel Crew v{version} 已發布": "Pixel Crew v{version} is out",
   "目前版本 v{version}": "Current version v{version}",
   "查看 Release（打包版下載新 zip）": "View release (packaged users: download the new zip)",
+  "下載並更新至 v{version}": "Download and update to v{version}",
+  "正在下載並更新…": "Downloading and updating…",
   "git clone 使用者更新方式：": "For git clone users, update with:",
   "複製更新指令": "Copy update command",
   "⬆ 有新版 v{version}": "⬆ New version v{version}",

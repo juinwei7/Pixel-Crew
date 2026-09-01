@@ -6,6 +6,7 @@ export type UpdateInfo = {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
+  oneClickAvailable: boolean;
   releaseUrl: string | null;
   checkedAt: string | null;
 };
@@ -64,6 +65,7 @@ export class UpdateChecker {
   constructor(
     private readonly currentVersion: string,
     private readonly onUpdate?: (info: UpdateInfo) => void,
+    private readonly canApplyOneClickUpdate: () => boolean = () => false,
   ) {}
 
   getInfo(): UpdateInfo {
@@ -71,6 +73,7 @@ export class UpdateChecker {
       currentVersion: this.currentVersion,
       latestVersion: this.latestVersion,
       updateAvailable: this.latestVersion !== null && isNewerVersion(this.currentVersion, this.latestVersion),
+      oneClickAvailable: this.canApplyOneClickUpdate(),
       releaseUrl: this.releaseUrl ?? RELEASES_PAGE_URL,
       checkedAt: this.checkedAt,
     };

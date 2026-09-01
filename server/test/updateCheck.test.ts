@@ -43,5 +43,6 @@ test("update info reports no update until a newer release is known", () => {
   assert.equal(info.currentVersion, "1.0.0");
   assert.equal(info.latestVersion, null);
   assert.equal(info.updateAvailable, false);
+  assert.equal(info.oneClickAvailable, false);
   assert.match(info.releaseUrl ?? "", /github\.com\/juinwei7\/Pixel-Crew\/releases/);
 });

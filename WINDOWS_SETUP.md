@@ -65,7 +65,7 @@ git pull
 scripts\windows\setup-windows.cmd
 ```
 
-Release ZIP：從上方固定連結下載新版並解壓到新目錄。NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式目錄而消失。
+Release ZIP：偵測到新版後，程式右上角會出現「有新版」；按「下載並更新」會下載官方 ZIP、以同一 Release 的 SHA-256 清單驗證後，替換程式並自動重新開啟。更新只在所有 NPC 都空檔時允許開始；NPC、對話索引與角色資料保存在 `%LOCALAPPDATA%\Pixel Crew`，不會因替換程式目錄而消失。若想手動更新，仍可從上方固定連結下載新版並解壓到新目錄。
 
 ## 環境診斷
 

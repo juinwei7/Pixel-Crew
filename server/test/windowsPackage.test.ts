@@ -12,6 +12,7 @@ const backgroundLauncher = fileURLToPath(new URL("../../start-pixel-crew.vbs", i
 const restartLauncher = fileURLToPath(new URL("../../relaunch-pixel-crew.ps1", import.meta.url));
 const portablePackager = fileURLToPath(new URL("../../scripts/package.mjs", import.meta.url));
 const trayController = fileURLToPath(new URL("../../scripts/windows/pixel-crew-tray.ps1", import.meta.url));
+const selfUpdateHelper = fileURLToPath(new URL("../../scripts/windows/self-update.ps1", import.meta.url));
 const serverEntrypoint = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
 function peHeader(machine: number): Buffer {
@@ -75,4 +76,19 @@ test("server restart uses graceful shutdown after the detached launcher starts",
   assert.match(source, /launcher\.once\("spawn", \(\) => \{\s*started = true;\s*finishServerRestart\(\);/);
   assert.match(source, /exitAfterShutdown\("planned restart", 0\)/);
   assert.match(source, /app\.get\("\/api\/restart-server\/status"/);
+});
+
+test("Windows self-update verifies the published archive before replacing the bundle", () => {
+  const source = readFileSync(selfUpdateHelper, "utf8");
+  const entrypoint = readFileSync(serverEntrypoint, "utf8");
+
+  assert.match(source, /SHA256SUMS\.txt/);
+  assert.match(source, /Get-FileHash[\s\S]*SHA256/);
+  assert.match(source, /Expand-Archive/);
+  assert.match(source, /Move-Item -LiteralPath \$InstallRoot/);
+  assert.match(source, /start-pixel-crew\.vbs/);
+  assert.match(source, /self-update-error\.log/);
+  assert.match(entrypoint, /app\.post\("\/api\/update\/apply"/);
+  assert.match(entrypoint, /workerSummary\(worker\)\.busy/);
+  assert.match(entrypoint, /exitAfterShutdown\("self update", 0\)/);
 });

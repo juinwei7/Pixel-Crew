@@ -97,6 +97,7 @@ export type UpdateInfo = {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
+  oneClickAvailable: boolean;
   releaseUrl: string | null;
   checkedAt: string | null;
 };
