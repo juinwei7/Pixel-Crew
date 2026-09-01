@@ -41,7 +41,7 @@ test("focus energy keeps both providers and reset context visible", () => {
   assert.match(html, /27%/);
   assert.match(html, /64%/);
   assert.match(html, /US\$\s*12\.34/);
-  assert.match(html, /不隨 NPC 切換/);
+  assert.match(html, /每個帳號分開顯示/);
 });
 
 test("focus energy emphasizes only the active provider and shows its concrete model", () => {

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { normalizeCodexUsage, parseClaudeUsage, ProviderUsageRegistry } from "../src/providerUsage.js";
+import { AccountUsageRegistry, normalizeCodexUsage, parseClaudeUsage, ProviderUsageRegistry } from "../src/providerUsage.js";
 import { LocalStore } from "../src/store.js";
 
 test("parses Claude /usage JSON into account-wide remaining energy", () => {
@@ -63,6 +63,43 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("reads and retains usage separately for every named account", async () => {
+  const accounts = [
+    { id: "claude-work", provider: "claude" as const, label: "work", homeDir: "/accounts/claude-work", createdAt: "", updatedAt: "" },
+    { id: "codex-personal", provider: "codex" as const, label: "personal", homeDir: "/accounts/codex-personal", createdAt: "", updatedAt: "" },
+  ];
+  const reads: Array<[string, string]> = [];
+  const registry = new AccountUsageRegistry(
+    () => accounts,
+    () => "authenticated",
+    () => undefined,
+    async (provider, homeDir) => {
+      reads.push([provider, homeDir]);
+      return [{ id: homeDir, label: "5 小時", usedPercent: 25, remainingPercent: 75, resetsAt: null, scope: "rate" }];
+    },
+  );
+
+  const states = await registry.refreshAll(true);
+  assert.deepEqual(reads, [["claude", "/accounts/claude-work"], ["codex", "/accounts/codex-personal"]]);
+  assert.equal(states["claude-work"]?.provider, "claude");
+  assert.equal(states["codex-personal"]?.provider, "codex");
+  assert.equal(states["claude-work"]?.windows[0]?.remainingPercent, 75);
+});
+
+test("does not query usage for a named account that is not signed in", async () => {
+  const account = { id: "signed-out", provider: "codex" as const, label: "signed out", homeDir: "/accounts/signed-out", createdAt: "", updatedAt: "" };
+  const registry = new AccountUsageRegistry(
+    () => [account],
+    () => "unauthenticated",
+    () => undefined,
+    async () => { throw new Error("the CLI must not run"); },
+  );
+
+  const state = await registry.refresh(account.id, true);
+  assert.equal(state.source, "empty");
+  assert.deepEqual(state.windows, []);
 });
 
 // idleState() (constructor-time load from disk) always recomputes source as

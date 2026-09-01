@@ -1028,6 +1028,7 @@ input:focus-visible {
 .boss-task-message--report { width: 100%; max-width: none; border-color: rgba(0, 255, 163,.28); background: rgba(0, 255, 163,.05); }
 .boss-task-message--report > span { color: var(--ok); }
 .boss-task-stages { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid rgba(168, 85, 255,.16); border-radius: 9px; background: rgba(8,14,29,.58); }
+.boss-task-stages__progress { margin: 0; color: var(--cyan); font: 700 9px var(--mono); letter-spacing: .04em; }
 .boss-task-stages h3 { margin: 0 0 3px; color: var(--text-dim); font-size: 10px; }
 .boss-task-stages button { display: flex; align-items: center; gap: 9px; border: 0; border-radius: 7px; background: rgba(255,255,255,.025); color: var(--text); padding: 8px; text-align: left; }
 .boss-task-stages button:not(:disabled) { cursor: pointer; }
@@ -1035,6 +1036,8 @@ input:focus-visible {
 .boss-task-stages button span { display: flex; min-width: 0; flex: 1; justify-content: space-between; gap: 8px; }
 .boss-task-stages button strong { font-size: 10px; }
 .boss-task-stages button small { color: var(--text-dim); font: 8px var(--mono); }
+.boss-task-desk__restart { margin-top: 10px; border: 1px solid rgba(255,176,0,.38); border-radius: 7px; background: rgba(255,176,0,.08); color: var(--warn); padding: 7px 10px; cursor: pointer; font-size: 11px; }
+.boss-task-desk__restart:disabled { cursor: not-allowed; opacity: .45; }
 .boss-task-composer { position: relative; flex: 0 0 auto; padding: 10px 14px 14px; border-top: 1px solid rgba(0, 229, 255,.13); background: linear-gradient(180deg, rgba(5,12,25,.94), rgba(3,9,21,.98)); box-shadow: 0 -18px 40px rgba(1,5,13,.18); }
 .boss-task-composer__setup { display: flex; height: 30px; align-items: center; gap: 7px; margin-bottom: 8px; }
 .boss-task-composer__setup label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; color: #637891; font: 700 8px var(--mono); letter-spacing: .06em; }

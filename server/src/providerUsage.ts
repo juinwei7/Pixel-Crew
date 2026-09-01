@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { config } from "./config.js";
 import type { AuthStatus, ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
+import type { ProviderAccount } from "./store.js";
 import { execCli, spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { codexChildEnv } from "./codexEnv.js";
 import { claudeChildEnv } from "./claudeEnv.js";
@@ -126,23 +127,23 @@ export function normalizeCodexUsage(payload: any): UsageWindow[] {
   return windows;
 }
 
-async function readClaudeUsage(): Promise<UsageWindow[]> {
+async function readClaudeUsage(claudeHome = config.defaultClaudeHome): Promise<UsageWindow[]> {
   const { stdout } = await execCli(config.claudeBin, ["-p", "/usage", "--output-format", "json"], {
     cwd: config.targetRepoPath,
     timeout: 30_000,
     maxBuffer: 1_000_000,
-    env: claudeChildEnv(process.env, config.defaultClaudeHome),
+    env: claudeChildEnv(process.env, claudeHome),
   });
   const windows = parseClaudeUsage(stdout);
   if (windows.length === 0) throw new Error(t("Claude /usage 沒有回傳可辨識的用量區間"));
   return windows;
 }
 
-async function readCodexUsage(): Promise<UsageWindow[]> {
+async function readCodexUsage(codexHome = config.defaultCodexHome): Promise<UsageWindow[]> {
   return new Promise((resolve, reject) => {
     const child = spawnCli(config.codexBin, ["app-server"], {
       cwd: config.targetRepoPath,
-      env: codexChildEnv(process.env, config.defaultCodexHome),
+      env: codexChildEnv(process.env, codexHome),
     });
     const rl = createInterface({ input: child.stdout });
     let settled = false;
@@ -179,6 +180,10 @@ async function readCodexUsage(): Promise<UsageWindow[]> {
     });
     send({ method: "initialize", id: 1, params: { clientInfo: { name: "pixel_crew", title: "Pixel Crew", version: "0.1.0" } } });
   });
+}
+
+async function readUsage(provider: ProviderId, homeDir: string): Promise<UsageWindow[]> {
+  return provider === "claude" ? readClaudeUsage(homeDir) : readCodexUsage(homeDir);
 }
 
 function idleState(provider: ProviderId, value: unknown): ProviderUsageState {
@@ -270,5 +275,82 @@ export class ProviderUsageRegistry {
     this.states = { ...this.states, [state.provider]: state };
     if (persist) this.store.saveProviderUsage(state.provider, state);
     this.onUpdate(state);
+  }
+}
+
+/**
+ * Named logins each have an isolated CLI home, so their subscription limits
+ * must be queried independently. This deliberately stays in memory: unlike
+ * the default slot, an account can be removed at any time and its old quota
+ * must not reappear after a restart as if it still belonged to a live login.
+ */
+export class AccountUsageRegistry {
+  private states: Record<string, ProviderUsageState> = {};
+  private active = new Map<string, Promise<ProviderUsageState>>();
+
+  constructor(
+    private readonly listAccounts: () => ProviderAccount[],
+    private readonly getAuthStatus: (accountId: string) => AuthStatus | null,
+    private readonly onUpdate: (accountId: string, state: ProviderUsageState) => void,
+    private readonly reader: (provider: ProviderId, homeDir: string) => Promise<UsageWindow[]> = readUsage,
+  ) {}
+
+  getStates(): Record<string, ProviderUsageState> {
+    return this.states;
+  }
+
+  remove(accountId: string): void {
+    this.active.delete(accountId);
+    if (!(accountId in this.states)) return;
+    const { [accountId]: _removed, ...remaining } = this.states;
+    this.states = remaining;
+  }
+
+  refresh(accountId: string, force = false): Promise<ProviderUsageState> {
+    const running = this.active.get(accountId);
+    if (running) return running;
+    const account = this.listAccounts().find((candidate) => candidate.id === accountId);
+    if (!account) return Promise.resolve(emptyState("claude"));
+    const previous = this.states[accountId] ?? emptyState(account.provider);
+    const status = this.getAuthStatus(accountId);
+    if (status === "checking" || status == null) {
+      const idle = { ...previous, loading: false, error: null };
+      if (previous.loading || previous.error) this.publish(accountId, idle);
+      return Promise.resolve(idle);
+    }
+    if (status !== "authenticated") {
+      const relabeled = previous.windows.length > 0 && previous.source === "live"
+        ? { ...previous, loading: false, error: null, source: "cache" as const }
+        : { ...previous, loading: false, error: null };
+      if (previous.loading || previous.error || previous.source !== relabeled.source) this.publish(accountId, relabeled);
+      return Promise.resolve(relabeled);
+    }
+    if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
+    this.publish(accountId, { ...previous, loading: true, error: null });
+    const operation = this.reader(account.provider, account.homeDir)
+      .then((windows) => {
+        const state: ProviderUsageState = { provider: account.provider, windows, loading: false, source: "live", updatedAt: new Date().toISOString(), error: null };
+        // An account could be deleted while its CLI query is still running.
+        if (this.listAccounts().some((candidate) => candidate.id === accountId)) this.publish(accountId, state);
+        return state;
+      })
+      .catch((error) => {
+        const state: ProviderUsageState = { ...this.states[accountId] ?? previous, loading: false, error: safeText((error as Error).message, 300) || t("無法讀取工作能量") };
+        if (this.listAccounts().some((candidate) => candidate.id === accountId)) this.publish(accountId, state);
+        return state;
+      })
+      .finally(() => this.active.delete(accountId));
+    this.active.set(accountId, operation);
+    return operation;
+  }
+
+  async refreshAll(force = false): Promise<Record<string, ProviderUsageState>> {
+    await Promise.all(this.listAccounts().map((account) => this.refresh(account.id, force)));
+    return this.states;
+  }
+
+  private publish(accountId: string, state: ProviderUsageState): void {
+    this.states = { ...this.states, [accountId]: state };
+    this.onUpdate(accountId, state);
   }
 }

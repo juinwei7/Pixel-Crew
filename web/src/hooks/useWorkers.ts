@@ -35,6 +35,7 @@ type ServerMessage =
       auth: ProviderAuthState[];
       accounts?: AccountWithAuth[];
       providerUsage: Record<ProviderId, ProviderUsageState>;
+      accountUsage?: Record<string, ProviderUsageState>;
       capabilitiesByWorkspace: Record<string, Record<ProviderId, CapabilityState>>;
       collaborations?: CollaborationTask[];
       missions?: DepartmentMission[];
@@ -77,6 +78,7 @@ type ServerMessage =
   | { type: "workflow_library_updated"; workspacePath: string; provider: ProviderId; revision: number }
   | { type: "auth_updated"; auth: ProviderAuthState }
   | { type: "usage_updated"; provider: ProviderId; usage: ProviderUsageState }
+  | { type: "account_usage_updated"; accountId: string; usage: ProviderUsageState }
   | { type: "stats_updated"; stats: { completedTurns: number; totalCostUsd: number } }
   | { type: "update_info"; updateInfo: UpdateInfo }
   | { type: "account_login_result"; accountId: string; ok: boolean; status: AccountLoginState["status"]; message: string | null }
@@ -166,6 +168,7 @@ export function useWorkers() {
     claude: emptyUsage("claude"),
     codex: emptyUsage("codex"),
   });
+  const [accountUsage, setAccountUsage] = useState<Record<string, ProviderUsageState>>({});
   const emptyInstall = (provider: ProviderId): ProviderInstallState => ({
     provider, status: "idle", phase: t("尚未開始"), command: "", sourceUrl: "",
     startedAt: null, finishedAt: null, output: "", error: null,
@@ -216,6 +219,7 @@ export function useWorkers() {
           setAuth(Object.fromEntries(data.auth.map((item) => [item.provider, item])) as Record<ProviderId, ProviderAuthState>);
           setAccounts(Object.fromEntries((data.accounts ?? []).map((account) => [account.id, account])));
           setProviderUsage(data.providerUsage ?? { claude: emptyUsage("claude"), codex: emptyUsage("codex") });
+          setAccountUsage(data.accountUsage ?? {});
           setCapabilitiesByWorkspace(data.capabilitiesByWorkspace ?? {});
           setCollaborations(Object.fromEntries((data.collaborations ?? []).map((task) => [task.id, task])));
           setMissions(Object.fromEntries((data.missions ?? []).map((mission) => [mission.id, mission])));
@@ -443,6 +447,10 @@ export function useWorkers() {
           setProviderUsage((current) => ({ ...current, [data.provider]: data.usage }));
           break;
         }
+        case "account_usage_updated": {
+          setAccountUsage((current) => ({ ...current, [data.accountId]: data.usage }));
+          break;
+        }
         case "stats_updated": {
           setStats(data.stats);
           break;
@@ -583,6 +591,11 @@ export function useWorkers() {
         method: "DELETE",
       });
       setAccounts((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setAccountUsage((current) => {
         const next = { ...current };
         delete next[id];
         return next;
@@ -871,11 +884,12 @@ export function useWorkers() {
     departmentId: string,
     confirm: boolean,
     workerIds?: string[],
+    restartActiveMission = false,
   ): Promise<{ data?: { requiresConfirmation?: boolean; members?: Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }>; results?: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>; retryWorkerIds?: string[]; historyClearedAt?: string | null }; error?: string }> => {
     try {
       return { data: await apiRequest(`/api/departments/${departmentId}/sessions/reset`, {
         method: "POST",
-        body: { confirm, workerIds },
+        body: { confirm, workerIds, restartActiveMission },
         timeoutMs: 90_000,
       }) };
     } catch (error) {
@@ -982,6 +996,20 @@ export function useWorkers() {
         return next;
       });
       return {};
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  }, []);
+
+  const restartBossTask = useCallback(async (id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }> => {
+    try {
+      const data = await apiRequest<{ members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }>(`/api/boss-tasks/${id}/restart`, {
+        method: "POST",
+        body: { confirm },
+        timeoutMs: 135_000,
+      });
+      if (data.bossTask) setBossTasks((current) => ({ ...current, [data.bossTask!.id]: data.bossTask! }));
+      return { data };
     } catch (error) {
       return { error: (error as Error).message };
     }
@@ -1221,8 +1249,9 @@ export function useWorkers() {
 
   const refreshUsage = useCallback(async (): Promise<string | null> => {
     try {
-      const data = await apiRequest<{ usage: Record<ProviderId, ProviderUsageState> }>("/api/usage/refresh", { method: "POST", timeoutMs: 35_000 });
+      const data = await apiRequest<{ usage: Record<ProviderId, ProviderUsageState>; accountUsage?: Record<string, ProviderUsageState> }>("/api/usage/refresh", { method: "POST", timeoutMs: 35_000 });
       setProviderUsage(data.usage);
+      setAccountUsage(data.accountUsage ?? {});
       return null;
     } catch (error) {
       return (error as Error).message;
@@ -1286,6 +1315,7 @@ export function useWorkers() {
     workflowRevisions,
     auth,
     providerUsage,
+    accountUsage,
     providerInstalls,
     accounts,
     accountLogins,
@@ -1324,6 +1354,7 @@ export function useWorkers() {
     messageBossTask,
     updateBossTask,
     deleteBossTask,
+    restartBossTask,
     cancelMission: (id: string) => missionAction(id, "cancel"),
     retryMissionReview: (id: string) => missionAction(id, "retry-review"),
     approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),

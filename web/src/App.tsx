@@ -82,9 +82,9 @@ const EMPTY_CAPABILITIES = {
 export function App() {
   const {
     workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
-    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
+    capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
-    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
     send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -944,7 +944,7 @@ export function App() {
         onNotificationsToggle={toggleNotifications}
         updateInfo={updateInfo}
       >
-        {!taskFocusMode && <EnergyHud usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
+        {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
       </TopBar>
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
@@ -1010,7 +1010,7 @@ export function App() {
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />}
+          {taskFocusMode && <FocusEnergy usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />}
           <div className="task-log-toolbar">
             {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label={t("日誌模式")}>
               <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
@@ -1058,11 +1058,14 @@ export function App() {
         {bossAssignmentOpen && <BossTaskDesk
           workspacePath={activeWorkspace}
           tasks={Object.values(bossTasks)}
+          missions={missionList}
+          workers={workerList}
           decisionModels={decisionModelOptions}
           onCreate={createBossTask}
           onMessage={messageBossTask}
           onUpdate={updateBossTask}
           onDelete={deleteBossTask}
+          onRestart={restartBossTask}
           onOpenMission={(missionId) => {
             const mission = missions[missionId];
             if (!mission?.departmentId) return;

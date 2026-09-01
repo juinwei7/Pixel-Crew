@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BossTaskDesk } from "../src/components/BossTaskDesk";
-import type { BossTask } from "../src/types";
+import { BossTaskDesk, bossStageProgress } from "../src/components/BossTaskDesk";
+import type { BossTask, DepartmentMission } from "../src/types";
 
 const task: BossTask = {
   id: "task-1",
@@ -101,6 +101,17 @@ test("renders a multi-department execution graph inside the same task log", () =
   assert.match(html, /PM · Plan MVP/);
   assert.match(html, /Engineering · Implement/);
   assert.match(html, /QA · Verify/);
+});
+
+test("Boss stage progress uses the live Mission step and assignee instead of a raw status", () => {
+  const stage = { id: "build", departmentId: "eng", departmentName: "Engineering", title: "Implement", objective: "build", acceptanceCriteria: [], dependsOn: [], status: "running" as const, missionId: "m2", report: null };
+  const mission: DepartmentMission = {
+    id: "m2", departmentId: "eng", workspacePath: "/repo", bossWorkerId: "lead", objective: "build", acceptanceCriteria: [], status: "executing", planSummary: null,
+    steps: [{ id: "step-2", title: "Build API", objective: "api", kind: "execute", assigneeWorkerId: "dev", acceptanceCriteria: [], status: "running", attempt: 1, result: null, reviewResult: null, startedAt: null, completedAt: null }],
+    currentStepIndex: 0, correctionCount: 0, maxCorrections: 1, error: null, createdAt: "2026-01-01", startedAt: null, completedAt: null,
+  };
+  assert.equal(bossStageProgress(stage, mission, [{ id: "dev", name: "小明" } as any]), "第 1/1 步：Build API · 小明");
+  assert.equal(bossStageProgress({ ...stage, missionId: null, status: "pending", dependsOn: ["plan"] }, undefined), "等待前一階段");
 });
 
 test("new Boss tasks use a compact chat-first starter state", () => {

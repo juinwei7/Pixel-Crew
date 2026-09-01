@@ -18,7 +18,7 @@ type Props = {
   onStart(bossWorkerId: string, token: string): Promise<string | null>;
   onLoadThread?(departmentId: string): Promise<{ data?: DepartmentThreadPayload; error?: string }>;
   onMessageDepartment?(departmentId: string, submission: CommandSubmission, acceptanceCriteria?: string[]): Promise<{ data?: DepartmentThreadPayload; error?: string }>;
-  onResetSessions?(departmentId: string, confirm: boolean, workerIds?: string[]): Promise<{ data?: { requiresConfirmation?: boolean; members?: Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }>; results?: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>; retryWorkerIds?: string[]; historyClearedAt?: string | null }; error?: string }>;
+  onResetSessions?(departmentId: string, confirm: boolean, workerIds?: string[], restartActiveMission?: boolean): Promise<{ data?: { requiresConfirmation?: boolean; members?: Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }>; results?: Array<{ workerId: string; name: string; ok: boolean; error: string | null }>; retryWorkerIds?: string[]; historyClearedAt?: string | null; activeMission?: DepartmentMission | null }; error?: string }>;
   resetRequestKey?: number;
   onCancel(id: string): Promise<string | null>;
   onRetryReview(id: string): Promise<string | null>;
@@ -128,6 +128,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
   const [threadLoading, setThreadLoading] = useState(false);
   const [resetPreview, setResetPreview] = useState<Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }> | null>(null);
   const [resetResults, setResetResults] = useState<Array<{ workerId: string; name: string; ok: boolean; error: string | null }> | null>(null);
+  const [restartingActiveMission, setRestartingActiveMission] = useState(false);
   const handledResetRequest = useRef(resetRequestKey);
   const department = workers.filter((worker) => boss.departmentId
     ? worker.departmentId === boss.departmentId
@@ -229,16 +230,17 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
   async function prepareSessionReset() {
     if (!departmentRecord || !onResetSessions) return;
     setWorking(true); setError(null); setResetResults(null);
-    const result = await onResetSessions(departmentRecord.id, false);
+    const restart = Boolean(activeMission);
+    const result = await onResetSessions(departmentRecord.id, false, undefined, restart);
     setWorking(false);
     if (result.error) setError(result.error);
-    else setResetPreview(result.data?.members ?? []);
+    else { setRestartingActiveMission(restart); setResetPreview(result.data?.members ?? []); }
   }
 
   async function confirmSessionReset(workerIds?: string[]) {
     if (!departmentRecord || !onResetSessions) return;
     setWorking(true); setError(null);
-    const result = await onResetSessions(departmentRecord.id, true, workerIds);
+    const result = await onResetSessions(departmentRecord.id, true, workerIds, restartingActiveMission);
     setWorking(false);
     if (result.error) setError(result.error);
     else {
@@ -400,7 +402,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
       {error && <div className="handoff-dialog__error" role="alert">{error}</div>}
       {resetPreview && <section className="department-reset" role="alertdialog" aria-label={t("確認重開部門工作階段")}>
         <strong>{t("為 {count} 位成員建立全新的 LLM 工作階段？", { count: resetPreview.length })}</strong>
-        <p>{t("部門畫面上的舊對話與 Mission 會清空，NPC 也會改用全新的模型上下文；Boss 任務、Boss Mission 詳情、附件與稽核仍會保留。")}</p>
+        <p>{restartingActiveMission ? t("目前進行中的 Mission 會先取消。部門畫面上的舊對話與 Mission 會清空，NPC 也會改用全新的模型上下文；Boss 任務、附件與稽核仍會保留。") : t("部門畫面上的舊對話與 Mission 會清空，NPC 也會改用全新的模型上下文；Boss 任務、Boss Mission 詳情、附件與稽核仍會保留。")}</p>
         <ul>{resetPreview.map((member) => <li key={member.workerId}>{member.name} · {member.provider}{member.model ? ` / ${member.model}` : ""}</li>)}</ul>
         <div><button type="button" onClick={() => setResetPreview(null)}>{t("取消")}</button><button type="button" className="collaboration-dialog__primary" onClick={() => void confirmSessionReset()}>{t("確認重開全部")}</button></div>
       </section>}

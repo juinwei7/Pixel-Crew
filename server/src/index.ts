@@ -62,7 +62,7 @@ import { registerApprovalRoutes } from "./approvalRoutes.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
-import { ProviderUsageRegistry } from "./providerUsage.js";
+import { AccountUsageRegistry, ProviderUsageRegistry } from "./providerUsage.js";
 import {
   composePersonaPrompt,
   normalizePersona,
@@ -271,13 +271,6 @@ function discardPendingImport(token: string): void {
   pendingImports.delete(token);
   rmSync(pending.stagingDir, { recursive: true, force: true });
 }
-const usageRegistry = new ProviderUsageRegistry(
-  store,
-  (usage) => {
-    broadcast({ type: "usage_updated", provider: usage.provider, usage });
-  },
-  (provider) => authStates[provider].status,
-);
 const updateChecker = new UpdateChecker(readCurrentVersion(), (info) => {
   broadcast({ type: "update_info", updateInfo: info });
 });
@@ -300,6 +293,20 @@ const accountRegistry = new AccountRegistry(
   (id) => store.getAccount(id),
   (provider, homeDir) => provider === "codex" ? new CodexAuthProvider(homeDir) : new ClaudeAuthProvider(homeDir),
 );
+const usageRegistry = new ProviderUsageRegistry(
+  store,
+  (usage) => {
+    broadcast({ type: "usage_updated", provider: usage.provider, usage });
+  },
+  (provider) => authStates[provider].status,
+);
+const accountUsageRegistry = new AccountUsageRegistry(
+  () => store.listAccounts(),
+  (accountId) => accountRegistry.stateFor(accountId)?.status ?? null,
+  (accountId, usage) => {
+    broadcast({ type: "account_usage_updated", accountId, usage });
+  },
+);
 const codexAccountLoginTracker = new CodexAccountLoginTracker(async (state) => {
   broadcast({
     type: "account_login_result",
@@ -312,7 +319,10 @@ const codexAccountLoginTracker = new CodexAccountLoginTracker(async (state) => {
     const auth = await accountRegistry.refresh(state.accountId);
     if (auth) {
       broadcast({ type: "account_auth_updated", accountId: state.accountId, auth });
-      if (auth.status === "authenticated") restartIdleWorkersForAccount(state.accountId);
+      if (auth.status === "authenticated") {
+        restartIdleWorkersForAccount(state.accountId);
+        void accountUsageRegistry.refresh(state.accountId, true);
+      }
     }
   }
 }, undefined, undefined, undefined, (state) => {
@@ -336,7 +346,10 @@ const claudeAccountLoginTracker = new ClaudeLoginTracker(async (state) => {
     const auth = await accountRegistry.refresh(state.accountId);
     if (auth) {
       broadcast({ type: "account_auth_updated", accountId: state.accountId, auth });
-      if (auth.status === "authenticated") restartIdleWorkersForAccount(state.accountId);
+      if (auth.status === "authenticated") {
+        restartIdleWorkersForAccount(state.accountId);
+        void accountUsageRegistry.refresh(state.accountId, true);
+      }
     }
   }
 }, undefined, undefined, undefined, (state) => {
@@ -2425,6 +2438,7 @@ wss.on("connection", (socket) => {
         auth: accountRegistry.stateFor(account.id),
       })),
       providerUsage: usageRegistry.getStates(),
+      accountUsage: accountUsageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       collaborations: store.listRecentCollaborationTasks(),
       missions: store.listDepartmentMissions(),
@@ -2563,11 +2577,15 @@ app.get("/api/auth", (_req, res) => {
 });
 
 app.get("/api/usage", (_req, res) => {
-  res.json({ usage: usageRegistry.getStates() });
+  res.json({ usage: usageRegistry.getStates(), accountUsage: accountUsageRegistry.getStates() });
 });
 
 app.post("/api/usage/refresh", async (_req, res) => {
-  res.json({ usage: await usageRegistry.refreshAll(true) });
+  const [usage, accountUsage] = await Promise.all([
+    usageRegistry.refreshAll(true),
+    accountUsageRegistry.refreshAll(true),
+  ]);
+  res.json({ usage, accountUsage });
 });
 
 // ── 優雅重啟 ────────────────────────────────────────────────────────────────
@@ -2916,7 +2934,8 @@ registerAccountRoutes({
     .map((worker) => worker.runner.name),
   cancelAccountLogin: (provider, accountId) => accountLoginTrackerFor(provider).cancel(accountId),
   invalidateAccountAuth: (accountId) => accountRegistry.invalidate(accountId),
-  onAccountDeleted: (_accountId, orphanedWorkerIds) => {
+  onAccountDeleted: (accountId, orphanedWorkerIds) => {
+    accountUsageRegistry.remove(accountId);
     for (const workerId of orphanedWorkerIds) {
       const worker = workers.get(workerId);
       if (!worker) continue;
@@ -2927,7 +2946,10 @@ registerAccountRoutes({
   refreshAccountAuth: (accountId) => accountRegistry.refresh(accountId),
   onAccountAuthUpdated: (accountId, auth) => {
     broadcast({ type: "account_auth_updated", accountId, auth });
-    if (auth.status === "authenticated") restartIdleWorkersForAccount(accountId);
+    void accountUsageRegistry.refresh(accountId, true);
+    if (auth.status === "authenticated") {
+      restartIdleWorkersForAccount(accountId);
+    }
   },
   startCodexLogin: (accountId, homeDir, mode, apiKey) => codexAccountLoginTracker.start(accountId, homeDir, mode, apiKey),
   startClaudeLogin: (accountId, homeDir) => claudeAccountLoginTracker.start(accountId, homeDir),
@@ -4441,6 +4463,48 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
   }
   broadcast({ type: "boss_task_deleted", bossTaskId: task.id });
   res.json({ ok: true, bossTaskId: task.id });
+});
+
+app.post("/api/boss-tasks/:id/restart", async (req, res) => {
+  const task = store.getBossTask(req.params.id);
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
+  if (task.archivedAt) { res.status(409).json({ error: t("封存的 Boss Task 不能重新交辦") }); return; }
+  if (task.status === "discovering" || task.status === "synthesizing") { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
+  const restartScope = bossTaskRestartScope(task);
+  const preflightError = restartScope.members.length > 0
+    ? await scopedRestartPreflightError(restartScope.members, restartScope.activeMissions)
+    : null;
+  if (preflightError) { res.status(409).json({ error: preflightError }); return; }
+  const preview = {
+    requiresConfirmation: true,
+    missions: restartScope.activeMissions.map((mission) => ({ id: mission.id, objective: mission.objective })),
+    departments: restartScope.departments.map(({ department }) => ({ id: department.id, name: department.name })),
+    members: restartScope.members.map((member) => ({ workerId: member.id, name: member.runner.name, provider: member.runner.provider, model: member.runner.getModel() ?? null })),
+    preserved: [t("附件"), t("稽核紀錄")],
+  };
+  if (req.body?.confirm !== true) { res.json(preview); return; }
+  for (const mission of restartScope.activeMissions) cancelMissionForScopedRestart(mission);
+  const outcomes = restartScope.departments.map(({ department, members }) => cleanDepartment(department, members));
+  const failed = outcomes.flatMap((outcome) => outcome.results).filter((result) => !result.ok);
+  if (failed.length > 0) {
+    task.status = "needs_attention";
+    task.error = t("部分 NPC 無法重建，Boss Task 尚未重新派工");
+    task.messages.push(bossTaskMessage("system", task.error));
+    persistBossTask(task);
+    res.status(500).json({ error: t("部分 NPC 無法重建，Boss Task 沒有重新派工"), results: failed });
+    return;
+  }
+  const clearedAt = new Date().toISOString();
+  task.historyClearedAt = clearedAt;
+  task.stages = [];
+  task.finalReport = null;
+  task.completedAt = null;
+  task.status = "discovering";
+  task.error = null;
+  task.messages.push(bossTaskMessage("system", t("已清空原本交辦並重新規劃；附件與稽核紀錄已保留。"), [], null, null, timestampAfter(clearedAt)));
+  persistBossTask(task);
+  await decideBossTask(task);
+  res.json({ bossTask: bossTaskForDisplay(task), ...preview });
 });
 
 app.post("/api/boss-tasks/:id/messages", async (req, res) => {
@@ -6037,9 +6101,9 @@ app.post("/api/workers/:id/model", (req, res) => {
   res.json({ ok: true });
 });
 
-async function departmentCleanPreflightError(members: Worker[]): Promise<string | null> {
+async function departmentCleanPreflightError(members: Worker[], allowedBusyWorkerIds: ReadonlySet<string> = new Set()): Promise<string | null> {
   const blocked = members.filter((worker) =>
-    worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id),
+    (worker.runner.busy && !allowedBusyWorkerIds.has(worker.id)) || handoffInProgress(worker) || collaborationInProgress(worker.id),
   );
   if (blocked.length > 0) {
     return t("以下 NPC 正在工作，不能重建：{names}", { names: blocked.map((worker) => worker.runner.name).join("、") });
@@ -6086,6 +6150,83 @@ function cleanDepartment(department: Department, members: Worker[]): DepartmentC
     broadcast({ type: "department_thread_updated", thread });
   }
   return { ok: failed.length === 0, results, historyClearedAt };
+}
+
+function cancelMissionForScopedRestart(mission: DepartmentMission): void {
+  if (!missionLocksWorkspace(mission)) return;
+  activeMissions.delete(mission.id);
+  missionActivities.delete(mission.id);
+  stopMissionRunners(mission.id, true);
+  mission.status = "cancelled";
+  mission.error = null;
+  mission.completedAt = new Date().toISOString();
+  store.saveDepartmentMission(mission);
+  pendingMissionReplans.delete(mission.id);
+  updateDepartmentThreadMission(mission.departmentId, null);
+  departmentAudit("mission_cancelled_for_restart", mission.departmentId, mission.id);
+  broadcastMission(mission);
+}
+
+function restartMissionMemberIds(missions: DepartmentMission[]): Set<string> {
+  return new Set(missions.flatMap((mission) => [
+    mission.bossWorkerId,
+    ...(mission.memberWorkerIds ?? []),
+    ...mission.steps.map((step) => step.assigneeWorkerId),
+  ]));
+}
+
+type BossTaskRestartScope = {
+  activeMissions: DepartmentMission[];
+  departments: Array<{ department: Department; members: Worker[] }>;
+  members: Worker[];
+};
+
+function bossTaskRestartScope(task: BossTask): BossTaskRestartScope {
+  const missionById = new Map<string, DepartmentMission>();
+  for (const stage of task.stages) {
+    if (!stage.missionId || missionById.has(stage.missionId)) continue;
+    const mission = activeMissions.get(stage.missionId) ?? store.getDepartmentMission(stage.missionId);
+    if (mission) missionById.set(mission.id, mission);
+  }
+  const taskMissions = [...missionById.values()];
+  const memberIdsByDepartment = new Map<string, Set<string>>();
+  for (const mission of taskMissions) {
+    if (!mission.departmentId) continue;
+    const ids = memberIdsByDepartment.get(mission.departmentId) ?? new Set<string>();
+    for (const id of restartMissionMemberIds([mission])) ids.add(id);
+    memberIdsByDepartment.set(mission.departmentId, ids);
+  }
+  const claimedMemberIds = new Set<string>();
+  const departmentsForTask = [...memberIdsByDepartment.entries()].flatMap(([departmentId, memberIds]) => {
+    const department = departments.get(departmentId);
+    if (!department) return [];
+    const members = [...memberIds].flatMap((id) => {
+      if (claimedMemberIds.has(id)) return [];
+      const member = workers.get(id);
+      if (!member) return [];
+      claimedMemberIds.add(id);
+      return [member];
+    });
+    return [{ department, members }];
+  });
+  return {
+    activeMissions: taskMissions.filter((mission) => missionLocksWorkspace(mission)),
+    departments: departmentsForTask,
+    members: departmentsForTask.flatMap(({ members }) => members),
+  };
+}
+
+async function scopedRestartPreflightError(members: Worker[], restarting: DepartmentMission[]): Promise<string | null> {
+  const restartingIds = new Set(restarting.map((mission) => mission.id));
+  const memberIds = new Set(members.map((member) => member.id));
+  const conflict = [...activeMissions.values()].find((mission) =>
+    !restartingIds.has(mission.id)
+    && missionLocksWorkspace(mission)
+    && [...restartMissionMemberIds([mission])].some((id) => memberIds.has(id)),
+  );
+  if (conflict) return t("{objective} 正在使用這些 NPC，不能清空重開", { objective: conflict.objective.slice(0, 120) });
+  const scopedWorkerIds = restartMissionMemberIds(restarting);
+  return departmentCleanPreflightError(members, scopedWorkerIds);
 }
 
 function bossTaskDepartments(task: BossTask): Department[] {
@@ -6135,7 +6276,8 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
   const department = departments.get(req.params.departmentId);
   if (!department) { res.status(404).json({ error: t("找不到部門") }); return; }
   const activeMission = workspaceMission(department.workspacePath, department.id);
-  if (activeMission) {
+  const restartActiveMission = req.body?.restartActiveMission === true;
+  if (activeMission && !restartActiveMission) {
     res.status(409).json({ error: t("部門仍有進行中或待決定的 Mission，不能重建工作階段"), mission: activeMission });
     return;
   }
@@ -6147,9 +6289,15 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
     .flatMap((id) => {
       const worker = workers.get(id);
       return worker ? [worker] : [];
-    });
+  });
   if (members.length === 0) { res.status(400).json({ error: t("沒有可重建工作階段的部門成員") }); return; }
-  const preflightError = await departmentCleanPreflightError(members);
+  if (activeMission && requestedIds) {
+    res.status(400).json({ error: t("重開進行中的 Mission 時必須重建整個部門") });
+    return;
+  }
+  const preflightError = activeMission
+    ? await scopedRestartPreflightError(members, [activeMission])
+    : await departmentCleanPreflightError(members);
   if (preflightError) {
     res.status(409).json({ error: preflightError });
     return;
@@ -6164,11 +6312,14 @@ app.post("/api/departments/:departmentId/sessions/reset", async (req, res) => {
     res.json({
       requiresConfirmation: true,
       members: preview,
+      activeMission: activeMission ?? null,
+      willCancelMission: Boolean(activeMission),
       preserved: [t("Boss 任務與其 Mission 詳情"), t("附件"), t("稽核紀錄")],
       discarded: [t("部門畫面上的舊對話與 Mission"), t("每位 NPC 的原生 LLM 對話上下文")],
     });
     return;
   }
+  if (activeMission) cancelMissionForScopedRestart(activeMission);
   const outcome = cleanDepartment(department, members);
   const failed = outcome.results.filter((result) => !result.ok);
   res.status(failed.length > 0 ? 207 : 200).json({
@@ -7082,10 +7233,14 @@ void Promise.all(store.listAccounts().map(async (account) => {
   const auth = await accountRegistry.refresh(account.id);
   if (!auth) return;
   broadcast({ type: "account_auth_updated", accountId: account.id, auth });
-  if (auth.status === "authenticated") restartIdleWorkersForAccount(account.id);
+  if (auth.status === "authenticated") {
+    restartIdleWorkersForAccount(account.id);
+    void accountUsageRegistry.refresh(account.id, true);
+  }
 }));
 const usageRefreshTimer = setInterval(() => {
   void usageRegistry.refreshAll(true);
+  void accountUsageRegistry.refreshAll(true);
 }, 5 * 60_000);
 usageRefreshTimer.unref();
 

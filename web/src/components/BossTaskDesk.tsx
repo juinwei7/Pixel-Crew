@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { BossTask, CommandSubmission, ExecutionProfile, ProviderId } from "../types";
+import type { BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 
@@ -10,6 +10,8 @@ type DecisionModelOption = { provider: ProviderId; model: string; label: string 
 type Props = {
   workspacePath: string;
   tasks: BossTask[];
+  missions?: DepartmentMission[];
+  workers?: WorkerState[];
   decisionModels: DecisionModelOption[];
   onCreate(input: {
     message: string;
@@ -28,6 +30,7 @@ type Props = {
   onMessage(id: string, submission: CommandSubmission): Promise<{ data?: BossTask; error?: string }>;
   onUpdate(id: string, patch: { title?: string; archived?: boolean }): Promise<{ data?: BossTask; error?: string }>;
   onDelete(id: string): Promise<{ error?: string }>;
+  onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
   onOpenMission?(missionId: string): void;
   onClose(): void;
   composerHost?: Element | null;
@@ -59,7 +62,32 @@ function workspaceLabel(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 }
 
-export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, onMessage, onUpdate, onDelete, onOpenMission, onClose, composerHost, focusMode = false }: Props) {
+export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMission | undefined, workers: WorkerState[] = []): string {
+  if (!mission) {
+    if (stage.status === "completed") return t("已完成");
+    if (stage.status === "failed") return t("失敗");
+    if (stage.status === "cancelled") return t("已取消");
+    return stage.dependsOn.length > 0 ? t("等待前一階段") : t("等待啟動");
+  }
+  if (mission.status === "planning") return t("規劃中");
+  if (mission.status === "reviewing") return t("審核交付中");
+  if (mission.status === "needs_attention") return t("等待你決定");
+  if (mission.status === "completed") return t("已完成");
+  if (mission.status === "failed") return t("失敗");
+  if (mission.status === "cancelled") return t("已取消");
+  const currentIndex = mission.currentStepIndex;
+  const step = currentIndex == null ? null : mission.steps[currentIndex];
+  if (!step) return t("執行中");
+  const assignee = workers.find((worker) => worker.id === step.assigneeWorkerId)?.name;
+  return t("第 {current}/{total} 步：{title}{assignee}", {
+    current: (currentIndex ?? 0) + 1,
+    total: mission.steps.length || 1,
+    title: step.title,
+    assignee: assignee ? ` · ${assignee}` : "",
+  });
+}
+
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onClose, composerHost, focusMode = false }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -192,6 +220,21 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
     setSelectedId(activeTasks.find((task) => task.id !== selected.id)?.id ?? null);
   }
 
+  async function restartTask() {
+    if (!selected || !onRestart || working) return;
+    setWorking(true); setError(null);
+    const preview = await onRestart(selected.id, false);
+    setWorking(false);
+    if (preview.error) { setError(preview.error); return; }
+    const missionCount = preview.data?.missions?.length ?? 0;
+    const memberNames = preview.data?.members?.map((member) => member.name).join("、") || t("相關 NPC");
+    if (!window.confirm(t("清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。", { count: missionCount, members: memberNames }))) return;
+    setWorking(true); setError(null);
+    const committed = await onRestart(selected.id, true);
+    setWorking(false);
+    if (committed.error) setError(committed.error);
+  }
+
   const canReply = selected && ["needs_input", "needs_attention", "completed", "failed"].includes(selected.status);
   const placeholder = !selected || newTask
     ? t("直接交辦你想做的工作，例如：我要上週業績報告")
@@ -301,6 +344,10 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
           profile: selected.executionBudget.label, agents: selected.executionBudget.maxAgents, stages: selected.executionBudget.maxStages,
           steps: selected.executionBudget.maxMissionSteps, min: selected.executionBudget.estimatedDurationMinutes.min, max: selected.executionBudget.estimatedDurationMinutes.max,
         })}</p>}
+        {selected.stages.length > 0 && <p className="boss-task-stages__progress">{t("已完成 {completed}/{total} 個部門階段", {
+          completed: selected.stages.filter((stage) => (stage.missionId ? missions.find((mission) => mission.id === stage.missionId)?.status : stage.status) === "completed").length,
+          total: selected.stages.length,
+        })}</p>}
         <div className="boss-task-desk__messages">
           {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}`}>
             <span>{entry.role === "boss" ? t("老闆") : entry.role === "decision_model" ? t("決策模型") : entry.role === "report" ? t("最終報告") : "Pixel Crew"}</span>
@@ -313,9 +360,10 @@ export function BossTaskDesk({ workspacePath, tasks, decisionModels, onCreate, o
         {selected.stages.length > 0 && <div className="boss-task-stages">
           <h3>{selected.executionMode === "research" ? t("部門快速研究") : t("跨部門執行")}</h3>
           {selected.stages.map((stage, index) => <button key={stage.id} type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
-            <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{stage.status}</small></span>
+            <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined, workers)}</small></span>
           </button>)}
         </div>}
+        {onRestart && !selected.archivedAt && <button type="button" className="boss-task-desk__restart" disabled={working || selected.status === "discovering" || selected.status === "synthesizing"} onClick={() => void restartTask()}>{t("清空並重新交辦")}</button>}
       </>}
     </div>
 
