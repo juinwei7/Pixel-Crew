@@ -48,6 +48,44 @@ test("migrates existing custom avatars to the custom source without losing them"
   }
 });
 
+test("keeps pre-managed-account Claude sessions on their original home", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-legacy-claude-home-"));
+  let store: LocalStore | null = null;
+  try {
+    const path = join(dir, "test.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE workers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model TEXT,
+        color_index INTEGER NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        workspace_path TEXT,
+        claude_session_id TEXT NOT NULL,
+        completed_turns INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO workers (id, name, color_index, provider, workspace_path, claude_session_id, completed_turns)
+      VALUES
+        ('old-claude', '舊 Claude', 0, 'claude', '/repo', 'legacy-session', 4),
+        ('new-claude', '新 Claude', 1, 'claude', '/repo', 'new-session', 0),
+        ('old-codex', '舊 Codex', 2, 'codex', '/repo', 'codex-session', 5);
+    `);
+    legacy.close();
+
+    store = new LocalStore(path);
+    const homes = new Map(store.loadWorkers(10).map((worker) => [worker.id, worker.claudeHomeMode]));
+    assert.equal(homes.get("old-claude"), "legacy");
+    assert.equal(homes.get("new-claude"), "managed");
+    assert.equal(homes.get("old-codex"), "managed");
+  } finally {
+    store?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("persists workers, bounded events, and capability cache", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-"));
   const stores: LocalStore[] = [];
@@ -126,6 +164,7 @@ test("persists workers, bounded events, and capability cache", () => {
     assert.equal(worker.avatarPresetId, "signal");
     assert.deepEqual(worker.persona, { role: "前端 QA", instructions: "回報 bug 附重現步驟" });
     assert.equal(worker.autoApproveMode, "full");
+    assert.equal(worker.claudeHomeMode, "managed");
     assert.deepEqual(worker.events.map((event) => event.type), ["text_delta", "turn_end"]);
     assert.deepEqual(reopened.loadCapabilities("/repo"), capabilities);
     assert.deepEqual(reopened.loadProviderUsage("claude"), usage);

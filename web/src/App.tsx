@@ -192,8 +192,13 @@ export function App() {
   // BOSS 桌從頂欄與看板空狀態兩處進入，開法保持一致。
   const openBossDesk = () => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); setTaskSearchOpen(false); updatePreferences({ taskLogOpen: true }); };
   const [restartPending, setRestartPending] = useState(false);
-  // 重啟完成後 WebSocket 會斷線再重連;重連成功就把 pending 徽章收掉
-  useEffect(() => { if (wsReady) setRestartPending(false); }, [wsReady]);
+  const [updateApplying, setUpdateApplying] = useState(false);
+  // 重啟或更新完成後 WebSocket 會斷線再重連；重連成功才把暫態按鈕收掉。
+  useEffect(() => {
+    if (!wsReady) return;
+    setRestartPending(false);
+    setUpdateApplying(false);
+  }, [wsReady]);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [bossAssignmentOpen, setBossAssignmentOpen] = useState(false);
   const [pendingModelSwitch, setPendingModelSwitch] = useState<{ workerId: string; model: string } | null>(null);
@@ -886,6 +891,19 @@ export function App() {
     }
   }
 
+  async function requestAppUpdate() {
+    if (updateApplying) return;
+    if (!window.confirm(t("確定下載並更新嗎？會驗證官方更新檔，完成後 Pixel Crew 會自動重新開啟。所有 NPC 必須先完成目前工作。"))) return;
+    try {
+      setUpdateApplying(true);
+      await apiRequest<{ ok: boolean }>("/api/update/apply", { method: "POST" });
+      notify(t("正在下載並安裝新版；完成後會自動重新開啟。"), "info");
+    } catch (error) {
+      setUpdateApplying(false);
+      notify(error instanceof Error ? error.message : t("更新請求失敗"), "error");
+    }
+  }
+
   return (
     <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
@@ -965,6 +983,8 @@ export function App() {
         notificationsEnabled={preferences.notificationsEnabled}
         onNotificationsToggle={toggleNotifications}
         updateInfo={updateInfo}
+        onApplyUpdate={() => void requestAppUpdate()}
+        updateApplying={updateApplying}
       >
         {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
       </TopBar>

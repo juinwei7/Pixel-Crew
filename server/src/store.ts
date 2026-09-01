@@ -166,6 +166,7 @@ export type PersistedWorker = {
   events: RunnerEvent[];
   departmentId: string | null;
   accountId: string | null;
+  claudeHomeMode?: "legacy" | "managed";
 };
 
 export type ProviderAccount = {
@@ -548,7 +549,7 @@ export class LocalStore {
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode
       FROM workers ORDER BY sort_order, created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -581,6 +582,7 @@ export class LocalStore {
         events,
         departmentId: row.department_id == null ? null : String(row.department_id),
         accountId: row.account_id == null ? null : String(row.account_id),
+        claudeHomeMode: row.claude_home_mode === "legacy" ? "legacy" : "managed",
       };
     });
   }
@@ -589,8 +591,8 @@ export class LocalStore {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -606,6 +608,7 @@ export class LocalStore {
           auto_approve_mode = excluded.auto_approve_mode,
           department_id = excluded.department_id,
           account_id = excluded.account_id,
+          claude_home_mode = excluded.claude_home_mode,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -623,6 +626,7 @@ export class LocalStore {
         worker.autoApproveMode,
         worker.departmentId ?? null,
         worker.accountId ?? null,
+        worker.claudeHomeMode === "legacy" ? "legacy" : "managed",
       );
     });
   }

@@ -181,14 +181,14 @@ test("shows the update button only when a newer release exists", () => {
   const withUpdate = renderToStaticMarkup(<TopBar
     {...(updateBaseProps as any)}
     active={worker}
-    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true, releaseUrl: "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.1.0", checkedAt: "2026-07-17T00:00:00Z" }}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.1.0", updateAvailable: true, oneClickAvailable: false, releaseUrl: "https://github.com/juinwei7/Pixel-Crew/releases/tag/v1.1.0", checkedAt: "2026-07-17T00:00:00Z" }}
   />);
   assert.match(withUpdate, /有新版 v1\.1\.0/);
 
   const current = renderToStaticMarkup(<TopBar
     {...(updateBaseProps as any)}
     active={worker}
-    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.0.0", updateAvailable: false, releaseUrl: null, checkedAt: "2026-07-17T00:00:00Z" }}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: "1.0.0", updateAvailable: false, oneClickAvailable: false, releaseUrl: null, checkedAt: "2026-07-17T00:00:00Z" }}
   />);
   assert.doesNotMatch(current, /有新版/);
 });
@@ -201,7 +201,7 @@ test("health popover data includes the running version", () => {
   const html = renderToStaticMarkup(<TopBar
     {...(updateBaseProps as any)}
     active={worker}
-    updateInfo={{ currentVersion: "1.0.0", latestVersion: null, updateAvailable: false, releaseUrl: null, checkedAt: null }}
+    updateInfo={{ currentVersion: "1.0.0", latestVersion: null, updateAvailable: false, oneClickAvailable: false, releaseUrl: null, checkedAt: null }}
   />);
   assert.doesNotMatch(html, /有新版/);
 });

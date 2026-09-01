@@ -1,5 +1,11 @@
 /** server 端英文字典 A（index.ts 專用）。key=中文原文（或 "語境::原文"）。 */
 export const enServerA: Record<string, string> = {
+  // self-update
+  "此安裝方式不支援一鍵更新，請下載 Windows Release ZIP": "This installation does not support one-click update; download the Windows Release ZIP instead",
+  "新版已在下載及安裝中": "The new version is already downloading and installing",
+  "目前沒有可安裝的新版": "There is no newer version ready to install",
+  "請先等所有 NPC 工作完成，再開始更新": "Wait for every NPC to finish before starting the update",
+  "無法啟動更新工具：{message}": "Could not start the update tool: {message}",
   "還原正在進行中": "A restore is already in progress",
   "自訂指令數量已達上限（{max} 個）": "Custom command limit reached ({max})",
   "附件保存失敗，請稍後重試": "Failed to save attachment, please try again later",

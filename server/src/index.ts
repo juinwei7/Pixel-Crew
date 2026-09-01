@@ -13,7 +13,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ import { CodexSession, codexChildEnv } from "./codexRunner.js";
 import type { AgentSession, MessageDocument, MessageImage } from "./providers/session.js";
 import type { AgentAuthProvider, ProviderAuthState, ProviderId } from "./providers/types.js";
 import { UpdateChecker, readCurrentVersion } from "./updateCheck.js";
+import { bundledWindowsRoot, releaseVersion } from "./selfUpdate.js";
 import { registerWorkflowLibraryRoutes } from "./workflowLibraryRoutes.js";
 import { isAllowedLocalRequest, isAllowedLoopbackOrigin } from "./localAccess.js";
 import { WorkflowLibraryWatcher } from "./workflowWatcher.js";
@@ -276,9 +277,11 @@ function discardPendingImport(token: string): void {
   pendingImports.delete(token);
   rmSync(pending.stagingDir, { recursive: true, force: true });
 }
-const updateChecker = new UpdateChecker(readCurrentVersion(), (info) => {
-  broadcast({ type: "update_info", updateInfo: info });
-});
+const updateChecker = new UpdateChecker(
+  readCurrentVersion(),
+  (info) => { broadcast({ type: "update_info", updateInfo: info }); },
+  () => bundledWindowsRoot(process.platform, process.execPath, existsSync) !== null,
+);
 updateChecker.start();
 migrateAmbientCodexHome(config.defaultCodexHome);
 migrateAmbientClaudeHome(config.defaultClaudeHome);
@@ -459,6 +462,7 @@ type Worker = {
   // in the provider-agnostic `accounts` table whose `provider` must match
   // runner.provider.
   accountId: string | null;
+  claudeHomeMode: "legacy" | "managed";
   resumeCandidate: ResumeCandidate | null;
 };
 
@@ -730,7 +734,11 @@ function workerProviderReady(worker: Worker): boolean {
   return workerAuthState(worker).status === "authenticated";
 }
 
-function homeForWorker(worker: Worker): string {
+function homeForWorker(worker: Worker): string | null {
+  // A pre-managed-accounts session must resume from the ambient Claude home
+  // that created it. Forcing CLAUDE_CONFIG_DIR to the new private home makes
+  // Claude see the old --resume id without its history.
+  if (worker.runner.provider === "claude" && !worker.accountId && worker.claudeHomeMode === "legacy") return null;
   const fallback = worker.runner.provider === "codex" ? config.defaultCodexHome : config.defaultClaudeHome;
   if (!worker.accountId) return fallback;
   const account = store.getAccount(worker.accountId);
@@ -790,6 +798,7 @@ function workerPersistenceRecord(worker: Worker): Omit<PersistedWorker, "events"
     autoApproveMode: worker.autoApproveMode,
     departmentId: worker.departmentId,
     accountId: worker.accountId,
+    claudeHomeMode: worker.claudeHomeMode,
     ...session,
   };
 }
@@ -1685,6 +1694,7 @@ function createWorker(
     handoff: persisted ? store.loadLatestFailedHandoff(id) : null,
     departmentId: persisted?.departmentId ?? departmentId,
     accountId: persisted?.accountId ?? accountId,
+    claudeHomeMode: persisted?.claudeHomeMode ?? "managed",
     resumeCandidate: persisted ? store.getResumeCandidate(id) : null,
   };
   const initialState = persisted
@@ -1792,7 +1802,13 @@ function workerCleanDeps(worker: Worker): WorkerCleanDeps {
       || handoffInProgress(worker)
       || collaborationInProgress(worker.id)
       || missionInProgress(worker.id),
-    createRunner: (provider, workspacePath) => createRunner(worker, provider, workspacePath),
+    createRunner: (provider, workspacePath) => {
+      // /clean intentionally drops the native conversation. Switch before
+      // warmup so the fresh Claude process is born in the managed home rather
+      // than inheriting the legacy session's ambient home for one more turn.
+      if (provider === "claude" && !worker.accountId) worker.claudeHomeMode = "managed";
+      return createRunner(worker, provider, workspacePath);
+    },
     persistWorker: () => persistWorker(worker),
     saveCheckpoint: (runner) => store.saveProviderCheckpoint(
       worker.id,
@@ -2601,6 +2617,7 @@ app.post("/api/usage/refresh", async (_req, res) => {
 let restartPending = false;
 let restartFailure: string | null = null;
 let restartTimer: ReturnType<typeof setInterval> | null = null;
+let selfUpdatePending = false;
 
 // dev（tsx watch, cwd=server/）跟正式版（node server/dist/index.js, cwd=release
 // 根目錄）下 process.cwd() 不一致；下面重啟/遠端存取用到的檔案
@@ -2647,6 +2664,43 @@ function launchRestartHelper(command: string, args: string[]): void {
   } catch (error) {
     failServerRestart(t("無法啟動重啟工具：{message}", { message: (error as Error).message }));
   }
+}
+
+async function launchWindowsSelfUpdate(version: string): Promise<void> {
+  const root = bundledWindowsRoot(process.platform, process.execPath, existsSync);
+  if (!root) throw new Error(t("此安裝方式不支援一鍵更新，請下載 Windows Release ZIP"));
+  const helperSource = join(root, "scripts", "windows", "self-update.ps1");
+  const helperDir = mkdtempSync(join(tmpdir(), "pixel-crew-update-launch-"));
+  const helper = join(helperDir, "self-update.ps1");
+  try {
+    copyFileSync(helperSource, helper);
+  } catch (error) {
+    rmSync(helperDir, { recursive: true, force: true });
+    throw error;
+  }
+  await new Promise<void>((resolve, reject) => {
+    let started = false;
+    try {
+      const updater = spawn("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper,
+        "-InstallRoot", root, "-Version", version, "-ServerPid", String(process.pid),
+      ], { detached: true, stdio: "ignore", windowsHide: true });
+      updater.once("spawn", () => {
+        started = true;
+        updater.unref();
+        resolve();
+      });
+      updater.once("error", (error) => {
+        if (!started) {
+          rmSync(helperDir, { recursive: true, force: true });
+          reject(error);
+        } else console.error("[self-update] updater failed after launch:", error);
+      });
+    } catch (error) {
+      rmSync(helperDir, { recursive: true, force: true });
+      reject(error);
+    }
+  });
 }
 
 function performServerRestart(): void {
@@ -2709,6 +2763,38 @@ app.post("/api/restart-server", (_req, res) => {
 
 app.get("/api/restart-server/status", (_req, res) => {
   res.json({ pending: restartPending, error: restartFailure });
+});
+
+app.post("/api/update/apply", async (_req, res) => {
+  if (selfUpdatePending) {
+    res.status(409).json({ error: t("新版已在下載及安裝中") });
+    return;
+  }
+  const info = updateChecker.getInfo();
+  const version = info.updateAvailable ? releaseVersion(info.latestVersion) : null;
+  if (!version) {
+    res.status(409).json({ error: t("目前沒有可安裝的新版") });
+    return;
+  }
+  if (!info.oneClickAvailable) {
+    res.status(409).json({ error: t("此安裝方式不支援一鍵更新，請下載 Windows Release ZIP") });
+    return;
+  }
+  if ([...workers.values()].some((worker) => workerSummary(worker).busy)) {
+    res.status(409).json({ error: t("請先等所有 NPC 工作完成，再開始更新") });
+    return;
+  }
+  try {
+    await launchWindowsSelfUpdate(version);
+    selfUpdatePending = true;
+    console.log(`[self-update] v${version} download and verified replacement scheduled`);
+    res.json({ ok: true, version });
+    const timer = setTimeout(() => exitAfterShutdown("self update", 0), 800);
+    timer.unref();
+  } catch (error) {
+    console.error("[self-update] unable to launch updater:", error);
+    res.status(503).json({ error: t("無法啟動更新工具：{message}", { message: (error as Error).message }) });
+  }
 });
 
 // Windows' normal launcher deliberately runs without a persistent console or
@@ -5768,11 +5854,11 @@ function saveWarroomReport(topic: string, difficulty: WarRoomDifficulty, result:
 }
 
 // 難度自動分級：用便宜模型快速判斷 simple/medium/hard，讓簡單題別浪費強模型（省 token）。
-async function triageDifficulty(topic: string, workspacePath: string, provider: ProviderId, homeDir: string): Promise<WarRoomDifficulty> {
+async function triageDifficulty(topic: string, workspacePath: string, provider: ProviderId, homeDir?: string | null): Promise<WarRoomDifficulty> {
   try {
     const { text } = await runDetachedTurn(provider, workspacePath, warroomModels(provider, "simple").peer, undefined, null,
       t("判斷這個討論主題的難度，只回一個英文單詞：simple（常識/簡單）、medium（需要一些分析）、hard（架構/專業/多方權衡）。規則：只要主題涉及「即時資訊」（今日行情、天氣、新聞、現價…需要上網查證的），至少回 medium，不可回 simple——因為查證需要較可靠的模型執行。不要多寫。\n主題：{topic}", { topic }),
-      30_000, { kind: "no_tools" }, homeDir);
+      30_000, { kind: "no_tools" }, homeDir ?? undefined);
     const lowered = text.toLowerCase();
     if (lowered.includes("hard")) return "hard";
     if (lowered.includes("simple")) return "simple";

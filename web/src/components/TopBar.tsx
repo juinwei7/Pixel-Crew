@@ -51,6 +51,8 @@ type Props = {
   notificationsEnabled: boolean;
   onNotificationsToggle(): void;
   updateInfo?: UpdateInfo | null;
+  onApplyUpdate?(): void;
+  updateApplying?: boolean;
   /** 置中插槽（能量條）：排進 flex 流裡跟其他控件互相讓位，不再蓋住任何按鈕。 */
   children?: ReactNode;
 };
@@ -89,6 +91,8 @@ export function TopBar({
   notificationsEnabled,
   onNotificationsToggle,
   updateInfo = null,
+  onApplyUpdate,
+  updateApplying = false,
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
@@ -403,6 +407,14 @@ export function TopBar({
               <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">
                 {t("查看 Release（打包版下載新 zip）")}
               </a>
+              {updateInfo.oneClickAvailable && onApplyUpdate && <button
+                type="button"
+                className="update-popover__apply"
+                disabled={updateApplying}
+                onClick={() => onApplyUpdate()}
+              >
+                {updateApplying ? t("正在下載並更新…") : t("下載並更新至 v{version}", { version: updateInfo.latestVersion ?? "" })}
+              </button>}
               <small>{t("git clone 使用者更新方式：")}</small>
               <code>git pull && npm install && npm run build</code>
               <button
