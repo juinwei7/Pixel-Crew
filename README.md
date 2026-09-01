@@ -18,7 +18,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
 - **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
-- **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart.
+- **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart; each stage shows the linked Mission’s planning state, current step, and owner, while deliberate restart is limited to that task’s linked Missions and NPCs.
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
 - **AI-routed department work** — use one “Hand to department” action; the Boss chooses a focused read-only Consult/Review or a full 2–5 step Mission, assigns same-workspace specialists, and keeps handoffs moving until completion or a real approval is needed.
@@ -30,7 +30,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 - **Image and document prompts** — paste or pick PNG/JPEG/WebP images plus text, Markdown, CSV, JSON, HTML, XML, YAML, PDF and modern Office documents. Images use native multimodal input; documents are staged privately for the selected CLI and removed after the turn.
 - **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their attachments run in order.
 - **Interactive approvals** — allow once, deny, or grant a supported scoped session rule directly in the task log.
-- **Work-energy HUD** — shows each provider's remaining usage at a glance.
+- **Work-energy HUD** — separates remaining usage for the shared login and every named Claude/Codex account.
 - **Local-first** — Pixel Crew binds to `127.0.0.1`, stores its own state in local SQLite, and adds no hosted backend or API-key form. Tasks still go through the selected provider's official CLI and service under that CLI's terms.
 
 ## Quick start
@@ -75,8 +75,9 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **專心閱讀與工作室**：把完成的 NPC 對話切成專注閱讀工作區。左側可縮放的「工作室」欄列出受管理的本機工作資料夾，可用 `Alt+1`–`Alt+9` 快速切換，會記住各工作室最後選過的 NPC；並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind，不會修改 repository。
 - **Focus 工作台**：Focus Reader 可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
 - **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
+- **帳號工作能量**：頂部 HUD 分開顯示共用登入與每個具名稱 Claude Code／Codex 帳號的用量；重新整理只讀取已登入帳號各自的官方 CLI，不混用不同帳號的 quota。
 - **Codex 目標與指令面板**：用 `/goal` 設定、查看或清除 thread 的目標；Focus 控制與指令管理也會呈現內建 Codex 對話控制，而自訂面板項目會明確標示為一般聊天文字。
-- **持久化老闆任務日誌**：從頂部 Boss Desk 以聊天方式直接交辦。任務、探索問題、回答、跨部門進度與最終報告都會保存，切換畫面或重啟後仍可繼續。
+- **持久化老闆任務日誌**：從頂部 Boss Desk 以聊天方式直接交辦。任務、探索問題、回答、跨部門進度與最終報告都會保存，切換畫面或重啟後仍可繼續；每個階段直接顯示 Mission 的規劃、目前步驟與負責 NPC。需要重做時，可明確確認後只清空該 Boss Task 所連結的 Mission 與 NPC，衝突中的工作、交接或協作會先阻擋操作。
 - **跨部門編排**：決策模型可依真實部門與 NPC 職務建立經過驗證的依賴圖，依序安排 PM、工程、QA 等部門；每個部門收到明確的上游報告，最後只向老闆提交一份彙整結果。
 - **NPC 管理**：最多同時建立 20 位 NPC，可從左側清單重新命名；名稱與對話會保存在本機 SQLite。
 - **NPC 個性 / 職務**：為每位 NPC 設定「職務」與「詳細指示」，會在每次啟動時自動注入（Claude 透過 `--append-system-prompt`、Codex 透過 `model_instructions_file`），即使 `/clear`、換模型或重啟服務都保留，不必每次重講。也能把常用人設存成範本，一鍵套用到其他 NPC。
@@ -94,7 +95,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
 - **互動式核准**：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次或拒絕；Codex 另支援「本次工作階段皆允許」。
-- **全域工作能量**：頂部 HUD 顯示 Claude 與 Codex 目前的剩餘用量（讀取各自 CLI 的用量資訊），為帳號共用、不隨房間或 NPC 切換。
+- **全域工作能量**：頂部 HUD 顯示共用與每個具名稱 Claude／Codex 帳號目前的剩餘用量（讀取各自 CLI 的用量資訊），不隨房間或 NPC 切換。
 - **更可靠的本機執行環境**：Server 能妥善恢復計畫性重啟與卡住的背景活動；Windows release 預設隱藏啟動，並透過系統匣提供開啟、重啟、停止與查看 log。
 - **富文字對話**：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
 - **像素辦公室**：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
