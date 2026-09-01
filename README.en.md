@@ -41,6 +41,7 @@ The work itself is still carried out by the **official CLIs already installed on
 - **Live streaming** — replies, thinking, tool input/output, and final results stream over WebSocket.
 - **Image and document prompts** — paste or pick PNG/JPEG/WebP images plus text, Markdown, CSV, JSON, HTML, XML, YAML, PDF, and modern Office documents. Images use native multimodal input; documents are staged privately for the selected CLI and removed after the turn.
 - **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their attachments run in order.
+- **Local voice input (optional)** — speak into an NPC composer, then review and edit the Traditional Chinese draft before sending. Recording and transcription stay local; the model downloads once and works offline afterwards.
 - **Interactive approvals** — allow once, deny, or grant a supported scoped session rule directly in the task log; Codex additionally supports "allow for this session."
 - **Work-energy HUD** — a top-of-screen HUD shows remaining usage for the shared login and every named Claude/Codex account, never per room or NPC.
 - **Resilient local runtime** — the server recovers cleanly from planned restarts and stalled background activity; Windows releases launch hidden by default and expose open, restart, stop, and log actions through a tray controller.
@@ -165,7 +166,7 @@ codex login
 
 1. Pick `Claude Code` or `Codex` from the provider menu in the top right. An idle NPC switches type in place; one with an existing conversation shows the handoff risk and target usage first, then hands off via a summary once confirmed.
 2. Click the room name at the top of the screen. macOS and Windows can use the native folder picker directly, or you can type an absolute local path or pick a recent room. The current NPC relocates in place — this never creates additional NPCs.
-3. Type a task for the active worker in the bottom composer (`Enter` to send, `Shift+Enter` for a new line; images can be pasted directly). IME composition is respected, so committing a character with `Enter` won't accidentally send the message. You can keep typing while a worker is busy — follow-ups queue and send in order.
+3. Type a task for the active worker in the bottom composer (`Enter` to send, `Shift+Enter` for a new line; images can be pasted directly). IME composition is respected, so committing a character with `Enter` won't accidentally send the message. You can keep typing while a worker is busy — follow-ups queue and send in order. When a local voice engine is configured, the microphone records and appends an editable transcript to the draft; it never sends the message automatically.
 4. Claude workers can type `/` to see room-, user-, and CLI-level native slash commands; Codex workers can type `/` for Pixel Crew's supported native conversation controls, or `$` for the current room's repo skills. Provider-specific TUI-only controls (model, permissions, MCP, etc.) are exposed through Pixel Crew's own top-bar UI instead.
 5. Set a **persona / role** from an NPC's "•••" menu: fill in a role and detailed instructions and the NPC will work from that persona going forward. Personas can be applied from, or saved as, reusable templates.
 6. Open **Account management** from the top bar to add a named Claude Code or Codex login, authenticate it in the browser (Codex also supports its normal API-key flow), and select it when creating an NPC. A worker with native conversation history must be cleared before changing accounts, so no account change quietly abandons its provider-side thread.
@@ -198,6 +199,18 @@ Config file: `server/.env`
 | `PORT` | `8787` | Backend port |
 | `DB_PATH` | OS per-user app-data directory | SQLite database location; defaults to `%LOCALAPPDATA%\Pixel Crew\cockpit.sqlite` on Windows |
 | `AVATAR_DIR` | `avatars/` next to the database | Local storage directory for normalized NPC PNGs and validated GIFs |
+| `WHISPER_SERVER_BIN` | `whisper-server` | Optional `whisper.cpp` transcription-server executable; may be an absolute path |
+| `VOICE_SERVER_PORT` | `8793` | Loopback port for the local `whisper-server` |
+
+### Local voice input (optional)
+
+Voice input needs a compatible `whisper.cpp` `whisper-server` executable installed separately. Pixel Crew does not bundle the engine or its model: make the executable available on `PATH`, or set its absolute location in `server/.env`:
+
+```dotenv
+WHISPER_SERVER_BIN=/absolute/path/to/whisper-server
+```
+
+The microphone in an NPC's primary composer asks for confirmation before its first download of the multilingual **Whisper medium** model (`ggml-medium.bin`, about 1.5 GB). The model is kept in `voice-models/` next to the SQLite database — by default on Windows, `%LOCALAPPDATA%\Pixel Crew\voice-models\ggml-medium.bin`. Downloads receive SHA-256 integrity verification and transcription works offline afterwards. The button is available only when Pixel Crew is opened through `localhost`; remote and mobile access do not support voice input.
 
 ### Web (advanced)
 
@@ -215,6 +228,7 @@ Config file: `web/.env`
 - Each named provider account gets its own private CLI home beneath Pixel Crew data; its label and assignment are stored locally, while authentication remains owned by the provider's official CLI. Deleting an account removes that private home and moves its idle NPCs back to the shared login.
 - Uploaded avatar source images are processed entirely in the browser; the server only ever stores validated 24×32 PNGs. GIFs are kept as-is to preserve animation, capped at 2 MiB, 320×320, 120 frames, and 8 million decoded pixels, and played back using the GIF's own per-frame timing. Both live in `avatars/` next to the database.
 - A worker's room path is stored in SQLite; the actual project files stay in their original local folder and are never copied into Pixel Crew.
+- Raw voice recordings exist only in browser memory and for the duration of the loopback transcription request. Pixel Crew does not write them to SQLite, backups, diagnostics, or regular logs. The model is stored in `voice-models/` next to the database, never in a working repository.
 - Message images are only ever relayed to the active provider through the local loopback server. Codex's required local image staging files are created with `0600` permissions and deleted when the turn completes, aborts, or fails; image content is never written into Pixel Crew's SQLite event history.
 - Personas are injected via a per-NPC temporary instructions file (Codex) or launch argument (Claude), created with `0600` permissions and cleared when the session ends.
 - Raw HTML produced by an agent is passed through an allowlist sanitizer before rendering; scripts, event handlers, and dangerous URLs are never injected directly into the page.

@@ -4,7 +4,14 @@ import { encodeWavBlob, hasAudibleSpeech, isLocalVoiceInputContext, resampleToMo
 import { t } from "../i18n";
 
 export type VoiceModelStatus = "not_downloaded" | "downloading" | "ready" | "failed";
-export type VoiceModelState = { status: VoiceModelStatus; bytesDownloaded: number; totalBytes: number; error: string | null };
+export type VoiceModelState = {
+  status: VoiceModelStatus;
+  bytesDownloaded: number;
+  totalBytes: number;
+  error: string | null;
+  name: string;
+  fileName: string;
+};
 export type VoiceStatusResponse = { engineAvailable: boolean; model: VoiceModelState };
 
 export type VoiceInputPhase =

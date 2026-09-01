@@ -9,6 +9,7 @@ import { t } from "../i18n.js";
 // 錯誤不可接受；`medium` 加上 initial_prompt 才能穩定聽對。因此改用 `medium`，超出原預算，
 // 已在 spec 記錄取捨，不是隨手放大。
 export const VOICE_MODEL_FILENAME = "ggml-medium.bin";
+export const VOICE_MODEL_NAME = "Whisper medium";
 export const VOICE_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin";
 // 2026-09-01 下載後以 `shasum -a 256` 實測核對，與 Hugging Face 回應的 x-linked-etag 一致。
 export const VOICE_MODEL_SHA256 = "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208";
@@ -21,6 +22,11 @@ export type VoiceModelState = {
   bytesDownloaded: number;
   totalBytes: number;
   error: string | null;
+};
+
+export type VoiceModelInfo = VoiceModelState & {
+  name: string;
+  fileName: string;
 };
 
 type FetchLike = (url: string) => Promise<{
@@ -58,6 +64,10 @@ export class VoiceModelManager {
 
   getState(): VoiceModelState {
     return this.state;
+  }
+
+  getInfo(): VoiceModelInfo {
+    return { ...this.state, name: VOICE_MODEL_NAME, fileName: VOICE_MODEL_FILENAME };
   }
 
   start(): VoiceModelState {

@@ -30,6 +30,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 - **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
 - **Image and document prompts** — paste or pick PNG/JPEG/WebP images plus text, Markdown, CSV, JSON, HTML, XML, YAML, PDF and modern Office documents. Images use native multimodal input; documents are staged privately for the selected CLI and removed after the turn.
 - **Queued follow-ups** — keep typing while an NPC is busy; follow-up messages and their attachments run in order.
+- **Local voice input (optional)** — speak into the NPC composer, then review and edit the Traditional Chinese draft before sending. The recording and transcription stay local; the model downloads once and works offline afterwards.
 - **Interactive approvals** — allow once, deny, or grant a supported scoped session rule directly in the task log.
 - **Work-energy HUD** — separates remaining usage for the shared login and every named Claude/Codex account.
 - **Local-first** — Pixel Crew binds to `127.0.0.1`, stores its own state in local SQLite, and adds no hosted backend or API-key form. Tasks still go through the selected provider's official CLI and service under that CLI's terms.
@@ -95,6 +96,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **即時串流**：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
 - **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
+- **本機語音輸入（選用）**：從 NPC 輸入框說話，先取得可編輯的繁體中文草稿，再沿用原本的送出操作。錄音與轉寫留在本機；模型只需下載一次，之後可離線使用。
 - **互動式核准**：Claude Code 或 Codex 要求額外權限時，可直接在任務日誌允許一次或拒絕；Codex 另支援「本次工作階段皆允許」。
 - **全域工作能量**：頂部 HUD 顯示共用與每個具名稱 Claude／Codex 帳號目前的剩餘用量（讀取各自 CLI 的用量資訊），不隨房間或 NPC 切換。
 - **更可靠的本機執行環境**：Server 能妥善恢復計畫性重啟與卡住的背景活動；Windows release 預設隱藏啟動，並透過系統匣提供開啟、重啟、停止與查看 log。
@@ -195,7 +197,7 @@ npm run dev
 
 1. 在右上角 provider 選單選擇 `Claude Code` 或 `Codex`；空白 NPC 會直接原地換類型，已有對話時則顯示交接風險與目標用量，確認後整理摘要並由新 session 接手。
 2. 點擊畫面上方的房間名稱；macOS 與 Windows 可直接使用系統資料夾選擇器，也可輸入本機絕對路徑或選擇最近房間。目前 NPC 會原地搬遷，不會增加 NPC 數量。
-3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。
+3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。若已設定本機語音引擎，可按麥克風開始／停止錄音；轉寫後只會附加到草稿，不會自動送出。
 4. Claude Worker 可輸入 `/` 查看目前房間、使用者層級與內建原生指令；Codex Worker 可輸入 `/` 使用 Pixel Crew 支援的原生對話控制，或輸入 `$` 查看目前房間的 repo skills。模型、權限、MCP 等 TUI 專屬控制則使用 Pixel Crew 頂部的對應介面。
 5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
 6. 從頂部列開啟**帳號管理**，新增具名稱的 Claude Code 或 Codex 登入，在瀏覽器完成登入（Codex 也支援原本的 API key 流程）。建立 NPC 時，在選擇工作資料夾的畫面使用「選擇 AI 帳號」，可直接選擇 Claude Code／Codex 的共用登入或任何已登入具名稱帳號。已有原生對話歷史的 Worker 必須先清除工作階段才能換帳號，避免帳號切換悄悄放棄 provider 端的 thread。
@@ -228,6 +230,18 @@ npm run dev
 | `PORT` | `8787` | 後端連接埠 |
 | `DB_PATH` | OS 使用者應用資料目錄 | SQLite 資料庫位置；Windows 預設 `%LOCALAPPDATA%\Pixel Crew\cockpit.sqlite` |
 | `AVATAR_DIR` | 與資料庫同層的 `avatars/` | 正規化 NPC PNG 與已驗證 GIF 的本機儲存目錄 |
+| `WHISPER_SERVER_BIN` | `whisper-server` | 選用的 `whisper.cpp` 轉寫服務執行檔；可填絕對路徑 |
+| `VOICE_SERVER_PORT` | `8793` | 本機 `whisper-server` 的 loopback 連接埠 |
+
+### 本機語音輸入（選用）
+
+語音輸入需要另外安裝相容的 `whisper.cpp` `whisper-server` 執行檔。Pixel Crew 不會把引擎或模型包進主安裝檔：將執行檔放進 `PATH`，或在 `server/.env` 設定其絕對位置：
+
+```dotenv
+WHISPER_SERVER_BIN=/absolute/path/to/whisper-server
+```
+
+NPC 主要輸入框的麥克風按鈕會在首次使用時請你確認下載 **Whisper medium** 多語言模型（`ggml-medium.bin`，約 1.5 GB）。模型下載後位於資料庫同層的 `voice-models/`；例如 Windows 的預設位置是 `%LOCALAPPDATA%\Pixel Crew\voice-models\ggml-medium.bin`。下載具 SHA-256 完整性驗證，完成後可離線轉寫。按鈕只在 `localhost` 開啟的 Pixel Crew 顯示，遠端／手機存取不支援。
 
 ### Web（進階）
 
@@ -245,6 +259,7 @@ npm run dev
 - 每個具名稱的 provider 帳號都在 Pixel Crew 資料目錄下使用自己的私有 CLI home；本機只保存帳號標籤與指派，認證資料仍由官方 CLI 管理。刪除帳號會移除該私有 home，並把它的閒置 NPC 改回共用登入。
 - 靜態角色來源圖只在瀏覽器處理，伺服器僅保存通過驗證的 24×32 PNG；GIF 為保留動畫會保存原檔，限制 2 MiB、320×320、120 幀與 800 萬解碼像素，並依 GIF 內建的每幀時間播放。兩者位於資料庫同層的 `avatars/`。
 - Worker 的房間路徑會存入 SQLite；實際專案檔案仍留在原本的本機資料夾，不會複製進 Pixel Crew。
+- 語音輸入的原始錄音只在瀏覽器記憶體與 loopback 轉寫請求期間存在；Pixel Crew 不會把它寫入 SQLite、備份、診斷資料或一般 log。模型位於資料庫同層的 `voice-models/`，不會寫進任何工作 repository。
 - 訊息圖片只經由本機 loopback server 傳給目前 provider。Codex 所需的本機圖片暫存檔權限為 `0600`，會在該回合完成、中止或失敗時刪除；圖片本體不會寫入 Pixel Crew 的 SQLite 事件歷史。
 - NPC 人設會以每個 NPC 的暫存指示檔（Codex）或啟動參數（Claude）注入，檔案權限為 `0600`，session 結束時清除。
 - Agent 產生的原始 HTML 會經過 allowlist 清理後才顯示；腳本、事件處理器與危險 URL 不會直接注入頁面。
