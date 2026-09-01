@@ -35,6 +35,17 @@ export type VoiceInputPhase =
   | "transcribing"
   | "error";
 
+// 輪詢回覆的狀態優先順序。引擎就緒時模型仍可能下載中，因此模型下載必須先於
+// 「可要求下載」處理，否則 UI 會在下載中跳回確認畫面。
+export function pollPhaseForVoiceStatus(status: VoiceStatusResponse): VoiceInputPhase | null {
+  if (status.engineInstaller.status === "downloading") return "installing-engine";
+  if (status.engineInstaller.status === "failed") return "error";
+  if (status.model.status === "downloading") return "downloading";
+  if (status.model.status === "ready") return "idle";
+  if (status.model.status === "failed") return "error";
+  return status.engineAvailable ? "confirm-download" : null;
+}
+
 // 30 秒、16kHz、16-bit、單聲道 WAV ≈ 0.96 MB；伺服器端上限是 4 MiB（見
 // server/src/voice/voiceRoutes.ts），這裡在到達前就自動停止，避免使用者忘記按停止
 // 結果整段被伺服器拒收。
@@ -121,20 +132,18 @@ export function useVoiceInput(): {
       if (!mountedRef.current || !status) return;
       setModel(status.model);
       setEngineInstaller(status.engineInstaller);
-      if (status.engineInstaller.status === "downloading") {
+      const nextPhase = pollPhaseForVoiceStatus(status);
+      if (nextPhase === "installing-engine" || nextPhase === "downloading") {
+        setPhase(nextPhase);
         schedulePoll();
-      } else if (status.engineInstaller.status === "ready" && status.engineAvailable) {
-        setPhase(status.model.status === "ready" ? "idle" : "confirm-download");
-      } else if (status.engineInstaller.status === "failed") {
+      } else if (nextPhase === "error" && status.engineInstaller.status === "failed") {
         setPhase("error");
         setError(status.engineInstaller.error || t("語音轉寫引擎安裝失敗"));
-      } else if (status.model.status === "downloading") {
-        schedulePoll();
-      } else if (status.model.status === "ready") {
-        setPhase("idle");
-      } else if (status.model.status === "failed") {
+      } else if (nextPhase === "error" && status.model.status === "failed") {
         setPhase("error");
         setError(status.model.error || t("模型下載失敗"));
+      } else if (nextPhase) {
+        setPhase(nextPhase);
       }
     }, MODEL_POLL_MS);
   }
@@ -148,6 +157,16 @@ export function useVoiceInput(): {
     if (!mountedRef.current) return;
     if (!status || !status.engineAvailable) {
       setEngineInstaller(status?.engineInstaller ?? null);
+      if (status?.engineInstaller.status === "downloading") {
+        setPhase("installing-engine");
+        schedulePoll();
+        return;
+      }
+      if (status?.engineInstaller.status === "failed") {
+        setPhase("error");
+        setError(status.engineInstaller.error || t("語音轉寫引擎安裝失敗"));
+        return;
+      }
       if (status?.engineInstaller.supported) {
         setPhase("confirm-engine-install");
       } else {
@@ -162,27 +181,50 @@ export function useVoiceInput(): {
       await beginRecording();
       return;
     }
+    if (status.model.status === "downloading") {
+      // 若使用者在模型下載中再次按麥克風，應回到同一個進度畫面，而不是又要求確認。
+      setPhase("downloading");
+      schedulePoll();
+      return;
+    }
+    if (status.model.status === "failed") {
+      setPhase("error");
+      setError(status.model.error || t("模型下載失敗"));
+      return;
+    }
     setPhase("confirm-download");
   }
 
   function confirmEngineInstall(): void {
     setPhase("installing-engine");
     void apiRequest<{ engineInstaller: VoiceEngineInstallState }>("/api/voice/engine/install", { method: "POST" })
-      .then((result) => { if (mountedRef.current) setEngineInstaller(result.engineInstaller); })
+      .then((result) => {
+        if (!mountedRef.current) return;
+        setEngineInstaller(result.engineInstaller);
+        // 等 POST 已經讓伺服器進入下載狀態才開始讀取，避免先讀到舊的 not_installed 狀態。
+        schedulePoll();
+      })
       .catch((error) => {
         if (!mountedRef.current) return;
         setPhase("error");
         setError(error instanceof Error ? error.message : t("語音轉寫引擎安裝失敗"));
       });
-    schedulePoll();
   }
 
   function confirmDownload(): void {
     setPhase("downloading");
     void apiRequest<{ model: VoiceModelState }>("/api/voice/model/download", { method: "POST" })
-      .then((result) => { if (mountedRef.current) setModel(result.model); })
-      .catch(() => { /* 下一次輪詢會反映失敗狀態 */ });
-    schedulePoll();
+      .then((result) => {
+        if (!mountedRef.current) return;
+        setModel(result.model);
+        // POST 回覆前輪詢可能仍讀到 not_downloaded，導致確認框被重新打開。
+        schedulePoll();
+      })
+      .catch((error) => {
+        if (!mountedRef.current) return;
+        setPhase("error");
+        setError(error instanceof Error ? error.message : t("模型下載失敗"));
+      });
   }
 
   async function beginRecording(): Promise<void> {
@@ -223,7 +265,9 @@ export function useVoiceInput(): {
 
   async function stopAndTranscribe(): Promise<string | null> {
     const recorder = recorderRef.current;
-    if (!recorder || phase !== "recording") return null;
+    // 計時器持有的是建立當下 render 的 closure，不能用當中的 phase 判斷；
+    // MediaRecorder 的實際狀態才是唯一可靠來源。
+    if (!recorder || recorder.state === "inactive") return null;
     stopElapsedTimer();
     const audioBlob = await new Promise<Blob>((resolve) => {
       recorder.addEventListener("stop", () => resolve(new Blob(chunksRef.current, { type: recorder.mimeType })), { once: true });
