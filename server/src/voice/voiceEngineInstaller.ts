@@ -22,7 +22,10 @@ export const VOICE_ENGINE_WINDOWS_X64: VoiceEngineRelease = {
   url: "https://github.com/ggml-org/whisper.cpp/releases/download/b4938/whisper-bin-x64.zip",
   sha256: "c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d",
   bytes: 8_361_840,
-  executable: "whisper-server.exe",
+  // The official archive keeps the executable and its required DLLs under
+  // `Release/`; retaining that directory also keeps Windows DLL resolution
+  // beside whisper-server.exe.
+  executable: "Release/whisper-server.exe",
 };
 
 export type VoiceEngineInstallStatus = "not_supported" | "not_installed" | "downloading" | "ready" | "failed";
@@ -43,12 +46,21 @@ type FetchLike = (url: string) => Promise<{
 }>;
 type ExtractZip = (archivePath: string, destination: string) => Promise<void>;
 
+export function powerShellExtractionCommand(archivePath: string, destination: string): string {
+  // `-Command` consumes every following token as PowerShell source, not as
+  // `$args`. Encoding the complete script means paths with spaces (or a user's
+  // apostrophe in their profile name) are passed literally on Windows PowerShell
+  // 5.1 as well as newer versions.
+  const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const script = `$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath ${literal(archivePath)} -DestinationPath ${literal(destination)} -Force`;
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
 function extractWithPowerShell(archivePath: string, destination: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawnCli("powershell.exe", [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-      "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
-      archivePath, destination,
+      "-EncodedCommand", powerShellExtractionCommand(archivePath, destination),
     ]);
     child.stdout.resume(); child.stderr.resume();
     child.once("error", reject);
