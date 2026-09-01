@@ -56,6 +56,7 @@ type ServerMessage =
         persona: Persona | null;
         autoApproveMode: AutoApproveMode;
         handoff: HandoffProgress | null;
+        resumeCandidate?: WorkerState["resumeCandidate"];
         events: RunnerEvent[];
       }>;
     }
@@ -102,6 +103,7 @@ type WorkerSummary = {
   persona: Persona | null;
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
+  resumeCandidate?: WorkerState["resumeCandidate"];
 };
 
 function defaultAuth(
@@ -183,10 +185,16 @@ export function useWorkers() {
     let socket: WebSocket | null = null;
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | null = null;
+    let connectedOnce = false;
+    const pendingApprovals = new Map<string, number>();
 
     function connect() {
       socket = new WebSocket(`${WS_URL}/ws`);
-      socket.onopen = () => setWsReady(true);
+      socket.onopen = () => {
+        if (connectedOnce) void apiRequest("/api/diagnostics/events", { method: "POST", body: { kind: "websocket_reconnect", value: 1 } }).catch(() => {});
+        connectedOnce = true;
+        setWsReady(true);
+      };
       socket.onclose = () => {
         setWsReady(false);
         if (!closed) retry = setTimeout(connect, 1000);
@@ -245,6 +253,7 @@ export function useWorkers() {
             state.busy = w.busy;
             state.departmentId = w.departmentId ?? null;
             state.accountId = w.accountId ?? null;
+            state.resumeCandidate = w.resumeCandidate ?? null;
             record[w.id] = state;
             ids.push(w.id);
           }
@@ -254,6 +263,14 @@ export function useWorkers() {
           break;
         }
         case "event": {
+          if (data.event.type === "approval_requested") pendingApprovals.set(data.event.request.id, Date.now());
+          if (data.event.type === "approval_resolved") {
+            const startedAt = pendingApprovals.get(data.event.id);
+            if (startedAt) {
+              pendingApprovals.delete(data.event.id);
+              void apiRequest("/api/diagnostics/events", { method: "POST", body: { kind: "approval_wait", value: Math.round((Date.now() - startedAt) / 1_000) } }).catch(() => {});
+            }
+          }
           setWorkers((prev) => {
             const w = prev[data.workerId];
             if (!w) return prev;
@@ -503,6 +520,29 @@ export function useWorkers() {
       if (retry) clearTimeout(retry);
       socket?.close();
     };
+  }, []);
+
+  useEffect(() => {
+    const report = (kind: "ui_long_task" | "fps_sample", value: number) => {
+      void apiRequest("/api/diagnostics/events", { method: "POST", body: { kind, value } }).catch(() => {});
+    };
+    let observer: PerformanceObserver | null = null;
+    try {
+      if (typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+        observer = new PerformanceObserver((entries) => entries.getEntries().forEach((entry) => report("ui_long_task", Math.round(entry.duration))));
+        observer.observe({ type: "longtask", buffered: false });
+      }
+    } catch { /* diagnostics must never affect the app when the browser lacks this API */ }
+    let frame = 0;
+    let start = performance.now();
+    let raf = 0;
+    const sample = (now: number) => {
+      frame += 1;
+      if (now - start >= 1_000) { report("fps_sample", Math.round((frame * 1_000) / (now - start))); frame = 0; start = now; }
+      raf = requestAnimationFrame(sample);
+    };
+    raf = requestAnimationFrame(sample);
+    return () => { observer?.disconnect(); cancelAnimationFrame(raf); };
   }, []);
 
   const createWorker = useCallback(async (
@@ -862,6 +902,9 @@ export function useWorkers() {
     preferredWorkspace?: string;
     decisionProvider?: ProviderId;
     decisionModel?: string;
+    executionProfile?: "quick" | "standard" | "deep";
+    maxAgents?: number;
+    maxMissionSteps?: number;
     clarifications?: Array<{ question: string; answer: string }>;
   }): Promise<{ data?: BossAssignmentResponse; error?: string }> => {
     try {

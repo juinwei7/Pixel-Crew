@@ -235,7 +235,7 @@ npm run dev
 ## 本機資料與安全性
 
 - 後端預設只監聽 `127.0.0.1`，定位為個人本機工具。
-- SQLite 會保存使用者訊息、thinking、工具輸入、工具結果與各 NPC 人設，預設位於作業系統的使用者應用資料目錄；Windows 為 `%LOCALAPPDATA%\Pixel Crew`。
+- SQLite 會保存使用者訊息、thinking、工具輸入、工具結果與各 NPC 人設，預設位於作業系統的使用者應用資料目錄；Windows 為 `%LOCALAPPDATA%\Pixel Crew`。備份會包含這些資料與角色圖片，但不包含 Provider 私有認證 home 或工作區專案檔案；需要跨裝置傳輸時可在備份面板選擇 AES-256-GCM 密碼加密，密碼不會保存。
 - 每個具名稱的 provider 帳號都在 Pixel Crew 資料目錄下使用自己的私有 CLI home；本機只保存帳號標籤與指派，認證資料仍由官方 CLI 管理。刪除帳號會移除該私有 home，並把它的閒置 NPC 改回共用登入。
 - 靜態角色來源圖只在瀏覽器處理，伺服器僅保存通過驗證的 24×32 PNG；GIF 為保留動畫會保存原檔，限制 2 MiB、320×320、120 幀與 800 萬解碼像素，並依 GIF 內建的每幀時間播放。兩者位於資料庫同層的 `avatars/`。
 - Worker 的房間路徑會存入 SQLite；實際專案檔案仍留在原本的本機資料夾，不會複製進 Pixel Crew。
@@ -285,7 +285,7 @@ npm test -w web
 - 最多為每位 Worker 保存最近 2,000 筆 runner events。
 - Claude 可使用掃描到的原生 slash commands；Codex 支援 `/clear`、`/new`、`/compact`、`/review`、`/goal` 與 `$` 觸發的 Repo Skills。自訂 Codex 指令面板項目除非 Codex 本身理解，否則會以一般聊天文字送出。
 - 「本次工作階段皆允許」目前 Codex 為原生支援；Claude 端是否提供取決於所安裝 CLI 版本的權限提示能力。
-- 這是早期版本，資料庫 schema 尚未提供正式 migration 工具。
+- SQLite schema 使用版本化 migration runner；升級既有資料庫前會建立本機一致性快照，並在資料庫內保存成功與失敗的 migration 執行紀錄。
 - Claude 與 Codex 的原生 session 歷史不能互換；跨 LLM 切換使用摘要交接，因此可能遺漏細節、工具狀態、待核准操作或未完成的背景工作。
 
 ## 技術棧

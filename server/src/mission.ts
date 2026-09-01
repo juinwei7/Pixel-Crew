@@ -96,6 +96,9 @@ export type DepartmentMission = {
   parentMissionId?: string | null;
   sourceMessageId?: string | null;
   executionMode?: MissionExecutionMode;
+  executionProfile?: "quick" | "standard" | "deep";
+  maxPlanSteps?: number;
+  memberWorkerIds?: string[];
   origin?: MissionOrigin;
   status: DepartmentMissionStatus;
   planSummary: string | null;
@@ -195,6 +198,7 @@ export function parseMissionPlan(
   bossWorkerId?: string,
   allowedAttachmentIds = new Set<string>(),
   executionMode: MissionExecutionMode = "project",
+  maxPlanSteps?: number,
 ): { plan?: MissionPlan; error?: string } {
   const bounded = text(raw, 50_000);
   const marked = bounded.match(/<department_mission_plan>\s*([\s\S]*?)\s*<\/department_mission_plan>/i)?.[1];
@@ -208,11 +212,11 @@ export function parseMissionPlan(
   if (!parsed || typeof parsed !== "object") return { error: t("Mission 計畫格式無效") };
   const value = parsed as Record<string, unknown>;
   const minimumSteps = executionMode === "research" ? 1 : 2;
-  const maximumSteps = executionMode === "research" ? 2 : 4;
+  const maximumSteps = Math.max(minimumSteps, Math.min(executionMode === "research" ? 2 : 4, maxPlanSteps ?? 4));
   if (!Array.isArray(value.steps) || value.steps.length < minimumSteps || value.steps.length > maximumSteps) {
     return { error: executionMode === "research"
       ? t("研究模式分工計畫必須包含 1 到 2 個步驟")
-      : t("Mission 分工計畫必須包含 2 到 4 個步驟；系統會再加入最終彙整報告") };
+      : t("Mission 分工計畫必須包含 2 到 {max} 個步驟；系統會再加入最終彙整報告", { max: maximumSteps }) };
   }
   const steps: MissionPlan["steps"] = [];
   for (let index = 0; index < value.steps.length; index++) {
@@ -431,8 +435,10 @@ export function missionPlanningPrompt(input: {
   members: MissionMember[];
   attachments?: Array<{ id: string; name: string; mimeType: string }>;
   executionMode?: MissionExecutionMode;
+  maxPlanSteps?: number;
   discussion?: MissionDiscussionContribution[];
 }): string {
+  const maxPlanSteps = Math.max(input.executionMode === "research" ? 1 : 2, Math.min(input.executionMode === "research" ? 2 : 4, input.maxPlanSteps ?? 4));
   const discussionBlock = input.discussion && input.discussion.length
     ? t("\n\n部門討論紀錄（請以此為分工依據，讓計畫反映討論共識，把工作分給討論中主動認領或最適合的成員）：\n{transcript}", { transcript: discussionTranscript(input.discussion) })
     : "";
@@ -452,7 +458,7 @@ export function missionPlanningPrompt(input: {
     );
   }
   return t(
-    "你是 Department Work 的部門主管。使用者是老闆與最終決策者；老闆已經用這次交辦授權部門依計畫開始工作，不需要再次核准一般分工。你負責依每位 NPC 的職務規劃、分工、接續與彙整。請只規劃，不要修改檔案。\nMISSION ID: {id}\nDEPARTMENT LEAD WORKER ID: {bossWorkerId}\nWORKSPACE: {workspace}\n老闆交辦目標: {objective}\n驗收條件: {acceptance}\n可指派的部門 NPC: {members}\n可分派的附件: {attachments}{discussionBlock}\n\n規則:\n- {policy}\n- 不要啟動背景 Agent；在同一回合直接完成規劃。\n- 依照每位 NPC 的 role 分派最符合其職責與專長的工作，不要把所有工作交給主管。\n- 自己判斷最小充分流程，不要為了看起來像協作而增加步驟。\n- 聚焦建議或調查：用 Quick Consult，第一步 consult 指派專家，第二步 execute 必須交回部門主管。\n- 檢查既有成果：用 Quick Review，第一步 review 指派專家，第二步 execute 必須交回部門主管。\n- 跨多個實作責任：用完整 Mission，從 execute 開始，review 必須緊接其 execute，且 Review 與前一 Execute 必須由不同 NPC 負責。\n- 產出 2 到 4 個依序執行的分工步驟；系統會自動再加入第 3～5 步的部門最終報告。assigneeWorkerId 必須逐字使用上方清單中的 id。\n- attachmentIds 只能使用上方附件 id，且只把該步驟真正需要的附件交給該成員。\n- Consult 與 Review 唯讀；Execute 負責實作或由部門主管根據快速協作結果接續完成。\n- 權限、認證、重大取捨與無法確認的事項必須留給老闆決定。\n- 任務應能在不自動進行 Git release 操作的情況下完成。\n\n最後只能以這個標記回傳結構化計畫：\n<department_mission_plan>{\"summary\":\"說明分工依據與為何選 Quick 或 Mission\",\"steps\":[{\"title\":\"\",\"objective\":\"\",\"kind\":\"execute|review|consult\",\"assigneeWorkerId\":\"\",\"acceptanceCriteria\":[],\"attachmentIds\":[]}]}</department_mission_plan>",
+    "你是 Department Work 的部門主管。使用者是老闆與最終決策者；老闆已經用這次交辦授權部門依計畫開始工作，不需要再次核准一般分工。你負責依每位 NPC 的職務規劃、分工、接續與彙整。請只規劃，不要修改檔案。\nMISSION ID: {id}\nDEPARTMENT LEAD WORKER ID: {bossWorkerId}\nWORKSPACE: {workspace}\n老闆交辦目標: {objective}\n驗收條件: {acceptance}\n可指派的部門 NPC: {members}\n可分派的附件: {attachments}{discussionBlock}\n\n規則:\n- {policy}\n- 不要啟動背景 Agent；在同一回合直接完成規劃。\n- 依照每位 NPC 的 role 分派最符合其職責與專長的工作，不要把所有工作交給主管。\n- 自己判斷最小充分流程，不要為了看起來像協作而增加步驟。\n- 聚焦建議或調查：用 Quick Consult，第一步 consult 指派專家，第二步 execute 必須交回部門主管。\n- 檢查既有成果：用 Quick Review，第一步 review 指派專家，第二步 execute 必須交回部門主管。\n- 跨多個實作責任：用完整 Mission，從 execute 開始，review 必須緊接其 execute，且 Review 與前一 Execute 必須由不同 NPC 負責。\n- 產出 2 到 {maxPlanSteps} 個依序執行的分工步驟；系統會自動加入最終報告。assigneeWorkerId 必須逐字使用上方清單中的 id。\n- attachmentIds 只能使用上方附件 id，且只把該步驟真正需要的附件交給該成員。\n- Consult 與 Review 唯讀；Execute 負責實作或由部門主管根據快速協作結果接續完成。\n- 權限、認證、重大取捨與無法確認的事項必須留給老闆決定。\n- 任務應能在不自動進行 Git release 操作的情況下完成。\n\n最後只能以這個標記回傳結構化計畫：\n<department_mission_plan>{\"summary\":\"說明分工依據與為何選 Quick 或 Mission\",\"steps\":[{\"title\":\"\",\"objective\":\"\",\"kind\":\"execute|review|consult\",\"assigneeWorkerId\":\"\",\"acceptanceCriteria\":[],\"attachmentIds\":[]}]}</department_mission_plan>",
     {
       id: text(input.missionId, 200),
       bossWorkerId: text(input.bossWorkerId, 200),
@@ -462,6 +468,7 @@ export function missionPlanningPrompt(input: {
       members: JSON.stringify(input.members),
       attachments: JSON.stringify(input.attachments ?? []),
       discussionBlock,
+      maxPlanSteps,
       policy: policyText(),
     },
   );

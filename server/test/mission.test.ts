@@ -28,6 +28,12 @@ test("parses a bounded ordered same-department Mission plan", () => {
   assert.equal(result.plan?.steps[1].kind, "review");
 });
 
+test("enforces an owner-selected Mission step ceiling without changing the legacy default", () => {
+  const threeSteps = plan([execute, review, { ...execute, title: "Finish", assigneeWorkerId: "builder" }]);
+  assert.match(parseMissionPlan(threeSteps, new Set(["builder", "reviewer"]), "builder", new Set(), "project", 2).error ?? "", /2 到 2/);
+  assert.equal(parseMissionPlan(threeSteps, new Set(["builder", "reviewer"]), "builder").error, undefined);
+});
+
 test("accepts a Quick Consult or Review only when it returns to the department lead", () => {
   const consult = { title: "Ask specialist", objective: "Investigate", kind: "consult", assigneeWorkerId: "reviewer", acceptanceCriteria: ["give advice"] };
   const continuation = { ...execute, title: "Boss continues", assigneeWorkerId: "boss" };

@@ -6,7 +6,7 @@ import { theme, setTheme } from "../theme";
 import { apiRequest } from "../api";
 import { roomName } from "../workspace";
 
-type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean };
+type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean; diagnosticsEnabled: boolean };
 
 type ModelOption = { id: string; label: string; description?: string };
 
@@ -308,6 +308,10 @@ export function TopBar({
                 onChange={() => toggleAppSetting("limitResumeEnabled")}
               />
               <span>{t("⏰ 撞限自動續跑")}</span>
+            </label>
+            <label className="top-bar__menu-toggle" title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
+              <input type="checkbox" checked={appToggles?.diagnosticsEnabled ?? true} disabled={!appToggles} onChange={() => toggleAppSetting("diagnosticsEnabled")} />
+              <span>{t("📈 本機診斷")}</span>
             </label>
           </div>
         )}

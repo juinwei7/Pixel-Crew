@@ -8,6 +8,8 @@ export interface AppSettings {
   brainSwapEnabled: boolean;
   /** 撞訂閱用量上限後，重置時刻一到自動叫 NPC 繼續（limitResumeHook） */
   limitResumeEnabled: boolean;
+  /** 僅留在本機的產品品質／效能診斷；可隨時關閉，不會自動上傳。 */
+  diagnosticsEnabled: boolean;
   /** server 端訊息語言（web 🌐 切換時同步過來；瀏覽器 UI 語言仍以 localStorage 為準） */
   lang: "zh" | "en";
 }
@@ -15,6 +17,7 @@ export interface AppSettings {
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   brainSwapEnabled: true,
   limitResumeEnabled: true,
+  diagnosticsEnabled: true,
   lang: "zh",
 };
 
@@ -23,6 +26,7 @@ export function normalizeAppSettings(raw: unknown): AppSettings {
   return {
     brainSwapEnabled: typeof source.brainSwapEnabled === "boolean" ? source.brainSwapEnabled : DEFAULT_APP_SETTINGS.brainSwapEnabled,
     limitResumeEnabled: typeof source.limitResumeEnabled === "boolean" ? source.limitResumeEnabled : DEFAULT_APP_SETTINGS.limitResumeEnabled,
+    diagnosticsEnabled: typeof source.diagnosticsEnabled === "boolean" ? source.diagnosticsEnabled : DEFAULT_APP_SETTINGS.diagnosticsEnabled,
     lang: source.lang === "en" ? "en" : DEFAULT_APP_SETTINGS.lang,
   };
 }
