@@ -1574,7 +1574,13 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   font-size: 13px;
 }
 
-.focus-energy__panel > header button {
+.focus-energy__panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.focus-energy__panel-actions button {
   min-height: 30px;
   padding: 5px 7px;
   border: 1px solid rgba(201, 210, 220, 0.12);
@@ -1583,6 +1589,14 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   color: #8794a1;
   cursor: pointer;
   font-size: 9px;
+}
+
+.focus-energy__close {
+  width: 30px;
+  padding: 0 !important;
+  color: #b2c0ca !important;
+  font-size: 18px !important;
+  line-height: 1;
 }
 
 .focus-energy__subject {
@@ -1766,15 +1780,29 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 }
 
-@media (max-width: 840px) {
+/* The focus header has four independent controls: identity, actions, usage,
+   and the current work target.  Letting flex decide where each wraps made the
+   action buttons and target selector collide at tablet widths.  Give them
+   deliberate rows before the viewport gets small enough to be a phone. */
+@media (max-width: 1100px) {
   .holo-panel--focus .holo-panel__title {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "heading toolbar"
+      "energy energy"
+      "context context";
     align-items: center;
+    gap: 8px 12px;
+    min-height: 0;
   }
 
+  .holo-panel--focus .holo-panel__heading { grid-area: heading; }
+
   .focus-context-switch {
-    flex: 1 0 100%;
-    order: 4;
+    grid-area: context;
+    width: 100%;
+    margin-right: 0;
   }
 
   .focus-worker-switch {
@@ -1782,8 +1810,28 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
     max-width: none;
   }
 
+  .focus-energy {
+    grid-area: energy;
+    order: initial;
+    width: 100%;
+  }
+
+  .focus-energy__summary {
+    width: 100%;
+    justify-content: center;
+  }
+
   .holo-panel--focus .task-log-toolbar {
-    margin-left: auto;
+    grid-area: toolbar;
+    margin-left: 0;
+    justify-self: end;
+  }
+
+  /* Keep the control menu below the complete three-row header.  Otherwise it
+     opens over the usage and target rows, which looks like those controls
+     have jumped out of position. */
+  .focus-controls__panel {
+    top: calc(100% + 114px);
   }
 
   .focus-reader__studio-rail .focus-studios:not(.focus-studios--collapsed) .focus-studios__list {
@@ -1793,18 +1841,15 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 @media (max-width: 700px) {
   .holo-panel--focus .holo-panel__title {
-    flex-wrap: wrap;
     row-gap: 7px;
     padding-inline: 14px;
   }
 
   .focus-energy {
-    order: 4;
-    width: 100%;
+    order: initial;
   }
 
   .focus-energy__summary {
-    width: 100%;
     justify-content: center;
   }
 
@@ -1821,5 +1866,87 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .focus-reader > .quest-log {
     padding-right: 18px;
     padding-left: 18px;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Split panes are useful on a wide monitor, but at phone width two reports
+     side by side become unreadable. Keep every selected report full-width. */
+  .focus-workbench { gap: 8px; padding: 8px; flex-direction: column; overflow-y: auto; }
+  .focus-workbench__rail { width: 100%; max-height: none; padding: 0; }
+  .focus-pane-grid--2, .focus-pane-grid--3, .focus-pane-grid--4 { grid-template-columns: 1fr; grid-template-rows: auto; }
+  .focus-pane-grid--3 .focus-pane:first-child { grid-column: auto; }
+  .focus-pane { min-height: 360px; }
+  .focus-pane__header select { height: 40px; font-size: 16px; }
+  .focus-pane__close { width: 40px; height: 40px; }
+
+  /* A collapsed studio rail is useful on a phone, but it must not become a
+     tall left-side stack above the report. Keep its shortcuts in one
+     horizontally scrollable strip so the reader gets the remaining height. */
+  .focus-reader { padding: 6px 10px 0; overflow: hidden; }
+  .focus-reader__studio-rail {
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 0 7px;
+  }
+  .focus-reader__studio-rail .focus-studios--collapsed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: max-content;
+  }
+  .focus-reader__studio-rail .focus-studios--collapsed .focus-studios__header { flex: 0 0 auto; margin: 0; }
+  .focus-reader__studio-rail .focus-studios--collapsed .focus-studios__list {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    overflow: visible;
+    padding: 0;
+  }
+  .focus-reader > .quest-log {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 0 12px 20px;
+  }
+
+  /* The usage detail is a true bottom sheet on a phone. It no longer floats
+     across the report and it leaves the persistent command controls clear. */
+  .focus-energy__panel,
+  .focus-energy__panel--anchored {
+    position: fixed;
+    /* Focus mode's composer lives in the layer footer rather than against the
+       viewport edge. Reserve that whole footer (including its mobile margin)
+       so this sheet never covers the input or its action buttons. */
+    inset: auto 8px max(192px, calc(env(safe-area-inset-bottom) + 184px));
+    width: auto;
+    max-height: min(58dvh, calc(100dvh - 258px));
+    padding: 14px;
+    border-radius: 14px;
+    z-index: 26000;
+    box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.48);
+  }
+
+  .focus-energy__panel:not(.focus-energy__panel--open) {
+    display: none;
+  }
+
+  .focus-energy__panel--open,
+  .focus-energy__panel--anchored.focus-energy__panel--open {
+    display: block;
+  }
+
+  .focus-energy__panel-actions button {
+    min-width: 40px;
+    min-height: 40px;
+    padding-inline: 10px;
+    font-size: 11px;
+  }
+
+  .focus-energy__close {
+    width: 40px;
+    font-size: 22px !important;
   }
 }

@@ -51,7 +51,7 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Modal label={t("成品匣")} eyebrow="OUTBOX" title={`📦 ${t("成品匣")}`} onClose={onClose}>
+    <Modal label={t("成品匣")} eyebrow="OUTBOX" title={`📦 ${t("成品匣")}`} cardClassName="warroom-result__card outbox-modal" onClose={onClose}>
       <p style={{ fontSize: 12.5, color: "#8ea0d0", lineHeight: 1.6, margin: "2px 0 12px" }}>
         {t("隊員完成的交付物會放進各自工作區的 outbox 資料夾，並集中顯示在這裡。想收東西時，直接跟隊員說「完成後把檔案放進 outbox」。")}
       </p>
@@ -63,13 +63,14 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
           {t("目前沒有成品。交辦任務時附一句「完成後把最終檔案放進 outbox 資料夾」，成品就會出現在這裡。")}
         </div>
       ) : (
-        <div style={{ display: "grid", gap: 6, maxHeight: "52vh", overflowY: "auto" }}>
+        <div className="outbox-modal__list" style={{ display: "grid", gap: 6, maxHeight: "52vh", overflowY: "auto" }}>
           {items.map((it) => (
             <a
               key={`${it.workerId}/${it.name}`}
               href={`/api/outbox/file?worker=${encodeURIComponent(it.workerId)}&name=${encodeURIComponent(it.name)}`}
               target="_blank"
               rel="noopener noreferrer"
+              className="outbox-modal__item"
               style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
                 borderRadius: 10, border: "1px solid #26304e", background: "#101627",
@@ -86,7 +87,7 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
           ))}
         </div>
       )}
-      <div style={{ marginTop: 12, textAlign: "right" }}>
+      <div className="outbox-modal__actions" style={{ marginTop: 12, textAlign: "right" }}>
         <button
           type="button"
           onClick={() => { setItems(null); void load(); }}

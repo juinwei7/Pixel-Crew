@@ -764,6 +764,31 @@
   }
 }
 
+/* Phone-specific command management: a 220px side rail leaves too little
+   editing space below 600px. Stack the chooser above the editor instead. */
+@media (max-width: 600px) {
+  .command-center { padding: 0; place-items: stretch; }
+  .command-center__shell { width: 100%; height: 100dvh; min-height: 0; border: 0; border-radius: 0; }
+  .command-center__header { height: 68px; gap: 8px; padding: 10px 12px; }
+  .command-center__header h2 { font-size: 16px; }
+  .command-center__header p, .command-center__eyebrow { display: none; }
+  .command-center__providers { min-width: 0; margin-left: auto; }
+  .command-center__providers button { min-height: 40px; padding-inline: 7px; }
+  .command-center__close { width: 44px; height: 44px; flex: 0 0 auto; }
+  .command-center__body { height: calc(100% - 68px); grid-template-columns: 1fr; grid-template-rows: 172px minmax(0, 1fr); }
+  .command-library { min-height: 0; padding: 9px 12px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+  .command-library__actions { flex-direction: row; }
+  .command-library__actions input { min-height: 40px; font-size: 16px; }
+  .command-library__actions button { min-height: 40px; }
+  .command-library__scope { display: none; }
+  .command-library__list { display: flex; gap: 7px; overflow-x: auto; overflow-y: hidden; padding: 3px 0 6px; }
+  .command-library__item { flex: 0 0 min(220px, 70vw); min-height: 62px; }
+  .command-editor { min-height: 0; padding: 14px 12px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; }
+  .command-editor__document textarea, .command-editor input, .command-editor select { font-size: 16px; }
+  .command-editor__footer { flex-wrap: wrap; }
+  .command-editor__footer > * { min-height: 40px; }
+}
+
 /* ---------- MCP chip + management modal ---------- */
 
 .top-bar__mcp {
@@ -925,3 +950,37 @@
 .backup-modal__notice { margin-top: 10px; font-size: 11px; color: var(--ok); }
 .backup-modal__notice--err { color: var(--err); }
 
+/* Account, MCP and backup dialogs share dense desktop rows. On a phone they
+   become bottom sheets with 44px controls and rows that never force horizontal
+   scrolling or Safari text-field zoom. */
+@media (max-width: 600px) {
+  .mcp-modal, .backup-modal { align-items: end; padding: 0; }
+  .mcp-modal__card, .backup-modal__card {
+    width: 100%;
+    max-height: min(92dvh, calc(100dvh - env(safe-area-inset-top)));
+    padding: 20px 14px calc(18px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 18px 18px 0 0;
+  }
+  .mcp-modal__close, .backup-modal__close { top: 6px; right: 5px; width: 44px; height: 44px; }
+  .mcp-modal__header, .backup-modal__header { min-height: 42px; padding-right: 46px; }
+  .mcp-modal__header { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .mcp-modal__header h2, .backup-modal__header h2 { font-size: 16px; }
+  .mcp-modal__row { flex-wrap: wrap; padding: 10px; }
+  .mcp-modal__actions { width: 100%; padding-left: 16px; }
+  .mcp-modal__actions button, .mcp-modal__refresh, .accounts-modal__tab, .codex-commands-modal__add button,
+  .backup-modal__actions button, .backup-modal__export { min-height: 40px; }
+  .mcp-modal__row-inputs { grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
+  .mcp-modal__row-inputs input { grid-column: 1 / -1; min-height: 40px; font-size: 16px; }
+  .mcp-modal__row-inputs button { min-height: 40px; }
+  .codex-commands-modal__add, .backup-modal__encryption > div { align-items: stretch; flex-direction: column; }
+  .codex-commands-modal__add input, .mcp-modal__input, .backup-modal__input { min-height: 40px; font-size: 16px; }
+  .mcp-modal__transport button, .mcp-modal__submit { min-height: 40px; }
+  .mcp-modal__row-inputs, .mcp-modal__transport { gap: 8px; }
+  .backup-modal__summary-row { align-items: flex-start; gap: 10px; }
+  .backup-modal__summary-row span:last-child { overflow-wrap: anywhere; text-align: right; }
+  .backup-modal__actions { align-items: stretch; flex-direction: column-reverse; }
+  .backup-modal__actions button { width: 100%; }
+}

@@ -208,6 +208,8 @@ export function App() {
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
   const taskFocusMode = preferences.taskFocusMode;
+  const [focusPhoneViewport, setFocusPhoneViewport] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600);
+  const focusPhone = focusPhoneViewport;
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
   // Split-pane workbench state: which NPC each pane shows and which pane
@@ -539,10 +541,10 @@ export function App() {
   const enterTaskFocusMode = useCallback(() => {
     focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setFocusSeenTurns(Object.fromEntries(workerList.map((worker) => [worker.id, latestReadableTurnKey(worker)])));
-    const panes = createFocusPanes(preferences.focusPaneLayout, [activeId]);
+    const panes = createFocusPanes(focusPhone ? 1 : preferences.focusPaneLayout, [activeId]);
     setFocusWorkbench({ panes, focusedPaneId: panes[0].id });
     updatePreferences({ taskLogOpen: true, taskFocusMode: true });
-  }, [activeId, preferences.focusPaneLayout, updatePreferences, workerList]);
+  }, [activeId, focusPhone, preferences.focusPaneLayout, updatePreferences, workerList]);
 
   const exitTaskFocusMode = useCallback(() => {
     setFocusUsageOpen(false);
@@ -635,6 +637,26 @@ export function App() {
     };
   }, [taskFocusMode]);
 
+  useEffect(() => {
+    const syncFocusViewport = () => setFocusPhoneViewport(window.innerWidth <= 600);
+    syncFocusViewport();
+    window.addEventListener("resize", syncFocusViewport);
+    return () => window.removeEventListener("resize", syncFocusViewport);
+  }, []);
+
+  // A phone is a reading-and-reply surface, not a pane manager. If a desktop
+  // split layout crosses into phone width, retain the focused NPC and collapse
+  // the transient workbench to one pane without overwriting the desktop choice.
+  useEffect(() => {
+    if (!taskFocusMode || !focusPhone || focusPanes.length <= 1) return;
+    setFocusWorkbench((current) => {
+      if (current.panes.length <= 1) return current;
+      const focused = current.panes.find((pane) => pane.id === current.focusedPaneId) ?? current.panes[0];
+      const panes = createFocusPanes(1, [focused.workerId]);
+      return { panes, focusedPaneId: panes[0].id };
+    });
+  }, [focusPanes.length, focusPhone, taskFocusMode]);
+
   // A worker counts as "seen" once it's showing in any visible pane, not just
   // the focused one — split view lets you watch a pane you're not typing into.
   useEffect(() => {
@@ -656,10 +678,10 @@ export function App() {
 
   // Any pane add/remove/layout-switch persists as the next "enter focus mode" default.
   useEffect(() => {
-    if (!taskFocusMode) return;
+    if (!taskFocusMode || focusPhone) return;
     const count = focusPanes.length as 1 | 2 | 3 | 4;
     if (preferences.focusPaneLayout !== count) updatePreferences({ focusPaneLayout: count });
-  }, [focusPanes.length, preferences.focusPaneLayout, taskFocusMode, updatePreferences]);
+  }, [focusPanes.length, focusPhone, preferences.focusPaneLayout, taskFocusMode, updatePreferences]);
 
   // activeId can change via paths that don't go through assignWorkerToPane
   // (e.g. the approval shortcut outside focus mode); keep the focused pane in
@@ -1023,7 +1045,7 @@ export function App() {
             {!taskFocusMode && <select aria-label={t("日誌寬度")} value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
               <option value="420">{t("緊湊")}</option><option value="600">{t("閱讀")}</option><option value="820">{t("寬版")}</option>
             </select>}
-            {taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="focus-pane-toggle" role="group" aria-label={t("分割視窗數量")}>
+            {taskFocusMode && !focusPhone && !selectedDepartment && !bossAssignmentOpen && <div className="focus-pane-toggle" role="group" aria-label={t("分割視窗數量")}>
               {([1, 2, 3, 4] as const).map((count) => (
                 <button key={count} type="button" className={focusPanes.length === count ? "active" : ""} title={t("分割成 {count} 個視窗", { count: String(count) })} onClick={() => setFocusPaneLayout(count)}>{count}</button>
               ))}
