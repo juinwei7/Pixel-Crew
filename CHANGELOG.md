@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-09-01
+
+### Fixed
+
+- Keep local Whisper model download progress visible instead of repeatedly reopening its confirmation dialog, including while the download request is still starting.
+- Make the Windows local Whisper engine installer fall back to the inbox `tar.exe` extractor when PowerShell extraction is unavailable.
+
 ## [2.2.0] - 2026-09-01
 
 ### Added
@@ -136,7 +143,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.2...v2.2.0
 [2.1.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.0...v2.1.1
