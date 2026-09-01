@@ -295,6 +295,11 @@
 }
 .voice-input__panel strong { display: block; margin-bottom: 6px; color: #8deeff; font-size: 12px; }
 .voice-input__panel p { margin: 0 0 10px; font-size: 11px; line-height: 1.5; color: #a9bdd4; }
+.voice-input__model-details { display: grid; gap: 5px; margin: 0 0 10px; font-size: 10px; }
+.voice-input__model-details div { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 6px; }
+.voice-input__model-details dt { color: #8195ad; }
+.voice-input__model-details dd { min-width: 0; margin: 0; color: #cfe6f5; overflow-wrap: anywhere; }
+.voice-input__model-details code { color: #a9eefa; font: inherit; }
 .voice-input__panel-actions { display: flex; gap: 8px; }
 .voice-input__panel-actions button {
   flex: 1; padding: 6px 0; border: 1px solid rgba(0, 229, 255,.26); border-radius: 7px;

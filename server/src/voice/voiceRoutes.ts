@@ -22,11 +22,12 @@ export function registerVoiceRoutes(input: {
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AUDIO_BYTES } });
 
   app.get("/api/voice/status", (_req, res) => {
-    res.json({ engineAvailable: transcriber.engineAvailable, model: modelManager.getState() });
+    res.json({ engineAvailable: transcriber.engineAvailable, model: modelManager.getInfo() });
   });
 
   app.post("/api/voice/model/download", (_req, res) => {
-    res.json({ model: modelManager.start() });
+    modelManager.start();
+    res.json({ model: modelManager.getInfo() });
   });
 
   app.post("/api/voice/transcribe", upload.single("audio"), async (req, res) => {

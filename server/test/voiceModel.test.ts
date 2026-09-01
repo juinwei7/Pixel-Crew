@@ -97,3 +97,18 @@ test("treats a leftover partial download from a previous run as unusable", () =>
   assert.deepEqual(readdirSync(dir), []);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("exposes stable model metadata for the first-download UI", () => {
+  const dir = tmpModelsDir();
+  const manager = new VoiceModelManager(dir, async () => fakeResponse([]));
+
+  assert.deepEqual(manager.getInfo(), {
+    status: "not_downloaded",
+    bytesDownloaded: 0,
+    totalBytes: 1_533_763_059,
+    error: null,
+    name: "Whisper medium",
+    fileName: "ggml-medium.bin",
+  });
+  rmSync(dir, { recursive: true, force: true });
+});
