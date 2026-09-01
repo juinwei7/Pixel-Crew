@@ -74,12 +74,10 @@ export function encodeWavBlob(samples: Float32Array, sampleRate = VOICE_TARGET_S
 // 用簡單的均方根音量擋掉明顯沒講話的錄音，對應 spec §6「沒有偵測到語音」那一列——
 // 不送出、不讓幻覺文字混進聊天輸入框。
 //
-// 門檻數字不是憑感覺定的：2026-09-01 實測，關掉 AGC 後安靜房間（MacBook 內建麥克風）
-// 錄到的最大 RMS 是 0.0058——原本設的 0.006 幾乎貼著這條雜訊線，稍有風吹草動就會
-// 誤判成「有講話」。改成留約 3.5 倍安全邊界，同時仍遠低於一般說話音量（正常講話的
-// RMS 通常在 0.05 以上）。之後如果在明顯更吵或更安靜的環境出現誤判，先用同一支
-// 量測腳本重新量安靜房間的 RMS，再回頭調這個數字，不要憑感覺改。
-export const MIN_SPEECH_RMS = 0.02;
+// 實測的原始麥克風音量會因裝置而有很大差異，Windows 的內建麥克風尤其常比 Mac
+// 低。瀏覽器已啟用自動增益與降噪，但仍保留一個低門檻擋住純靜音；0.008 比安靜房間
+// 的背景音量稍高，又不會把正常但較小聲的 Windows 輸入誤判成沒有錄到。
+export const MIN_SPEECH_RMS = 0.008;
 
 export function computeRms(samples: Float32Array): number {
   if (samples.length === 0) return 0;
