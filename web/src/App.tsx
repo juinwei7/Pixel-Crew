@@ -1294,7 +1294,7 @@ export function App() {
         }}
       />}
 
-      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} newWorkerProvider={newWorkerProvider} accounts={Object.values(accounts)} accountId={newWorkerAccountId} onAccountChange={setNewWorkerAccountId} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
+      {workspaceOpen && <WorkspacePicker required={workspaceSetupRequired} mode={workspaceMode} currentPath={activeWorkspace} recentPaths={workspacePaths} resetsConversation={workspaceMode === "move" && Boolean(active?.turns.length)} newWorkerProvider={newWorkerProvider} accounts={Object.values(accounts)} accountId={newWorkerAccountId} onProviderChange={setNewWorkerProvider} onAccountChange={setNewWorkerAccountId} onBrowse={pickWorkspace} onClose={() => setWorkspaceOpen(false)} onSelect={async (path) => {
         if (workspaceMode === "create") {
           const result = await createWorker(undefined, newWorkerProvider, path, undefined, newWorkerAccountId);
           if (!result.error) notify(t("新工位建造中"));

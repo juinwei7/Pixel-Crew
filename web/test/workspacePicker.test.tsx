@@ -37,3 +37,19 @@ test("new NPC flow asks for a workspace before creating the station", () => {
   assert.match(html, /在此建立工位/);
   assert.doesNotMatch(html, /目前 NPC 會直接搬到新位置/);
 });
+
+test("new NPC flow offers both providers and every named account", () => {
+  const html = renderToStaticMarkup(<WorkspacePicker
+    {...common}
+    mode="create"
+    newWorkerProvider="codex"
+    accounts={[
+      { id: "claude-work", provider: "claude", label: "工作", homeDir: "/accounts/claude", createdAt: "", updatedAt: "", auth: { provider: "claude", displayName: "Claude", status: "authenticated", loginCommand: "", checkedAt: null, error: null, debug: null } },
+      { id: "codex-personal", provider: "codex", label: "個人", homeDir: "/accounts/codex", createdAt: "", updatedAt: "", auth: { provider: "codex", displayName: "Codex", status: "authenticated", loginCommand: "", checkedAt: null, error: null, debug: null } },
+    ]}
+  />);
+  assert.match(html, /選擇 AI 帳號/);
+  assert.match(html, /Claude Code · 使用共用登入/);
+  assert.match(html, /Claude Code · 工作/);
+  assert.match(html, /Codex · 個人/);
+});

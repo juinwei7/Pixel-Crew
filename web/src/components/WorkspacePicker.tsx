@@ -16,13 +16,14 @@ type Props = {
   newWorkerProvider?: ProviderId;
   accounts?: AccountWithAuth[];
   accountId?: string | null;
+  onProviderChange?(provider: ProviderId): void;
   onAccountChange?(id: string | null): void;
   onClose(): void;
   onSelect(path: string): Promise<string | null>;
   onBrowse(): Promise<{ path?: string; canceled?: boolean; error?: string }>;
 };
 
-export function WorkspacePicker({ required = false, mode = "move", currentPath, recentPaths, resetsConversation, newWorkerProvider, accounts, accountId, onAccountChange, onClose, onSelect, onBrowse }: Props) {
+export function WorkspacePicker({ required = false, mode = "move", currentPath, recentPaths, resetsConversation, newWorkerProvider, accounts, accountId, onProviderChange, onAccountChange, onClose, onSelect, onBrowse }: Props) {
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,23 +104,35 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
         )}
 
         {creating && newWorkerProvider && (() => {
-          const providerAccounts = accounts?.filter((account) => account.provider === newWorkerProvider) ?? [];
-          if (providerAccounts.length === 0) return null;
-          const providerLabel = newWorkerProvider === "codex" ? "Codex" : "Claude";
+          const accountsByProvider = {
+            claude: accounts?.filter((account) => account.provider === "claude") ?? [],
+            codex: accounts?.filter((account) => account.provider === "codex") ?? [],
+          };
+          const selectedAccount = accountId ? accounts?.find((account) => account.id === accountId) : null;
+          const selectedProvider = selectedAccount?.provider ?? newWorkerProvider;
           return (
           <div className="workspace-picker__label" style={{ marginTop: 0 }}>
-            <label htmlFor="workspace-account">{t("{provider} 帳號", { provider: providerLabel })}</label>
+            <label htmlFor="workspace-account">{t("選擇 AI 帳號")}</label>
             <select
               id="workspace-account"
               className="workspace-picker__input"
-              value={accountId ?? ""}
-              onChange={(event) => onAccountChange?.(event.target.value || null)}
+              value={`${selectedProvider}:${accountId ?? ""}`}
+              onChange={(event) => {
+                const [provider, nextAccountId] = event.target.value.split(":", 2) as [ProviderId, string];
+                if (provider !== "claude" && provider !== "codex") return;
+                onProviderChange?.(provider);
+                onAccountChange?.(nextAccountId || null);
+              }}
             >
-              <option value="">{t("使用共用登入")}</option>
-              {providerAccounts.map((account) => (
-                <option key={account.id} value={account.id} disabled={account.auth?.status !== "authenticated"}>
-                  {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
-                </option>
+              {(["claude", "codex"] as ProviderId[]).map((provider) => (
+                <optgroup key={provider} label={provider === "claude" ? "Claude Code" : "Codex"}>
+                  <option value={`${provider}:`}>{provider === "claude" ? "Claude Code" : "Codex"} · {t("使用共用登入")}</option>
+                  {accountsByProvider[provider].map((account) => (
+                    <option key={account.id} value={`${provider}:${account.id}`} disabled={account.auth?.status !== "authenticated"}>
+                      {provider === "claude" ? "Claude Code" : "Codex"} · {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
