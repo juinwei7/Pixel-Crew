@@ -2727,6 +2727,23 @@ app.post("/api/shutdown-server", (_req, res) => {
 // ── 遠端存取／手機控制（轉接站 sidecar）─────────────────────────────────────
 // 分工刻意：驗證/公開切換都在轉接站(_tsproxy.mjs, 8790)，本體只負責「把它拉起來」。
 const TSPROXY_PORT = 8790;
+// The relay is deliberately detached so it survives a UI/server restart.  Keep a
+// tiny local startup log as well: otherwise a macOS launch failure (for example a
+// port conflict or a missing executable) is discarded with stdio: "ignore" and
+// the UI can only say "relay not started".
+const TSPROXY_START_LOG = join(REPO_ROOT, "_tsproxy.startup.log");
+function writeTsproxyStartupLog(message: string, append = false) {
+  try {
+    writeFileSync(TSPROXY_START_LOG, `${new Date().toISOString()} ${message}\n`, {
+      encoding: "utf8", mode: 0o600, flag: append ? "a" : "w",
+    });
+  } catch { /* Diagnostic logging must never prevent the app from starting. */ }
+}
+function tsproxyStartupDetail() {
+  try {
+    return readFileSync(TSPROXY_START_LOG, "utf8").trim().split("\n").slice(-3).join(" ").slice(-700);
+  } catch { return ""; }
+}
 function tsproxyRunning(): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = netConnect({ host: "127.0.0.1", port: TSPROXY_PORT });
@@ -2746,6 +2763,7 @@ app.get("/api/remote-access/status", async (_req, res) => {
 app.post("/api/remote-access/start", async (_req, res) => {
   if (await tsproxyRunning()) { res.json({ ok: true, running: true, already: true }); return; }
   try {
+    writeTsproxyStartupLog("Starting relay");
     if (process.platform === "win32") {
       // Windows：用隱藏視窗的 vbs 拉起（不彈黑窗）。
       const vbs = join(REPO_ROOT, "_tsproxy_launch.vbs");
@@ -2755,7 +2773,12 @@ app.post("/api/remote-access/start", async (_req, res) => {
       // macOS / Linux：直接用當前 node 執行檔跑 _tsproxy.mjs，detached 讓它獨立存活。
       const mjs = join(REPO_ROOT, "_tsproxy.mjs");
       if (!existsSync(mjs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy.mjs") }); return; }
-      spawn(process.execPath, [mjs], { detached: true, stdio: "ignore", cwd: REPO_ROOT }).unref();
+      const child = spawn(process.execPath, [mjs], {
+        detached: true, stdio: "ignore", cwd: REPO_ROOT,
+        env: { ...process.env, PC_TSPROXY_LOG: TSPROXY_START_LOG },
+      });
+      child.once("error", (err) => writeTsproxyStartupLog(`Could not launch relay: ${err.message}`, true));
+      child.unref();
     }
   } catch (err) {
     res.status(500).json({ ok: false, error: (err as Error).message });
@@ -2767,7 +2790,11 @@ app.post("/api/remote-access/start", async (_req, res) => {
     await new Promise((r) => setTimeout(r, 400));
     running = await tsproxyRunning();
   }
-  res.json({ ok: true, running });
+  res.json({
+    ok: running,
+    running,
+    error: running ? undefined : (tsproxyStartupDetail() || t("轉接站啟動失敗，請稍後再試")),
+  });
 });
 
 // 同源代理：把前端對 /api/remote-access/api/* 的呼叫轉發到轉接站 8790 的 /__gate/api/*。

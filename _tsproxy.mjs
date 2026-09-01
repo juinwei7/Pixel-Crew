@@ -21,6 +21,14 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.PC_TSPROXY_CONFIG || path.join(__dirname, '_tsproxy.secret.json');
+const STARTUP_LOG_PATH = process.env.PC_TSPROXY_LOG || '';
+function startupLog(message) {
+  // Parent starts this process detached and intentionally has no terminal.  A
+  // private, short log is the only useful way to return a startup failure to the
+  // local settings screen.
+  if (!STARTUP_LOG_PATH) return;
+  try { fs.appendFileSync(STARTUP_LOG_PATH, `${new Date().toISOString()} ${message}\n`, { mode: 0o600 }); } catch {}
+}
 
 const LISTEN_PORT = Number(process.env.PC_TSPROXY_PORT) || 8790;
 const TARGET_HOST = '127.0.0.1';
@@ -1142,8 +1150,15 @@ server.on('upgrade', (req, clientSocket, head) => {
 
 server.listen(LISTEN_PORT, '127.0.0.1', () => {
   console.log(`tsproxy(wizard) listening 127.0.0.1:${LISTEN_PORT} -> ${TARGET_HOSTHEADER}  setup=${needsSetup()} google=${googleEnabled()}`);
+  startupLog(`Relay listening on 127.0.0.1:${LISTEN_PORT}`);
   // 上次選的是免安裝通道 → 開機/重啟後自動重開，拿到新網址（Tailscale 由其自身常駐、不需這裡處理）。
   if (CONFIG.channel === 'cloudflared' && cfInstalled()) {
     cfStart().then((r) => console.log('[cloudflared] auto-start', r.ok ? r.url : ('fail: ' + r.error)));
   }
+});
+server.once('error', (err) => {
+  const message = `Relay could not listen on 127.0.0.1:${LISTEN_PORT}: ${err && err.message ? err.message : String(err)}`;
+  console.error(message);
+  startupLog(message);
+  process.exitCode = 1;
 });

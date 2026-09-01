@@ -164,7 +164,13 @@ export function FocusEnergy({ usage, accountUsage = {}, accounts = [], onRefresh
         </span>
       </button>
       <aside className={`focus-energy__panel ${open ? "focus-energy__panel--open" : ""} ${anchored ? "focus-energy__panel--anchored" : ""}`} aria-label={t("工作用量詳情")}>
-        <header><div><span>WORK ENERGY</span><strong>{t("用量與重置時間")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
+        <header>
+          <div><span>WORK ENERGY</span><strong>{t("用量與重置時間")}</strong></div>
+          <div className="focus-energy__panel-actions">
+            <button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button>
+            <button type="button" className="focus-energy__close" onClick={() => onOpenChange(false)} aria-label={t("關閉工作用量詳情")}>×</button>
+          </div>
+        </header>
         {activeSubject && <div className="focus-energy__subject">
           <span>FOCUS SUBJECT</span>
           <strong>{activeSubject.name}</strong>

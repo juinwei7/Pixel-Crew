@@ -180,6 +180,17 @@ body {
   .handoff-dialog__route i { transform: rotate(90deg); align-self: center; }
 }
 
+@media (max-width: 600px) {
+  .handoff-dialog { padding: 12px; }
+  .handoff-dialog__card { max-height: calc(100dvh - 24px); }
+  .handoff-dialog__close { width: 44px; height: 44px; top: 7px; right: 6px; }
+  .handoff-dialog__header { padding-right: 42px; }
+  .handoff-dialog__meters > div { grid-template-columns: 68px minmax(0, 1fr) 38px; gap: 7px; }
+  .handoff-dialog__progress-head { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .handoff-dialog__actions { align-items: stretch; flex-direction: column-reverse; }
+  .handoff-dialog__actions button { width: 100%; min-height: 44px; }
+}
+
 .game-host {
   position: absolute;
   inset: 0;
@@ -2716,4 +2727,3 @@ body {
 .worker-tab__avatar-button--custom {
   text-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
 }
-

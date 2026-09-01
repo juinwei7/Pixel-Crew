@@ -64,9 +64,9 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
   async function startProxy() {
     setBusy("start");
     try {
-      const r = await apiRequest<{ ok: boolean; running: boolean }>("/api/remote-access/start", { method: "POST", timeoutMs: 30000 });
+      const r = await apiRequest<{ ok: boolean; running: boolean; error?: string }>("/api/remote-access/start", { method: "POST", timeoutMs: 30000 });
       if (r.running) { notify(t("轉接站已啟動"), "ok"); await load(); }
-      else notify(t("轉接站啟動失敗，請稍後再試"), "error");
+      else notify(r.error || t("轉接站啟動失敗，請稍後再試"), "error");
     } catch (e) { notify((e as Error).message, "error"); }
     finally { setBusy(""); }
   }
@@ -100,11 +100,13 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
       label={t("遠端存取／手機控制")}
       eyebrow="REMOTE ACCESS"
       title={t("🔗 遠端存取／手機控制")}
+      overlayClassName="warroom-result remote-access-modal"
+      cardClassName="warroom-result__card remote-access-modal__card"
       onClose={onClose}
     >
-      <div style={{ padding: "2px 2px 8px", color: "#e6ecff", lineHeight: 1.6, width: "min(560px, 92vw)" }}>
+      <div className="remote-access-modal__content" style={{ padding: "2px 2px 8px", color: "#e6ecff", lineHeight: 1.6 }}>
         {/* 進度條 */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 4px" }}>
+        <div className="remote-access-modal__steps" style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 4px" }}>
           {steps.map((s, i) => (
             <div key={i} style={{ flex: 1 }}>
               <div style={{ height: 6, borderRadius: 4, background: s.done ? "#5b8cff" : "#232c46" }} />
@@ -173,11 +175,11 @@ function Dashboard({ st, busy, run, notify, onReload }: {
     <div style={{ display: "grid", gap: 12 }}>
       {/* 目前對外網址 */}
       {st.publicUrl ? (
-        <div style={{ ...card, borderColor: "#2e6f4e", background: "#0d1a14" }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div className="remote-access-modal__url-card" style={{ ...card, borderColor: "#2e6f4e", background: "#0d1a14" }}>
+          <div className="remote-access-modal__url-layout" style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 240px", minWidth: 0 }}>
               <div style={{ fontSize: 12, color: "#7ee0a2", marginBottom: 6 }}>{t("● 已上線，手機用這個網址＋通行碼連進來")}</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div className="remote-access-modal__url-actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <code style={{ flex: 1, color: "#cfe0ff", fontSize: 13, wordBreak: "break-all" }}>{st.publicUrl}</code>
                 <button style={btnGhost} onClick={() => void copyUrl(st.publicUrl)}>{t("複製")}</button>
               </div>
@@ -185,7 +187,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
                 <div style={{ fontSize: 11, color: "#7d8cb8", marginTop: 6 }}>{t("※ 免安裝通道的網址每次重啟會變，重開後記得重新複製。")}</div>
               )}
             </div>
-            <div style={{ textAlign: "center", margin: "0 auto" }}>
+            <div className="remote-access-modal__qr" style={{ textAlign: "center", margin: "0 auto" }}>
               <QrTree text={st.publicUrl} px={200} />
               <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("📱 掃碼開啟・點一下逛夜城")}</div>
             </div>
@@ -234,7 +236,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
       </div>
 
       {/* 開機自啟＋關閉通道 */}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div className="remote-access-modal__channel-actions" style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
         {st.autostart.supported && (
           <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
             <input type="checkbox" checked={st.autostart.enabled} disabled={busy === "auto"} onChange={(e) => void run("autostart", { on: e.target.checked }, "auto")} />
@@ -268,7 +270,7 @@ function PasscodeSection({ busy, run, notify }: { busy: string; run: Run; notify
       <summary style={summary}>🔑 {t("變更通行碼")}</summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <label style={label}>{t("新通行碼（至少 6 碼）")}</label>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8 }}>
           <input style={input} type="text" value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} placeholder="••••••••" />
           <button style={btnBlue} disabled={!!busy} onClick={() => void submit()}>{busy === "pass" ? t("儲存中…") : t("更新")}</button>
         </div>
@@ -298,7 +300,7 @@ function GuardianSection({ st, busy, run, notify }: { st: State; busy: string; r
           {t("分享訪客可以讀取、建立，並刪改自己這次建立的東西；但要動到既有／別人建立的資料或高危操作（還原備份、重啟、換 provider…）時，需先輸入這組監護密碼。與登入通行碼分開，訪客看到也學不到你的主碼。未設定＝訪客一律無法執行受限操作。")}
         </p>
         <label style={label}>{t("監護密碼（至少 4 碼，留空＝清除）")}</label>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8 }}>
           <input style={input} type="text" value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} placeholder={st.guardian.set ? t("已設定，留空＝清除") : "••••"} />
           <button style={btnBlue} disabled={!!busy} onClick={() => void submit()}>{busy === "guardian" ? t("儲存中…") : t("更新")}</button>
         </div>
@@ -384,14 +386,14 @@ function ShareSection({ st, busy, run, notify }: { st: State; busy: string; run:
         ) : (
           <>
             <label style={label}>{t("到期方式")}</label>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <div className="remote-access-modal__choice-row" style={{ display: "flex", gap: 6, marginBottom: 10 }}>
               {tab("quick", t("快捷"))}
               {tab("custom", t("自訂時數"))}
               {tab("at", t("指定到某時刻"))}
             </div>
 
             {mode === "quick" && (
-              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <div className="remote-access-modal__choice-row" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
                 {[1, 4, 12, 24].map((h) => (
                   <button key={h} style={quickH === h ? btnBlue : btnGhost} onClick={() => setQuickH(h)}>{h}h</button>
                 ))}
@@ -411,7 +413,7 @@ function ShareSection({ st, busy, run, notify }: { st: State; busy: string; run:
             )}
 
             <label style={label}>{t("臨時分享密碼（至少 6 碼）")}</label>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8 }}>
               <input style={input} type="text" value={sp} onChange={(e) => setSp(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void startShare(); }} placeholder="••••••••" />
               <button style={btnBlue} disabled={!!busy} onClick={() => void startShare()}>{busy === "share" ? t("處理中…") : t("開始分享")}</button>
             </div>
@@ -456,7 +458,7 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
           {t("⚠ 重新導向 URI 必須固定，建議搭 Tailscale（cloudflared 每次網址會變，不適合）。")}
         </p>
         <label style={label}>{t("把這個「已授權的重新導向 URI」貼到 Google Cloud：")}</label>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <code style={{ ...input, padding: "8px 10px", color: redirectUri ? "#cfe0ff" : "#6b7aa0" }}>{redirectUri || t("（先開通 Tailscale 才會有）")}</code>
           {redirectUri && <button style={btnGhost} onClick={async () => { try { await navigator.clipboard.writeText(redirectUri); notify(t("已複製"), "ok"); } catch { /* noop */ } }}>{t("複製")}</button>}
         </div>
@@ -494,7 +496,7 @@ function DemoWalkthrough({ onDone }: { onDone(): void }) {
       <div style={{ fontSize: 11, color: "#ffd479", marginBottom: 8 }}>{t("預覽模式・示範一台全新空白電腦怎麼從 0 設到能用（不會實際變更任何設定）")}</div>
       <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>{s.t}</div>
       <div style={{ fontSize: 13, color: "#c7d3f5", minHeight: 48 }}>{s.d}</div>
-      <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+      <div className="remote-access-modal__demo-actions" style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
         <button style={btnGhost} disabled={i === 0} onClick={() => setI((v) => Math.max(0, v - 1))}>{t("上一步")}</button>
         <button style={btnBlue} onClick={() => (last ? onDone() : setI((v) => v + 1))}>{last ? t("完成（關閉教學）") : t("下一步")}</button>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "#7d8cb8" }}>{i + 1} / {steps.length}</span>

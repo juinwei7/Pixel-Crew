@@ -147,6 +147,74 @@
 .warroom-result__prio--P4 { background: rgba(132,171,190,.15); color: #aebdca; }
 .warroom-result__note { margin-top: 12px; color: #7d8ea3; font-size: 11px; }
 
+/* Remote access is deliberately usable on the phone that it helps connect.
+   Keep the desktop dashboard compact, but turn its horizontal controls into
+   full-width, thumb-friendly rows before they can overflow a narrow viewport. */
+.remote-access-modal__card { width: min(640px, calc(100vw - 32px)); }
+.remote-access-modal__content { width: min(560px, 100%); }
+.remote-access-modal__url-layout { min-width: 0; }
+.remote-access-modal__url-actions code { min-width: 0; }
+
+@media (max-width: 600px) {
+  /* All dialog variants share Modal's warroom shell. This keeps every lazy
+     loaded tool (accounts, backup, kanban, remote access, etc.) inside the
+     visual viewport when Safari's address bar changes height. */
+  .warroom-result {
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+  .warroom-result__card {
+    width: min(640px, 100%);
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    padding: 20px 16px;
+  }
+  .warroom-result__close { width: 44px; height: 44px; top: 5px; right: 4px; }
+  .warroom-result__card > header h2 { max-width: calc(100% - 46px); line-height: 1.3; }
+
+  .remote-access-modal { align-items: end; padding: 0; }
+  .remote-access-modal__card {
+    width: 100%;
+    max-height: min(92dvh, calc(100dvh - env(safe-area-inset-top)));
+    margin: 0;
+    padding: 18px 14px calc(18px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 18px 18px 0 0;
+  }
+  .remote-access-modal__card h2 { max-width: calc(100% - 42px); font-size: 17px; line-height: 1.35; }
+  .remote-access-modal__close { width: 44px; height: 44px; top: 7px; right: 5px; }
+  .remote-access-modal__steps { gap: 5px !important; }
+  .remote-access-modal__steps > div > div:last-child { font-size: 10px !important; line-height: 1.3; }
+  .remote-access-modal__url-layout { display: grid !important; gap: 14px !important; }
+  .remote-access-modal__url-actions,
+  .remote-access-modal__input-row { align-items: stretch !important; flex-direction: column; }
+  .remote-access-modal__input-row > input,
+  .remote-access-modal__input-row > code { display: block; width: 100% !important; }
+  .remote-access-modal__url-actions button,
+  .remote-access-modal__input-row button { min-height: 44px; width: 100%; }
+  .remote-access-modal__url-actions code { display: block; padding: 6px 0; }
+  .remote-access-modal__qr { margin-inline: auto !important; }
+  .remote-access-modal__qr svg,
+  .remote-access-modal__qr canvas { max-width: min(200px, 62vw); height: auto; }
+  .remote-access-modal__channel-actions { align-items: stretch !important; gap: 10px !important; }
+  .remote-access-modal__channel-actions > * { width: 100%; }
+  .remote-access-modal__channel-actions button { margin-left: 0 !important; min-height: 44px; }
+  .remote-access-modal__choice-row { flex-wrap: wrap; }
+  .remote-access-modal__choice-row button { min-height: 40px; flex: 1 1 94px; }
+  .remote-access-modal__demo-actions { flex-wrap: wrap; }
+  .remote-access-modal__demo-actions span { margin-left: 0 !important; }
+  /* Remote setup has inline 14px input styles. Override them here so iOS does
+     not zoom the entire page while entering a passcode. */
+  .remote-access-modal input,
+  .remote-access-modal select,
+  .remote-access-modal textarea { font-size: 16px !important; }
+}
+
+@media (max-width: 380px) {
+  .remote-access-modal__card { padding-inline: 12px; }
+  .remote-access-modal__steps > div > div:last-child { font-size: 9px !important; }
+}
+
 /* Explicit consent for the only mode that removes every approval boundary. */
 .auto-approve-confirm { position: fixed; inset: 0; z-index: 25020; display: grid; place-items: center; padding: 18px; background: rgba(4, 8, 16, .76); backdrop-filter: blur(4px); }
 .auto-approve-confirm__card { position: relative; width: min(540px, 100%); max-height: min(700px, calc(100vh - 36px)); overflow: auto; padding: 24px; border: 1px solid rgba(255, 91, 91, .5); border-radius: 16px; background: linear-gradient(180deg, rgba(40, 20, 29, .99), rgba(17, 18, 29, .99)); box-shadow: 0 32px 90px rgba(0, 0, 0, .66), 0 0 34px rgba(255, 46, 136, .12); color: #dce4ee; }
@@ -471,9 +539,9 @@
 @media (max-width: 1279px) {
   .top-bar__group-label, .top-bar__health span { display: none; }
   .top-bar__room { max-width: 190px; }
-  /* Exclude the collapsed rail so it keeps its 52px width (matches the
-     :not() pattern used in the narrower breakpoint below). */
-  .crew-rail:not(.crew-rail--collapsed) { width: 205px; }
+  /* Keep the compact rail wide enough for the CREW label and its five
+     controls, while preserving the 52px collapsed rail. */
+  .crew-rail:not(.crew-rail--collapsed) { width: min(230px, calc(100% - 20px)); }
 }
 
 @media (max-width: 1440px) {
@@ -504,6 +572,10 @@
   .holo-panel__worker { display: none; }
   .top-bar button, .top-bar select, .crew-rail button, .task-log-toolbar button, .task-log-search button, .command-composer button, .copy-button, .rich-code > button { min-height: 40px; }
   .crew-rail__head button, .crew-row__menu-button { width: 40px; height: 40px; }
+  /* At touch size, five 40px controls are the priority. The roster label is
+     redundant with the visible list, so tuck it away rather than wrap. */
+  .crew-rail:not(.crew-rail--collapsed) .crew-rail__head { gap: 3px; }
+  .crew-rail:not(.crew-rail--collapsed) .crew-rail__head strong { display: none; }
   .canvas-zoom { bottom: 82px; left: 10px; transform: scale(.88); transform-origin: left bottom; }
   .game-root--task-log-open .canvas-zoom { opacity: 0; pointer-events: none; }
 }
@@ -588,6 +660,16 @@
     padding-top: 15px;
   }
 
+  /* Focus mode uses its own full-height flex shell and composer footer. It
+     must not inherit the regular task log's phone bottom-sheet height cap. */
+  .game-root--focus .holo-panel.holo-panel--focus {
+    inset: auto;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    padding-top: 0;
+  }
+
   /* The width-drag handle (left edge) becomes a height-drag grabber at the top. */
   .holo-panel__resize {
     top: 0; bottom: auto; left: 0; right: 0;
@@ -642,6 +724,15 @@
     transform-origin: top right;
     z-index: 60;
   }
+
+  /* The compact HUD is scaled from its top-right corner. Anchor its expanded
+     detail to that same edge; centering it first would push the scaled sheet
+     past the right side of a phone viewport. */
+  .energy-detail {
+    right: 0;
+    left: auto;
+    transform: none;
+  }
 }
 
 /* Belt-and-suspenders: never let content drag the page sideways on a phone.
@@ -692,7 +783,11 @@ input:focus-visible {
   }
 }
 
-@media (max-width: 720px) {
+/* Tablet keeps the side-panel width; phones already switch it to an inset
+   bottom sheet above. Keeping this range above 600px prevents the later
+   tablet rule from replacing the phone sheet's `width: auto` with a fixed
+   viewport calculation. */
+@media (min-width: 601px) and (max-width: 720px) {
   .game-root {
     --log-panel-width: calc(100vw - 24px);
   }
@@ -1345,6 +1440,41 @@ input:focus-visible {
 .kanban__more { padding: 2px 4px; color: #7d90ad; font-size: 10px; }
 @media (max-width: 900px) { .kanban__columns { grid-template-columns: repeat(2, 1fr); } }
 
+/* Operations, reports, board and onboarding all remain available at phone
+   widths. Avoid desktop multi-column density and keep all choices tappable. */
+@media (max-width: 600px) {
+  .ops-modal__tabs { gap: 6px; }
+  .ops-modal__tabs button { min-height: 42px; font-size: 11px; }
+  .ops-modal__body { max-height: 58dvh; padding-right: 0; }
+  .ops-diagnostics__grid { grid-template-columns: 1fr; }
+  .ops-diagnostics__reasons li, .ops-schedule__meta, .ops-budget__row { align-items: stretch; flex-direction: column; gap: 6px; }
+  .ops-budget__input { width: 100%; }
+  .ops-budget__input input { width: 100%; min-height: 40px; font-size: 16px; }
+  .ops-budget__row button { min-height: 40px; }
+  .ops-schedule__form { grid-template-columns: 1fr; }
+  .ops-schedule__form select, .ops-schedule__form input, .ops-schedule__form textarea { min-height: 40px; font-size: 16px; }
+  .ops-schedule__actions { flex-wrap: wrap; }
+  .ops-schedule__actions button { min-height: 40px; flex: 1 1 120px; }
+  .day-report__nav { justify-content: space-between; gap: 6px; }
+  .day-report__nav strong { min-width: 0; font-size: 11px; }
+  .day-report__nav button { min-height: 40px; }
+  .day-report__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day-report__filter { align-items: stretch; flex-direction: column; gap: 5px; }
+  .day-report__filter select { min-height: 40px; font-size: 16px; }
+  .ops-costs__label--npc { width: 72px; }
+  .ops-costs__value { width: 54px; font-size: 9px; }
+  .day-report__event { align-items: flex-start; }
+  .kanban-modal { width: 100%; }
+  .kanban__columns { grid-template-columns: 1fr; }
+  .kanban__cards { max-height: none; max-height: 38dvh; }
+  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; }
+  .tour-hole { display: none; }
+  .tour-dialog__actions { align-items: stretch; flex-wrap: wrap; }
+  .tour-dialog__progress { width: 100%; margin-right: 0; }
+  .tour-dialog__skip { min-height: 40px; margin-right: auto; }
+  .tour-dialog__btn { min-height: 40px; }
+}
+
 /* ===== 新手導覽（聚光燈＋導覽貓對話框） ===== */
 .tour-overlay { position: fixed; inset: 0; z-index: 28000; }
 .tour-overlay--plain { background: rgba(3, 7, 17, .78); backdrop-filter: blur(3px); }
@@ -1568,4 +1698,21 @@ input:focus-visible {
   .game-root--modern .crew-rail,
   .game-root--modern .holo-panel,
   .game-root--modern .command-composer { backdrop-filter: none; }
+}
+
+/* Final phone pass for components whose desktop rules are declared later in
+   this stylesheet. Keep no modal action below the recommended touch target. */
+@media (max-width: 600px) {
+  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; }
+  .tour-hole { display: none; }
+  .tour-dialog__actions { align-items: stretch; flex-wrap: wrap; }
+  .tour-dialog__progress { width: 100%; margin-right: 0; }
+  .tour-dialog__skip { min-height: 40px; margin-right: auto; }
+  .tour-dialog__btn { min-height: 40px; }
+
+  .outbox-modal__list { max-height: 56dvh !important; }
+  .outbox-modal__item { align-items: flex-start !important; min-height: 56px; }
+  .outbox-modal__item > span:last-child { display: none; }
+  .outbox-modal__actions { text-align: stretch !important; }
+  .outbox-modal__actions button { width: 100%; min-height: 44px; }
 }
