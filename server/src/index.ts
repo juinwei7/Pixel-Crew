@@ -61,6 +61,7 @@ import { registerAccountRoutes } from "./accountRoutes.js";
 import { registerApprovalRoutes } from "./approvalRoutes.js";
 import { VoiceModelManager } from "./voice/voiceModel.js";
 import { VoiceEngineServer } from "./voice/voiceEngineServer.js";
+import { VoiceEngineInstaller } from "./voice/voiceEngineInstaller.js";
 import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.js";
 import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import {
@@ -3400,13 +3401,14 @@ app.post("/api/backup/export", async (req, res) => {
 });
 
 const voiceModelManager = new VoiceModelManager(config.voiceModelsDir);
+const voiceEngineInstaller = new VoiceEngineInstaller(config.voiceEnginesDir, (path) => voiceEngineServer.setExecutable(path));
 const voiceEngineServer = new VoiceEngineServer(
-  resolveWhisperBinary([...new Set([config.whisperServerBin, "whisper-server"])]),
+  resolveWhisperBinary([...new Set([config.whisperServerBin, "whisper-server"])]) ?? voiceEngineInstaller.installedBinary,
   config.voiceServerPort,
   () => voiceModelManager.modelPath,
 );
 const voiceTranscriber = new VoiceTranscriber(voiceEngineServer);
-registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber });
+registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber, engineInstaller: voiceEngineInstaller });
 
 registerBackupImportTransport({
   app,

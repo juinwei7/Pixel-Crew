@@ -19,7 +19,7 @@ export class VoiceEngineServer implements VoiceEngine {
   private starting: Promise<void> | null = null;
 
   constructor(
-    private readonly whisperServerBin: string | null,
+    private whisperServerBin: string | null,
     private readonly port: number,
     private readonly modelPathProvider: () => string,
     private readonly startupTimeoutMs = 30_000,
@@ -31,6 +31,10 @@ export class VoiceEngineServer implements VoiceEngine {
 
   get baseUrl(): string {
     return `http://127.0.0.1:${this.port}`;
+  }
+
+  setExecutable(path: string): void {
+    this.whisperServerBin = path;
   }
 
   private isAlive(): Promise<boolean> {

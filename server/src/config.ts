@@ -75,6 +75,7 @@ export const config = {
   whisperServerBin: process.env.WHISPER_SERVER_BIN?.trim() || "whisper-server",
   voiceServerPort: Number(process.env.VOICE_SERVER_PORT ?? 8793),
   voiceModelsDir: join(dirname(dbPath), "voice-models"),
+  voiceEnginesDir: join(dirname(dbPath), "voice-engines"),
   webDistPath: process.env.WEB_DIST_PATH?.trim() || fileURLToPath(new URL("../../web/dist", import.meta.url)),
   production: process.env.NODE_ENV === "production" || process.argv.includes("--serve-web"),
 };
