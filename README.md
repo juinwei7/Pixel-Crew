@@ -17,6 +17,7 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 ## Highlights
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
+- **Choose an LLM when recruiting** — the new-NPC workspace screen lists both Claude Code and Codex, their shared logins, and every authenticated named account. The selected provider and account are assigned together, so a new worker starts with the intended local CLI identity.
 - **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
 - **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart; each stage shows the linked Mission’s planning state, current step, and owner, while deliberate restart is limited to that task’s linked Missions and NPCs.
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
@@ -74,7 +75,7 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
 - **專心閱讀與工作室**：把完成的 NPC 對話切成專注閱讀工作區。左側可縮放的「工作室」欄列出受管理的本機工作資料夾，可用 `Alt+1`–`Alt+9` 快速切換，會記住各工作室最後選過的 NPC；並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind，不會修改 repository。
 - **Focus 工作台**：Focus Reader 可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
-- **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
+- **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。新增 NPC 時的工作資料夾畫面會列出兩種 LLM 的共用登入與所有已登入的具名稱帳號，選定後會一併指派 provider 與帳號。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
 - **帳號工作能量**：頂部 HUD 分開顯示共用登入與每個具名稱 Claude Code／Codex 帳號的用量；重新整理只讀取已登入帳號各自的官方 CLI，不混用不同帳號的 quota。
 - **Codex 目標與指令面板**：用 `/goal` 設定、查看或清除 thread 的目標；Focus 控制與指令管理也會呈現內建 Codex 對話控制，而自訂面板項目會明確標示為一般聊天文字。
 - **持久化老闆任務日誌**：從頂部 Boss Desk 以聊天方式直接交辦。任務、探索問題、回答、跨部門進度與最終報告都會保存，切換畫面或重啟後仍可繼續；每個階段直接顯示 Mission 的規劃、目前步驟與負責 NPC。需要重做時，可明確確認後只清空該 Boss Task 所連結的 Mission 與 NPC，衝突中的工作、交接或協作會先阻擋操作。
@@ -197,7 +198,7 @@ npm run dev
 3. 在底部輸入框對目前的 Worker 下達任務（`Enter` 送出、`Shift+Enter` 換行，也可直接貼上圖片；支援中文輸入法組字，選字時的 Enter 不會誤送）。Worker 忙碌時仍可繼續輸入，送出後會進入等待佇列。
 4. Claude Worker 可輸入 `/` 查看目前房間、使用者層級與內建原生指令；Codex Worker 可輸入 `/` 使用 Pixel Crew 支援的原生對話控制，或輸入 `$` 查看目前房間的 repo skills。模型、權限、MCP 等 TUI 專屬控制則使用 Pixel Crew 頂部的對應介面。
 5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
-6. 從頂部列開啟**帳號管理**，新增具名稱的 Claude Code 或 Codex 登入，在瀏覽器完成登入（Codex 也支援原本的 API key 流程），並在建立 NPC 時選擇要使用的帳號。已有原生對話歷史的 Worker 必須先清除工作階段才能換帳號，避免帳號切換悄悄放棄 provider 端的 thread。
+6. 從頂部列開啟**帳號管理**，新增具名稱的 Claude Code 或 Codex 登入，在瀏覽器完成登入（Codex 也支援原本的 API key 流程）。建立 NPC 時，在選擇工作資料夾的畫面使用「選擇 AI 帳號」，可直接選擇 Claude Code／Codex 的共用登入或任何已登入具名稱帳號。已有原生對話歷史的 Worker 必須先清除工作階段才能換帳號，避免帳號切換悄悄放棄 provider 端的 thread。
 7. 按**老闆交辦**：先選擇決策模型，再填寫目標；驗收條件可選填，不必預先選 NPC 或部門。決策模型會從可接單部門的用途、成員職務與指示做結構化判斷；信心不足時先請你補充。路由成立後，部門主管會依成員職務選擇快速 Consult／Review 或完整 Mission，自動規劃、直接開始、依序交接、有限次修正，最後提交一份部門報告。單人部門可執行工作，但兩位以上才能安排獨立 Review。
 8. 使用左下角的 `＋` 建立同 provider、同帳號、同房間的新 Worker，再透過分頁切換任務。
 9. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
