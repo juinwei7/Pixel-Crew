@@ -1,9 +1,8 @@
 import { t } from "./i18n";
 
-// 工作站主題（單一事實來源）：像素風工作小窗（GameCanvas）、3D 焦點大螢幕（Office3D）、
-// 3D 頭頂小窗（officeScene）共用同一張表，改一處三邊同步。
+// 工作站主題的單一事實來源：像素風工作小窗（GameCanvas）使用這張表。
 // label＝工作站名稱；plain＝大白話標題（非工程背景的人一看就懂 NPC 在幹嘛）；
-// bg/fg＝3D 頭頂小窗的面板底色/文字色；accent＝各處共用的主題色；
+// bg/fg＝小窗的面板底色/文字色；accent＝各處共用的主題色；
 // kind=web 的小窗會放真實瀏覽器截圖(/api/webshot)，其餘顯示站點主題＋即時任務文字。
 export type StationTheme = {
   label: string;

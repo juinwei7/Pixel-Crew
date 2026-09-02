@@ -18,13 +18,12 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
 - **Choose an LLM when recruiting** — the new-NPC workspace screen lists both Claude Code and Codex, their shared logins, and every authenticated named account. The selected provider and account are assigned together, so a new worker starts with the intended local CLI identity.
-- **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
+- **Pixel / Professional modes** — use the pixel office as the simple default, then switch from the top bar into a full-screen Professional Workbench for reports, managed workspaces, split panes, usage, and follow-up commands. A collapsible Studio rail switches between local workspaces (with `Alt+1`–`Alt+9`) and exposes a read-only branch / commit / dirty-file / ahead-behind summary.
 - **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart; each stage shows the linked Mission’s planning state, current step, and owner, while deliberate restart is limited to that task’s linked Missions and NPCs.
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
 - **AI-routed department work** — use one “Hand to department” action; the Boss chooses a focused read-only Consult/Review or a full 2–5 step Mission, assigns same-workspace specialists, and keeps handoffs moving until completion or a real approval is needed.
 - **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
-- **3D office view (optional)** — add `?theme=modern` to switch from the default pixel (2D) office to a real-time 3D "dollhouse": a glass-curtain tower with per-floor bands, a day/night lighting cycle, NPCs seated at their stations as 3D characters, and floating work windows that show — in plain language — which tool each agent is running. Drag to orbit the azimuth and scroll to zoom; pull back to take in the whole tower.
 - **Remote access / mobile control (optional)** — a bundled gateway puts a passcode or Google sign-in (plus brute-force lockout and time-limited share codes) in front of the local server and opens an HTTPS tunnel via cloudflared or Tailscale, so you can command your crew from a phone. The connection QR renders as a 3D neon night city that flips into a scannable aerial view — tap to explore, drag to orbit.
 - **Folders as rooms** — bind each worker to a local folder; the agent runs there.
 - **Live streaming** — replies, thinking, tool input/output and final results over WebSocket.
@@ -74,8 +73,8 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 ## 功能
 
 - **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
-- **專心閱讀與工作室**：把完成的 NPC 對話切成專注閱讀工作區。左側可縮放的「工作室」欄列出受管理的本機工作資料夾，可用 `Alt+1`–`Alt+9` 快速切換，會記住各工作室最後選過的 NPC；並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind，不會修改 repository。
-- **Focus 工作台**：Focus Reader 可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
+- **像素／專業模式**：像素辦公室是簡單的預設入口；從頂欄切到全螢幕「專業工作台」後，可閱讀報告、管理工作室、比較分割窗格、查看用量並繼續下指令。左側「工作室」欄可用 `Alt+1`–`Alt+9` 快速切換本機工作資料夾，並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind。
+- **專業工作台分割窗格**：可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
 - **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。新增 NPC 時的工作資料夾畫面會列出兩種 LLM 的共用登入與所有已登入的具名稱帳號，選定後會一併指派 provider 與帳號。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
 - **帳號工作能量**：頂部 HUD 分開顯示共用登入與每個具名稱 Claude Code／Codex 帳號的用量；重新整理只讀取已登入帳號各自的官方 CLI，不混用不同帳號的 quota。
 - **Codex 目標與指令面板**：用 `/goal` 設定、查看或清除 thread 的目標；Focus 控制與指令管理也會呈現內建 Codex 對話控制，而自訂面板項目會明確標示為一般聊天文字。
@@ -102,7 +101,6 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **更可靠的本機執行環境**：Server 能妥善恢復計畫性重啟與卡住的背景活動；Windows release 預設隱藏啟動，並透過系統匣提供開啟、重啟、停止與查看 log。
 - **富文字對話**：Agent 回覆支援 GitHub Flavored Markdown 與安全的 HTML 子集合，包含表格、程式碼區塊、連結與圖片。
 - **像素辦公室**：依照工具類型，讓角色移動到任務板、終端機、瀏覽器或其他工作站。
-- **3D 辦公室（選用）**：在網址加上 `?theme=modern`，即可從預設的像素（2D）辦公室切換到即時 3D「娃娃屋」——玻璃帷幕塔身與逐層樓板環帶、日夜光影循環、NPC 以 3D 角色坐在各自工作站，頭上的浮動工作小窗會以白話中文即時顯示每位 Agent 正在執行的工具。滑鼠拖曳旋轉方位、滾輪縮放，拉遠即可欣賞整棟塔身。預設仍為像素主題。
 - **遠端存取／手機控制（選用）**：內建轉接站在本機 server 前加上通行碼或 Google 登入（含暴力嘗試鎖定與限時分享密碼），並以 cloudflared 或 Tailscale 開出 HTTPS 通道，手機掃碼即可連入指揮辦公室。連線 QR 以 3D 霓虹夜城呈現——進場長出城市後自動翻轉成可掃描的空拍視角，點一下逛街景、拖曳環繞城市。
 - **Commands / Skills**：Claude 啟動時掃描專案與使用者指令並快取原生指令；Codex 會預載 Pixel Crew 可透過 app-server 原生執行的 `/clear`、`/new`、`/compact`、`/review`、`/goal`，並另外掃描 repo-scoped `$skills`。新建 NPC 或剛切換房間都能立即使用，不必先送出測試訊息。
 - **MCP 狀態**：依目前 provider 載入 MCP servers，可在介面中新增、移除、重新整理及查看狀態（含「需授權」等狀態）。
@@ -206,7 +204,7 @@ npm run dev
 9. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
 10. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
 11. 頂部的 WORK ENERGY 顯示 Claude / Codex 的剩餘用量；Worker 執行期間可以切換到其他 Worker，或按「中止」停止目前回合。
-12. 在任務日誌按**專心閱讀**可進入 Focus Reader。頂部會明示目前 NPC 的 provider 與實際使用模型；左側「工作室」可收合或展開，選擇另一間工作室會回到該工作室上次閱讀的 NPC。需要比較報告時可分割成最多四個窗格，按 `Alt+[`／`Alt+]` 在窗格間移動焦點。工作室卡片中的 Git 資訊僅供檢視，並不會執行 fetch、checkout、commit 或 push。
+12. 從頂欄切換到**專業**即可進入 Professional Workbench。頂部會明示目前 NPC 的 provider 與實際使用模型；左側「工作室」可收合或展開，選擇另一間工作室會回到該工作室上次閱讀的 NPC。需要比較報告時可分割成最多四個窗格，按 `Alt+[`／`Alt+]` 在窗格間移動焦點。工作室卡片中的 Git 資訊僅供檢視，並不會執行 fetch、checkout、commit 或 push。
 13. Codex NPC 可輸入 `/goal <目標>` 設定目前 thread 目標、`/goal` 查看，或 `/goal clear` 清除；`/clear`、`/new`、`/compact`、`/review` 也都是支援的原生對話控制。
 
 右上角會分別顯示伺服器與目前 provider 的狀態。CLI 尚未登入時，Pixel Crew 會暫停該 provider 的訊息送出、顯示登入指令，並每 3 秒重新檢查；若另一個 provider 已登入，可直接從引導畫面切換過去。

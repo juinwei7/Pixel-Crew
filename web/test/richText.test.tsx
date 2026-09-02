@@ -11,6 +11,7 @@ test("renders GFM Markdown and safe inline HTML", () => {
   assert.match(html, /<h1>標題<\/h1>/);
   assert.match(html, /type="checkbox"/);
   assert.match(html, /<table>/);
+  assert.match(html, /class="rich-text__table-scroll"/);
   assert.match(html, /<strong>HTML<\/strong>/);
 });
 

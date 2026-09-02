@@ -28,6 +28,7 @@ type Props = {
   onAvatar(id: string): void;
   onPersona(id: string): void;
   onRoom(id: string): void;
+  inert?: boolean;
 };
 
 const MAX_WORKERS = 20;
@@ -57,7 +58,7 @@ function statusCopy(status: WorkerAttention): string {
 const DRAG_THRESHOLD_PX = 6;
 const TOUCH_DRAG_DELAY_MS = 350;
 
-export function WorkerTabs({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom }: Props) {
+export function WorkerTabs({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom, inert = false }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -310,7 +311,7 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
   }
 
   return (
-    <aside ref={railRef} className={`crew-rail ${collapsed ? "crew-rail--collapsed" : ""}`}>
+    <aside ref={railRef} className={`crew-rail ${collapsed ? "crew-rail--collapsed" : ""}`} aria-hidden={inert || undefined} inert={inert ? "" : undefined}>
       <div className="crew-rail__head">
         {!collapsed && <strong>CREW <span>{workers.length}/{MAX_WORKERS}</span></strong>}
         <button type="button" onClick={() => onCollapsed(!collapsed)} aria-label={collapsed ? t("展開人員列") : t("收合人員列")} title={collapsed ? t("展開人員列") : t("收合人員列")}><svg viewBox="0 0 24 24" aria-hidden="true">{collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="M15 6 9 12l6 6" />}</svg></button>

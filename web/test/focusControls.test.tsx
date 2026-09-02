@@ -7,23 +7,9 @@ import { emptyWorker } from "../src/workerState";
 
 const baseProps = {
   workerCount: 2,
-  modelOptions: [{ id: "sonnet", label: "Sonnet" }],
-  authReady: true,
-  notificationsEnabled: false,
-  onModel: () => {},
-  onAutoApprove: () => {},
-  onProvider: () => {},
   onRename: async () => null,
   onPersona: () => {},
-  onAvatar: () => {},
-  onRoom: () => {},
   onRemove: () => {},
-  onCreateNpc: () => {},
-  onOpenMcp: () => {},
-  onOpenCodexCommands: () => {},
-  onOpenBackup: () => {},
-  onNotificationsToggle: () => {},
-  onOpenCommandCenter: () => {},
 };
 
 test("focus controls exposes a single collapsed management trigger", () => {

@@ -19,11 +19,9 @@ import { FocusPaneGrid } from "./components/FocusPaneGrid";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
 import { Modal } from "./components/Modal";
 import { hasSeenTour } from "./onboardingState";
-import { Office3D } from "./components/Office3D";
 import { RichText } from "./components/RichText";
 import { WarroomVerdictBody, type WarRoomResult } from "./components/WarroomVerdictBody";
 import { requiresAutoApproveConfirmation } from "./autoApproveSafety";
-import { theme } from "./theme";
 import { parseMcpToolName } from "./mcpToolName";
 import { discussionSubmission, toggleDiscussionMode, type DiscussionMode } from "./discussionMode";
 import { roundtablePrompt } from "./roundtablePrompt";
@@ -233,7 +231,8 @@ export function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const focusLayerRef = useRef<HTMLDivElement>(null);
-  const focusExitRef = useRef<HTMLButtonElement>(null);
+  const topBarRef = useRef<HTMLElement>(null);
+  const professionalModeButtonRef = useRef<HTMLButtonElement>(null);
   const focusReturnRef = useRef<HTMLElement | null>(null);
 
   // 這幾個清單以前每次 render 都用 .map / Object.values 重算一份新陣列，害得吃它們的重量級子元件
@@ -635,7 +634,7 @@ export function App() {
   useEffect(() => {
     if (!taskFocusMode) return;
     const previousFocus = focusReturnRef.current;
-    focusExitRef.current?.focus();
+    professionalModeButtonRef.current?.focus();
     return () => {
       if (previousFocus?.isConnected) previousFocus.focus();
       focusReturnRef.current = null;
@@ -761,19 +760,22 @@ export function App() {
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = [...(focusLayerRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    const topBarFocusable = [...(topBarRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
     ) ?? [])].filter((element) => element.getClientRects().length > 0);
+    const layerFocusable = [...(focusLayerRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => element.getClientRects().length > 0);
+    const focusable = [...topBarFocusable, ...layerFocusable];
     if (!focusable.length) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
+    const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+    // A nested dialog owns its own focus lifecycle. Background elements are
+    // inert in Professional mode, so only the visible top bar and workbench
+    // enter this cycle.
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const nextIndex = (currentIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length;
+    focusable[nextIndex]?.focus();
   }
 
   async function changeProvider(provider: ProviderId) {
@@ -905,20 +907,11 @@ export function App() {
   }
 
   return (
-    <div className={`game-root ${theme === "modern" ? "game-root--modern" : ""} ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} style={{
+    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} onKeyDownCapture={trapFocusInReader} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
-      {theme === "modern" ? (
-        // 現代主題：3D 娃娃屋只當背景層，頂欄/日誌/對話/圓桌/Modal 全部沿用下方共用元件＝功能與像素風一致。
-        // 場景僅提供「點角色 = 選取」；改名/個性/派工等 NPC 操作走右側隊員列（WorkerTabs）與頂欄，跟像素風同入口。
-        <Office3D
-          workers={workerList}
-          departments={departmentList}
-          active={active ?? null}
-          onSelect={activateNpc}
-        />
-      ) : (
+      <div className="office-background" aria-hidden={taskFocusMode || undefined} inert={taskFocusMode ? "" : undefined}>
       <GameCanvas
         workers={workerList}
         activeId={activeId}
@@ -946,10 +939,10 @@ export function App() {
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
       />
-      )}
-
-      {/* 主題切換統一走頂欄那顆 🎨 像素｜現代（TopBar），這裡不再放浮動鈕＝避免左下角與縮放條重疊、功能重複。 */}
+      </div>
       <TopBar
+        topBarRef={topBarRef}
+        professionalModeButtonRef={professionalModeButtonRef}
         active={active}
         activeWorkspace={activeWorkspace}
         platform={system?.platform}
@@ -964,6 +957,7 @@ export function App() {
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
         onBossAssignment={openBossDesk}
         onOpenMcp={() => setMcpModalOpen(true)}
+        onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
         onOpenAccounts={() => setAccountsModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
         onOpenOps={() => setOpsModalOpen(true)}
@@ -985,6 +979,8 @@ export function App() {
         updateInfo={updateInfo}
         onApplyUpdate={() => void requestAppUpdate()}
         updateApplying={updateApplying}
+        professionalMode={taskFocusMode}
+        onProfessionalModeChange={(enabled) => enabled ? enterTaskFocusMode() : exitTaskFocusMode()}
       >
         {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
       </TopBar>
@@ -994,6 +990,8 @@ export function App() {
 
       <button
         className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`}
+        aria-hidden={taskFocusMode || undefined}
+        inert={taskFocusMode ? "" : undefined}
         // Capture the pointer so a tap OR a swipe off the button both toggle: on a
         // phone the log is a bottom sheet, and users instinctively press this arrow
         // and drag to dismiss. Without capture the drag was eaten by the canvas
@@ -1010,14 +1008,12 @@ export function App() {
       <div
         ref={focusLayerRef}
         className="task-focus-layer"
-        aria-label={taskFocusMode ? t("專心閱讀與輸入") : undefined}
-        aria-modal={taskFocusMode || undefined}
-        role={taskFocusMode ? "dialog" : undefined}
-        onKeyDown={trapFocusInReader}
+        aria-label={taskFocusMode ? t("專業模式工作台") : undefined}
+        role={taskFocusMode ? "region" : undefined}
       >
       <aside
         className={`holo-panel ${isTaskLogVisible(preferences.taskLogOpen, taskFocusMode) ? "" : "holo-panel--closed"} ${taskFocusMode ? "holo-panel--focus" : ""}`}
-        aria-label={taskFocusMode ? t("專心閱讀任務報告") : t("任務日誌")}
+        aria-label={taskFocusMode ? t("專業模式任務工作台") : t("任務日誌")}
       >
         {!taskFocusMode && <button type="button" className="holo-panel__resize" aria-label={t("調整任務日誌大小")} title={t("拖曳調整；雙擊恢復預設")} onPointerDown={beginPanelResize} onDoubleClick={() => updatePreferences(window.innerWidth <= 600 ? { taskLogHeight: 62 } : { taskLogWidth: 600 })} onKeyDown={(event) => {
           if (window.innerWidth <= 600) {
@@ -1031,15 +1027,15 @@ export function App() {
           updatePreferences({ taskLogWidth: preferences.taskLogWidth + (event.key === "ArrowLeft" ? 24 : -24) });
         }} />}
         <div className="holo-panel__title">
-          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "FOCUS BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "FOCUS DEPARTMENT" : "FOCUS READER" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專注部門") : t("專心閱讀") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
+          <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
           {taskFocusMode ? <div className="focus-context-switch">
-            <div className="focus-context-switch__kind" aria-label={t("專注模式工作對象")}>
+            <div className="focus-context-switch__kind" aria-label={t("專業模式工作對象")}>
               <button type="button" className={!selectedDepartment && !bossAssignmentOpen ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
               <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
               <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
             </div>
             {!bossAssignmentOpen && (!selectedDepartment ? (focusPanes.length <= 1 && <div className="focus-worker-switch">
-              <select aria-label={t("切換專心模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => assignWorkerToPane(focusedPaneId, event.target.value)}>
+              <select aria-label={t("切換專業模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => assignWorkerToPane(focusedPaneId, event.target.value)}>
                 {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
                 {focusStudioDepartmentGroups.map(({ department, workers: departmentWorkers }) => <optgroup key={department.id} label={department.name}>{departmentWorkers.map((worker) => {
                   const unread = worker.id !== activeId && workerHasUnread(worker, focusSeenTurns[worker.id] ?? undefined);
@@ -1047,7 +1043,7 @@ export function App() {
                 })}</optgroup>)}
                 {focusStudioStandaloneWorkers.map((worker) => <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker)}</option>)}
               </select>
-            </div>) : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專心模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
+            </div>) : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專業模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
@@ -1061,7 +1057,6 @@ export function App() {
             {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label={t("搜尋任務日誌")} title={t("搜尋")}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
             </button>}
-            {!taskFocusMode && <button type="button" className="task-log-toolbar__focus" onClick={enterTaskFocusMode} aria-label={t("進入專心閱讀模式")} title={t("專心閱讀")}><span aria-hidden="true">▣</span> {t("專心")}</button>}
             {!taskFocusMode && <select aria-label={t("日誌寬度")} value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
               <option value="420">{t("緊湊")}</option><option value="600">{t("閱讀")}</option><option value="820">{t("寬版")}</option>
             </select>}
@@ -1073,28 +1068,11 @@ export function App() {
             {taskFocusMode && <FocusControls
               active={active}
               workerCount={workerList.length}
-              modelOptions={modelOptions}
-              authReady={activeAuth.status === "authenticated"}
-              providerChanging={providerChanging}
-              notificationsEnabled={preferences.notificationsEnabled}
-              onModel={handleModelChange}
-              onAutoApprove={handleAutoApproveChange}
-              onProvider={(provider) => void changeProvider(provider)}
               onRename={handleRename}
               onPersona={() => active && setPersonaWorkerId(active.id)}
-              onAvatar={() => active && setAvatarWorkerId(active.id)}
-              onRoom={openWorkspaceForMove}
               onRemove={handleRemoveWorker}
-              onCreateNpc={() => openWorkspaceForCreate(activeProvider)}
-              onCreateDepartment={() => { setDepartmentCreatorOpen(true); }}
-              onOpenMcp={() => setMcpModalOpen(true)}
-              onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
-              onOpenAccounts={() => setAccountsModalOpen(true)}
-              onOpenBackup={() => setBackupModalOpen(true)}
-              onNotificationsToggle={toggleNotifications}
-              onOpenCommandCenter={() => { setCommandPaletteOpen(false); setCommandCenterOpen(true); }}
+              onCreateDepartment={() => setDepartmentCreatorOpen(true)}
             />}
-            {taskFocusMode && <button ref={focusExitRef} type="button" className="task-log-toolbar__exit" onClick={exitTaskFocusMode} aria-label={t("退出專心閱讀模式")}>{t("退出")} <kbd>Esc</kbd></button>}
           </div>
         </div>
         {bossAssignmentOpen && <BossTaskDesk
@@ -1281,6 +1259,7 @@ export function App() {
       </div>
 
       <WorkerTabs
+        inert={taskFocusMode}
         workers={workerList}
         activeId={activeId}
         departments={departmentList}

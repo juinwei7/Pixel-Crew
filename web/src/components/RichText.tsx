@@ -146,6 +146,11 @@ export function RichText({ text, compact = false, headingPrefix, highlight = "" 
           pre({ node: _node, children }) {
             return <CodeBlock>{children}</CodeBlock>;
           },
+          table({ node: _node, children, ...props }) {
+            // Task reports often contain wide Issue tables. Preserve their
+            // columns and scroll the wrapper instead of crushing every cell.
+            return <div className="rich-text__table-scroll" tabIndex={0}><table {...props}>{children}</table></div>;
+          },
           a({ node: _node, href, children, ...props }) {
             const external = Boolean(href && !href.startsWith("#"));
             return (
