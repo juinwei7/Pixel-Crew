@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ApprovalDecision } from "../src/claudeRunner.js";
-import { cleanWorkerSession, matchNativeCommand } from "../src/nativeCommands.js";
+import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand } from "../src/nativeCommands.js";
 import type { AgentSession } from "../src/providers/session.js";
 
 class FakeSession implements AgentSession {
@@ -39,6 +39,22 @@ test("matchNativeCommand ignores unrelated text and provider-native commands", (
   assert.equal(matchNativeCommand("/new"), null);
   assert.equal(matchNativeCommand("please clean this up"), null);
   assert.equal(matchNativeCommand(""), null);
+});
+
+test("recognizes only the exact provider-neutral /clear conversation control", () => {
+  assert.equal(isClearCommand("/clear"), true);
+  assert.equal(isClearCommand("  /CLEAR  "), true);
+  assert.equal(isClearCommand("/clear old context"), false);
+  assert.equal(isClearCommand("/clear\nnext task"), false);
+  assert.equal(isClearCommand("/clean"), false);
+});
+
+test("parses shared /goal get, clear, and set commands", () => {
+  assert.deepEqual(parseGoalCommand("/goal"), { type: "get" });
+  assert.deepEqual(parseGoalCommand(" /goal CLEAR "), { type: "clear" });
+  assert.deepEqual(parseGoalCommand("/goal ship the release"), { type: "set", objective: "ship the release" });
+  assert.deepEqual(parseGoalCommand("/goal clear the auth debt"), { type: "set", objective: "clear the auth debt" });
+  assert.equal(parseGoalCommand("/goals"), null);
 });
 
 test("cleanWorkerSession refuses a busy worker without touching its session", () => {

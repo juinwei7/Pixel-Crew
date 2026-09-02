@@ -22,6 +22,24 @@ test("parses Claude /usage JSON into account-wide remaining energy", () => {
   ]);
 });
 
+test("parses the current Claude /usage response shape", () => {
+  const raw = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result: [
+      "You are currently using your subscription to power your Claude Code usage",
+      "",
+      "Current session: 57% used · resets Sep 1 at 6:29pm (Asia/Taipei)",
+      "Current week (all models): 44% used · resets Sep 3 at 7:59pm (Asia/Taipei)",
+    ].join("\n"),
+  });
+
+  assert.deepEqual(parseClaudeUsage(raw).map(({ label, remainingPercent }) => ({ label, remainingPercent })), [
+    { label: "本次時段", remainingPercent: 43 },
+    { label: "本週", remainingPercent: 56 },
+  ]);
+});
+
 test("normalizes Codex primary and secondary rate-limit windows", () => {
   const windows = normalizeCodexUsage({
     rateLimits: {
@@ -65,7 +83,7 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
   }
 });
 
-test("reads and retains usage separately for every named account", async () => {
+test("reads Codex and leaves unavailable Claude subscription usage unqueried", async () => {
   const accounts = [
     { id: "claude-work", provider: "claude" as const, label: "work", homeDir: "/accounts/claude-work", createdAt: "", updatedAt: "" },
     { id: "codex-personal", provider: "codex" as const, label: "personal", homeDir: "/accounts/codex-personal", createdAt: "", updatedAt: "" },
@@ -82,10 +100,12 @@ test("reads and retains usage separately for every named account", async () => {
   );
 
   const states = await registry.refreshAll(true);
-  assert.deepEqual(reads, [["claude", "/accounts/claude-work"], ["codex", "/accounts/codex-personal"]]);
+  assert.deepEqual(reads, [["codex", "/accounts/codex-personal"]]);
   assert.equal(states["claude-work"]?.provider, "claude");
   assert.equal(states["codex-personal"]?.provider, "codex");
-  assert.equal(states["claude-work"]?.windows[0]?.remainingPercent, 75);
+  assert.match(states["claude-work"]?.error ?? "", /等待既有 Claude 工作階段/);
+  registry.report("claude-work", parseClaudeUsage("Current session: 57% used · resets Sep 1 at 6:29pm (Asia/Taipei)"));
+  assert.equal(registry.getStates()["claude-work"]?.windows[0]?.remainingPercent, 43);
 });
 
 test("does not query usage for a named account that is not signed in", async () => {

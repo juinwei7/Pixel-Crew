@@ -3,9 +3,8 @@ import { config } from "./config.js";
 import type { AuthStatus, ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
 import type { ProviderAccount } from "./store.js";
-import { execCli, spawnCli, terminateProcessTree } from "./platform/processes.js";
+import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { codexChildEnv } from "./codexEnv.js";
-import { claudeChildEnv } from "./claudeEnv.js";
 import { t } from "./i18n.js";
 const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
@@ -127,18 +126,6 @@ export function normalizeCodexUsage(payload: any): UsageWindow[] {
   return windows;
 }
 
-async function readClaudeUsage(claudeHome = config.defaultClaudeHome): Promise<UsageWindow[]> {
-  const { stdout } = await execCli(config.claudeBin, ["-p", "/usage", "--output-format", "json"], {
-    cwd: config.targetRepoPath,
-    timeout: 30_000,
-    maxBuffer: 1_000_000,
-    env: claudeChildEnv(process.env, claudeHome),
-  });
-  const windows = parseClaudeUsage(stdout);
-  if (windows.length === 0) throw new Error(t("Claude /usage 沒有回傳可辨識的用量區間"));
-  return windows;
-}
-
 async function readCodexUsage(codexHome = config.defaultCodexHome): Promise<UsageWindow[]> {
   return new Promise((resolve, reject) => {
     const child = spawnCli(config.codexBin, ["app-server"], {
@@ -182,8 +169,8 @@ async function readCodexUsage(codexHome = config.defaultCodexHome): Promise<Usag
   });
 }
 
-async function readUsage(provider: ProviderId, homeDir: string): Promise<UsageWindow[]> {
-  return provider === "claude" ? readClaudeUsage(homeDir) : readCodexUsage(homeDir);
+async function readUsage(_provider: ProviderId, homeDir: string): Promise<UsageWindow[]> {
+  return readCodexUsage(homeDir);
 }
 
 function idleState(provider: ProviderId, value: unknown): ProviderUsageState {
@@ -220,6 +207,21 @@ export class ProviderUsageRegistry {
     return this.states;
   }
 
+  /** Stores a quota snapshot returned by `/usage` inside an existing Claude session. */
+  report(provider: ProviderId, windows: UsageWindow[]): ProviderUsageState {
+    if (windows.length === 0) return this.states[provider];
+    const state: ProviderUsageState = {
+      provider,
+      windows,
+      loading: false,
+      source: "live",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    };
+    this.publish(state, true);
+    return state;
+  }
+
   refresh(provider: ProviderId, force = false): Promise<ProviderUsageState> {
     const running = this.active.get(provider);
     if (running) return running;
@@ -248,9 +250,21 @@ export class ProviderUsageRegistry {
       }
       return Promise.resolve(relabeled);
     }
+    // `/usage` is an interactive-only Claude Code command. Running
+    // `claude -p /usage` creates an empty SDK turn instead of returning plan
+    // quota, so never present that unrelated result as account-wide usage.
+    if (provider === "claude") {
+      const state = {
+        ...previous,
+        loading: false,
+        error: previous.windows.length ? null : t("等待既有 Claude 工作階段回報訂閱用量"),
+      };
+      if (previous.loading || previous.error !== state.error) this.publish(state, false);
+      return Promise.resolve(state);
+    }
     if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish({ ...previous, loading: true, error: null }, false);
-    const operation = (provider === "claude" ? readClaudeUsage() : readCodexUsage())
+    const operation = readCodexUsage()
       .then((windows) => {
         const state: ProviderUsageState = { provider, windows, loading: false, source: "live", updatedAt: new Date().toISOString(), error: null };
         this.publish(state, true);
@@ -279,7 +293,7 @@ export class ProviderUsageRegistry {
 }
 
 /**
- * Named logins each have an isolated CLI home, so their subscription limits
+ * Named logins each have an isolated CLI home, so Codex limits
  * must be queried independently. This deliberately stays in memory: unlike
  * the default slot, an account can be removed at any time and its old quota
  * must not reappear after a restart as if it still belonged to a live login.
@@ -297,6 +311,22 @@ export class AccountUsageRegistry {
 
   getStates(): Record<string, ProviderUsageState> {
     return this.states;
+  }
+
+  /** Stores a quota snapshot for one named account, without mixing accounts. */
+  report(accountId: string, windows: UsageWindow[]): ProviderUsageState | null {
+    const account = this.listAccounts().find((candidate) => candidate.id === accountId);
+    if (!account || windows.length === 0) return this.states[accountId] ?? null;
+    const state: ProviderUsageState = {
+      provider: account.provider,
+      windows,
+      loading: false,
+      source: "live",
+      updatedAt: new Date().toISOString(),
+      error: null,
+    };
+    this.publish(accountId, state);
+    return state;
   }
 
   remove(accountId: string): void {
@@ -324,6 +354,15 @@ export class AccountUsageRegistry {
         : { ...previous, loading: false, error: null };
       if (previous.loading || previous.error || previous.source !== relabeled.source) this.publish(accountId, relabeled);
       return Promise.resolve(relabeled);
+    }
+    if (account.provider === "claude") {
+      const state = {
+        ...previous,
+        loading: false,
+        error: previous.windows.length ? null : t("等待既有 Claude 工作階段回報訂閱用量"),
+      };
+      if (previous.loading || previous.error !== state.error) this.publish(accountId, state);
+      return Promise.resolve(state);
     }
     if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish(accountId, { ...previous, loading: true, error: null });
