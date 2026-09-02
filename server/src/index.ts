@@ -68,7 +68,7 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
-import { AccountUsageRegistry, ProviderUsageRegistry } from "./providerUsage.js";
+import { AccountUsageRegistry, parseClaudeUsage, ProviderUsageRegistry } from "./providerUsage.js";
 import {
   composePersonaPrompt,
   normalizePersona,
@@ -86,6 +86,7 @@ import {
   getExtras,
   removeMemoryNote,
   setDailyBudget,
+  setWorkerGoal,
 } from "./workerExtras.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
@@ -150,7 +151,7 @@ import {
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
 import { replaceWithFreshSession } from "./freshSession.js";
-import { cleanWorkerSession, matchNativeCommand, type WorkerCleanDeps } from "./nativeCommands.js";
+import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
   bossTaskDecisionPrompt,
@@ -467,6 +468,10 @@ type Worker = {
 };
 
 const workers = new Map<string, Worker>();
+// Account-scoped background `/usage` requests currently in flight. There is
+// at most one per Claude account, and each is sent only through an existing
+// idle worker session (not a newly created `-p` session).
+const claudeUsagePolls = new Map<string, string>();
 
 // 舊版的共用 turn_end hook 會把 persist:false 的短命 worker 又存回 SQLite。
 // 服務重啟後，這些 worker 不可能再接回原本的編排 promise，會永遠顯示成閒置。
@@ -1424,6 +1429,19 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
   if (worker.persistent && (event.type === "turn_end" || event.type === "error")) persistWorker(worker);
+  // `/usage` is handled by Claude inside its already-authenticated session.
+  // `claude -p /usage` opens a different empty session, so only the completed
+  // turn's own result is authoritative for this worker's assigned account.
+  if (event.type === "turn_end" && worker.runner.provider === "claude") {
+    const windows = parseClaudeUsage(event.resultText);
+    if (windows.length > 0) {
+      if (worker.accountId) accountUsageRegistry.report(worker.accountId, windows);
+      else usageRegistry.report("claude", windows);
+    }
+  }
+  if ((event.type === "turn_end" || event.type === "error") && claudeUsagePolls.get(worker.id)) {
+    claudeUsagePolls.delete(worker.id);
+  }
   if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
   if (event.type === "turn_end") {
     const completedTurns = event.isError
@@ -1824,6 +1842,9 @@ function workerCleanDeps(worker: Worker): WorkerCleanDeps {
 function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; error: string } {
   const result = cleanWorkerSession(worker, workerCleanDeps(worker));
   if (!result.ok) return result;
+  // Goals belong to a conversation, unlike long-term memory notes and daily
+  // budgets. A fresh `/clear` session must not inherit its old objective.
+  setWorkerGoal(worker.id, null);
   clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
   const announcement = t("已清除工作階段，NPC 記憶重新開始。");
@@ -1837,6 +1858,37 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
     permissionDenials: [],
   });
   return { ok: true };
+}
+
+function announceClaudeGoal(worker: Worker, command: GoalCommand): void {
+  let resultText: string;
+  if (command.type === "set") {
+    const goal = setWorkerGoal(worker.id, command.objective);
+    // Claude reads its appended system prompt at process start. Restart the
+    // idle transport so the new goal applies to the very next turn while its
+    // native conversation session is resumed intact.
+    worker.runner.stop();
+    worker.runner.warmup();
+    resultText = t("已設定目標：{objective}", { objective: goal ?? command.objective });
+  } else if (command.type === "clear") {
+    const hadGoal = getExtras(worker.id).goal != null;
+    setWorkerGoal(worker.id, null);
+    worker.runner.stop();
+    worker.runner.warmup();
+    resultText = hadGoal ? t("已清除目標。") : t("目前沒有設定目標。");
+  } else {
+    const goal = getExtras(worker.id).goal;
+    resultText = goal ? t("目前目標：{objective}（狀態：{status}）", { objective: goal, status: "active" }) : t("目前沒有設定目標。");
+  }
+  record(worker, { type: "text_delta", text: resultText });
+  record(worker, {
+    type: "turn_end",
+    resultText,
+    costUsd: 0,
+    durationMs: 0,
+    isError: false,
+    permissionDenials: [],
+  });
 }
 
 function missionRunnerKey(missionId: string, workerId: string): string {
@@ -2602,6 +2654,9 @@ app.get("/api/usage", (_req, res) => {
 });
 
 app.post("/api/usage/refresh", async (_req, res) => {
+  // Codex can answer directly; Claude refreshes through the idle session and
+  // publishes the eventual result over the existing usage WebSocket event.
+  refreshClaudeUsageSessions();
   const [usage, accountUsage] = await Promise.all([
     usageRegistry.refreshAll(true),
     accountUsageRegistry.refreshAll(true),
@@ -3900,7 +3955,11 @@ app.post("/api/departments/:departmentId/messages", async (req, res) => {
     res.status(400).json({ error: t("請輸入訊息或附加檔案") });
     return;
   }
-  if (matchNativeCommand(text) === "clean") {
+  if (matchNativeCommand(text) === "clean" || (
+    images.length === 0
+    && documents.length === 0
+    && isClearCommand(text)
+  )) {
     const activeMission = workspaceMission(department.workspacePath, department.id);
     if (activeMission) {
       res.status(409).json({ error: t("部門仍有進行中或待決定的 Mission，不能重建工作階段"), mission: activeMission });
@@ -4663,7 +4722,13 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     res.status(400).json({ error: t("請輸入回覆內容或加入附件") });
     return;
   }
-  if (matchNativeCommand(message) === "clean") {
+  // `/clear` is a provider-neutral conversation control. Handle it before a
+  // runner sees the message, so it cannot be interpreted as a skill.
+  if (matchNativeCommand(message) === "clean" || (
+    images.length === 0
+    && documents.length === 0
+    && isClearCommand(message)
+  )) {
     const bossDepartments = bossTaskDepartments(task);
     if (bossDepartments.length === 0) {
       res.status(400).json({ error: t("這個 Boss Task 沒有可重建工作階段的部門") });
@@ -6114,13 +6179,29 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(400).json({ error: "message or attachment required" });
     return;
   }
-  if (matchNativeCommand(message) === "clean") {
+  if (matchNativeCommand(message) === "clean" || (
+    images.length === 0
+    && documents.length === 0
+    && isClearCommand(message)
+  )) {
     const result = cleanWorkerAndAnnounce(worker);
     if (!result.ok) {
       res.status(409).json({ error: result.error });
       return;
     }
     res.json({ ok: true, cleaned: true });
+    return;
+  }
+  // Codex dispatches `/goal` through its app-server. Claude's stream-json
+  // transport has no equivalent slash-command RPC, so mirror the same
+  // get/set/clear semantics here and re-spawn its idle transport with the
+  // persisted goal appended to its system prompt.
+  const claudeGoal = worker.runner.provider === "claude" && images.length === 0 && documents.length === 0
+    ? parseGoalCommand(message)
+    : null;
+  if (claudeGoal) {
+    announceClaudeGoal(worker, claudeGoal);
+    res.json({ ok: true, goal: getExtras(worker.id).goal });
     return;
   }
   if (worker.resumeCandidate) {
@@ -7369,8 +7450,53 @@ void Promise.all(store.listAccounts().map(async (account) => {
 const usageRefreshTimer = setInterval(() => {
   void usageRegistry.refreshAll(true);
   void accountUsageRegistry.refreshAll(true);
+  refreshClaudeUsageSessions();
 }, 5 * 60_000);
 usageRefreshTimer.unref();
+
+/**
+ * Claude currently returns account usage when `/usage` runs inside an already
+ * authenticated, established session. A fresh non-interactive `-p` session
+ * only reports its own empty turn, so use one idle existing NPC per account.
+ */
+function refreshClaudeUsageSessions(): void {
+  const coveredAccounts = new Set<string>();
+  for (const worker of workers.values()) {
+    if (
+      !worker.persistent
+      || worker.runner.provider !== "claude"
+      || !workerProviderReady(worker)
+      || worker.runner.busy
+      || worker.resumeCandidate
+      || handoffInProgress(worker)
+      || collaborationInProgress(worker.id)
+      || missionInProgress(worker.id)
+      || worker.runner.getPersistenceState().completedTurns < 1
+    ) continue;
+    const accountKey = worker.accountId ? `account:${worker.accountId}` : "default";
+    if (coveredAccounts.has(accountKey) || claudeUsagePolls.has(worker.id)) continue;
+    // A different worker belonging to this account may still be polling.
+    if ([...claudeUsagePolls.values()].includes(accountKey)) continue;
+    coveredAccounts.add(accountKey);
+    claudeUsagePolls.set(worker.id, accountKey);
+    // Keep the normal transcript visible: this is an account-level refresh,
+    // but the result comes from this particular native conversation.
+    record(worker, { type: "user_message", text: "/usage" });
+    try {
+      worker.runner.send("/usage");
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch (error) {
+      claudeUsagePolls.delete(worker.id);
+      const message = error instanceof Error ? error.message : t("無法讀取工作能量");
+      record(worker, { type: "error", message });
+    }
+  }
+}
+
+// Let auth restoration and worker warmup settle first, then populate every
+// account that already owns an established Claude conversation.
+const initialClaudeUsagePoll = setTimeout(refreshClaudeUsageSessions, 15_000);
+initialClaudeUsagePoll.unref();
 
 // A Mission/collaboration turn is deliberately kept open while a background
 // "async agent" tool call is outstanding (see applyMissionActivityEvent), but
@@ -7473,6 +7599,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`pixel-crew received ${signal}; shutting down`);
   clearInterval(usageRefreshTimer);
+  clearTimeout(initialClaudeUsagePoll);
   clearInterval(missionActivityTimeoutSweep);
   workflowWatcher.stop();
   mcpConfigWatcher.stop();

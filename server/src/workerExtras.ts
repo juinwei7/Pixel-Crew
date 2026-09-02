@@ -16,10 +16,12 @@ import { t } from "./i18n.js";
 export type WorkerExtras = {
   notes: string[];
   dailyBudgetUsd: number | null;
+  goal: string | null;
 };
 
 export const MAX_MEMORY_NOTES = 30;
 export const MAX_MEMORY_NOTE_LENGTH = 200;
+export const MAX_WORKER_GOAL_LENGTH = 1_000;
 
 const extrasDir = join(config.dataDirectory, "npc-extras");
 const cache = new Map<string, WorkerExtras>();
@@ -31,7 +33,7 @@ function extrasPath(workerId: string): string {
 }
 
 function emptyExtras(): WorkerExtras {
-  return { notes: [], dailyBudgetUsd: null };
+  return { notes: [], dailyBudgetUsd: null, goal: null };
 }
 
 export function getExtras(workerId: string): WorkerExtras {
@@ -48,7 +50,10 @@ export function getExtras(workerId: string): WorkerExtras {
       const budget = typeof raw.dailyBudgetUsd === "number" && Number.isFinite(raw.dailyBudgetUsd) && raw.dailyBudgetUsd > 0
         ? raw.dailyBudgetUsd
         : null;
-      extras = { notes, dailyBudgetUsd: budget };
+      const goal = typeof raw.goal === "string"
+        ? raw.goal.trim().replace(/\s+/g, " ").slice(0, MAX_WORKER_GOAL_LENGTH) || null
+        : null;
+      extras = { notes, dailyBudgetUsd: budget, goal };
     }
   } catch (error) {
     console.warn(`[extras] 讀取 ${workerId} 的 npc-extras 失敗，視為空白：`, (error as Error).message);
@@ -100,6 +105,15 @@ export function setDailyBudget(workerId: string, input: unknown): { ok: true; da
   return { ok: true, dailyBudgetUsd: value };
 }
 
+/** null clears the goal; goals are bounded to keep system-prompt injection safe. */
+export function setWorkerGoal(workerId: string, input: unknown): string | null {
+  const goal = input == null
+    ? null
+    : String(input).trim().replace(/\s+/g, " ").slice(0, MAX_WORKER_GOAL_LENGTH) || null;
+  persist(workerId, { ...getExtras(workerId), goal });
+  return goal;
+}
+
 export function deleteExtras(workerId: string): void {
   cache.delete(workerId);
   try {
@@ -116,8 +130,13 @@ export function deleteExtras(workerId: string): void {
  * even with zero notes — so brand-new NPCs start remembering from turn 1.
  */
 export function composeMemorySection(workerId: string): string {
-  const { notes } = getExtras(workerId);
+  const { notes, goal } = getExtras(workerId);
   const lines: string[] = [];
+  if (goal) {
+    lines.push(t("【目前目標 / Active goal】{goal}", { goal }));
+    lines.push(t("這是使用者明確設定的目前目標；除非使用者更新或清除它，請讓後續工作持續朝它推進。"));
+    lines.push("");
+  }
   if (notes.length > 0) {
     lines.push(t("【長期記憶 / Memory】以下是你先前替使用者記下的長期事實與偏好，回應與做事時要納入考量："));
     lines.push(...notes.map((note) => `- ${note}`));

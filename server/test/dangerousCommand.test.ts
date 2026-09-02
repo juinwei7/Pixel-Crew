@@ -81,6 +81,26 @@ test("leaves routine dev commands alone", () => {
   }
 });
 
+test("flags forceful and enumerate-then-kill Windows process termination", () => {
+  assert.equal(isDangerousCommand("Stop-Process -Id 1234 -Force").dangerous, true);
+  assert.equal(isDangerousCommand("taskkill /PID 1234 /F").dangerous, true);
+  assert.equal(
+    isDangerousCommand(
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'bot.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId }",
+    ).dangerous,
+    true,
+  );
+  assert.equal(
+    isDangerousCommand("Get-Process node | Stop-Process").dangerous,
+    true,
+  );
+});
+
+test("does not flag a plain Stop-Process by known PID — the common, low-risk case", () => {
+  assert.equal(isDangerousCommand("Stop-Process -Id 1234").dangerous, false);
+  assert.equal(isDangerousCommand("taskkill /PID 1234").dangerous, false);
+});
+
 test("empty command is never dangerous", () => {
   assert.equal(isDangerousCommand("").dangerous, false);
   assert.equal(isDangerousCommand("   ").dangerous, false);

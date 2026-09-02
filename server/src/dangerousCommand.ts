@@ -26,6 +26,14 @@ const RM_BARE_ROOT_ISH = new RegExp(`${NOT_A_WRAPPER_SUBCOMMAND}\\brm\\b\\s+(-\\
 // reassembly, etc.); a denylist can only ever flag known shapes, not defeat
 // arbitrary obfuscation.
 const DOWNLOAD_THEN_EXECUTE = /\b(curl|wget)\b[\s\S]*?(?:\||&&|;|\n)\s*(sudo\s+)?\b(sh|bash|zsh|python3?|perl|ruby|node)\b/i;
+// Windows equivalents of a forced/blind kill: `-Force`/`/F` skip the normal
+// "are you sure" a graceful stop would hit, and enumerate-then-kill (list
+// processes by a loose CommandLine match, then Stop-Process the results) can
+// take out anything that happens to match the filter — including a process
+// the caller's own CLI transport depends on.
+const STOP_PROCESS_FORCE = /\bStop-Process\b[^|&;\n]*-Force\b/i;
+const TASKKILL_FORCE = /\btaskkill\b[^|&;\n]*\/F\b/i;
+const ENUMERATE_THEN_KILL = /\b(Get-CimInstance|Get-WmiObject|Get-Process)\b[\s\S]*?\bStop-Process\b/i;
 
 const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: RM_RECURSIVE_OR_FORCE, reason: "遞迴或強制刪除（rm -r / -f）" },
@@ -41,6 +49,9 @@ const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: DOWNLOAD_THEN_EXECUTE, reason: "下載並直接執行遠端指令" },
   { test: /\bgit\s+push\b[^|&;\n]*(--force\b|(?<!--)\s-f\b)/i, reason: "強制推送（git push --force）覆蓋遠端歷史" },
   { test: /\bgit\s+reset\b[^|&;\n]*--hard\b/i, reason: "硬重置（git reset --hard）可能捨棄未提交的變更" },
+  { test: STOP_PROCESS_FORCE, reason: "強制終止行程（Stop-Process -Force）可能誤殺其他行程" },
+  { test: TASKKILL_FORCE, reason: "強制終止行程（taskkill /F）可能誤殺其他行程" },
+  { test: ENUMERATE_THEN_KILL, reason: "先列舉再批次終止行程，篩選條件不夠精確時可能誤殺其他行程（包含自己所依賴的行程）" },
 ];
 
 export function isDangerousCommand(command: string): DangerousMatch {

@@ -81,6 +81,7 @@ export const enServerC: Record<string, string> = {
   "已清除目標。": "Goal cleared.",
   "目前沒有設定目標。": "No goal is currently set.",
   "目前目標：{objective}（狀態：{status}）": "Current goal: {objective} (status: {status})",
+  "等待既有 Claude 工作階段回報訂閱用量": "Waiting for an existing Claude session to report subscription usage.",
   "計畫\n{text}": "Plan\n{text}",
   "唯讀模式已拒絕指令": "Read-only mode rejected the command",
   "唯讀模式已拒絕檔案變更": "Read-only mode rejected the file change",

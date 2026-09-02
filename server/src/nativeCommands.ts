@@ -10,6 +10,30 @@ export function matchNativeCommand(text: string): NativeCommand | null {
   return /^\/clean\b/i.test(text.trim()) ? "clean" : null;
 }
 
+/**
+ * `/clear` is Pixel Crew's provider-neutral conversation control. Intercept
+ * it at the HTTP boundary so neither Claude nor Codex can interpret it as a
+ * skill invocation.
+ */
+export function isClearCommand(text: string): boolean {
+  return /^\/clear\s*$/i.test(text.trim());
+}
+
+export type GoalCommand =
+  | { type: "get" }
+  | { type: "clear" }
+  | { type: "set"; objective: string };
+
+/** Parse the shared `/goal [objective|clear]` command without consuming normal chat. */
+export function parseGoalCommand(text: string): GoalCommand | null {
+  const match = text.trim().match(/^\/goal(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const argument = (match[1] ?? "").trim();
+  if (!argument) return { type: "get" };
+  if (argument.toLowerCase() === "clear") return { type: "clear" };
+  return { type: "set", objective: argument };
+}
+
 export type CleanableWorker = {
   id: string;
   runner: AgentSession;

@@ -20,13 +20,14 @@ const {
   getExtras,
   removeMemoryNote,
   setDailyBudget,
+  setWorkerGoal,
 } = await import("../src/workerExtras.js");
 
 const extrasDir = join(dataDir, "npc-extras");
 const extrasFile = (workerId: string) => join(extrasDir, `${workerId}.json`);
 
 test("getExtras returns empty defaults when no file exists", () => {
-  assert.deepEqual(getExtras("w-missing"), { notes: [], dailyBudgetUsd: null });
+  assert.deepEqual(getExtras("w-missing"), { notes: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("addMemoryNote trims, collapses whitespace, persists to disk", () => {
@@ -34,7 +35,7 @@ test("addMemoryNote trims, collapses whitespace, persists to disk", () => {
   assert.deepEqual(result, { ok: true, note: "使用者喜歡 繁體中文 回覆" });
   assert.deepEqual(getExtras("w-add").notes, ["使用者喜歡 繁體中文 回覆"]);
   const onDisk = JSON.parse(readFileSync(extrasFile("w-add"), "utf8"));
-  assert.deepEqual(onDisk, { notes: ["使用者喜歡 繁體中文 回覆"], dailyBudgetUsd: null });
+  assert.deepEqual(onDisk, { notes: ["使用者喜歡 繁體中文 回覆"], dailyBudgetUsd: null, goal: null });
 });
 
 test("blank note is rejected with a zh-TW error", () => {
@@ -100,10 +101,17 @@ test("setDailyBudget rejects zero, negatives, NaN, and amounts over 10000", () =
   assert.equal(getExtras("w-badbudget").dailyBudgetUsd, null);
 });
 
+test("setWorkerGoal persists a bounded normalized goal and can clear it", () => {
+  assert.equal(setWorkerGoal("w-goal", "  ship\n the   release  "), "ship the release");
+  assert.equal(getExtras("w-goal").goal, "ship the release");
+  assert.equal(setWorkerGoal("w-goal", null), null);
+  assert.equal(getExtras("w-goal").goal, null);
+});
+
 test("corrupt extras file on disk falls back to empty defaults", () => {
   mkdirSync(extrasDir, { recursive: true });
   writeFileSync(extrasFile("w-corrupt"), "not json at all", "utf8");
-  assert.deepEqual(getExtras("w-corrupt"), { notes: [], dailyBudgetUsd: null });
+  assert.deepEqual(getExtras("w-corrupt"), { notes: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("malformed fields in the file are sanitized on load", () => {
@@ -129,7 +137,7 @@ test("deleteExtras removes the file and the cache", () => {
   assert.equal(existsSync(extrasFile("w-del")), true);
   deleteExtras("w-del");
   assert.equal(existsSync(extrasFile("w-del")), false);
-  assert.deepEqual(getExtras("w-del"), { notes: [], dailyBudgetUsd: null });
+  assert.deepEqual(getExtras("w-del"), { notes: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("worker ids are sanitized so they cannot traverse out of the extras dir", () => {
@@ -154,4 +162,12 @@ test("composeMemorySection lists stored notes above the instruction", () => {
   assert.match(section, /- 偏好深色主題/);
   assert.match(section, /- 專案用 pnpm/);
   assert.ok(section.indexOf("【長期記憶") < section.indexOf("【記憶工具】"));
+});
+
+test("composeMemorySection includes an active goal before long-term memory", () => {
+  setWorkerGoal("w-goal-section", "完成登入流程");
+  addMemoryNote("w-goal-section", "使用 TypeScript");
+  const section = composeMemorySection("w-goal-section");
+  assert.match(section, /【目前目標 \/ Active goal】完成登入流程/);
+  assert.ok(section.indexOf("【目前目標") < section.indexOf("【長期記憶"));
 });
