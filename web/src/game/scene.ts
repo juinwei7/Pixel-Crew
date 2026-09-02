@@ -258,7 +258,7 @@ export async function createScene(
 
   app.stage.addChild(world, labelLayer);
 
-  // 像素世界不套任何濾鏡皮膚層（賽博皮膚路線已淘汰，改為獨立的「現代工作台」DOM 主題）。
+  // 像素世界不套任何額外的全域濾鏡皮膚層，保留清晰的像素原色。
 
   let scale = 1;
   let fitScale = 2;

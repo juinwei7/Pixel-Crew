@@ -14,7 +14,7 @@ const GROUPS: Group[] = [
       { keys: [MOD, "J"], label: t("展開 / 收合任務日誌") },
       { keys: [MOD, "⇧", "A"], label: t("跳到待核准的 NPC") },
       { keys: ["?"], label: t("顯示這張快捷鍵說明") },
-      { keys: ["Esc"], label: t("關閉目前的面板 / 退出專心模式") },
+      { keys: ["Esc"], label: t("關閉目前的面板 / 回到像素模式") },
     ],
   },
   {
@@ -27,7 +27,7 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    title: t("專心模式"),
+    title: t("專業模式"),
     rows: [
       { keys: ["Alt", "1-9"], label: t("跳到第 N 個工作區") },
       { keys: ["Alt", "]"], label: t("切到下一個分割視窗") },

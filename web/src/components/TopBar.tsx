@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import type { AccountWithAuth, AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
 import { APP_VERSION } from "../appVersion";
 import { lang, setLang, t, tc } from "../i18n";
-import { theme, setTheme } from "../theme";
 import { apiRequest } from "../api";
 import { roomName } from "../workspace";
 
@@ -53,6 +52,11 @@ type Props = {
   updateInfo?: UpdateInfo | null;
   onApplyUpdate?(): void;
   updateApplying?: boolean;
+  professionalMode?: boolean;
+  onProfessionalModeChange?(enabled: boolean): void;
+  topBarRef?: Ref<HTMLElement>;
+  professionalModeButtonRef?: Ref<HTMLButtonElement>;
+  onOpenCodexCommands?(): void;
   /** 置中插槽（能量條）：排進 flex 流裡跟其他控件互相讓位，不再蓋住任何按鈕。 */
   children?: ReactNode;
 };
@@ -93,6 +97,11 @@ export function TopBar({
   updateInfo = null,
   onApplyUpdate,
   updateApplying = false,
+  professionalMode = false,
+  onProfessionalModeChange,
+  topBarRef,
+  professionalModeButtonRef,
+  onOpenCodexCommands,
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
@@ -110,6 +119,59 @@ export function TopBar({
     server.status === "connected" || server.status === "enabled"
   ).length;
   const showBackgroundServiceStop = canShowBackgroundServiceStop(platform, onShutdown);
+  const providerAccounts = accounts?.filter((account) => account.provider === provider) ?? [];
+  const providerLabel = provider === "codex" ? "Codex" : "Claude";
+  const hasHistory = Boolean(active && active.turns.length > 0);
+
+  const providerSelect = (className = "top-bar__provider-select") => (
+    <select
+      className={className}
+      value={provider}
+      disabled={Boolean(active?.busy) || providerChanging}
+      onChange={(event) => onProvider(event.target.value as ProviderId)}
+      aria-label={t("選擇 Agent provider")}
+    >
+      <option value="claude">Claude Code</option>
+      <option value="codex">Codex</option>
+    </select>
+  );
+
+  const modelSelect = (className = "top-bar__model-select") => (
+    <select
+      className={className}
+      value={active?.model ?? ""}
+      disabled={!active || active.busy || !authReady || modelOptions.length === 0}
+      onChange={(event) => onModel(event.target.value)}
+      aria-label={t("選擇模型")}
+    >
+      {modelOptions.map((option) => (
+        <option key={option.id} value={option.id}>{option.label}</option>
+      ))}
+    </select>
+  );
+
+  const accountSelect = (className = "top-bar__provider-select") => {
+    if (!active || providerAccounts.length === 0) return null;
+    return <select
+      className={className}
+      value={active.accountId ?? ""}
+      disabled={active.busy || hasHistory}
+      onChange={(event) => onSetWorkerAccount?.(active.id, event.target.value || null)}
+      aria-label={t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })}
+      title={
+        hasHistory
+          ? t("這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶", { provider: providerLabel })
+          : t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })
+      }
+    >
+      <option value="">{t("共用登入")}</option>
+      {providerAccounts.map((account) => (
+        <option key={account.id} value={account.id} disabled={account.auth?.status !== "authenticated"}>
+          {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
+        </option>
+      ))}
+    </select>;
+  };
 
   useEffect(() => {
     if (!toolsOpen) return;
@@ -157,9 +219,15 @@ export function TopBar({
     };
   }, []);
 
+  const accountMenuSelect = accountSelect("top-bar__provider-select");
+
   return (
-    <header className="top-bar">
+    <header ref={topBarRef} className="top-bar">
       <div className="top-bar__brand"><i />PIXEL CREW</div>
+      <div className="top-bar__mode-switch" role="group" aria-label={t("工作模式")}>
+        <button type="button" className={!professionalMode ? "active" : ""} aria-pressed={!professionalMode} onClick={() => onProfessionalModeChange?.(false)}>{t("像素")}</button>
+        <button ref={professionalModeButtonRef} type="button" className={professionalMode ? "active" : ""} aria-pressed={professionalMode} onClick={() => onProfessionalModeChange?.(true)}>{t("專業")}</button>
+      </div>
       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
       <button className="top-bar__room" type="button" onClick={onRoom} title={activeWorkspace}>
         <span>ROOM</span>
@@ -173,55 +241,10 @@ export function TopBar({
 
       <div className="top-bar__agent" aria-label="Agent 設定">
         <span className="top-bar__group-label">AGENT</span>
-        <select
-          className="top-bar__provider-select"
-          value={provider}
-          disabled={Boolean(active?.busy) || providerChanging}
-          onChange={(event) => onProvider(event.target.value as ProviderId)}
-          aria-label={t("選擇 Agent provider")}
-        >
-          <option value="claude">Claude Code</option>
-          <option value="codex">Codex</option>
-        </select>
-        <select
-          className="top-bar__model-select"
-          value={active?.model ?? ""}
-          disabled={!active || active.busy || !authReady || modelOptions.length === 0}
-          onChange={(event) => onModel(event.target.value)}
-          aria-label={t("選擇模型")}
-        >
-          {modelOptions.map((option) => (
-            <option key={option.id} value={option.id}>{option.label}</option>
-          ))}
-        </select>
+        {providerSelect()}
+        {modelSelect()}
         {capabilities.loading && <span className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></span>}
-        {active && (() => {
-          const providerAccounts = accounts?.filter((account) => account.provider === provider) ?? [];
-          if (providerAccounts.length === 0) return null;
-          const hasHistory = active.turns.length > 0;
-          const providerLabel = provider === "codex" ? "Codex" : "Claude";
-          return (
-          <select
-            className="top-bar__provider-select"
-            value={active.accountId ?? ""}
-            disabled={active.busy || hasHistory}
-            onChange={(event) => onSetWorkerAccount?.(active.id, event.target.value || null)}
-            aria-label={t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })}
-            title={
-              hasHistory
-                ? t("這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶", { provider: providerLabel })
-                : t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })
-            }
-          >
-            <option value="">{t("共用登入")}</option>
-            {providerAccounts.map((account) => (
-              <option key={account.id} value={account.id} disabled={account.auth?.status !== "authenticated"}>
-                {account.label}{account.auth?.status !== "authenticated" ? t("（尚未登入）") : ""}
-              </option>
-            ))}
-          </select>
-          );
-        })()}
+        {accountSelect()}
         <select
           className={`top-bar__auto-approve top-bar__auto-approve--${active?.autoApproveMode ?? "off"}`}
           value={active?.autoApproveMode ?? "off"}
@@ -254,10 +277,11 @@ export function TopBar({
           {restartPending ? t("⟳ 等空檔重啟中…") : t("⚙ 功能")} <strong>⌄</strong>
         </button>
         {toolsOpen && (
-          <div className="top-bar__more-menu" role="menu">
+          <div className="top-bar__more-menu" role="group" aria-label={t("功能")}>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenMcp(); }} title={t("MCP 能力與連線狀態")}>
               {t("MCP 能力")} <strong>{capabilities.loading && capabilities.mcpServers.length === 0 ? "…" : `${connected}/${capabilities.mcpServers.length}`}</strong>
             </button>
+            {onOpenCodexCommands && active?.provider === "codex" && <button type="button" onClick={() => { setToolsOpen(false); onOpenCodexCommands(); }} title={t("管理 Codex CLI 的原生指令與能力")}>{t("Codex 原生指令管理")}</button>}
             <button type="button" onClick={() => { setToolsOpen(false); onOpenAccounts(); }} title={t("帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個")}>
               {t("🔑 帳號管理")}
             </button>
@@ -337,34 +361,24 @@ export function TopBar({
         <span className="top-bar__lang-sep">/</span>
         <span className={lang === "en" ? "top-bar__lang--on" : "top-bar__lang--off"}>EN</span>
       </button>
-      <button
-        type="button"
-        className="top-bar__capability"
-        onClick={() => setTheme(theme === "modern" ? "pixel" : "modern")}
-        title={t("切換視覺主題：像素風 / 現代工作台")}
-        aria-label={t("切換視覺主題")}
-      >
-        🎨 <span className={theme === "pixel" ? "top-bar__lang--on" : "top-bar__lang--off"}>{t("像素")}</span>
-        <span className="top-bar__lang-sep">/</span>
-        <span className={theme === "modern" ? "top-bar__lang--on" : "top-bar__lang--off"}>{t("現代")}</span>
-      </button>
-
       <details className="top-bar__more" ref={moreRef}>
         <summary aria-label={t("更多 Agent 設定")}>•••</summary>
         <div className="top-bar__more-menu">
-          {/* Phone-only: the standalone 🌐/🎨/🔔 icons are hidden on small screens
+          {/* Phone-only: the standalone 🌐/🔔 icons are hidden on small screens
               (too cryptic + crowd the bar), surfaced here with clear labels. */}
           <div className="top-bar__more-mobile">
             <button type="button" onClick={() => {
               const next = lang === "zh" ? "en" : "zh";
               void apiRequest("/api/app-settings", { method: "POST", body: { lang: next } }).catch(() => {}).finally(() => setLang(next));
             }}>🌐 {lang === "zh" ? t("切換英文 EN") : t("切換中文 中")}</button>
-            <button type="button" onClick={() => setTheme(theme === "modern" ? "pixel" : "modern")}>
-              🎨 {theme === "modern" ? t("切換像素風") : t("切換現代風")}
-            </button>
             <button type="button" onClick={onNotificationsToggle}>
               🔔 {notificationsEnabled ? t("關閉桌面通知") : t("開啟桌面通知")}
             </button>
+          </div>
+          <div className="top-bar__more-mobile top-bar__more-mobile--agent">
+            <label><span>{t("供應商")}</span>{providerSelect()}</label>
+            <label><span>{t("模型")}</span>{modelSelect("top-bar__model-select top-bar__menu-model-select")}</label>
+            {accountMenuSelect && <label><span>{t("帳號")}</span>{accountMenuSelect}</label>}
           </div>
           <label>
             <span>{t("自動核准")}</span>

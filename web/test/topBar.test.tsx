@@ -32,7 +32,38 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /top-bar__model-select/);
   assert.match(html, /top-bar__more/);
   assert.match(html, /更多 Agent 設定/);
+  assert.match(html, /top-bar__more-mobile--agent/);
+  assert.match(html, />供應商</);
+  assert.match(html, />模型</);
   assert.match(html, /health-dot--ok/);
+});
+
+test("top bar exposes an accessible Pixel / Professional mode switch", () => {
+  const worker = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
+  const html = renderToStaticMarkup(<TopBar
+    active={worker}
+    activeWorkspace="/repo/my-room"
+    capabilities={{ slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: false, source: "live", updatedAt: null, error: null }}
+    auth={{ provider: "claude", displayName: "Claude Code", status: "authenticated", loginCommand: "claude", checkedAt: null, error: null, debug: null }}
+    wsReady
+    modelOptions={[]}
+    workerCount={1}
+    onRoom={() => {}}
+    onOpenMcp={() => {}}
+    onOpenBackup={() => {}}
+    onProvider={() => {}}
+    onModel={() => {}}
+    onAutoApprove={() => {}}
+    onRefreshAuth={() => {}}
+    onResetUi={() => {}}
+    professionalMode
+    onProfessionalModeChange={() => {}}
+  />);
+  assert.match(html, /top-bar__mode-switch/);
+  assert.match(html, /aria-label="工作模式"/);
+  assert.match(html, />像素</);
+  assert.match(html, />專業</);
+  assert.match(html, /aria-pressed="true"/);
 });
 
 test("top bar exposes the single Boss Assignment entry point", () => {

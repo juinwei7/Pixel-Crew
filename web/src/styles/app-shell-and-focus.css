@@ -36,6 +36,31 @@
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.55);
 }
 
+.top-bar__mode-switch {
+  display: inline-flex;
+  overflow: hidden;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid rgba(100, 172, 205, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 11, 23, 0.76);
+}
+
+.top-bar__mode-switch button {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #7186a3;
+  cursor: pointer;
+  font: 700 9px var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.top-bar__mode-switch button:hover { color: #c4d4e5; }
+.top-bar__mode-switch button.active { background: rgba(0, 229, 255, 0.13); color: var(--cyan); }
+
 .top-bar__boss {
   min-height: 34px;
   display: grid;
@@ -547,32 +572,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .turn-text__label, .tool-row__label { display: flex; align-items: center; justify-content: space-between; }
 
 /* Focus reader: a calm, document-first surface for long AI responses. */
-.task-log-toolbar .task-log-toolbar__focus {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding-inline: 9px;
-  border: 1px solid rgba(143, 184, 232, 0.13);
-  color: #91a4bc;
-}
-
-.task-log-toolbar .task-log-toolbar__exit {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding-inline: 11px;
-  border: 1px solid rgba(143, 184, 232, 0.18);
-  color: #cbd5df;
-}
-
-.task-log-toolbar__exit kbd {
-  padding: 2px 5px;
-  border: 1px solid rgba(203, 213, 223, 0.16);
-  border-radius: 4px;
-  color: #8794a2;
-  font: 8px var(--mono);
-}
-
 .focus-controls { position: relative; flex: 0 0 auto; }
 
 .focus-controls__trigger {
@@ -607,6 +606,21 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   text-align: left;
 }
 
+/* On a wide professional workbench, the usage rail owns the far-right gutter.
+   Open management immediately to its left so two independent inspectors never
+   stack on top of each other. */
+@media (min-width: 1500px) {
+  .holo-panel--focus .focus-controls__panel {
+    right: 274px;
+  }
+
+  /* Wide mode keeps usage as a persistent side readout, so a close control
+     would promise a state this layout intentionally does not have. */
+  .focus-energy__close {
+    display: none;
+  }
+}
+
 .focus-controls__panel section + section {
   margin-top: 14px;
   padding-top: 14px;
@@ -629,24 +643,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   font: 9px var(--mono);
   color: #8794a1;
 }
-
-.focus-controls__row select {
-  min-height: 30px;
-  padding: 0 8px;
-  border: 1px solid rgba(201, 210, 220, 0.14);
-  border-radius: 6px;
-  background: #171c24;
-  color: #c4ccd4;
-  font: 9px var(--mono);
-}
-
-.focus-controls__auto-approve--off { color: #8794a1; }
-.focus-controls__auto-approve--safe { color: #7fd1a0; }
-.focus-controls__auto-approve--full { color: #e0a276; }
-.focus-controls__auto-approve--invincible { color: #ff8a5f; text-shadow: 0 0 8px rgba(255, 51, 85, 0.5); }
-.focus-controls__auto-approve-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.focus-controls__auto-approve-reset { min-height: 30px; padding: 0 7px; border: 1px solid rgba(0, 255, 163, .35); border-radius: 6px; background: rgba(0, 255, 163, .08); color: #7fd1a0; font: 700 9px var(--mono); cursor: pointer; }
-.focus-controls__auto-approve-reset:hover, .focus-controls__auto-approve-reset:focus-visible { border-color: rgba(0, 255, 163, .75); background: rgba(0, 255, 163, .16); }
 
 .focus-controls__rename {
   display: flex;
@@ -693,8 +689,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   border-color: rgba(0, 229, 255, 0.32);
   color: var(--cyan);
 }
-
-.focus-controls__notify { margin-bottom: 0; }
 
 .focus-controls__danger { color: #e78ba0; border-color: rgba(231, 139, 160, 0.24); }
 .focus-controls__danger:hover { border-color: rgba(231, 139, 160, 0.5); color: #ff9aae; }
@@ -1042,7 +1036,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .holo-panel--focus .rich-text ol,
 .holo-panel--focus .rich-text blockquote,
 .holo-panel--focus .rich-text pre,
-.holo-panel--focus .rich-text table,
+.holo-panel--focus .rich-text__table-scroll,
 .holo-panel--focus .rich-text details {
   margin: 0.9em 0;
 }
@@ -1097,7 +1091,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   padding-top: 46px;
 }
 
-.holo-panel--focus .rich-text table {
+.holo-panel--focus .rich-text__table-scroll > table {
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid rgba(210, 219, 228, 0.1);
@@ -1131,6 +1125,26 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   background: rgba(255, 255, 255, 0.018);
 }
 
+/* Reports frequently contain wide Issue / acceptance-criteria tables. On a
+   phone, preserve their structure inside a deliberate horizontal scroller
+   rather than shrinking every column until Chinese text wraps one character
+   per line. */
+@media (max-width: 600px) {
+  .holo-panel--focus .rich-text__table-scroll > table {
+    min-width: 680px;
+  }
+
+  .holo-panel--focus .rich-text th,
+  .holo-panel--focus .rich-text td {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .holo-panel--focus .rich-text th {
+    white-space: nowrap;
+  }
+}
+
 .holo-panel--focus .turn-error {
   margin: 22px 28px 0;
 }
@@ -1148,7 +1162,15 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding-top: 60px;
   background: #10141b;
+}
+
+.game-root--focus .top-bar {
+  position: fixed;
+  z-index: 25001;
+  border-bottom: 1px solid rgba(201, 210, 220, 0.1);
+  background: rgba(16, 20, 27, 0.98);
 }
 
 .game-root--focus .holo-panel.holo-panel--focus {
@@ -1260,10 +1282,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
   .holo-panel--focus .turn-card__cmd {
     max-width: 52vw;
-  }
-
-  .task-log-toolbar__exit kbd {
-    display: none;
   }
 
   .game-root--focus .command-composer {
@@ -1451,30 +1469,42 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   margin-bottom: 28px;
 }
 
-.focus-turn-pending {
-  display: flex;
+.focus-execution {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 11px;
-  min-height: 72px;
-  padding: 14px 4px 34px;
-  color: #8998a6;
-  font-size: 13px;
+  gap: 9px;
+  min-height: 68px;
+  margin: 14px 4px 24px;
+  padding: 10px 13px;
+  border: 1px solid rgba(100, 172, 205, 0.2);
+  border-radius: 9px;
+  background: linear-gradient(90deg, rgba(73, 135, 164, 0.11), rgba(18, 24, 32, 0.28));
+  color: #aebdca;
 }
 
-.focus-turn-pending strong {
-  color: #b9c7d2;
-  font-weight: 650;
+.focus-execution__prompt {
+  color: #63c9e6;
+  font: 700 20px/1 var(--mono);
 }
 
-.focus-turn-pending__dot {
-  width: 9px;
-  height: 9px;
-  flex: 0 0 auto;
+.focus-execution__pulse {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: #78a9be;
-  box-shadow: 0 0 0 5px rgba(120, 169, 190, 0.1);
-  animation: hudPulse 1.6s ease-in-out infinite;
+  background: #6bd2ec;
+  box-shadow: 0 0 0 4px rgba(107, 210, 236, 0.11);
+  animation: hudPulse 1.35s ease-in-out infinite;
 }
+
+.focus-execution > div { min-width: 0; display: grid; gap: 3px; }
+.focus-execution__meta { color: #72899a; font: 8px var(--mono); letter-spacing: .12em; }
+.focus-execution strong { color: #d7e2e9; font: 650 12px/1.2 var(--mono); }
+.focus-execution small { overflow: hidden; color: #91a9b9; font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.focus-execution__live { padding: 3px 5px; border: 1px solid rgba(93, 198, 168, .28); border-radius: 4px; color: #67d5b5; font: 700 8px var(--mono); letter-spacing: .08em; }
+.focus-execution--approval { border-color: rgba(255, 192, 100, .3); background: linear-gradient(90deg, rgba(255, 190, 93, .09), rgba(18, 24, 32, .28)); }
+.focus-execution--approval .focus-execution__pulse { background: #f0bd70; box-shadow: 0 0 0 4px rgba(240, 189, 112, .11); }
+.focus-execution--tool .focus-execution__pulse { background: #70d5a9; box-shadow: 0 0 0 4px rgba(112, 213, 169, .11); }
 
 .focus-energy {
   flex: 0 0 auto;
@@ -1515,7 +1545,9 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 .focus-energy__panel {
   position: fixed;
-  top: 88px;
+  /* Start with the reader canvas, never over the professional header's
+     target selector, usage summary, or management controls. */
+  top: 148px;
   right: max(24px, calc((100vw - 1500px) / 2));
   bottom: 92px;
   width: 250px;
@@ -1700,7 +1732,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 
   .focus-energy__panel {
-    top: 70px;
+    top: 148px;
     right: 24px;
     bottom: auto;
     width: min(390px, calc(100vw - 32px));
@@ -1715,10 +1747,45 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 }
 
-/* At medium widths, a fourth engineering column leaves the document too narrow.
-   Switch the two navigation surfaces into a normal reading flow before either
-   the report or the workspace rail has to overlap or clip. */
-@media (max-width: 1240px) {
+/* Between a compact desktop and a tablet, retain a true reading canvas: the
+   workspace rail and report index share the left column while the active
+   report keeps the full remaining height. This prevents the old stacked
+   layout's conspicuous empty band above the report. */
+@media (max-width: 1320px) and (min-width: 1001px) {
+  .focus-reader,
+  .focus-reader--with-studios {
+    display: grid;
+    grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "studios report"
+      "navigation report";
+    justify-content: stretch;
+    gap: 12px 16px;
+    padding: 12px 18px;
+  }
+
+  .focus-reader__studio-rail {
+    grid-area: studios;
+    max-height: none;
+    padding: 0 4px;
+  }
+
+  .focus-reader > .quest-log {
+    grid-area: report;
+    height: 100%;
+  }
+
+  .focus-report-nav {
+    grid-area: navigation;
+    min-height: 0;
+    max-height: none;
+  }
+}
+
+/* At tablet widths, navigation becomes normal vertical flow and the report
+   index becomes an explicit drawer. */
+@media (max-width: 1000px) {
   .focus-reader {
     display: flex;
     flex-direction: column;
@@ -1834,6 +1901,10 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
     top: calc(100% + 114px);
   }
 
+  .focus-energy__panel {
+    top: 220px;
+  }
+
   .focus-reader__studio-rail .focus-studios:not(.focus-studios--collapsed) .focus-studios__list {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
@@ -1854,7 +1925,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 
   .focus-energy__panel {
-    top: 112px;
+    top: 220px;
     right: 12px;
     width: calc(100vw - 24px);
   }

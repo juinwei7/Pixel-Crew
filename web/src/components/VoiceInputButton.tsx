@@ -1,12 +1,6 @@
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { t } from "../i18n";
-
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
+import { formatElapsed } from "../formatElapsed";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -46,7 +40,7 @@ export function VoiceInputButton({ onTranscript }: Props) {
       {voice.phase === "transcribing" ? "…" : voice.phase === "recording" ? "⏹" : "🎤"}
     </button>
     {voice.phase === "recording" && <>
-      <span className="voice-input__timer" aria-live="polite">{formatElapsed(voice.elapsedMs)}</span>
+      <span className="voice-input__timer" aria-live="polite">{formatElapsed(voice.elapsedMs / 1000)}</span>
       <button type="button" className="voice-input__cancel" aria-label={t("取消錄音")} title={t("取消錄音")} onClick={() => voice.cancel()}>×</button>
     </>}
     {voice.phase === "confirm-engine-install" && voice.engineInstaller && <div className="voice-input__panel" role="dialog" aria-label={t("安裝本機語音轉寫引擎")}>

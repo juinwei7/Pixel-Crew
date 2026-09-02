@@ -156,7 +156,7 @@ export function FocusEnergy({ usage, accountUsage = {}, accounts = [], onRefresh
 
   return (
     <div ref={rootRef} className={`focus-energy ${anchored ? "focus-energy--anchored" : ""}`}>
-      <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label={t("查看專心模式工作用量")}>
+      <button type="button" className={`focus-energy__summary ${activeRemaining !== null && activeRemaining < 15 ? "focus-energy__summary--low" : ""}`} onClick={() => onOpenChange(!open)} aria-expanded={open} aria-label={t("查看專業模式工作用量")}>
         <ProviderMeter provider={activeProvider} state={usage[activeProvider]} />
         <span className="focus-energy__more">{activeRemaining !== null && activeRemaining < 15 ? t("用量偏低") : t("全部")}</span>
         <span className="energy-hud__cost" title={t("Claude 累計花費（不含 Codex；Codex 無美元計費，以配額百分比計算）")}>

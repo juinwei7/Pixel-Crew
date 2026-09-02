@@ -5,6 +5,7 @@ import { extractMarkdownHeadings, RichText } from "./RichText";
 import { parseMcpToolName as toolMeta } from "../mcpToolName";
 import { describeApproval } from "../approvalPlain";
 import { t } from "../i18n";
+import { formatElapsed } from "../formatElapsed";
 
 const focusScrollPositions = new Map<string, number>();
 const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
@@ -271,6 +272,50 @@ function ThinkingRow({ text }: { text: string }) {
   );
 }
 
+type FocusExecutionState = { phase: string; detail?: string; tone: "analysis" | "tool" | "approval" | "reply" };
+
+function focusExecutionState(items: TurnItem[]): FocusExecutionState {
+  const pendingApproval = items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending");
+  if (pendingApproval) return { phase: t("等待你的核准"), detail: pendingApproval.request.title, tone: "approval" };
+
+  const runningTool = [...items].reverse().find((item): item is ToolCallItem => item.kind === "tool_call" && item.status === "running");
+  if (runningTool) {
+    const { label, mcpServer } = toolMeta(runningTool.name);
+    return { phase: t("正在執行工具"), detail: mcpServer ? `${label} · MCP/${mcpServer}` : label, tone: "tool" };
+  }
+
+  const latest = items.at(-1);
+  if (latest?.kind === "thinking") return { phase: t("正在分析需求與規劃下一步"), tone: "analysis" };
+  if (latest?.kind === "tool_call") return { phase: t("正在驗證工具結果"), detail: toolMeta(latest.name).label, tone: "tool" };
+  if (latest?.kind === "assistant_text") return { phase: t("正在整理可交付回覆"), tone: "reply" };
+  return { phase: t("正在建立 Agent 工作階段"), tone: "analysis" };
+}
+
+/** A CLI-style heartbeat for a live turn. It surfaces observable execution
+ * phases, not the model's private reasoning text, and disappears with the
+ * completed turn. */
+function FocusExecution({ items }: { items: TurnItem[] }) {
+  const [elapsed, setElapsed] = useState(0);
+  const state = focusExecutionState(items);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return <div className={`focus-execution focus-execution--${state.tone}`} role="status" aria-live="polite">
+    <span className="focus-execution__prompt" aria-hidden="true">›</span>
+    <span className="focus-execution__pulse" aria-hidden="true" />
+    <div>
+      <span className="focus-execution__meta">CLI ACTIVITY · {formatElapsed(elapsed, { padMinutes: true })}</span>
+      <strong>{state.phase}</strong>
+      {state.detail && <small>{state.detail}</small>}
+    </div>
+    <span className="focus-execution__live" aria-hidden="true">LIVE</span>
+  </div>;
+}
+
 function TurnItems({ items, status, view, focusMode, turnKey, highlight, onApprove }: { items: TurnItem[]; status: Turn["status"]; view: TaskLogView; focusMode: boolean; turnKey: string; highlight: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   let finalTextIndex = -1;
   if (status !== "running") {
@@ -308,12 +353,7 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
 
   return (
     <div className="turn-card__items">
-      {focusMode && status === "running" && grouped.length === 0 && (
-        <div className="focus-turn-pending" role="status" aria-live="polite">
-          <span className="focus-turn-pending__dot" aria-hidden="true" />
-          <span><strong>{t("指令已送出")}</strong>{t("，NPC 正在處理中…")}</span>
-        </div>
-      )}
+      {focusMode && status === "running" && <FocusExecution items={items} />}
       {grouped.map((item) => {
         if (item.kind === "tool_group") {
           return item.items.length === 1

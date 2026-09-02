@@ -158,7 +158,7 @@ test("focus mode keeps pending approvals visible even when they belong to an old
   assert.match(html, /最新報告/);
 });
 
-test("focus mode keeps the latest readable report and acknowledges a newly sent turn", () => {
+test("focus mode keeps the latest readable report and shows a live CLI execution phase", () => {
   const turns: Turn[] = [
     {
       key: "report",
@@ -177,9 +177,22 @@ test("focus mode keeps the latest readable report and acknowledges a newly sent 
   const html = renderToStaticMarkup(<QuestLog turns={turns} focusMode />);
   assert.match(html, /可以繼續閱讀的報告/);
   assert.match(html, /剛開始的新任務/);
-  assert.match(html, /指令已送出/);
-  assert.match(html, /NPC 正在處理中/);
+  assert.match(html, /CLI ACTIVITY/);
+  assert.match(html, /正在執行工具/);
+  assert.match(html, /Read/);
   assert.match(html, /role="status"/);
+});
+
+test("focus execution exposes an analysis phase without rendering private thinking text", () => {
+  const turn: Turn = {
+    key: "thinking-live",
+    command: "分析需求",
+    status: "running",
+    items: [{ kind: "thinking", key: "thinking", text: "不應直接顯示的內部推理" }],
+  };
+  const html = renderToStaticMarkup(<QuestLog turns={[turn]} focusMode />);
+  assert.match(html, /正在分析需求與規劃下一步/);
+  assert.doesNotMatch(html, /不應直接顯示的內部推理/);
 });
 
 test("focus navigation includes report headings and search exposes result controls", () => {

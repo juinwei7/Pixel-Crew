@@ -34,7 +34,7 @@ test("renders zero total cost as US$ 0.00 rather than blank or NaN", () => {
 
 test("focus energy keeps both providers and reset context visible", () => {
   const html = renderToStaticMarkup(<FocusEnergy usage={{ claude: state("claude", 27), codex: state("codex", 64) }} onRefresh={async () => null} totalCostUsd={12.34} open={false} onOpenChange={() => {}} />);
-  assert.match(html, /查看專心模式工作用量/);
+  assert.match(html, /查看專業模式工作用量/);
   assert.match(html, /關閉工作用量詳情/);
   assert.match(html, /用量與重置時間/);
   assert.match(html, /Claude Code/);

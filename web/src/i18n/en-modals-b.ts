@@ -199,9 +199,9 @@ export const enModalsB: Record<string, string> = {
   "過往單次 NPC 協作 · {count}": "Past one-off NPC collaborations · {count}",
 
   // FocusControls.tsx
-  "專心模式管理面板": "Focus mode management panel",
+  "專業模式管理面板": "Professional mode management panel",
   "管理": "Manage",
-  "專心模式功能": "Focus mode actions",
+  "專業模式功能": "Professional mode actions",
   "目前 NPC": "Current NPC",
   "模型": "Model",
   "自動核准": "Auto-approve",

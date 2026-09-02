@@ -1,57 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import type { AutoApproveMode, ProviderId, WorkerState } from "../types";
-import { t, tc } from "../i18n";
-
-type ModelOption = { id: string; label: string; description?: string };
+import type { WorkerState } from "../types";
+import { t } from "../i18n";
 
 type Props = {
   active?: WorkerState;
   workerCount: number;
-  modelOptions: ModelOption[];
-  authReady: boolean;
-  providerChanging?: boolean;
-  notificationsEnabled: boolean;
-  onModel(model: string): void;
-  onAutoApprove(mode: AutoApproveMode): void;
-  onProvider(provider: ProviderId): void;
   onRename(id: string, name: string): Promise<string | null>;
   onPersona(): void;
-  onAvatar(): void;
-  onRoom(): void;
   onRemove(id: string): void;
-  onCreateNpc(): void;
   onCreateDepartment?(): void;
-  onOpenMcp(): void;
-  onOpenCodexCommands(): void;
-  onOpenAccounts(): void;
-  onOpenBackup(): void;
-  onNotificationsToggle(): void;
-  onOpenCommandCenter(): void;
 };
 
 export function FocusControls({
   active,
   workerCount,
-  modelOptions,
-  authReady,
-  providerChanging = false,
-  notificationsEnabled,
-  onModel,
-  onAutoApprove,
-  onProvider,
   onRename,
   onPersona,
-  onAvatar,
-  onRoom,
   onRemove,
-  onCreateNpc,
   onCreateDepartment,
-  onOpenMcp,
-  onOpenCodexCommands,
-  onOpenAccounts,
-  onOpenBackup,
-  onNotificationsToggle,
-  onOpenCommandCenter,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -111,53 +77,16 @@ export function FocusControls({
         className="focus-controls__trigger"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-label={t("專心模式管理面板")}
+        aria-label={t("專業模式管理面板")}
       >
         <span aria-hidden="true">⚙</span> {t("管理")}
       </button>
       {open && (
-        <div className="focus-controls__panel" role="menu" aria-label={t("專心模式功能")}>
+        <div className="focus-controls__panel" role="group" aria-label={t("專業模式功能")}>
           <section>
             <h4>{t("目前 NPC")}</h4>
             {active ? (
               <>
-                <label className="focus-controls__row">
-                  <span>{t("模型")}</span>
-                  <select
-                    value={active.model ?? ""}
-                    disabled={active.busy || !authReady || modelOptions.length === 0}
-                    onChange={(event) => onModel(event.target.value)}
-                  >
-                    {modelOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                  </select>
-                </label>
-                <label className="focus-controls__row">
-                  <span>{t("自動核准")}</span>
-                  <span className="focus-controls__auto-approve-actions">
-                    <select
-                      className={`focus-controls__auto-approve focus-controls__auto-approve--${active.autoApproveMode}`}
-                      value={active.autoApproveMode}
-                      onChange={(event) => onAutoApprove(event.target.value as AutoApproveMode)}
-                    >
-                      <option value="off">{tc("自動核准", "關閉")}</option>
-                      <option value="safe">{t("安全")}</option>
-                      <option value="full">{t("完全")}</option>
-                      <option value="invincible">{t("⚡ 無限制")}</option>
-                    </select>
-                    {active.autoApproveMode === "invincible" && <button type="button" className="focus-controls__auto-approve-reset" onClick={() => onAutoApprove("safe")}>{t("回到安全")}</button>}
-                  </span>
-                </label>
-                <label className="focus-controls__row">
-                  <span>{t("引擎")}</span>
-                  <select
-                    value={active.provider}
-                    disabled={active.busy || providerChanging}
-                    onChange={(event) => onProvider(event.target.value as ProviderId)}
-                  >
-                    <option value="claude">Claude Code</option>
-                    <option value="codex">Codex</option>
-                  </select>
-                </label>
                 <div className="focus-controls__row">
                   <span>{t("名稱")}</span>
                   {renaming ? (
@@ -180,9 +109,7 @@ export function FocusControls({
                   )}
                 </div>
                 <div className="focus-controls__actions">
-                  <button type="button" onClick={() => { onPersona(); setOpen(false); }}>{t("個性 / 職務")}</button>
-                  <button type="button" onClick={() => { onAvatar(); setOpen(false); }}>{t("像素角色")}</button>
-                  <button type="button" onClick={() => { onRoom(); setOpen(false); }}>{t("切換房間")}</button>
+                  <button type="button" onClick={() => { onPersona(); setOpen(false); }}>{t("職務與指示")}</button>
                 </div>
                 {workerCount > 1 && (
                   confirmRemove ? (
@@ -215,22 +142,12 @@ export function FocusControls({
               </>
             ) : <p className="focus-controls__empty">{t("尚未選擇 NPC")}</p>}
           </section>
-          <section>
+          {onCreateDepartment && <section>
             <h4>{t("團隊")}</h4>
             <div className="focus-controls__actions">
-              <button type="button" onClick={() => { onCreateNpc(); setOpen(false); }}>{t("＋ 新增 NPC")}</button>
-              {onCreateDepartment && <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>{t("＋ 建立部門")}</button>}
-              <button type="button" onClick={() => { onOpenMcp(); setOpen(false); }}>{t("MCP 伺服器")}</button>
-              <button type="button" onClick={() => { onOpenCodexCommands(); setOpen(false); }}>{t("Codex 原生指令管理")}</button>
-              <button type="button" onClick={() => { onOpenAccounts(); setOpen(false); }}>{t("🔑 帳號管理")}</button>
-              <button type="button" onClick={() => { onOpenBackup(); setOpen(false); }}>{t("備份與還原")}</button>
-              <button type="button" onClick={() => { onOpenCommandCenter(); setOpen(false); }}>{t("指令庫")}</button>
+              <button type="button" onClick={() => { onCreateDepartment(); setOpen(false); }}>{t("建立部門")}</button>
             </div>
-            <label className="focus-controls__row focus-controls__notify">
-              <span>{t("桌面通知")}</span>
-              <input type="checkbox" checked={notificationsEnabled} onChange={onNotificationsToggle} />
-            </label>
-          </section>
+          </section>}
         </div>
       )}
     </div>

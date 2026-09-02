@@ -1,6 +1,5 @@
 // 日夜曲線（單一事實來源）：真實時鐘小時 → night 係數（0=白天、1=深夜）。
-// 像素風窗外天空（game/scene.ts）、3D 場景光影（three/officeScene.ts）、
-// 3D 背景漸層（components/Office3D.tsx）共用同一條關鍵影格曲線，改一處三邊同步。
+// 像素風窗外天空使用同一條日夜關鍵影格曲線，改一處即可同步整個像素場景。
 export const DAY_NIGHT_KEYS: Array<[number, number]> = [
   [0, 1], [5, 1], [6.5, 0], [9, 0], [17, 0], [18.5, 0], [20, 1], [24, 1],
 ];

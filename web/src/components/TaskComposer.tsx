@@ -394,7 +394,7 @@ export function TaskComposer({
         </div>,
         document.body,
       )}
-      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專注模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專業模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {attachmentsBlock}
         {toolbar && <div className="command-composer__toolbar">{toolbar}</div>}
         {palette?.open && (

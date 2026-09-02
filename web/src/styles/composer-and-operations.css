@@ -599,13 +599,13 @@
 }
 
 @media (max-width: 760px) {
-  .top-bar__model-select, .top-bar__mcp { display: none; }
+  .top-bar__agent .top-bar__model-select, .top-bar__mcp { display: none; }
   .top-bar__room { max-width: 135px; }
 }
 
 @media (max-width: 599px) {
   .top-bar__brand { letter-spacing: .11em; }
-  .top-bar__room span, .top-bar__room b, .top-bar__model-select, .top-bar__mcp { display: none; }
+  .top-bar__room span, .top-bar__room b, .top-bar__agent .top-bar__model-select, .top-bar__mcp { display: none; }
   .top-bar__room { max-width: 120px; grid-template-columns: minmax(0,1fr); }
   .top-bar__boss { min-width: 40px; padding: 5px; }
   .top-bar__agent { padding-left: 4px; }
@@ -704,8 +704,12 @@
   .top-bar__room { display: none; }
   .top-bar__capability { display: none; }   /* 🌐 / 🎨 → ••• menu */
   .top-bar__bell { display: none; }          /* 🔔 → ••• menu */
+  .top-bar__agent { display: none; }
   .top-bar__provider-select { width: 96px !important; max-width: 96px !important; flex-basis: 96px !important; }
   .top-bar__more-mobile { display: grid; gap: 7px; }
+  .top-bar__more-mobile--agent { padding-top: 7px; border-top: 1px solid rgba(143,184,232,.13); }
+  .top-bar__more-mobile--agent label { margin: 0; }
+  .top-bar__more-mobile--agent .top-bar__menu-model-select { display: inline-flex; width: 110px; max-width: 110px !important; flex-basis: 110px; }
   .top-bar__more summary { min-width: 40px; min-height: 40px; }
 
   /* The open/close ▶ now floats over the office above the sheet — make it a proper
@@ -1571,133 +1575,6 @@ input:focus-visible {
 .npc-workwindow__loading {
   height: var(--ww-shot-h, 104px); display: flex; align-items: center; justify-content: center;
   font: 500 11px var(--sans, sans-serif); color: #9aa7b4; background: #fff;
-}
-
-/* -------------------------------------------------------------------------
-   Unified theme shell — Modern workbench
-   The DOM and interaction model stay shared with pixel mode.  Only this
-   scoped layer changes visual tokens and chrome, so a theme switch cannot
-   discard a selected worker, task log, or command target. */
-.game-root--modern {
-  color-scheme: light;
-  --bg-void: #e7eef5;
-  --bg: #edf3f8;
-  --bg-surface: #f8fafc;
-  --bg-raised: #ffffff;
-  --bg-line: #d4dee9;
-  --panel-glass: rgba(255, 255, 255, 0.94);
-  --panel-border: rgba(43, 99, 151, 0.25);
-  --panel-border-dim: rgba(52, 80, 109, 0.14);
-  --text: #1f334a;
-  --text-dim: #64748b;
-  --cyan: #1769aa;
-  --cyan-soft: rgba(23, 105, 170, 0.1);
-  --magenta: #be476f;
-  --violet: #7057b8;
-  --purple: #7057b8;
-  --ok: #14865b;
-  --warn: #b76b16;
-  --err: #c24161;
-  --danger: #c24161;
-  background: #edf3f8;
-}
-
-.game-root--modern .top-bar {
-  border-bottom-color: rgba(48, 82, 116, 0.18);
-  background: rgba(248, 250, 252, 0.95);
-  box-shadow: 0 3px 16px rgba(35, 61, 87, 0.14);
-  backdrop-filter: blur(16px);
-}
-.game-root--modern .top-bar__brand { color: #1769aa; text-shadow: none; }
-.game-root--modern .top-bar__boss,
-.game-root--modern .top-bar__room,
-.game-root--modern .top-bar__capability,
-.game-root--modern .top-bar__bell,
-.game-root--modern .top-bar__health,
-.game-root--modern .top-bar__agent select,
-.game-root--modern .top-bar__auto-approve,
-.game-root--modern .top-bar__more summary {
-  border-color: rgba(48, 82, 116, 0.18);
-  background: rgba(255, 255, 255, 0.8);
-  color: #344b63;
-}
-.game-root--modern .top-bar__room span,
-.game-root--modern .top-bar__group-label,
-.game-root--modern .top-bar__more-menu label { color: #64748b; }
-.game-root--modern .top-bar__room strong,
-.game-root--modern .top-bar__boss strong { color: #243b53; }
-.game-root--modern .top-bar__more-menu {
-  border-color: rgba(48, 82, 116, 0.18);
-  background: #fff;
-  box-shadow: 0 16px 40px rgba(35, 61, 87, 0.18);
-}
-.game-root--modern .top-bar__more-menu select,
-.game-root--modern .top-bar__more-menu button,
-.game-root--modern .top-bar__more-menu a { background: #f8fafc; border-color: #d7e0ea; color: #344b63; }
-
-.game-root--modern .crew-rail {
-  border-color: rgba(48, 82, 116, 0.2);
-  background: rgba(248, 250, 252, 0.94);
-  box-shadow: 0 12px 32px rgba(35, 61, 87, 0.14);
-  backdrop-filter: blur(14px);
-}
-.game-root--modern .crew-rail__head { border-bottom-color: rgba(52, 80, 109, 0.12); }
-.game-root--modern .crew-rail__head strong,
-.game-root--modern .crew-row__name { color: #273f59; }
-.game-root--modern .crew-rail__head strong span,
-.game-root--modern .crew-rail__head button,
-.game-root--modern .crew-row__meta { color: #718198; }
-.game-root--modern .crew-rail__head button:hover,
-.game-root--modern .crew-rail__head .crew-rail__filter-active { background: rgba(23, 105, 170, 0.08); border-color: rgba(23, 105, 170, 0.25); }
-.game-root--modern .crew-rail__search { border-color: #cedae6; background: #fff; color: #243b53; }
-.game-root--modern .crew-department { border-color: rgba(85, 111, 140, 0.18); background: rgba(255, 255, 255, 0.66); }
-.game-root--modern .crew-row { border-color: rgba(85, 111, 140, 0.12); background: rgba(255, 255, 255, 0.74); }
-.game-root--modern .crew-row:hover,
-.game-root--modern .crew-row--selected { background: rgba(225, 239, 251, 0.95); border-color: rgba(23, 105, 170, 0.38); }
-
-.game-root--modern .holo-panel {
-  border-color: rgba(48, 82, 116, 0.22);
-  background: rgba(248, 250, 252, 0.96);
-  box-shadow: 0 18px 45px rgba(35, 61, 87, 0.16), 0 0 0 1px rgba(255,255,255,0.8) inset;
-  backdrop-filter: blur(16px);
-}
-.game-root--modern .holo-panel__title { border-bottom-color: rgba(52, 80, 109, 0.13); background: linear-gradient(90deg, rgba(23, 105, 170, 0.08), transparent 58%); }
-.game-root--modern .holo-panel__heading strong { color: #223b55; }
-.game-root--modern .holo-panel__eyebrow { color: #1769aa; }
-.game-root--modern .holo-panel__worker { border-color: rgba(23, 105, 170, 0.2); background: rgba(23, 105, 170, 0.07); color: #47627e; }
-.game-root--modern .holo-panel__modes { border-color: #d6e0e9; background: #eef3f7; }
-.game-root--modern .holo-panel__modes button { color: #718198; }
-.game-root--modern .holo-panel__modes button:hover,
-.game-root--modern .holo-panel__modes .holo-panel__mode--active { background: #fff; color: #1769aa; box-shadow: 0 1px 3px rgba(35,61,87,.12); }
-.game-root--modern .panel-toggle { background: #fff; border-color: #cbd8e5; color: #1769aa; box-shadow: 0 5px 15px rgba(35,61,87,.12); }
-.game-root--modern .turn-card { border-color: #d7e1ea; background: #fff; box-shadow: 0 1px 2px rgba(35,61,87,.04); }
-.game-root--modern .turn-card__head { background: #f8fafc; }
-.game-root--modern .turn-text { background: #f5f8fb; }
-.game-root--modern .task-log-toolbar,
-.game-root--modern .task-log-toolbar button,
-.game-root--modern .task-log-toolbar input { border-color: #d7e1ea; background-color: #fff; color: #40576f; }
-.game-root--modern .quest-log::-webkit-scrollbar-thumb { background: rgba(23, 105, 170, 0.25); }
-
-.game-root--modern .command-composer {
-  border-color: rgba(48, 82, 116, 0.24);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 14px 35px rgba(35, 61, 87, 0.18);
-  backdrop-filter: blur(16px);
-}
-.game-root--modern .command-composer:focus-within { border-color: rgba(23, 105, 170, 0.54); }
-.game-root--modern .command-composer__target,
-.game-root--modern .command-composer__library,
-.game-root--modern .composer-research-toggle { border-color: rgba(23, 105, 170, 0.2); background: rgba(23, 105, 170, 0.06); color: #1769aa; }
-.game-root--modern .command-composer textarea,
-.game-root--modern .command-composer input { color: #243b53; }
-.game-root--modern .command-composer textarea::placeholder,
-.game-root--modern .command-composer input::placeholder { color: #8392a5; }
-.game-root--modern .app-copyright { color: rgba(57, 86, 116, 0.62); text-shadow: none; }
-
-@media (max-width: 820px) {
-  .game-root--modern .crew-rail,
-  .game-root--modern .holo-panel,
-  .game-root--modern .command-composer { backdrop-filter: none; }
 }
 
 /* Final phone pass for components whose desktop rules are declared later in
