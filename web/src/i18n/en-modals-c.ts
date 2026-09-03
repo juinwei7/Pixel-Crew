@@ -248,4 +248,15 @@ export const enModalsC: Record<string, string> = {
   "清除人設": "Clear persona",
   "儲存中…": "Saving…",
   "存為範本": "Save as template",
+  "全域記憶": "Global Memory",
+  "🧠 全域記憶": "🧠 Global Memory",
+  "跨所有 NPC 共用的長期記憶": "Long-term memory shared across every NPC",
+  "關閉全域記憶": "Close Global Memory",
+  "跨所有 NPC 共用的長期記憶。任何 NPC 學到值得記住的事都會寫在這裡，換一個 NPC 也不會失憶。":
+    "Long-term memory shared across every NPC. Anything worth remembering that any NPC learns gets written here, so switching NPCs never means starting over.",
+  "還沒有全域記憶。跟任何 NPC 聊到你的偏好時它會自己記下來，也可以在下面手動新增。":
+    "No global memories yet. Any NPC will note things down on its own when you mention your preferences, or you can add one manually below.",
+  "由 {name} 記下": "Recorded by {name}",
+  "使用者手動新增": "Added manually by the user",
+  "例：使用者姓名、慣用稱呼、跨專案偏好": "e.g. your name, preferred way to be addressed, cross-project preferences",
 };

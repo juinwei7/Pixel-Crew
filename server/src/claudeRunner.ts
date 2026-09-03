@@ -90,6 +90,7 @@ export class ClaudeSession implements AgentSession {
   private executionProfile: ExecutionProfile = "normal";
   private queryAllowedTools = new Set<string>();
   private mcpReloadPending = false;
+  private promptRefreshPending = false;
   private spawnedProfile: ExecutionProfile | null = null;
   private readonly approvalToken = randomUUID();
   private readonly approvalConfigPath = join(dirname(config.dbPath), `.pixel-crew-approval-${randomUUID()}.json`);
@@ -139,6 +140,11 @@ export class ClaudeSession implements AgentSession {
     this.ensureChild();
   }
 
+  /** See AgentSession.requestPromptRefresh. */
+  requestPromptRefresh(): void {
+    this.promptRefreshPending = true;
+  }
+
   async reloadMcp(): Promise<"reloaded" | "deferred"> {
     if (this.busy) {
       this.mcpReloadPending = true;
@@ -173,6 +179,10 @@ export class ClaudeSession implements AgentSession {
   }
 
   send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
+    if (this.promptRefreshPending && !this.busy) {
+      this.promptRefreshPending = false;
+      this.stop();
+    }
     if (this.mcpReloadPending && !this.busy) {
       this.mcpReloadPending = false;
       this.stop();

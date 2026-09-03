@@ -31,6 +31,7 @@ type Props = {
   onRoom(): void;
   onBossAssignment?(): void;
   onOpenMcp(): void;
+  onOpenGlobalMemory(): void;
   onOpenAccounts(): void;
   onOpenBackup(): void;
   onOpenOps(): void;
@@ -76,6 +77,7 @@ export function TopBar({
   onRoom,
   onBossAssignment,
   onOpenMcp,
+  onOpenGlobalMemory,
   onOpenAccounts,
   onOpenBackup,
   onOpenOps,
@@ -282,6 +284,9 @@ export function TopBar({
               {t("MCP 能力")} <strong>{capabilities.loading && capabilities.mcpServers.length === 0 ? "…" : `${connected}/${capabilities.mcpServers.length}`}</strong>
             </button>
             {onOpenCodexCommands && active?.provider === "codex" && <button type="button" onClick={() => { setToolsOpen(false); onOpenCodexCommands(); }} title={t("管理 Codex CLI 的原生指令與能力")}>{t("Codex 原生指令管理")}</button>}
+            <button type="button" onClick={() => { setToolsOpen(false); onOpenGlobalMemory(); }} title={t("跨所有 NPC 共用的長期記憶")}>
+              {t("🧠 全域記憶")}
+            </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenAccounts(); }} title={t("帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個")}>
               {t("🔑 帳號管理")}
             </button>

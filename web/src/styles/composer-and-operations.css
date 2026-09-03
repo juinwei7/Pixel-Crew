@@ -1410,6 +1410,27 @@ input:focus-visible {
 .persona-editor__memory-add button:hover:not(:disabled) { background: rgba(255, 183, 94, 0.16); }
 .persona-editor__memory-add button:disabled { opacity: .45; cursor: default; }
 
+/* ── 全域記憶（跨 worker 共用）───────────────────────────────────────────── */
+.global-memory-modal { position: fixed; z-index: 25000; inset: 0; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 42%, rgba(255, 183, 94, 0.08), transparent 40%), rgba(3, 7, 17, 0.8); backdrop-filter: blur(8px); }
+.global-memory-modal__card { position: relative; width: min(560px, calc(100vw - 40px)); max-height: calc(100vh - 56px); overflow: auto; padding: 28px; border: 1px solid rgba(255, 183, 94, 0.28); border-radius: 18px; background: linear-gradient(145deg, rgba(24, 22, 15, 0.98), rgba(8, 10, 20, 0.99) 72%), #08101f; box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55), 0 0 45px rgba(255, 183, 94, 0.07); color: var(--text); }
+.global-memory-modal__close { position: absolute; top: 16px; right: 18px; width: 32px; height: 32px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #98a7bd; font-size: 18px; cursor: pointer; }
+.global-memory-modal__close:hover { border-color: rgba(255,255,255,.16); color: #fff; }
+.global-memory-modal h2 { margin: 0 0 4px; font-size: 17px; }
+.global-memory-modal__hint { margin: 0 0 16px; color: #8394ab; font-size: 11px; line-height: 1.5; }
+.global-memory-modal__list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.global-memory-modal__list li { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 207, 138, 0.05); }
+.global-memory-modal__note { flex: 1; min-width: 0; display: block; color: var(--text); font-size: 12px; line-height: 1.5; word-break: break-word; }
+.global-memory-modal__meta { display: block; margin-top: 3px; color: #8394ab; font-size: 10px; }
+.global-memory-modal__list li button { flex: 0 0 auto; width: 26px; height: 26px; border: 1px solid var(--panel-border); border-radius: 7px; background: transparent; color: #8394ab; font-size: 14px; cursor: pointer; }
+.global-memory-modal__list li button:hover { border-color: rgba(255, 46, 136, 0.4); color: #ff9aae; }
+.global-memory-modal__empty { padding: 9px; color: #8394ab; font-size: 11px; text-align: center; }
+.global-memory-modal__add { display: flex; gap: 6px; }
+.global-memory-modal__add input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.02); color: var(--text); font-size: 12px; }
+.global-memory-modal__add button { flex: 0 0 auto; padding: 0 14px; border: 1px solid rgba(255, 183, 94, 0.35); border-radius: 8px; background: rgba(255, 183, 94, 0.08); color: #ffcf8a; font: 700 11px var(--mono); cursor: pointer; }
+.global-memory-modal__add button:hover:not(:disabled) { background: rgba(255, 183, 94, 0.16); }
+.global-memory-modal__add button:disabled { opacity: .45; cursor: default; }
+.global-memory-modal__error { margin-top: 10px; padding: 8px 10px; border: 1px solid rgba(255, 46, 136, 0.35); border-radius: 8px; background: rgba(255, 46, 136, 0.08); color: #ff9aae; font-size: 11px; }
+
 /* ── 每日預算上限（營運面板）───────────────────────────────────────────── */
 .ops-budget__list { display: grid; gap: 6px; margin-bottom: 14px; }
 .ops-budget__row { display: flex; align-items: center; gap: 8px; }

@@ -88,6 +88,12 @@ import {
   setDailyBudget,
   setWorkerGoal,
 } from "./workerExtras.js";
+import {
+  addGlobalMemoryNote,
+  composeGlobalMemorySection,
+  listGlobalMemory,
+  removeGlobalMemoryNote,
+} from "./globalMemory.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
 import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
@@ -1775,6 +1781,7 @@ function composeWorkerPrompt(worker: Worker): string {
   const ephemeral = isEphemeralWorkerName(name);
   return [
     composePersonaPrompt(worker.persona),
+    ephemeral ? "" : composeGlobalMemorySection(store, worker.id),
     ephemeral ? "" : composeMemorySection(worker.id),
     ephemeral ? "" : composeOutboxSection(),
     // 小隊商量：只注入給「有隊員的部門隊長」。隊長自助 curl 發起，隊員意見彙整後自動送回。
@@ -6783,6 +6790,66 @@ app.post("/api/workers/:id/budget", (req, res) => {
     return;
   }
   res.json({ ok: true, dailyBudgetUsd: result.dailyBudgetUsd });
+});
+
+// ── 全域長期記憶（global_memory，SQLite table）──────────────────────────────
+// 跟上面的 npc-extras 是平行擴充：per-worker 記憶綁在單一 NPC 身上，這裡是
+// App 對使用者本人的記憶，任何 NPC 學到的事都寫進同一份、所有 NPC 共用。
+//
+// 已經在跑的 worker 要怎麼拿到新記憶：composeWorkerPrompt 只在 spawn 那一刻
+// 被讀一次，process 活著的期間不會重讀，所以寫入後呼叫下面的
+// refreshGlobalMemoryForAllWorkers()——對每個非短命 worker 呼叫
+// runner.requestPromptRefresh()（見 AgentSession），標記它下次 idle 時該
+// 重啟底層 process。**寫入來源自己也要包含在內**：它剛學到的事只活在這回合
+// 的對話上下文裡，一旦之後被壓縮（換腦／compact）就會消失，而它的 system
+// prompt 從 spawn 那一刻就沒有這則記憶——不重新整理的話它反而比其他 worker
+// 更早失憶。這條路徑刻意不會打斷正在進行的回合：busy 的 worker 只是先記下
+// 待處理，等它自己下一次 send() 才真正 stop()+respawn；對話連續性靠
+// --resume（Claude）／thread/resume（Codex）保留，stop() 不動 session id。
+function refreshGlobalMemoryForAllWorkers(): void {
+  for (const worker of workers.values()) {
+    if (isEphemeralWorkerName(worker.runner.name)) continue; // 短命 worker 本來就沒被注入這段
+    worker.runner.requestPromptRefresh();
+  }
+}
+
+app.get("/api/memory", (_req, res) => {
+  res.json({ notes: listGlobalMemory(store) });
+});
+
+app.post("/api/memory", (req, res) => {
+  const rawWorkerId = typeof req.body?.workerId === "string" ? req.body.workerId.trim() : "";
+  let sourceWorkerId: string | null = null;
+  let sourceWorkerName: string | null = null;
+  if (rawWorkerId) {
+    const worker = workers.get(rawWorkerId);
+    if (!worker) {
+      res.status(400).json({ error: t("找不到這個 workerId") });
+      return;
+    }
+    sourceWorkerId = worker.id;
+    sourceWorkerName = worker.runner.name ?? null;
+  }
+  const result = addGlobalMemoryNote(store, req.body?.note, sourceWorkerId, sourceWorkerName);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  const notes = listGlobalMemory(store);
+  broadcast({ type: "global_memory_updated", notes });
+  refreshGlobalMemoryForAllWorkers();
+  res.json({ ok: true, notes });
+});
+
+app.delete("/api/memory/:id", (req, res) => {
+  if (!removeGlobalMemoryNote(store, req.params.id)) {
+    res.status(400).json({ error: t("沒有這則記憶") });
+    return;
+  }
+  const notes = listGlobalMemory(store);
+  broadcast({ type: "global_memory_updated", notes });
+  refreshGlobalMemoryForAllWorkers();
+  res.json({ ok: true, notes });
 });
 
 app.get("/api/persona-templates", (_req, res) => {

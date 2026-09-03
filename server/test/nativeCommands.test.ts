@@ -21,6 +21,7 @@ class FakeSession implements AgentSession {
   send() {}
   interrupt() {}
   stop() { this.stopped = true; }
+  requestPromptRefresh() {}
   resolveApproval(_id: string, _decision: ApprovalDecision) { return false; }
   handleApprovalBridge() { return null; }
   setModel(model: string | undefined) { this.model = model; }

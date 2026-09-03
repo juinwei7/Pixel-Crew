@@ -26,6 +26,13 @@ export interface AgentSession {
   name: string;
   warmup(): void;
   reloadMcp(): Promise<"reloaded" | "deferred">;
+  // Marks the composed system prompt (persona + global memory) stale.
+  // Checked lazily at the start of the next send(), so a background memory
+  // sync never interrupts an in-progress turn — if the worker is idle when
+  // the next message arrives, its process restarts first so the fresh
+  // prompt is picked up. Conversation continuity survives the restart via
+  // --resume / thread/resume (stop() never touches session/thread id).
+  requestPromptRefresh(): void;
   send(text: string, images?: MessageImage[], documents?: MessageDocument[], options?: SendOptions): void;
   interrupt(): void;
   stop(): void;

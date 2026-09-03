@@ -182,6 +182,33 @@ test("Codex defers MCP reload while busy and performs it before the next turn", 
   assert.equal(writes[1].params.threadId, "thread-1");
 });
 
+test("Codex defers a global-memory prompt refresh until the next send(), preserving the resumed thread id", async () => {
+  const writes: any[] = [];
+  const session = new CodexSession(() => {}, "/repo");
+  let stops = 0;
+  const internals = session as unknown as {
+    child: { stdin: { write(data: string): void } } | null;
+    stop(): void;
+    ensureThread(): Promise<string>;
+  };
+  internals.child = { stdin: { write: (data) => writes.push(JSON.parse(data)) } };
+  internals.stop = () => { stops++; };
+  internals.ensureThread = () => {
+    assert.equal(stops, 1); // the pending refresh must restart before the (resumed) thread is fetched
+    return Promise.resolve("thread-1");
+  };
+
+  session.requestPromptRefresh();
+  assert.equal(stops, 0); // nothing should happen until the next send()
+
+  session.send("繼續工作");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(stops, 1);
+  assert.equal(writes[0].method, "turn/start");
+  assert.equal(writes[0].params.threadId, "thread-1");
+});
+
 test("auto-approve resolves a safe command without prompting", () => {
   const events: RunnerEvent[] = [];
   const session = new CodexSession((event) => events.push(event), "/repo", () => "", () => true);

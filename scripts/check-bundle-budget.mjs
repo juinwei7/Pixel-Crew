@@ -7,11 +7,14 @@ if (!files.length) throw new Error("No web build assets found. Run `npm run buil
 
 const budgets = [
   { name: "application entry", match: /^index-[\w-]+\.js$/, max: 360 * 1024 },
-  { name: "3D office", match: /^officeScene-[\w-]+\.js$/, max: 220 * 1024 },
-  { name: "Three.js vendor", match: /^three\.module-[\w-]+\.js$/, max: 540 * 1024 },
   { name: "Pixi vendor", match: /^pixi-[\w-]+\.js$/, max: 620 * 1024 },
   { name: "rich text vendor", match: /^rich-text-[\w-]+\.js$/, max: 380 * 1024 },
   { name: "i18n catalog", match: /^i18n-[\w-]+\.js$/, max: 110 * 1024 },
+  // three.js is only pulled in by QrTree's remote-access QR animation; it's
+  // isolated into its own vendor chunk (see vite.config.ts manualChunks) so
+  // RemoteAccessModal's own feature code stays under the generic lazy cap
+  // below instead of smuggling ~420 KiB of vendor library through it.
+  { name: "three.js vendor", match: /^three-vendor-[\w-]+\.js$/, max: 460 * 1024 },
 ];
 
 const errors = [];

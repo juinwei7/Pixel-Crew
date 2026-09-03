@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
@@ -87,7 +87,8 @@ type ServerMessage =
   | { type: "codex_default_login_result"; ok: boolean; status: AccountLoginState["status"]; message: string | null }
   | { type: "codex_default_login_url"; loginUrl: string | null }
   | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
-  | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] };
+  | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] }
+  | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] };
 
 type WorkerSummary = {
   id: string;
@@ -132,6 +133,7 @@ export function useWorkers() {
   const [departments, setDepartments] = useState<Record<string, Department>>({});
   const [order, setOrder] = useState<string[]>([]);
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
+  const [globalMemoryEvent, setGlobalMemoryEvent] = useState<{ notes: GlobalMemoryNoteDto[]; seq: number } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -416,6 +418,10 @@ export function useWorkers() {
         }
         case "mcp_login_result": {
           setMcpLoginResult((prev) => ({ ...data, seq: (prev?.seq ?? 0) + 1 }));
+          break;
+        }
+        case "global_memory_updated": {
+          setGlobalMemoryEvent((prev) => ({ notes: data.notes, seq: (prev?.seq ?? 0) + 1 }));
           break;
         }
         case "workflow_library_updated": {
@@ -1303,6 +1309,7 @@ export function useWorkers() {
     departments,
     order,
     mcpLoginResult,
+    globalMemoryEvent,
     activeId,
     setActiveId,
     targetRepoPath,

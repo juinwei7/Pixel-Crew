@@ -46,6 +46,7 @@ const ProviderHandoffDialog = lazy(() => import("./components/ProviderHandoffDia
 const PersonaEditor = lazy(() => import("./components/PersonaEditor").then((module) => ({ default: module.PersonaEditor })));
 const DepartmentCreator = lazy(() => import("./components/DepartmentCreator").then((module) => ({ default: module.DepartmentCreator })));
 const McpModal = lazy(() => import("./components/McpModal").then((module) => ({ default: module.McpModal })));
+const GlobalMemoryModal = lazy(() => import("./components/GlobalMemoryModal").then((module) => ({ default: module.GlobalMemoryModal })));
 const CodexCommandsModal = lazy(() => import("./components/CodexCommandsModal").then((module) => ({ default: module.CodexCommandsModal })));
 const AccountsModal = lazy(() => import("./components/AccountsModal").then((module) => ({ default: module.AccountsModal })));
 const BackupModal = lazy(() => import("./components/BackupModal").then((module) => ({ default: module.BackupModal })));
@@ -79,7 +80,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
@@ -177,6 +178,7 @@ export function App() {
   const [personaWorkerId, setPersonaWorkerId] = useState<string | null>(null);
   const [departmentCreatorOpen, setDepartmentCreatorOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [globalMemoryModalOpen, setGlobalMemoryModalOpen] = useState(false);
   const [codexCommandsModalOpen, setCodexCommandsModalOpen] = useState(false);
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [opsModalOpen, setOpsModalOpen] = useState(false);
@@ -595,7 +597,7 @@ export function App() {
       // These overlays already have their own Escape-to-close handling and can be
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
-      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
+      const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || globalMemoryModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
         || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
       if (overlayModalOpen) return;
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
@@ -614,7 +616,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -957,6 +959,7 @@ export function App() {
         onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
         onBossAssignment={openBossDesk}
         onOpenMcp={() => setMcpModalOpen(true)}
+        onOpenGlobalMemory={() => setGlobalMemoryModalOpen(true)}
         onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
         onOpenAccounts={() => setAccountsModalOpen(true)}
         onOpenBackup={() => setBackupModalOpen(true)}
@@ -1351,6 +1354,7 @@ export function App() {
       />}
 
       {mcpModalOpen && <McpModal capabilities={activeCapabilities} provider={activeProvider} workspacePath={activeWorkspace} mcpLoginResult={mcpLoginResult} platform={system?.platform} usedMcpTools={usedMcpTools} notify={notify} onClose={() => setMcpModalOpen(false)} />}
+      {globalMemoryModalOpen && <GlobalMemoryModal globalMemoryEvent={globalMemoryEvent} onClose={() => setGlobalMemoryModalOpen(false)} />}
       {codexCommandsModalOpen && <CodexCommandsModal capabilities={capabilitiesByWorkspace[activeWorkspace]?.codex ?? EMPTY_CAPABILITIES} onClose={() => setCodexCommandsModalOpen(false)} />}
       {accountsModalOpen && <AccountsModal
         accounts={Object.values(accounts)}

@@ -180,6 +180,14 @@ export type ProviderAccount = {
 
 export type ResumeCandidate = { workerId: string; taskText: string; sessionId: string; interruptedAt: string; resetAt: string | null };
 
+export type GlobalMemoryNote = {
+  id: string;
+  note: string;
+  sourceWorkerId: string | null;
+  sourceWorkerName: string | null;
+  createdAt: string;
+};
+
 export class LocalStore {
   private readonly db: DatabaseSync;
   private readonly path: string;
@@ -489,6 +497,14 @@ export class LocalStore {
         completed_turns INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (worker_id, provider)
+      );
+
+      CREATE TABLE IF NOT EXISTS global_memory (
+        id TEXT PRIMARY KEY,
+        note TEXT NOT NULL,
+        source_worker_id TEXT,
+        source_worker_name TEXT,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS meta_counters (
@@ -1487,6 +1503,47 @@ export class LocalStore {
   deleteProviderCheckpoint(workerId: string, provider: ProviderId): boolean {
     return this.safeWrite("delete provider checkpoint", () => {
       this.db.prepare("DELETE FROM provider_checkpoints WHERE worker_id = ? AND provider = ?").run(workerId, provider);
+    });
+  }
+
+  // 跨所有 worker 共用的長期記憶（App 對使用者本人的記憶），與 npc-extras 的
+  // per-worker 記憶平行存在。刻意不對 source_worker_id 設 FK：來源 worker 被
+  // 刪除後這則記憶仍該留著，source_worker_name 是寫入當下的名字快照。
+  listGlobalMemoryNotes(): GlobalMemoryNote[] {
+    const rows = this.db.prepare(
+      "SELECT id, note, source_worker_id, source_worker_name, created_at FROM global_memory ORDER BY rowid ASC",
+    ).all() as Array<{ id: string; note: string; source_worker_id: string | null; source_worker_name: string | null; created_at: string }>;
+    return rows.map((row) => ({
+      id: row.id,
+      note: row.note,
+      sourceWorkerId: row.source_worker_id,
+      sourceWorkerName: row.source_worker_name,
+      createdAt: row.created_at,
+    }));
+  }
+
+  saveGlobalMemoryNote(entry: GlobalMemoryNote, maxNotes: number): boolean {
+    return this.safeWrite("save global memory note", () => {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.prepare(
+          "INSERT INTO global_memory (id, note, source_worker_id, source_worker_name, created_at) VALUES (?, ?, ?, ?, ?)",
+        ).run(entry.id, entry.note, entry.sourceWorkerId, entry.sourceWorkerName, entry.createdAt);
+        this.db.prepare(`
+          DELETE FROM global_memory
+          WHERE rowid NOT IN (SELECT rowid FROM global_memory ORDER BY rowid DESC LIMIT ?)
+        `).run(maxNotes);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
+
+  deleteGlobalMemoryNote(id: string): boolean {
+    return this.safeWrite("delete global memory note", () => {
+      this.db.prepare("DELETE FROM global_memory WHERE id = ?").run(id);
     });
   }
 
