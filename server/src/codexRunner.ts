@@ -87,6 +87,7 @@ export class CodexSession implements AgentSession {
   private stagedInputDocuments = new Set<string>();
   private executionProfile: ExecutionProfile = "normal";
   private mcpReloadPending = false;
+  private promptRefreshPending = false;
   busy = false;
   name = "";
 
@@ -120,6 +121,11 @@ export class CodexSession implements AgentSession {
     void this.ensureThread().catch((error) => console.warn("Codex app-server warmup failed:", error.message));
   }
 
+  /** See AgentSession.requestPromptRefresh. */
+  requestPromptRefresh(): void {
+    this.promptRefreshPending = true;
+  }
+
   async reloadMcp(): Promise<"reloaded" | "deferred"> {
     if (this.busy) {
       this.mcpReloadPending = true;
@@ -139,6 +145,10 @@ export class CodexSession implements AgentSession {
 
   send(text: string, images: MessageImage[] = [], documents: MessageDocument[] = [], options: SendOptions = {}): void {
     if (this.busy) throw new Error("codex worker busy");
+    if (this.promptRefreshPending) {
+      this.promptRefreshPending = false;
+      this.stop();
+    }
     this.executionProfile = options.executionProfile ?? "normal";
     const nativeCommand = images.length === 0 && documents.length === 0
       ? parseCodexNativeCommand(text)

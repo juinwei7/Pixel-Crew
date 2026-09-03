@@ -23,6 +23,10 @@ export default defineConfig({
           if (id.includes("react-markdown") || id.includes("remark-") || id.includes("rehype-") || id.includes("hast-") || id.includes("mdast-") || id.includes("micromark")) return "rich-text";
           if (id.includes("react-dom") || id.includes("/react/")) return "react";
           if (id.includes("/yaml/")) return "yaml";
+          // Only QrTree (the remote-access QR "night city" animation) pulls
+          // in three.js. Isolate it into its own vendor chunk so that lazy
+          // chunk stays feature-code-sized instead of ~95% vendor library.
+          if (id.includes("node_modules/three/")) return "three-vendor";
           return undefined;
         },
       },

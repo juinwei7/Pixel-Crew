@@ -232,6 +232,32 @@ test("Claude defers MCP reload while busy and restarts the transport before the 
   assert.match(writes[0], /查詢新工具/);
 });
 
+test("Claude defers a global-memory prompt refresh until the next send(), never interrupting a running turn", async () => {
+  const session = new ClaudeSession(() => {}, "/repo");
+  session.busy = true;
+  session.requestPromptRefresh(); // mid-turn: must not restart immediately
+
+  let stops = 0;
+  const writes: string[] = [];
+  const internals = session as unknown as {
+    stop(): void;
+    ensureChild(): { stdin: { write(data: string): void } };
+  };
+  internals.stop = () => { stops++; session.busy = false; };
+  internals.ensureChild = () => {
+    assert.equal(stops, 1); // the pending refresh must restart before the next spawn is used
+    return { stdin: { write: (data) => writes.push(data) } };
+  };
+  assert.equal(stops, 0); // still busy — nothing should have happened yet
+
+  session.busy = false;
+  session.send("繼續工作");
+
+  assert.equal(stops, 1);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0], /繼續工作/);
+});
+
 test("builds Claude stream-json image content blocks", () => {
   assert.deepEqual(claudeMessageContent("這是什麼？", [{ name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=" }]), [
     { type: "text", text: "這是什麼？" },

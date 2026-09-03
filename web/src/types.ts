@@ -11,6 +11,14 @@ export type McpLoginResult = {
   message: string | null;
 };
 
+export type GlobalMemoryNoteDto = {
+  id: string;
+  note: string;
+  sourceWorkerId: string | null;
+  sourceWorkerName: string | null;
+  createdAt: string;
+};
+
 // 跨線協定型別的唯一權威在 server/src/protocol.ts —— 這裡只做 type-only
 // re-export（Vite 編譯時擦除，零 runtime 依賴），不要再手抄一份。
 import type {

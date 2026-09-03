@@ -464,6 +464,52 @@ test("meta counter accumulates and survives a reopen", () => {
   }
 });
 
+test("saveGlobalMemoryNote rolls back a duplicate-id insert with no partial side effect", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-global-memory-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+
+    const first = { id: "dup-id", note: "first note", sourceWorkerId: null, sourceWorkerName: null, createdAt: "2026-01-01T00:00:00.000Z" };
+    assert.equal(store.saveGlobalMemoryNote(first, 50), true);
+
+    const duplicate = { id: "dup-id", note: "second note", sourceWorkerId: null, sourceWorkerName: null, createdAt: "2026-01-02T00:00:00.000Z" };
+    assert.equal(store.saveGlobalMemoryNote(duplicate, 50), false);
+
+    const notes = store.listGlobalMemoryNotes();
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].note, "first note");
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saveGlobalMemoryNote is atomic: if the prune step throws, the insert that already ran is rolled back too", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-global-memory-atomic-"));
+  const stores: LocalStore[] = [];
+  try {
+    const path = join(dir, "test.sqlite");
+    const store = new LocalStore(path);
+    stores.push(store);
+
+    const entry = { id: "will-be-rolled-back", note: "should not survive", sourceWorkerId: null, sourceWorkerName: null, createdAt: "2026-01-01T00:00:00.000Z" };
+    // The INSERT (which doesn't touch maxNotes) succeeds on its own; only the
+    // prune statement's `LIMIT ?` bind fails on a too-large BigInt. Without
+    // the BEGIN/COMMIT/ROLLBACK wrapping, the already-autocommitted INSERT
+    // would survive even though this call reports failure.
+    const tooLargeMaxNotes = (2n ** 100n) as unknown as number;
+    assert.equal(store.saveGlobalMemoryNote(entry, tooLargeMaxNotes), false);
+
+    assert.deepEqual(store.listGlobalMemoryNotes(), []);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("flush() forces the debounced event queue to disk and checkpoint() truncates the WAL", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-checkpoint-"));
   const stores: LocalStore[] = [];
