@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features — Pixel Crew</title>
+<meta name="description" content="Pixel Crew's product tour: self-routing departments, assigning work, approvals, the camera, the task log, cross-LLM handoffs, and the Pixel Workshop.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/en/features/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/features/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/features/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/features/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/en/features/">
+<meta property="og:title" content="Features — Pixel Crew">
+<meta property="og:description" content="Self-routing departments, assigning work, approvals, the camera, the task log, cross-LLM handoffs, and the Pixel Workshop.">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_TW">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Features — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/en/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/en/">Home</a>
+      <a href="/en/features/" class="is-active" aria-current="page">Features</a>
+      <a href="/en/changelog/">Changelog</a>
+      <a href="/en/download/">Download</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/features/" hreflang="zh-Hant" lang="zh-Hant" aria-label="繁體中文版本">中文</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">FEATURES</span>
+  <h1>How a pixel crew actually divides the work.</h1>
+  <p class="lead">Starting with handing everything to a department, then assigning work, approvals, the camera, the task log, and cross-LLM handoffs — down to making your crew look the way you want. Here's the full tour.</p>
+</div>
+
+<!-- ============================== DEPARTMENTS & COLLABORATION (FLAGSHIP) ============================== -->
+<main class="scenes wrap" id="features">
+
+  <section class="scene-row--full scene-row--flagship" id="departments">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SIGNATURE <i>·</i> 2.0.0</span>
+        <h2>Hand the work to a department, and let the lead decide.</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          A department is two or more NPCs sharing one workspace, one of them designated the lead. Create one
+          directly with the Department Creator: fill in a purpose, headcount, and provider, and AI drafts
+          complementary roles and personas — you just pick who leads. From then on, every time you hand off work
+          you only write a goal and acceptance criteria; the lead decides whether to consult an expert, ask for a
+          review, or run a full task chain.
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>AI-planned departments</b>: fill in purpose, headcount, and provider; AI drafts complementary roles and you pick a lead</li>
+        <li><b>Quick Consult / Quick Review</b>: two-step, read-only collaboration — an expert advises or reviews, the lead executes and finalizes</li>
+        <li><b>Department Mission</b>: a 2–5 step task chain that always starts with execute, with a different NPC doing each review step; failed reviews get up to two automatic correction rounds</li>
+        <li><b>Only five things stop for you</b>: plan approval, an inconclusive review, a used-up correction budget, a failed step, or a member going offline — everything else hands off automatically</li>
+        <li>No mode ever auto-commits, pushes, merges, tags, or releases, and none of them touch your authentication</li>
+      </ul>
+    </div>
+
+    <div class="org-chart">
+      <span class="org-node org-node--lead">DEPARTMENT LEAD</span>
+      <span class="org-stem" aria-hidden="true"></span>
+      <div class="org-branches">
+        <div class="org-branch"><b>QUICK CONSULT</b><p>Expert advises → lead executes (2 steps, read-only)</p></div>
+        <div class="org-branch"><b>QUICK REVIEW</b><p>Expert reviews → lead finalizes (2 steps, read-only)</p></div>
+        <div class="org-branch"><b>DEPARTMENT MISSION</b><p>2–5 step chain, execute/review alternating owners</p></div>
+      </div>
+    </div>
+
+    <div class="media-stack media-stack--pair" style="margin-top: 34px;">
+      <figure class="shot">
+        <div class="shot-label"><span>MISSION — HAND TO DEPARTMENT</span><b>LIVE</b></div>
+        <img src="/assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="Hand-to-department dialog: only a goal and acceptance criteria are required; confirming hands it to the department lead to route automatically to Consult, Review, or a Mission">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>NEEDS ATTENTION — YOUR DECISION</span><b>LIVE</b></div>
+        <img src="/assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="A department's status turned to needs attention: the screen lists why it stopped and the choices available for the next step">
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================== BLACK WINDOW & MODE SWITCHING ============================== -->
+  <section class="scene-row--full scene-row--flagship" id="modes">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SIGNATURE <i>·</i> 2.3.0</span>
+        <h2>Same crew, all the way down to a real terminal.</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          Pixel is the default pixel-office view. Switch from the top bar into the full-screen Professional
+          workbench, or open Black Window directly — it runs a real Claude Code or Codex CLI session, not a
+          simulation. All three modes share the same accounts, models, and safety confirmations, so whichever
+          view you act from, the others are looking at the same real state.
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>Persistent sessions</b>: the daemon keeps the real terminal identity — surviving navigation, reloads, and even switching browser tabs</li>
+        <li><b>Per-pane controls</b>: each Agent pane can select Claude or Codex, a shared or named account, its model, and auto-approve mode</li>
+        <li><b>Freely arranged panes</b>: organize multiple terminals in workspace tabs — drag, resize, split, minimize, maximize</li>
+        <li><b>Studio rail</b>: <span class="kbd">Alt</span>+<span class="kbd">1</span>–<span class="kbd">9</span> switches local workspaces, with a read-only branch, commit, dirty-file, and ahead/behind summary</li>
+        <li>Terminal font size is adjustable and saved; local voice input becomes editable text first and never sends or executes automatically</li>
+      </ul>
+    </div>
+
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>PROFESSIONAL — FULL-SCREEN WORKBENCH</span><b>LIVE</b></div>
+        <img src="/assets/mode-professional.webp" width="1180" height="900" loading="lazy" decoding="async" alt="Professional Workbench: a report index and quick-switch buttons on the left, the selected NPC's work stream in the center, and a command input at the bottom">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>BLACK WINDOW — A REAL CLI</span><b>LIVE</b></div>
+        <img src="/assets/mode-blackwindow.webp" width="1600" height="1000" loading="lazy" decoding="async" alt="Black Window: a list of workspace tabs on the left, and a real Codex CLI terminal pane on the right showing a hooks-trust confirmation prompt">
+      </figure>
+    </div>
+    <p class="mode-note">▲ Captured from the real app — the NPC and workspace shown are a demo setup for this screenshot.</p>
+  </section>
+
+  <!-- ============================== FEATURE TOUR ============================== -->
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>ASSIGN — NPC 1 RECEIVED A TASK</span><b>REC</b></div>
+        <img src="/assets/task.webp" width="1330" height="880" loading="lazy" decoding="async" alt="Recording: after being assigned a task, an NPC walks from its desk to a file-reading workstation and starts working, showing elapsed seconds and a streaming output bubble overhead; a neighboring coworker cheers on completion">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 01 <i>·</i> ASSIGN WORK</span>
+      <h2>Assign it, then watch it go to work.</h2>
+      <p>
+        Type a task and the NPC walks to the matching workstation — to read files, write code, search the web,
+        or use the terminal. Its nameplate shows elapsed time while a speech bubble streams live output.
+      </p>
+      <ul class="scene-points">
+        <li><b>Workstation = tool</b>: where the character stands shows what the agent is using</li>
+        <li><b>Completion reactions</b>: nearby teammates celebrate success; failures produce a small storm cloud</li>
+        <li>This is an unedited recording of a real task</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack">
+        <figure class="shot">
+          <div class="shot-label"><span>APPROVAL — WAITING</span><b>LIVE</b></div>
+          <img src="/assets/approval.webp" width="920" height="760" loading="lazy" decoding="async" alt="Close-up: NPC one has an 'Allow this command?' approval bar overhead with deny, allow-for-task, and allow-once buttons; its nameplate shows a 9-second wait">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 02 <i>·</i> APPROVALS</span>
+      <h2>See who needs you, at a glance.</h2>
+      <p>
+        When an agent wants to run a command, its NPC stops, paces with a question mark overhead, and the
+        approval controls float right beside the character. No window switching, no digging through logs —
+        one glance across the office tells you who's stuck.
+      </p>
+      <ul class="scene-points">
+        <li><b>Three choices</b>: deny, allow for this task, or allow once</li>
+        <li><b>Three auto-approval levels</b>: off, safe (a read-only allowlist), or full (dangerous commands still force a confirmation)</li>
+        <li>Each NPC has independent settings</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>RADIAL — CONTEXT MENU</span><b>LIVE</b></div>
+        <img src="/assets/radial.webp" width="974" height="719" loading="lazy" decoding="async" alt="Right-clicking NPC one fans out five circular icon buttons along an arc — rename, persona, appearance, room, and remove; a cat happens to walk across the floor on the left">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 03 <i>·</i> RADIAL MENU</span>
+      <h2>One right-click, every setting for this character.</h2>
+      <p>
+        Right-click any NPC to rename it, edit its persona, change its look, switch rooms, or safely remove
+        it — and to ask another NPC at the same workstation for a read-only Consult or Review. For a bigger
+        job, just create a <a href="#departments">department</a>.
+      </p>
+      <ul class="scene-points">
+        <li><b>Persistent personas</b>: give an NPC a durable role ("You're a frontend QA — only raise issues, never touch code") injected through each CLI's native mechanism; it survives restarts</li>
+        <li><b>Pixel Workshop</b>: switch looks or upload your own animated GIF avatar</li>
+        <li><b>Cross-LLM handoff</b>: let Claude summarize its progress partway through and hand off to Codex (or the other way around)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>CAMERA — PAN &amp; ZOOM</span><b>REC</b></div>
+        <img src="/assets/camera.webp" width="1330" height="880" loading="lazy" decoding="async" alt="Recording: using the lower-left slider to zoom into the office, dragging to pan the view, then resetting to the default framing in one click">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 04 <i>·</i> CAMERA</span>
+      <h2>Your office, your point of view.</h2>
+      <p>
+        Drag empty space to pan, use the wheel or the lower-left slider to zoom — always in crisp integer
+        steps. Double-click the floor or press <span class="kbd">⟳</span> to reset to the default framing.
+      </p>
+      <ul class="scene-points">
+        <li>Zoom in to follow one NPC, or pull out to see the whole office</li>
+        <li>Nameplates, bubbles, and approval controls move with the camera</li>
+        <li>Tablet-friendly: one-finger pan plus a slider for zoom</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 05 <i>·</i> TASK LOG</span>
+        <h2>Every step, out in the open.</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          The left panel shows a task in progress: the agent explains what it's about to look up while a
+          WebSearch tool's input and output stream in live. The right panel shows the finished result: the
+          final reply rendered as full Markdown — lists, links, sources — plus the tool-call count and total
+          duration.
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>Two views</b>: summary mode for the conclusion, activity mode for every tool call</li>
+        <li><b>Searchable</b>: full-text search across this NPC's task history; one-click copy for code blocks</li>
+        <li><b>Desktop notifications</b>: get a system notification when a task finishes or needs approval while you're in another window (off by default)</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>RUNNING — TOOL STREAM</span><b>LIVE</b></div>
+        <img src="/assets/log-activity.webp" width="401" height="679" loading="lazy" decoding="async" alt="Task log while running: NPC five explains its search plan while a WebSearch tool's INPUT and OUTPUT JSON streams in below">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>COMPLETE — FINAL RESPONSE</span><b>LIVE</b></div>
+        <img src="/assets/log-result.webp" width="401" height="580" loading="lazy" decoding="async" alt="Completed task: the final response renders lists and links as Markdown, noting 3 tool activities and a 36.1-second duration">
+      </figure>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack media-stack--pair">
+        <figure class="shot">
+          <div class="shot-label"><span>SHIFT CHANGE — HANDOFF</span><b>LIVE</b></div>
+          <img src="/assets/handoff.webp" width="703" height="693" loading="lazy" decoding="async" alt="Handoff dialog: NPC five handing off from Codex to Claude Code, showing the target LLM's work-energy bar plus a list of cross-LLM handoff caveats and a confirmation checkbox">
+        </figure>
+        <figure class="shot">
+          <div class="shot-label"><span>OFFICE POWER — GLOBAL USAGE</span><b>LIVE</b></div>
+          <img src="/assets/energy.webp" width="450" height="472" loading="lazy" decoding="async" alt="Global work-energy panel: Claude Code showing session, weekly, and per-model usage bars with reset times; Codex showing 7-day usage">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 06 <i>·</i> HANDOFFS &amp; ENERGY</span>
+      <h2>Switch brains without dropping the work.</h2>
+      <p>
+        Running low on Codex allowance, or is this one better suited to Claude? Hand an NPC off between LLMs:
+        the system first summarizes the current work, then hands it to a fresh session on the other model.
+      </p>
+      <ul class="scene-points">
+        <li><b>Global work energy</b>: the top bar always shows live usage for both CLIs; open it for session, weekly, and per-model reset times</li>
+        <li><b>Check energy before switching</b>: see the target LLM's live usage before handing off, so you don't run out right after switching</li>
+        <li><b>Honest warnings</b>: it lists exactly what won't carry over (tool state, pending approvals) and requires a confirmation checkbox before proceeding; works Claude ⇄ Codex in either direction</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 07 <i>·</i> PIXEL WORKSHOP</span>
+        <h2>Make your crew look the way you want.</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          Swap between five official crew designs, or upload your own pixel GIF — animation timing is
+          preserved and the avatar is automatically fitted to the NPC's size in the office, walking, working,
+          and celebrating as usual.
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>Animated GIF avatars</b>: up to 320×320 and 120 frames, looping at their original frame timing</li>
+        <li><b>Safe to switch</b>: choosing an official look never deletes your custom character — switch back anytime</li>
+        <li>Pair it with the persona system so your "financial analyst" actually looks like one</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>OFFICIAL — CREW</span><b>LIVE</b></div>
+        <img src="/assets/workshop-official.webp" width="796" height="628" loading="lazy" decoding="async" alt="Pixel Workshop's official tab: five official crew looks available — Classic Crew, Neon Engineer, Signal Analyst, Spark Designer, and Night Shift Ops">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>CUSTOM — GIF AVATAR</span><b>LIVE</b></div>
+        <img src="/assets/workshop-custom.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="Pixel Workshop's custom tab: previewing a blue animated pixel character, with GIF size, file, frame, and decode limits listed on the right">
+      </figure>
+    </div>
+  </div>
+
+</main>
+
+<!-- ============================== SECURITY ============================== -->
+<section class="security">
+  <div class="wrap">
+    <span class="eyebrow">SECURITY MODEL</span>
+    <p class="headline">Your API key is safe — <em>because there is no API key.</em></p>
+    <p>
+      Pixel Crew isn't another service asking you to paste in a key. It orchestrates and visualizes the
+      official CLIs <strong>already installed and signed in</strong> on your machine. Authentication, usage,
+      and billing all stay in those tools — Pixel Crew never touches them.
+    </p>
+    <div class="sec-grid">
+      <div class="sec-item">
+        <b>Localhost only</b>
+        <p>The server listens on 127.0.0.1 and is never exposed publicly; the browser talks to it over a local WebSocket.</p>
+      </div>
+      <div class="sec-item">
+        <b>Native CLI authentication</b>
+        <p>Sign-in is managed by <code>claude</code>/<code>codex</code> themselves — Pixel Crew only invokes them, never stores any credential.</p>
+      </div>
+      <div class="sec-item">
+        <b>Data stays local</b>
+        <p>Conversation history, NPC settings, and avatars all live in a local SQLite database and folders — no cloud upload, no telemetry.</p>
+      </div>
+      <div class="sec-item">
+        <b>Dangerous-command guardrails</b>
+        <p>Even with full auto-approval on, destructive commands like <code>rm -rf</code> and disk operations still force a confirmation; a department Mission never auto-commits, pushes, merges, tags, or releases either.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization,
+      endorsement, or sponsorship from Anthropic or OpenAI. "Claude," "Claude Code," "Codex," and related
+      trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs
+      installed and signed into by the user themselves; use each CLI according to its own terms of service.
+      All screenshots and recordings on this page are from the real application.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

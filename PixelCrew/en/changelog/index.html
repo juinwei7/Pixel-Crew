@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog — Pixel Crew</title>
+<meta name="description" content="What changed in every Pixel Crew release, including the full 2.3.0 persistent Black Window workbench and shared global memory update.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/en/changelog/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/changelog/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/changelog/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/changelog/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/en/changelog/">
+<meta property="og:title" content="Changelog — Pixel Crew">
+<meta property="og:description" content="Everything in 2.3.0's persistent Black Window workbench, plus the history of every release since launch.">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_TW">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Changelog — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/en/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/en/">Home</a>
+      <a href="/en/features/">Features</a>
+      <a href="/en/changelog/" class="is-active" aria-current="page">Changelog</a>
+      <a href="/en/download/">Download</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/changelog/" hreflang="zh-Hant" lang="zh-Hant" aria-label="繁體中文版本">中文</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">CHANGELOG</span>
+  <h1>What changed in each release.</h1>
+  <p class="lead">From focused reading for long AI output to NPCs now forming their own departments — this is the history of every Pixel Crew release.</p>
+</div>
+
+<!-- ============================== LATEST RELEASE, EXPANDED ============================== -->
+<section class="launch wrap">
+  <div class="launch-shell">
+    <div class="launch-head">
+      <div>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.0</span>
+        <h2>Real CLI terminals can now stay and keep working inside Pixel Crew.</h2>
+        <p>Version 2.3.0 introduces the persistent Black Window workbench: arrange Claude Code and Codex across workspaces and terminal panes while preserving session identity through navigation and reloads. Shared global memory, per-account usage, and consistent safety confirmations connect Pixel, Professional, and Black Window modes into one reliable local workflow.</p>
+      </div>
+      <div class="launch-meta">
+        <span class="launch-version">v2.3.0</span>
+        <time class="launch-date" datetime="2026-09-04">2026.09.04</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">View full release notes ↗</a>
+      </div>
+    </div>
+
+    <div class="upgrade-grid">
+      <article class="upgrade-card"><span class="index">01 / BLACK WINDOW</span><b>One workbench, multiple real CLIs</b><p>Organize Claude Code and Codex terminals in workspace tabs. Panes move, resize, split, minimize, and maximize; leaving the view or reloading no longer discards the daemon-backed session or terminal identity.</p></article>
+      <article class="upgrade-card"><span class="index">02 / SYNC</span><b>Browser tabs no longer overwrite each other</b><p>Layout writes use version checks and adopt newer state when another tab wins the race. Local drag geometry merges safely with remote changes, preventing CLI processes from becoming orphaned or unreachable.</p></article>
+      <article class="upgrade-card"><span class="index">03 / AGENT CONTROLS</span><b>Choose account, model, and permissions in the terminal</b><p>Each Agent pane can select Claude or Codex, a shared or named account, its model, and auto-approve mode. Changes that require a new session are explained first, then replace terminal identity safely.</p></article>
+      <article class="upgrade-card"><span class="index">04 / TERMINAL UX</span><b>Font sizing and voice stay in the workflow</b><p>Save a readable font size per terminal. Local Whisper voice input becomes editable text in the active CLI and never executes automatically or passes control characters through.</p></article>
+      <article class="upgrade-card"><span class="index">05 / GLOBAL MEMORY</span><b>Every agent shares one local brief</b><p>Maintain shared Markdown memory in the app; Claude and Codex receive it through their native instruction mechanisms. It remains local and is included in validated backup and restore flows.</p></article>
+      <article class="upgrade-card"><span class="index">06 / SAFETY</span><b>Dangerous actions ask once and keep context</b><p>Removing an NPC, deleting a workspace, restarting services, or discarding edits now uses one keyboard-accessible in-app confirmation. If live state changes while it is open, the operation rechecks and cancels safely.</p></article>
+    </div>
+
+    <div class="proof-strip" aria-label="Pixel Crew existing feature UI">
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="Create-department dialog: enter the department's purpose, headcount, and provider; AI drafts a list of complementary roles and personas for the user to pick a lead from"></div><figcaption>DEPARTMENTS — existing collaboration flow</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="Hand-to-department dialog: enter a task goal and one acceptance criterion per line, then confirm to hand it to the department for the lead to route automatically"></div><figcaption>MISSION — existing task routing</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="A needs-attention state: a Mission has stopped because a review result was inconclusive, waiting for the user to decide the next step"></div><figcaption>NEEDS ATTENTION — only real blockers interrupt you</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== EARLIER RELEASES ============================== -->
+<section class="section release-notes">
+  <div class="wrap">
+    <div class="release-head">
+      <div>
+        <span class="eyebrow">EARLIER RELEASES</span>
+        <h2>Further back in the history.</h2>
+      </div>
+      <a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">View all releases ↗</a>
+    </div>
+
+    <div class="release-list">
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.2.2</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>Windows microphone capture fix</h3>
+        <p>Improved local Whisper microphone capture on Windows, including quieter speech; permission, missing-device, and in-use failures now explain their cause directly.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.2">Full v2.2.2 release notes ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.1.1</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>More reliable mobile workspace and remote access</h3>
+        <p>Focus Reader, remote access, workflow management, and supporting dialogs now fit phone-sized screens better and use touch-friendly controls. When the local remote relay cannot start, its settings screen now surfaces useful diagnostics.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.1">Full v2.1.1 release notes ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.1.0</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>Account isolation, Focus workbench, and local voice input</h3>
+        <p>Each NPC can now use its own Claude Code or Codex account, alongside <code>/goal</code>, up to four Focus Reader panes, and multi-agent execution boundaries that are previewed and enforced. The HUD reads usage per account; Boss Desk shows live department steps and can clear and reassign only its linked Missions and NPCs. Optional local voice input turns speech into an editable offline-capable draft after its one-time model download, and never sends a message automatically.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.0">Full v2.1.0 release notes ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.0.1</span>
+          <time class="release-date" datetime="2026-07-28">2026.07.28</time>
+        </div>
+        <h3>Boss task log and cross-department orchestration arrive</h3>
+        <p>Assign work directly from a persistent Boss Desk; the decision model builds a dependency graph across departments and returns one consolidated report. Also adds mid-session model switching, live MCP config sync, and clearer diagnostics when Claude/Codex login detection disagrees with reality.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1">Full v2.0.1 release notes ↗</a>
+      </article>
+
+      <div class="release-archive">
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v2.0.0</span><time class="release-date" datetime="2026-07-22">2026.07.22</time></div>
+          <h3>Department management and read-only collaboration arrive</h3>
+          <p>You can now create a department directly and let its lead decide between Quick Consult, Quick Review, or a full 2-to-5-step Mission; failed reviews get up to two automatic correction rounds, and dangerous actions always wait for your approval.</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.3</span><time class="release-date" datetime="2026-07-21">2026.07.21</time></div>
+          <h3>Management, backup, and focus workflows in one cockpit</h3>
+          <p>From MCP connections and local backups to full focus-mode controls, v1.0.3 makes daily maintenance more complete and long sessions safer.</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time></div>
+          <h3>Reading, input, and multi-NPC workflow upgrades</h3>
+          <p>Added focus reading, full-window attachment drops, persisted session state, early Codex command discovery, and persistent NPC ordering.</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Self-contained Windows build</h3>
+          <p>Added a portable Windows x64 ZIP with a verified bundled Node.js runtime and production dependencies, plus a stable latest-release download link.</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Pixel Crew's first public release</h3>
+          <p>The multi-agent pixel office, native Claude/Codex integration, approvals, personas, cross-LLM handoffs, usage monitoring, task logs, and the Pixel Workshop all launched.</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization,
+      endorsement, or sponsorship from Anthropic or OpenAI. "Claude," "Claude Code," "Codex," and related
+      trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs
+      installed and signed into by the user themselves; use each CLI according to its own terms of service.
+      All screenshots and recordings on this page are from the real application.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

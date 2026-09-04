@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>產品導覽 — Pixel Crew</title>
+<meta name="description" content="Pixel Crew 產品導覽：部門自動路由協作、派任務、核准、鏡頭、任務日誌、跨 LLM 交接與像素工作坊，逐一看完整個像素辦公室怎麼運作。">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/features/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/features/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/features/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/features/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/features/">
+<meta property="og:title" content="產品導覽 — Pixel Crew">
+<meta property="og:description" content="部門自動路由協作、派任務、核准、鏡頭、任務日誌、跨 LLM 交接與像素工作坊的完整導覽。">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="產品導覽 — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">跳到主要內容</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/">首頁</a>
+      <a href="/features/" class="is-active" aria-current="page">產品導覽</a>
+      <a href="/changelog/">版本更新</a>
+      <a href="/download/">下載</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/en/features/" hreflang="en" lang="en" aria-label="English version">EN</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">FEATURES</span>
+  <h1>一支像素團隊，怎麼分工、怎麼協作。</h1>
+  <p class="lead">從交給一整個部門開始，到派任務、核准、鏡頭、任務日誌、跨 LLM 交接，最後是讓隊員長你想要的樣子——這裡是完整導覽。</p>
+</div>
+
+<!-- ============================== 部門與協作（旗艦） ============================== -->
+<main class="scenes wrap" id="features">
+
+  <section class="scene-row--full scene-row--flagship" id="departments">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SIGNATURE <i>·</i> 2.0.0</span>
+        <h2>把工作交給部門，剩下的讓主管決定。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          部門是兩個以上、共用同一個工作資料夾的 NPC，其中一位是部門主管。用 DepartmentCreator 直接建立：
+          填目的、人數與 provider，AI 會自動草擬互補的角色與 persona，你只要選出誰當主管。之後每次交付工作，
+          你只需要寫目標與驗收標準——主管會自己決定該找專家諮詢、請人審查，還是啟動一段完整的任務鏈。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>AI 規劃部門</b>：目的、人數、provider 填好，AI 自動草擬互補角色，你選一位主管</li>
+        <li><b>Quick Consult／Quick Review</b>：唯讀的兩步協作，專家給建議或審查，主管執行與收尾</li>
+        <li><b>Department Mission</b>：2 到 5 步的任務鏈，一定以執行開始，每個審查步驟換一位 NPC 進行，退件最多自動修正兩輪</li>
+        <li><b>五個煞車點才會叫你</b>：計畫待核准、審查結果不明確、修正輪數用完、步驟失敗、成員離線——其餘全自動交接</li>
+        <li>無論哪種模式，都不會自動 commit／push／merge／tag／release，也不碰任何登入認證</li>
+      </ul>
+    </div>
+
+    <div class="org-chart">
+      <span class="org-node org-node--lead">部門主管 BOSS</span>
+      <span class="org-stem" aria-hidden="true"></span>
+      <div class="org-branches">
+        <div class="org-branch"><b>QUICK CONSULT</b><p>專家建議 → 主管執行（2 步・唯讀）</p></div>
+        <div class="org-branch"><b>QUICK REVIEW</b><p>專家審查 → 主管收尾（2 步・唯讀）</p></div>
+        <div class="org-branch"><b>DEPARTMENT MISSION</b><p>2–5 步任務鏈，執行／審查交替換人</p></div>
+      </div>
+    </div>
+
+    <div class="media-stack media-stack--pair" style="margin-top: 34px;">
+      <figure class="shot">
+        <div class="shot-label"><span>MISSION — 交給部門</span><b>LIVE</b></div>
+        <img src="/assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="交給部門對話框：只填目標與驗收標準，按下確認並交給部門，交由部門主管自動路由到 Consult、Review 或 Mission">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>NEEDS ATTENTION — 需要你決定</span><b>LIVE</b></div>
+        <img src="/assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="部門狀態轉為需要你決定：畫面列出目前卡住的原因與可選擇的下一步">
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================== BLACK WINDOW 與模式切換 ============================== -->
+  <section class="scene-row--full scene-row--flagship" id="modes">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SIGNATURE <i>·</i> 2.3.0</span>
+        <h2>同一支團隊，深入到真正的終端機。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          Pixel 是預設的像素辦公室視角；從頂欄可以切到 Professional 全螢幕工作台，或是直接打開 Black Window——
+          裡面跑的是真正的 Claude Code／Codex CLI session，不是模擬畫面。三種模式共用同一套帳號、模型與安全確認，
+          在任何一種視角下操作，其他視角看到的都是同一個真實狀態。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>持久化 session</b>：daemon 保留真正的終端身分，離開畫面、重新整理、甚至跨瀏覽器分頁都不會弄丟</li>
+        <li><b>每個 Agent pane 都能單獨設定</b>：指定 Claude／Codex、共用或具名帳號、模型與 auto-approve 模式</li>
+        <li><b>窗格自由編排</b>：以 Workspace 分頁整理多個終端，拖曳、縮放、分割、最小化、最大化</li>
+        <li><b>Studio 側欄</b>：<span class="kbd">Alt</span>+<span class="kbd">1</span>–<span class="kbd">9</span> 切換本機 Workspace，唯讀顯示分支、commit、未提交檔案與領先落後摘要</li>
+        <li>終端字體大小可調整並保存；本機語音輸入先轉成可編輯文字，不會自動送出或執行</li>
+      </ul>
+    </div>
+
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>PROFESSIONAL — 全螢幕工作台</span><b>LIVE</b></div>
+        <img src="/assets/mode-professional.webp" width="1180" height="900" loading="lazy" decoding="async" alt="Professional Workbench 畫面：左側是 Report Index 與快速切換鈕，中間是選定 NPC 的工作串流區，下方是指令輸入列">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>BLACK WINDOW — 真正的 CLI</span><b>LIVE</b></div>
+        <img src="/assets/mode-blackwindow.webp" width="1600" height="1000" loading="lazy" decoding="async" alt="Black Window 畫面：左側是 Workspaces 分頁清單，右側是一個真正的 Codex CLI 終端窗格，正顯示 hooks 信任確認提示">
+      </figure>
+    </div>
+    <p class="mode-note">▲ 實際畫面直出，NPC 與工作資料夾為展示用的示範內容。</p>
+  </section>
+
+  <!-- ============================== 展示窗 ============================== -->
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>ASSIGN — 一號機 收到任務</span><b>REC</b></div>
+        <img src="/assets/task.webp" width="1330" height="880" loading="lazy" decoding="async" alt="錄影：派任務給 NPC 後，它從座位走到讀檔案工位開始工作，頭上顯示執行秒數與輸出氣泡，完成時鄰座同事歡呼">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 01 <i>·</i> 派任務</span>
+      <h2>派下去，然後看著它走去上班。</h2>
+      <p>
+        在輸入列打一句話，NPC 就動身走到對應的工位——讀檔案、寫程式、上網查、跑終端機。
+        名牌上跳著已執行秒數，頭上的氣泡即時串流它正在說什麼。
+      </p>
+      <ul class="scene-points">
+        <li><b>工位＝工具</b>：角色站在哪，就代表 agent 正在用什麼</li>
+        <li><b>完成慶祝</b>：任務成功時鄰桌同事會轉頭歡呼，失敗則飄出小烏雲</li>
+        <li>這段錄影是真實任務的螢幕錄製，沒有剪接</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack">
+        <figure class="shot">
+          <div class="shot-label"><span>APPROVAL — 等待核准中</span><b>LIVE</b></div>
+          <img src="/assets/approval.webp" width="920" height="760" loading="lazy" decoding="async" alt="特寫：一號機頭上浮著「允許執行這個指令？」的核准列，提供拒絕、本次皆允許、允許三個按鈕，名牌顯示已等待 9 秒">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 02 <i>·</i> 核准</span>
+      <h2>誰在等你，一眼就看到。</h2>
+      <p>
+        Agent 要執行指令時，NPC 會停下來、頭上冒出「?」原地踱步，
+        核准按鈕直接浮在角色旁邊。不用切視窗、不用翻日誌——遠遠掃一眼就知道誰卡住了。
+      </p>
+      <ul class="scene-points">
+        <li><b>三個選擇</b>：拒絕／本次皆允許／允許這一次</li>
+        <li><b>三段自動核准</b>：關閉、安全（唯讀白名單放行）、完全（危險指令仍強制確認）</li>
+        <li>每個 NPC 獨立設定，互不影響</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>RADIAL — 右鍵選單</span><b>LIVE</b></div>
+        <img src="/assets/radial.webp" width="974" height="719" loading="lazy" decoding="async" alt="對一號機按右鍵，五顆圓形圖示按鈕沿弧線展開——重新命名、個性職務、像素造型、切換房間、移除人員；貓正好走過左邊的地板">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 03 <i>·</i> 圓弧選單</span>
+      <h2>右鍵一按，管理這個角色的一切。</h2>
+      <p>
+        對任何 NPC 按右鍵，就能重新命名、設定 persona、換造型、切換房間，或安全移除；
+        也能請同一工作位置的另一位 NPC 進行唯讀 Consult 或 Review。需要更完整的分工，
+        直接建立一個<a href="#departments">部門</a>就好。
+      </p>
+      <ul class="scene-points">
+        <li><b>個性系統</b>：給 NPC 一個持久的角色設定（「你是前端 QA，只提問題不改 code」），透過各 CLI 原生機制注入，重啟不會忘</li>
+        <li><b>像素工作坊</b>：換造型、上傳自己的動態 GIF 頭像</li>
+        <li><b>跨 LLM 交接</b>：Claude 做到一半，整理好進度摘要交給 Codex 接手（或反過來）</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <figure class="shot">
+        <div class="shot-label"><span>CAMERA — 縮放與平移</span><b>REC</b></div>
+        <img src="/assets/camera.webp" width="1330" height="880" loading="lazy" decoding="async" alt="錄影：使用左下角拉桿放大辦公室、拖曳平移視角，再一鍵恢復預設構圖">
+      </figure>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 04 <i>·</i> 鏡頭</span>
+      <h2>你的辦公室，你的視角。</h2>
+      <p>
+        拖曳空白處平移、滾輪或左下拉桿縮放——整數倍率，像素永遠銳利。
+        雙擊地板或按 <span class="kbd">⟳</span> 一鍵回到預設構圖。
+      </p>
+      <ul class="scene-points">
+        <li>NPC 一多，放大追某一個、拉遠看全局</li>
+        <li>名牌、氣泡、核准列全部跟著鏡頭走</li>
+        <li>平板可用：單指拖曳平移＋拉桿縮放</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 05 <i>·</i> 任務日誌</span>
+        <h2>每一步，都攤在陽光下。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          左圖是進行中：agent 說明它要查什麼，WebSearch 的輸入輸出逐字串流。
+          右圖是收工：最終回覆以 Markdown 完整渲染——清單、連結、資料來源，外加工具活動數與總耗時。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>兩種視角</b>：摘要模式只看結論，活動模式攤開每一次工具呼叫</li>
+        <li><b>可搜尋</b>：跨任務全文搜尋目前 NPC 的日誌；程式碼區塊一鍵複製</li>
+        <li><b>桌面通知</b>：切去別的視窗時，任務完成或等核准會發系統通知（預設關閉）</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>執行中 — 工具串流</span><b>LIVE</b></div>
+        <img src="/assets/log-activity.webp" width="401" height="679" loading="lazy" decoding="async" alt="任務日誌執行中：五號機說明查詢計畫，下方即時串流 WebSearch 工具的 INPUT 與 OUTPUT JSON 內容">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>完成 — FINAL RESPONSE</span><b>LIVE</b></div>
+        <img src="/assets/log-result.webp" width="401" height="580" loading="lazy" decoding="async" alt="任務完成：FINAL RESPONSE 以 Markdown 渲染清單與連結，標示工具活動 3 項與 36.1 秒耗時">
+      </figure>
+    </div>
+  </div>
+
+  <div class="scene-row">
+    <div class="scene-media">
+      <div class="media-stack media-stack--pair">
+        <figure class="shot">
+          <div class="shot-label"><span>SHIFT CHANGE — 交接班</span><b>LIVE</b></div>
+          <img src="/assets/handoff.webp" width="703" height="693" loading="lazy" decoding="async" alt="交接班對話框：五號機從 Codex 交接給 Claude Code，顯示目標 LLM 的工作能量條，並列出跨 LLM 交接的注意事項與確認核取方塊">
+        </figure>
+        <figure class="shot">
+          <div class="shot-label"><span>OFFICE POWER — 全域能量</span><b>LIVE</b></div>
+          <img src="/assets/energy.webp" width="450" height="472" loading="lazy" decoding="async" alt="全域工作能量面板：Claude Code 顯示本次時段、本週與模型層級的用量條與重置時間，Codex 顯示七天用量">
+        </figure>
+      </div>
+    </div>
+    <div class="scene-copy">
+      <span class="eyebrow">SCENE 06 <i>·</i> 跨 LLM 交接與能量</span>
+      <h2>換一顆大腦，不丟工作。</h2>
+      <p>
+        Codex 額度見底、或這題 Claude 更擅長？替 NPC 辦交接班：
+        系統先整理目前的工作摘要，再交給另一個 LLM 的新 session 接手。
+      </p>
+      <ul class="scene-points">
+        <li><b>全域工作能量</b>：頂欄常駐兩家 CLI 的即時用量，點開看本次時段／本週／各層級的重置時間</li>
+        <li><b>先看能量再換</b>：交接前顯示目標 LLM 的即時用量，避免換過去馬上斷糧</li>
+        <li><b>誠實的告知</b>：明確列出跨 LLM 會遺漏什麼（工具狀態、待核准操作），勾選確認才執行；Claude ⇄ Codex 雙向皆可</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="scene-row scene-row--full">
+    <div class="scene-head">
+      <div>
+        <span class="eyebrow">SCENE 07 <i>·</i> 像素工作坊</span>
+        <h2>你的隊員，長你想要的樣子。</h2>
+        <p style="margin: 0; color: var(--dim); font-size: 15px;">
+          五位官方隊員造型直接換，或上傳自己的像素 GIF——動畫原樣保留，
+          自動適配 NPC 在辦公室裡的尺寸，走路、工作、歡呼動作照常。
+        </p>
+      </div>
+      <ul class="scene-points">
+        <li><b>GIF 動態頭像</b>：最大 320×320、120 幀，依原始幀時間循環播放</li>
+        <li><b>不怕手滑</b>：切換官方造型不會刪除你的自訂角色，隨時換回來</li>
+        <li>搭配個性系統，讓「財報分析師」看起來真的像財報分析師</li>
+      </ul>
+    </div>
+    <div class="media-stack media-stack--pair">
+      <figure class="shot">
+        <div class="shot-label"><span>OFFICIAL — 官方隊員</span><b>LIVE</b></div>
+        <img src="/assets/workshop-official.webp" width="796" height="628" loading="lazy" decoding="async" alt="像素工作坊官方分頁：五位官方隊員造型可選——經典隊員、霓虹工程師、訊號分析師、火花設計師、夜班維運">
+      </figure>
+      <figure class="shot">
+        <div class="shot-label"><span>CUSTOM — 自訂 GIF</span><b>LIVE</b></div>
+        <img src="/assets/workshop-custom.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="像素工作坊自訂上傳分頁：預覽藍色動態像素角色，右側列出 GIF 尺寸、檔案、影格與解碼限制">
+      </figure>
+    </div>
+  </div>
+
+</main>
+
+<!-- ============================== 安全性 ============================== -->
+<section class="security">
+  <div class="wrap">
+    <span class="eyebrow">SECURITY MODEL</span>
+    <p class="headline">你的 API key 很安全——<em>因為根本沒有 API key。</em></p>
+    <p>
+      Pixel Crew 不是另一個要你貼金鑰的服務。它編排與視覺化的，是你機器上<strong>已經安裝、已經登入</strong>的官方
+      CLI。認證、額度、帳單全部留在原本的工具裡，Pixel Crew 一概碰不到。
+    </p>
+    <div class="sec-grid">
+      <div class="sec-item">
+        <b>只綁 localhost</b>
+        <p>伺服器監聽 127.0.0.1，不對外開放；瀏覽器與伺服器之間走本機 WebSocket。</p>
+      </div>
+      <div class="sec-item">
+        <b>CLI 原生認證</b>
+        <p>登入狀態由 <code>claude</code>／<code>codex</code> 自己管理，Pixel Crew 只呼叫、不儲存任何憑證。</p>
+      </div>
+      <div class="sec-item">
+        <b>資料留在本機</b>
+        <p>對話歷史、NPC 設定、頭像全部存在本機 SQLite 與資料夾，沒有任何雲端上傳或遙測。</p>
+      </div>
+      <div class="sec-item">
+        <b>危險指令攔截</b>
+        <p>即使開啟完全自動核准，<code>rm -rf</code>、磁碟操作等危險指令仍會強制跳出確認；部門的 Mission 也不會自動 commit／push／merge／tag／release。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew 是獨立的非官方開源專案，與 Anthropic、OpenAI 均無隸屬、授權、背書或贊助關係。
+      「Claude」、「Claude Code」、「Codex」及相關商標屬於其各自所有者。
+      本工具僅編排與視覺化使用者自行安裝並登入的官方 CLI；使用各 CLI 請遵守其服務條款。
+      頁面中的所有截圖與錄影均為實際軟體畫面。
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

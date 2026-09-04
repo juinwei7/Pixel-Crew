@@ -16,6 +16,17 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 The work itself is still carried out by the **official CLIs already installed on your machine**. Pixel Crew manages the sessions, normalizes the streaming events, and renders the interface — it never asks you to paste an API key; authentication and usage are entirely governed by your local Claude Code or Codex CLI configuration.
 
+![Pixel Crew pixel office with multiple Claude Code and Codex NPCs moving between workstations](./PixelCrew/assets/task.webp)
+
+## Three ways to work
+
+| Pixel Office | Professional Workbench | Black Window (v2.3.0) |
+| --- | --- | --- |
+| See NPCs move between stations while tasks and approvals stream in real time. | Read, search, compare, and continue reports across managed Studios and up to four panes. | Arrange real, daemon-backed Claude Code and Codex terminals whose identity and layout survive navigation and reloads. |
+| ![Pixel Crew pixel office in motion](./PixelCrew/assets/task.webp) | ![Pixel Crew Professional Workbench](./PixelCrew/assets/mode-professional.webp) | ![Pixel Crew Black Window with a real Codex CLI](./PixelCrew/assets/mode-blackwindow.webp) |
+
+Version **2.3.0** also adds conflict-safe layout synchronization across browser tabs, per-terminal account/model/permission/font controls, editable local voice input, shared global Markdown memory, and consistent keyboard-accessible in-app confirmations. See the [full v2.3.0 release notes](https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0) or explore the [visual product tour](https://pixelcrew.weibuilds.com/en/features/).
+
 ## Features
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, freely switchable at any time.
