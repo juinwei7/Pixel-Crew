@@ -11,6 +11,7 @@ export async function writeBackupExport(input: {
   dataDirectory: string;
   dbPath: string;
   avatarDir: string;
+  muxDbPath?: string;
   id: string;
   password?: string;
   flush(): void;
@@ -21,11 +22,11 @@ export async function writeBackupExport(input: {
   try {
     input.flush();
     input.checkpoint();
-    stageExportDirectory({ dbPath: input.dbPath, avatarDir: input.avatarDir }, stagingDir);
+    stageExportDirectory({ dbPath: input.dbPath, avatarDir: input.avatarDir, muxDbPath: input.muxDbPath }, stagingDir);
     const date = new Date().toISOString().slice(0, 10);
     if (password) {
       const archivePath = join(stagingDir, "backup.tar.gz");
-      await tar.create({ gzip: true, cwd: stagingDir, portable: true, file: archivePath } as any, ["manifest.json", "db", "avatars"]);
+      await tar.create({ gzip: true, cwd: stagingDir, portable: true, file: archivePath } as any, ["manifest.json", "db", "avatars", "mux"]);
       res.set({
         "Content-Type": "application/octet-stream",
         "Content-Disposition": `attachment; filename="pixel-crew-backup-${date}.pcbak"`,
@@ -39,7 +40,7 @@ export async function writeBackupExport(input: {
       "Content-Disposition": `attachment; filename="pixel-crew-backup-${date}.tar.gz"`,
       "X-Content-Type-Options": "nosniff",
     });
-    const stream = tar.create({ gzip: true, cwd: stagingDir, portable: true } as any, ["manifest.json", "db", "avatars"]);
+    const stream = tar.create({ gzip: true, cwd: stagingDir, portable: true } as any, ["manifest.json", "db", "avatars", "mux"]);
     stream.on("error", (error: unknown) => { console.warn("Backup export stream failed:", (error as Error).message); res.destroy(error as Error); });
     res.on("close", () => rmSync(stagingDir, { recursive: true, force: true }));
     (stream as unknown as NodeJS.ReadableStream).pipe(res);

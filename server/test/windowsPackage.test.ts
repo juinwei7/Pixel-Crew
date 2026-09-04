@@ -109,6 +109,11 @@ test("Windows release ships a self-contained native Pixel Crew control center", 
   assert.match(packager, /PixelCrewPayload/);
   assert.match(packager, /auditSingleFileRelease/);
   assert.match(packager, /pixel-crew-tray\.ps1/);
+  assert.match(packager, /node-pty["),\s]/);
+  assert.match(packager, /prebuilds["),\s]/);
+  assert.match(packager, /win32-x64/);
+  assert.match(packager, /conpty\.node/);
+  assert.match(packager, /winpty-agent\.exe/);
 });
 
 test("server restart uses graceful shutdown after the detached launcher starts", () => {

@@ -15,6 +15,7 @@ const budgets = [
   // RemoteAccessModal's own feature code stays under the generic lazy cap
   // below instead of smuggling ~420 KiB of vendor library through it.
   { name: "three.js vendor", match: /^three-vendor-[\w-]+\.js$/, max: 460 * 1024 },
+  { name: "xterm vendor", match: /^xterm-vendor-[\w-]+\.js$/, max: 400 * 1024 },
 ];
 
 const errors = [];

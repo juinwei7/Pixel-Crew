@@ -18,6 +18,8 @@ import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
+import { attachTerminalSocket } from "./terminal.js";
+import { snapshotTerminalMuxDatabase, terminalMuxRequest } from "./terminalMuxClient.js";
 import { config } from "./config.js";
 import { configuredDefaultModels } from "./defaultModels.js";
 import { readWorkspaceGitSummary } from "./workspaceGit.js";
@@ -2128,6 +2130,19 @@ function normalizeManagedWorkspacePath(input: unknown): string {
   return canonical;
 }
 
+/** A terminal may outlive the worker that originally authorized its workspace.
+ * Permit reconnecting only when the requested path matches that terminal's
+ * durable mux record; never widen this into a general filesystem allowance. */
+async function normalizeManagedTerminalWorkspacePath(input: unknown, terminalTabId: string): Promise<string> {
+  const canonical = normalizeWorkspacePath(input);
+  const managedPaths = [config.targetRepoPath, ...[...workers.values()].map((worker) => worker.runner.workspacePath)];
+  if (managedPaths.some((path) => sameWorkspace(path, canonical))) return canonical;
+  if (!/^terminal-[a-zA-Z0-9-]{8,120}$/.test(terminalTabId)) throw new Error(t("無效的終端分頁"));
+  const record = await terminalMuxRequest({ type: "terminal_get", tabId: terminalTabId });
+  if (typeof record.workspacePath === "string" && sameWorkspace(record.workspacePath, canonical)) return canonical;
+  throw new Error(t("只能管理目前已加入 Pixel Crew 的工作資料夾"));
+}
+
 function sameWorkspacePath(left: string, right: string): boolean {
   return sameWorkspace(left, right);
 }
@@ -2485,6 +2500,10 @@ wss.on("connection", (socket) => {
   socket.on("error", (error) => {
     console.error("[wss] client socket error:", error);
   });
+  // The black-window mode opens a second websocket for an explicit, raw shell.
+  // Keep it separate from worker events so CLI output can never be mistaken for
+  // an Agent event or become part of an NPC conversation.
+  attachTerminalSocket(socket, normalizeManagedTerminalWorkspacePath);
   for (const task of store.listBossTasksByStatus(["ready", "running"])) {
     // One malformed persisted boss task must not crash-loop the server on
     // every reconnect (crash → supervisor restart → client reconnects →
@@ -2570,6 +2589,40 @@ app.patch("/api/departments/:departmentId", (req, res) => {
 
 app.get("/api/workspaces", (_req, res) => {
   res.json({ defaultPath: config.targetRepoPath, paths: recentWorkspacePaths() });
+});
+
+// The black-window tree belongs to the mux daemon, not to one browser tab.
+// This also makes a normal web-server restart harmless to the engineer's
+// page/pane topology.
+app.get("/api/terminal-mux/layout", async (_req, res) => {
+  // Unlike ordinary GETs, this route can start the daemon. Once restore has
+  // released mux ownership, no request may recreate it before the DB swap.
+  if (maintenanceMode) { res.status(503).json({ error: t("還原正在進行中") }); return; }
+  try {
+    const result = await terminalMuxRequest({ type: "layout_get" });
+    res.json({ layout: typeof result.layout === "string" ? result.layout : null, version: typeof result.version === "number" ? result.version : 0 });
+  } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : "Terminal mux unavailable" }); }
+});
+
+app.put("/api/terminal-mux/layout", async (req, res) => {
+  try {
+    const result = await terminalMuxRequest({ type: "layout_save", layout: req.body?.layout, expectedVersion: req.body?.expectedVersion });
+    if (result.type === "error") { res.status(400).json({ error: result.message }); return; }
+    if (result.type === "layout_conflict") { res.status(409).json({ layout: result.layout, version: result.version }); return; }
+    const layout = JSON.stringify(req.body?.layout);
+    const version = typeof result.version === "number" ? result.version : 0;
+    broadcast({ type: "terminal_mux_layout", layout, version });
+    res.json({ ok: true, version });
+  } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : "Terminal mux unavailable" }); }
+});
+
+app.delete("/api/terminal-mux/tabs/:tabId", async (req, res) => {
+  if (!/^terminal-[a-zA-Z0-9-]{8,120}$/.test(req.params.tabId)) { res.status(400).json({ error: "Invalid terminal tab" }); return; }
+  try {
+    const result = await terminalMuxRequest({ type: "destroy", tabId: req.params.tabId });
+    if (result.type === "error") { res.status(400).json({ error: result.message }); return; }
+    res.json({ ok: true });
+  } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : "Terminal mux unavailable" }); }
 });
 
 app.get("/api/workspaces/git", async (req, res) => {
@@ -3525,10 +3578,23 @@ app.put("/api/workers/:id/avatar", async (req, res) => {
 });
 
 async function exportBackup(res: express.Response, password?: string): Promise<void> {
-  await writeBackupExport({
-    response: res, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir,
-    id: randomUUID(), password, flush: () => store.flush(), checkpoint: () => store.checkpoint(),
-  });
+  // Export also ensures/contacts the mux daemon. Do not let a concurrent
+  // export recreate that owner after restore has deliberately shut it down.
+  if (maintenanceMode) { res.status(503).json({ error: t("還原正在進行中") }); return; }
+  // A raw copy of the live mux db (+WAL/SHM) could straddle a write the
+  // still-running daemon makes between checkpoint and copy. Ask the daemon
+  // for an atomic VACUUM INTO snapshot instead, and export that file.
+  const muxSnapshotPath = join(config.dataDirectory, `.mux-export-${randomUUID()}.sqlite`);
+  let tookSnapshot = false;
+  try {
+    tookSnapshot = await snapshotTerminalMuxDatabase(muxSnapshotPath);
+    await writeBackupExport({
+      response: res, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir,
+      muxDbPath: tookSnapshot ? muxSnapshotPath : undefined, id: randomUUID(), password, flush: () => store.flush(), checkpoint: () => store.checkpoint(),
+    });
+  } finally {
+    rmSync(muxSnapshotPath, { force: true });
+  }
 }
 
 app.get("/api/backup/export", async (_req, res) => { await exportBackup(res); });
@@ -3569,7 +3635,10 @@ app.post("/api/backup/import/commit", async (req, res) => {
     setMaintenance: (value) => { maintenanceMode = value; },
     stopWorkers: () => { for (const worker of workers.values()) worker.runner.stop(); for (const client of wss.clients) client.terminate(); },
     flush: () => store.flush(), checkpoint: () => store.checkpoint(), closeStore: () => store.close(),
-    discardPending: discardPendingImport, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir,
+    discardPending: discardPendingImport, dataDirectory: config.dataDirectory, dbPath: config.dbPath, avatarDir: config.avatarDir, muxDbPath: join(config.dataDirectory, "terminal-mux.sqlite"),
+    // terminalMuxRequest starts the optional daemon when absent, so a failure
+    // here means ownership was not safely released and restore must abort.
+    stopTerminalMux: async () => { await terminalMuxRequest({ type: "shutdown" }); },
     exit: (code) => process.exit(code),
   });
 });

@@ -53,6 +53,14 @@ execFileSync("npm", [
   "--ignore-scripts",
 ], { cwd: packagedApp, stdio: "inherit" });
 
+// node-pty ships a small helper alongside its macOS native module. The
+// production install intentionally uses --ignore-scripts, so restore the
+// executable bit that node-pty's postinstall would normally set. Without it
+// the embedded black-window terminal cannot create an operating-system PTY.
+const ptySpawnHelper = join(packagedApp, "node_modules", "node-pty", "prebuilds", `darwin-${arch}`, "spawn-helper");
+await requireFile(ptySpawnHelper, "node-pty spawn helper");
+await chmod(ptySpawnHelper, 0o755);
+
 const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 await writeFile(join(contents, "Info.plist"), infoPlist(manifest.version ?? "0.0.0", arch));
 

@@ -6,7 +6,7 @@ export type CrewFilter = "all" | "working" | "attention" | "claude" | "codex" | 
 export type FocusPaneLayout = 1 | 2 | 3 | 4;
 
 export type UiPreferencesV2 = {
-  version: 6;
+  version: 7;
   taskLogWidth: number;
   taskLogHeight: number;
   taskLogView: TaskLogView;
@@ -16,6 +16,7 @@ export type UiPreferencesV2 = {
   reducedDetail: boolean;
   notificationsEnabled: boolean;
   taskFocusMode: boolean;
+  blackWindowMode: boolean;
   focusStudioLastWorkerIds: Record<string, string>;
   focusStudiosCollapsed: boolean;
   focusPaneLayout: FocusPaneLayout;
@@ -25,7 +26,7 @@ export const UI_PREFERENCES_KEY = "pixel-crew:ui-preferences-v2";
 export const COMPACT_OFFICE_MAX_WIDTH = 1440;
 
 export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
-  version: 6,
+  version: 7,
   taskLogWidth: 600,
   taskLogHeight: 62,
   taskLogView: "summary",
@@ -35,6 +36,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferencesV2 = {
   reducedDetail: false,
   notificationsEnabled: false,
   taskFocusMode: false,
+  blackWindowMode: false,
   focusStudioLastWorkerIds: {},
   focusStudiosCollapsed: true,
   focusPaneLayout: 1,
@@ -91,7 +93,7 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
     ? raw.taskLogWidth
     : DEFAULT_UI_PREFERENCES.taskLogWidth;
   return {
-    version: 6,
+    version: 7,
     taskLogWidth: clampTaskLogWidth(width, viewportWidth),
     taskLogHeight: clampTaskLogHeight(
       typeof raw.taskLogHeight === "number" ? raw.taskLogHeight : DEFAULT_UI_PREFERENCES.taskLogHeight,
@@ -115,6 +117,9 @@ export function parseUiPreferences(value: unknown, viewportWidth?: number): UiPr
     taskFocusMode: typeof raw.taskFocusMode === "boolean"
       ? raw.taskFocusMode
       : DEFAULT_UI_PREFERENCES.taskFocusMode,
+    blackWindowMode: typeof raw.blackWindowMode === "boolean"
+      ? raw.blackWindowMode
+      : DEFAULT_UI_PREFERENCES.blackWindowMode,
     focusStudioLastWorkerIds: studioWorkerIds(raw.focusStudioLastWorkerIds),
     focusStudiosCollapsed: typeof raw.focusStudiosCollapsed === "boolean"
       ? raw.focusStudiosCollapsed

@@ -3,11 +3,10 @@ import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveM
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
+import { runtimeWsOrigin } from "../runtimeOrigin";
 
-const browserWsOrigin = typeof window !== "undefined"
-  ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`
-  : "ws://localhost:8787";
-const WS_URL = import.meta.env.VITE_WS_URL?.trim() || browserWsOrigin;
+const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
+const WS_URL = runtimeWsOrigin(browserOrigin);
 
 type SystemStatus = {
   platform: string;
@@ -88,7 +87,8 @@ type ServerMessage =
   | { type: "codex_default_login_url"; loginUrl: string | null }
   | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
   | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] }
-  | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] };
+  | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] }
+  | { type: "terminal_mux_layout"; layout: string; version: number };
 
 type WorkerSummary = {
   id: string;
@@ -134,6 +134,7 @@ export function useWorkers() {
   const [order, setOrder] = useState<string[]>([]);
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
   const [globalMemoryEvent, setGlobalMemoryEvent] = useState<{ notes: GlobalMemoryNoteDto[]; seq: number } | null>(null);
+  const [muxLayoutEvent, setMuxLayoutEvent] = useState<{ layout: string; version: number; seq: number } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -422,6 +423,10 @@ export function useWorkers() {
         }
         case "global_memory_updated": {
           setGlobalMemoryEvent((prev) => ({ notes: data.notes, seq: (prev?.seq ?? 0) + 1 }));
+          break;
+        }
+        case "terminal_mux_layout": {
+          setMuxLayoutEvent((prev) => ({ layout: data.layout, version: data.version, seq: (prev?.seq ?? 0) + 1 }));
           break;
         }
         case "workflow_library_updated": {
@@ -1310,6 +1315,7 @@ export function useWorkers() {
     order,
     mcpLoginResult,
     globalMemoryEvent,
+    muxLayoutEvent,
     activeId,
     setActiveId,
     targetRepoPath,

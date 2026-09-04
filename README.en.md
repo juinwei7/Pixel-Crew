@@ -217,8 +217,8 @@ Config file: `web/.env`
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `VITE_SERVER_URL` | Same-origin / Vite proxy | Only needed if you deliberately run the server on a different loopback port |
-| `VITE_WS_URL` | Same-origin / Vite proxy | Only needed if you deliberately run the server on a different loopback port |
+| `VITE_SERVER_URL` | Same-origin / Vite proxy | Development only; needed only when deliberately using another loopback port |
+| `VITE_WS_URL` | Same-origin / Vite proxy | Development only; needed only when deliberately using another loopback port |
 
 ## Local data & security
 

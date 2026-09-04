@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
 import { readCurrentVersion } from "./updateCheck.js";
 
-export const BACKUP_FORMAT_VERSION = 1;
+export const BACKUP_FORMAT_VERSION = 2;
 
 export type BackupManifest = {
   formatVersion: number;
@@ -18,7 +18,7 @@ export type BackupManifest = {
 // configured on the *importing* machine, never to a name embedded here.
 // Mirrors platform/paths.ts's migrateLegacyData() copy technique.
 export function stageExportDirectory(
-  paths: { dbPath: string; avatarDir: string },
+  paths: { dbPath: string; avatarDir: string; muxDbPath?: string },
   stagingDir: string,
 ): void {
   ensurePrivateDirectorySync(stagingDir);
@@ -33,6 +33,11 @@ export function stageExportDirectory(
   const avatarsDir = join(stagingDir, "avatars");
   if (existsSync(paths.avatarDir)) cpSync(paths.avatarDir, avatarsDir, { recursive: true, errorOnExist: true });
   else ensurePrivateDirectorySync(avatarsDir); // never-uploaded-an-avatar case — archive still has a stable shape.
+  const muxDir = join(stagingDir, "mux"); ensurePrivateDirectorySync(muxDir);
+  if (paths.muxDbPath && existsSync(paths.muxDbPath)) {
+    cpSync(paths.muxDbPath, join(muxDir, "terminal-mux.sqlite"), { errorOnExist: true });
+    for (const suffix of ["-wal", "-shm"]) if (existsSync(`${paths.muxDbPath}${suffix}`)) cpSync(`${paths.muxDbPath}${suffix}`, join(muxDir, `terminal-mux.sqlite${suffix}`), { errorOnExist: true });
+  }
   const manifest: BackupManifest = {
     formatVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),

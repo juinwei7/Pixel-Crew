@@ -38,7 +38,7 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /health-dot--ok/);
 });
 
-test("top bar exposes an accessible Pixel / Professional mode switch", () => {
+test("top bar exposes an accessible Pixel / Professional / Black Window mode switch", () => {
   const worker = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
   const html = renderToStaticMarkup(<TopBar
     active={worker}
@@ -58,11 +58,13 @@ test("top bar exposes an accessible Pixel / Professional mode switch", () => {
     onResetUi={() => {}}
     professionalMode
     onProfessionalModeChange={() => {}}
+    onBlackWindowModeChange={() => {}}
   />);
   assert.match(html, /top-bar__mode-switch/);
   assert.match(html, /aria-label="工作模式"/);
   assert.match(html, />像素</);
   assert.match(html, />專業</);
+  assert.match(html, />黑窗</);
   assert.match(html, /aria-pressed="true"/);
 });
 

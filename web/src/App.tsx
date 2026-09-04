@@ -38,6 +38,7 @@ import type { AutoApproveMode, ProviderId } from "./types";
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
 })));
+const BlackWindowWorkspace = lazy(() => import("./components/BlackWindowWorkspace").then((module) => ({ default: module.BlackWindowWorkspace })));
 // These dialogs are all opened by an explicit user action. Keeping them out of
 // the first-load graph makes the office usable sooner without changing any
 // interaction once a dialog is requested.
@@ -80,7 +81,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
@@ -212,7 +213,8 @@ export function App() {
   const [taskSearchOpen, setTaskSearchOpen] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
-  const taskFocusMode = preferences.taskFocusMode;
+  const blackWindowMode = preferences.blackWindowMode;
+  const taskFocusMode = preferences.taskFocusMode && !blackWindowMode;
   const [focusPhoneViewport, setFocusPhoneViewport] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600);
   const focusPhone = focusPhoneViewport;
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
@@ -557,6 +559,15 @@ export function App() {
     updatePreferences({ taskFocusMode: false });
   }, [updatePreferences]);
 
+  const enterBlackWindowMode = useCallback(() => {
+    focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    updatePreferences({ taskFocusMode: false, blackWindowMode: true });
+  }, [updatePreferences]);
+
+  const exitBlackWindowMode = useCallback(() => {
+    updatePreferences({ blackWindowMode: false });
+  }, [updatePreferences]);
+
   const shortcuts = useMemo(() => ({
     onCommandPalette: () => setCommandPaletteOpen(true),
     onShortcutsHelp: () => setShortcutsHelpOpen((open) => !open),
@@ -564,6 +575,8 @@ export function App() {
     onPaneCycle: (direction: 1 | -1) => taskFocusMode && cycleFocusPane(direction),
     onToggleTaskLog: () => taskFocusMode
       ? exitTaskFocusMode()
+      : blackWindowMode
+        ? exitBlackWindowMode()
       : updatePreferences({ taskLogOpen: !preferences.taskLogOpen }),
     onApproval: () => {
       if (!approvalWorker) return;
@@ -600,6 +613,10 @@ export function App() {
       const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || globalMemoryModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
         || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
       if (overlayModalOpen) return;
+      if (blackWindowMode) {
+        exitBlackWindowMode();
+        return;
+      }
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);
       if (layer === "command_palette") {
         setCommandPaletteOpen(false);
@@ -616,7 +633,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, blackWindowMode, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitBlackWindowMode, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -909,11 +926,11 @@ export function App() {
   }
 
   return (
-    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} onKeyDownCapture={trapFocusInReader} style={{
+    <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${blackWindowMode ? "game-root--black-window" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} onKeyDownCapture={trapFocusInReader} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
-      <div className="office-background" aria-hidden={taskFocusMode || undefined} inert={taskFocusMode ? "" : undefined}>
+      <div className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
       <GameCanvas
         workers={workerList}
         activeId={activeId}
@@ -942,7 +959,7 @@ export function App() {
         onResolveApproval={resolveApproval}
       />
       </div>
-      <TopBar
+      {!blackWindowMode && <TopBar
         topBarRef={topBarRef}
         professionalModeButtonRef={professionalModeButtonRef}
         active={active}
@@ -984,9 +1001,24 @@ export function App() {
         updateApplying={updateApplying}
         professionalMode={taskFocusMode}
         onProfessionalModeChange={(enabled) => enabled ? enterTaskFocusMode() : exitTaskFocusMode()}
+        blackWindowMode={blackWindowMode}
+        onBlackWindowModeChange={(enabled) => enabled ? enterBlackWindowMode() : exitBlackWindowMode()}
       >
         {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
-      </TopBar>
+      </TopBar>}
+
+      {blackWindowMode && <Suspense fallback={<div className="system-banner" role="status">{t("正在載入黑窗工作台…")}</div>}><BlackWindowWorkspace
+        defaultWorkspacePath={activeWorkspace}
+        workspacePaths={workspacePaths}
+        accounts={Object.values(accounts)}
+        usage={providerUsage}
+        accountUsage={accountUsage}
+        totalCostUsd={stats.totalCostUsd}
+        onRefreshUsage={refreshUsage}
+        onPixel={exitBlackWindowMode}
+        onProfessional={() => { exitBlackWindowMode(); requestAnimationFrame(enterTaskFocusMode); }}
+        muxLayoutEvent={muxLayoutEvent}
+      /></Suspense>}
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
       {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />{t("Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。")}</div>}

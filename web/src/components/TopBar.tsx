@@ -55,6 +55,8 @@ type Props = {
   updateApplying?: boolean;
   professionalMode?: boolean;
   onProfessionalModeChange?(enabled: boolean): void;
+  blackWindowMode?: boolean;
+  onBlackWindowModeChange?(enabled: boolean): void;
   topBarRef?: Ref<HTMLElement>;
   professionalModeButtonRef?: Ref<HTMLButtonElement>;
   onOpenCodexCommands?(): void;
@@ -101,6 +103,8 @@ export function TopBar({
   updateApplying = false,
   professionalMode = false,
   onProfessionalModeChange,
+  blackWindowMode = false,
+  onBlackWindowModeChange,
   topBarRef,
   professionalModeButtonRef,
   onOpenCodexCommands,
@@ -227,8 +231,9 @@ export function TopBar({
     <header ref={topBarRef} className="top-bar">
       <div className="top-bar__brand"><i />PIXEL CREW</div>
       <div className="top-bar__mode-switch" role="group" aria-label={t("工作模式")}>
-        <button type="button" className={!professionalMode ? "active" : ""} aria-pressed={!professionalMode} onClick={() => onProfessionalModeChange?.(false)}>{t("像素")}</button>
-        <button ref={professionalModeButtonRef} type="button" className={professionalMode ? "active" : ""} aria-pressed={professionalMode} onClick={() => onProfessionalModeChange?.(true)}>{t("專業")}</button>
+        <button type="button" className={!professionalMode && !blackWindowMode ? "active" : ""} aria-pressed={!professionalMode && !blackWindowMode} onClick={() => { onBlackWindowModeChange?.(false); onProfessionalModeChange?.(false); }}>{t("像素")}</button>
+        <button ref={professionalModeButtonRef} type="button" className={professionalMode ? "active" : ""} aria-pressed={professionalMode} onClick={() => { onBlackWindowModeChange?.(false); onProfessionalModeChange?.(true); }}>{t("專業")}</button>
+        <button type="button" className={blackWindowMode ? "active" : ""} aria-pressed={blackWindowMode} onClick={() => onBlackWindowModeChange?.(true)} title={t("直接連到目前工作資料夾的原始 shell；指令會立刻在本機執行")}>{t("黑窗")}</button>
       </div>
       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
       <button className="top-bar__room" type="button" onClick={onRoom} title={activeWorkspace}>
