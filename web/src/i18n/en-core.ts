@@ -126,4 +126,6 @@ export const enCore: Record<string, string> = {
   "無法重新啟動 CLI，原本的 session 已保留。": "Unable to restart the CLI. The existing session was kept.",
   "Agent 無法啟動，請確認 CLI 與帳號登入狀態。": "The Agent could not start. Check the CLI and account sign-in status.",
   "帳號不可用；請重新選擇": "Account unavailable; choose another account",
+  "縮小終端字體": "Decrease terminal font size",
+  "放大終端字體": "Increase terminal font size",
 };
