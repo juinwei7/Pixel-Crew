@@ -9,9 +9,12 @@ function formatBytes(bytes: number): string {
 
 type Props = {
   onTranscript(text: string): void;
+  disabled?: boolean;
+  placement?: "composer" | "toolbar";
+  label?: string;
 };
 
-export function VoiceInputButton({ onTranscript }: Props) {
+export function VoiceInputButton({ onTranscript, disabled = false, placement = "composer", label }: Props) {
   const voice = useVoiceInput();
   if (!voice.supported) return null;
 
@@ -28,13 +31,15 @@ export function VoiceInputButton({ onTranscript }: Props) {
 
   const busy = voice.phase === "checking" || voice.phase === "requesting-permission" || voice.phase === "transcribing";
 
-  return <span className="voice-input">
+  const idleLabel = label ?? t("語音輸入");
+
+  return <span className={`voice-input${placement === "toolbar" ? " voice-input--toolbar" : ""}`}>
     <button
       type="button"
       className={`voice-input__mic${voice.phase === "recording" ? " voice-input__mic--recording" : ""}`}
-      aria-label={voice.phase === "recording" ? t("停止錄音並轉成文字") : t("語音輸入")}
-      title={voice.phase === "recording" ? t("停止錄音並轉成文字") : t("語音輸入")}
-      disabled={busy || voice.phase === "downloading" || voice.phase === "confirm-download"}
+      aria-label={voice.phase === "recording" ? t("停止錄音並轉成文字") : idleLabel}
+      title={voice.phase === "recording" ? t("停止錄音並轉成文字") : idleLabel}
+      disabled={busy || voice.phase === "downloading" || voice.phase === "confirm-download" || (disabled && voice.phase !== "recording")}
       onClick={() => void handleMicClick()}
     >
       {voice.phase === "transcribing" ? "…" : voice.phase === "recording" ? "⏹" : "🎤"}

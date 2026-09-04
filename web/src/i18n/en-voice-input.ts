@@ -1,6 +1,7 @@
 /** VoiceInputButton / useVoiceInput 的英文字典（key = 中文原文）。 */
 export const enVoiceInput: Record<string, string> = {
   "語音輸入": "Voice input",
+  "語音輸入至目前 CLI": "Voice input to current CLI",
   "停止錄音並轉成文字": "Stop recording and transcribe",
   "取消錄音": "Cancel recording",
   "下載本機語音模型": "Download the local voice model",

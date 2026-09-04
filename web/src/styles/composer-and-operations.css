@@ -379,6 +379,10 @@
   position: absolute; right: 0; bottom: calc(100% + 7px); max-width: 260px; padding: 7px 9px;
   border: 1px solid rgba(255, 46, 136,.28); border-radius: 7px; background: rgba(30,8,17,.96); color: #ff9aae; font-size: 10px;
 }
+.voice-input--toolbar .voice-input__panel, .voice-input--toolbar .voice-input__error { top: calc(100% + 8px); bottom: auto; }
+.black-workspace .voice-input__mic { width: 32px; height: 32px; min-height: 32px; padding: 0; border-color: #2b4d45; background: #0d1b18; color: #8cefc0; font-size: 15px; }
+.black-workspace .voice-input__mic:hover:not(:disabled) { border-color: #4fbd9a; background: #123024; color: #bfffd4; }
+.black-workspace .voice-input__panel { border-color: #30433f; background: #0d1415; color: #cfe8dc; }
 .command-composer__queue[aria-expanded="true"] { border-color: rgba(255,203,91,.38); background: rgba(255,203,91,.13); }
 .command-queue { position: absolute; right: 0; bottom: calc(100% + 10px); left: 0; max-height: min(52vh, 420px); overflow: auto; padding: 10px; border: 1px solid rgba(132,171,190,.2); border-radius: 13px; background: rgba(11,18,29,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); color: #aebdca; }
 .command-composer--attachments .command-queue { bottom: calc(100% + 78px); }
