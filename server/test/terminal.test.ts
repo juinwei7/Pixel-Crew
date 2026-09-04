@@ -255,8 +255,11 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     const shuttingDown = await client.waitFor((message) => message.type === "shutting_down");
     assert.equal(shuttingDown.type, "shutting_down");
     // By the time the ack is observed, the daemon must have already
-    // released its socket/pipe and database file — not "soon after".
-    assert.equal(existsSync(socketPath), process.platform === "win32");
+    // released its database file — not "soon after". Windows named-pipe
+    // teardown is asynchronous relative to the ack write, so existsSync on
+    // the pipe path is racy there; the later rejected reconnect is what
+    // actually proves the pipe is gone on every platform.
+    if (process.platform !== "win32") assert.equal(existsSync(socketPath), false);
     await exited;
     await waitForProcessExit(ptyPid);
     socket.destroy();
