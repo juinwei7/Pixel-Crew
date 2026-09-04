@@ -6,7 +6,7 @@ import { EnergyHud } from "./EnergyHud";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { t } from "../i18n";
 
-type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
+type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null; confirm(message: string, tone?: "default" | "danger"): Promise<boolean>; notify(message: string, tone?: "ok" | "error" | "info"): void };
 type DragState = { id: string; kind: "move" | "resize"; edge?: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"; startX: number; startY: number; window: BlackWindow };
 type AdvancedDraft = { model: string; autoApproveMode: AutoApproveMode };
 
@@ -41,7 +41,7 @@ async function destroyTerminalTab(id: string): Promise<boolean> {
 function providerLabel(provider: ProviderId): string { return provider === "codex" ? "Codex" : "Claude"; }
 function authenticated(status: ProviderAuthState["status"] | undefined): boolean { return status === "authenticated"; }
 
-export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAuth, usage, accountUsage, totalCostUsd, onRefreshUsage, onOpenAccounts, onPixel, onProfessional, muxLayoutEvent }: Props) {
+export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAuth, usage, accountUsage, totalCostUsd, onRefreshUsage, onOpenAccounts, onPixel, onProfessional, muxLayoutEvent, confirm, notify }: Props) {
   const [layout, setLayout] = useState<BlackWindowLayout>(() => loadBlackWindowLayout(defaultWorkspacePath));
   const [muxHydrated, setMuxHydrated] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
@@ -175,9 +175,9 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     const workspace = layout.workspaces.find((item) => item.id === workspaceId);
     const panes = layout.windows.filter((item) => item.workspaceId === workspaceId);
     if (!workspace) return;
-    if (!window.confirm(t("刪除「{name}」與其中 {count} 個 CLI session？這無法復原。", { name: workspace.title, count: panes.length }))) return;
+    if (!(await confirm(t("刪除「{name}」與其中 {count} 個 CLI session？這無法復原。", { name: workspace.title, count: panes.length }), "danger"))) return;
     const destroyed = await destroyWorkspaceTerminalTabs(panes.map((pane) => pane.id), destroyTerminalTab);
-    if (!destroyed) { window.alert(t("刪除 Workspace 的 CLI 失敗，請再試一次。")); return; }
+    if (!destroyed) { notify(t("刪除 Workspace 的 CLI 失敗，請再試一次。"), "error"); return; }
     for (const pane of panes) terminalRefs.current.delete(pane.id);
     setLayout((current) => {
       const destroyedIds = new Set(panes.map((pane) => pane.id));
@@ -211,7 +211,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     // WS message did) can leave an orphaned, unreachable PTY behind if that
     // pane's socket happened to be dead or mid-reconnect at the time.
     void (terminalRefs.current.get(id)?.destroy() ?? Promise.resolve(true)).then((ok) => {
-      if (!ok) { window.alert(t("關閉 CLI 失敗，請再試一次。")); return; }
+      if (!ok) { notify(t("關閉 CLI 失敗，請再試一次。"), "error"); return; }
       terminalRefs.current.delete(id);
       setLayout((current) => {
         const windows = current.windows.filter((entry) => entry.id !== id);
@@ -297,13 +297,13 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     const confirmation = reason === "account"
       ? t("切換為「{account}」需要結束目前 Agent session 並重新啟動。確定繼續？", { account: nextLabel })
       : t("套用新的進階設定需要結束目前 Agent session 並重新啟動。確定繼續？");
-    if (!window.confirm(confirmation)) return false;
+    if (!(await confirm(confirmation))) return false;
     const oldId = selected.id;
     setRestartingId(oldId);
     const destroyed = await (terminalRefs.current.get(oldId)?.destroy() ?? Promise.resolve(false));
     if (!destroyed) {
       setRestartingId(null);
-      window.alert(t("無法重新啟動 CLI，原本的 session 已保留。"));
+      notify(t("無法重新啟動 CLI，原本的 session 已保留。"), "error");
       return false;
     }
     terminalRefs.current.delete(oldId);
@@ -333,7 +333,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     if (command) {
       const launched = await terminalRefs.current.get(selected.id)?.launch(command);
       if (launched) update(selected.id, { agentStarted: true });
-      else window.alert(t("Agent 無法啟動，請確認 CLI 與帳號登入狀態。"));
+      else notify(t("Agent 無法啟動，請確認 CLI 與帳號登入狀態。"), "error");
     }
   };
 

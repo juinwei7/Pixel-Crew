@@ -8,6 +8,7 @@ import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
 import { TaskComposer } from "./components/TaskComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
+import { ConfirmDialog, type ConfirmTone } from "./components/ConfirmDialog";
 import { EnergyHud, FocusEnergy } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -234,6 +235,8 @@ export function App() {
   const [composerHost, setComposerHost] = useState<HTMLDivElement | null>(null);
   const setComposerHostRef = useCallback((node: HTMLDivElement | null) => setComposerHost(node), []);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [confirmRequest, setConfirmRequest] = useState<{ message: string; tone?: ConfirmTone; resolve(value: boolean): void } | null>(null);
+  const confirmRequestRef = useRef<typeof confirmRequest>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const focusLayerRef = useRef<HTMLDivElement>(null);
   const topBarRef = useRef<HTMLElement>(null);
@@ -360,6 +363,23 @@ export function App() {
   const dismissToast = useCallback((id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
     setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
+  }, []);
+  // In-app stand-in for window.confirm: renders a ConfirmDialog and resolves
+  // once the user picks confirm/cancel (or presses Esc, which counts as cancel).
+  const confirm = useCallback((message: string, tone: ConfirmTone = "default") => {
+    return new Promise<boolean>((resolve) => {
+      confirmRequestRef.current?.resolve(false);
+      const request = { message, tone, resolve };
+      confirmRequestRef.current = request;
+      setConfirmRequest(request);
+    });
+  }, []);
+  const resolveConfirm = useCallback((value: boolean) => {
+    const request = confirmRequestRef.current;
+    if (!request) return;
+    confirmRequestRef.current = null;
+    setConfirmRequest(null);
+    request.resolve(value);
   }, []);
 
   // A successful restart deliberately drops WebSocket and this state clears on
@@ -833,9 +853,9 @@ export function App() {
     return error;
   }
 
-  function handleRemoveWorker(id: string) {
+  async function handleRemoveWorker(id: string) {
     const name = workers[id]?.name;
-    if (!window.confirm(name ? t("確定永久移除「{name}」嗎？工位與完整對話紀錄都會一併拆除，此動作無法復原。", { name }) : t("確定永久移除這位 NPC 嗎？此動作無法復原。"))) return;
+    if (!(await confirm(name ? t("確定永久移除「{name}」嗎？工位與完整對話紀錄都會一併拆除，此動作無法復原。", { name }) : t("確定永久移除這位 NPC 嗎？此動作無法復原。"), "danger"))) return;
     void closeWorker(id).then((error) => error ? notify(error, "error") : notify(t("人員與工位拆除中"), "info"));
   }
 
@@ -895,7 +915,7 @@ export function App() {
 
   async function requestServerRestart() {
     if (restartPending) return;
-    if (!window.confirm(t("確定要重啟伺服器？會等所有 NPC 都空檔後才執行，不會打斷任何回合。"))) return;
+    if (!(await confirm(t("確定要重啟伺服器？會等所有 NPC 都空檔後才執行，不會打斷任何回合。")))) return;
     try {
       await apiRequest<{ ok: boolean }>("/api/restart-server", { method: "POST" });
       setRestartPending(true);
@@ -906,7 +926,7 @@ export function App() {
   }
 
   async function requestServerShutdown() {
-    if (!window.confirm(t("確定要關閉背景服務？所有進行中的 NPC 工作都會中斷，之後可再雙擊 Pixel Crew 重新啟動。"))) return;
+    if (!(await confirm(t("確定要關閉背景服務？所有進行中的 NPC 工作都會中斷，之後可再雙擊 Pixel Crew 重新啟動。"), "danger"))) return;
     try {
       await apiRequest<{ ok: boolean }>("/api/shutdown-server", { method: "POST" });
       notify(t("背景服務正在關閉，這個頁面即將失去連線。"), "info");
@@ -917,7 +937,7 @@ export function App() {
 
   async function requestAppUpdate() {
     if (updateApplying) return;
-    if (!window.confirm(t("確定下載並更新嗎？會驗證官方更新檔，完成後 Pixel Crew 會自動重新開啟。所有 NPC 必須先完成目前工作。"))) return;
+    if (!(await confirm(t("確定下載並更新嗎？會驗證官方更新檔，完成後 Pixel Crew 會自動重新開啟。所有 NPC 必須先完成目前工作。")))) return;
     try {
       setUpdateApplying(true);
       await apiRequest<{ ok: boolean }>("/api/update/apply", { method: "POST" });
@@ -1022,6 +1042,8 @@ export function App() {
         onPixel={exitBlackWindowMode}
         onProfessional={() => { exitBlackWindowMode(); requestAnimationFrame(enterTaskFocusMode); }}
         muxLayoutEvent={muxLayoutEvent}
+        confirm={confirm}
+        notify={notify}
       /></Suspense>}
 
       {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
@@ -1135,6 +1157,7 @@ export function App() {
           onClose={() => setBossAssignmentOpen(false)}
           composerHost={composerHost}
           focusMode={taskFocusMode}
+          confirm={confirm}
         />}
         {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? t("搜尋目前 NPC 的任務") : t("搜尋全部 NPC 的任務")} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label={t("搜尋範圍")}><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>{t("目前")}</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>{t("全部")}</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
         {!bossAssignmentOpen && !selectedDepartment && active && pendingModelSwitch?.workerId === active.id && <ModelSwitchCard
@@ -1321,7 +1344,7 @@ export function App() {
         onRoom={(id) => { setActiveId(id); openWorkspaceForMove(); }}
       />
 
-      {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [], documents: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} /></Suspense>}
+      {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [], documents: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} confirm={confirm} /></Suspense>}
 
       {!workspaceSetupRequired && <AuthGate
         auth={activeAuth}
@@ -1502,6 +1525,7 @@ export function App() {
 
       <footer className="app-copyright" aria-label={t("版權資訊")}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      {confirmRequest && <ConfirmDialog message={confirmRequest.message} tone={confirmRequest.tone} onConfirm={() => resolveConfirm(true)} onCancel={() => resolveConfirm(false)} />}
     </div>
   );
 }
