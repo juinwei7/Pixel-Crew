@@ -1,6 +1,6 @@
 {
   "name": "pixel-crew",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "description": "A local multi-agent office for Claude Code and Codex.",
   "license": "MIT",
   "repository": {

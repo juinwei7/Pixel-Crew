@@ -19,6 +19,8 @@ The work itself is still carried out by the **official CLIs already installed on
 ## Features
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, freely switchable at any time.
+- **Persistent Black Window workbench** — run real Claude Code or Codex CLIs in movable, resizable panes grouped into workspace tabs. Terminal identity and layout survive navigation and reloads, synchronize safely across browser tabs, and include account/model controls, font sizing, and editable local voice input.
+- **Shared global memory** — keep one local Markdown brief that every Claude and Codex session receives through its provider-native instruction mechanism; the same data is included in Pixel Crew backups.
 - **Focus Reader & Studios** — turn a finished NPC conversation into a distraction-free reading workspace. A collapsible Studio rail switches between managed local workspaces (with `Alt+1`–`Alt+9`), remembers the last NPC in each one, and exposes a read-only branch / commit / dirty-file / ahead-behind summary without changing the repository.
 - **Focus workbench** — split the Focus Reader into up to four independently selected NPC panes; use `Alt+[` and `Alt+]` to move between panes while keeping the current workspace, provider, model, report search, pins, copy, and Markdown export in view.
 - **Managed provider accounts** — create isolated, named Claude Code or Codex logins and assign them per NPC. Accounts retain separate local CLI homes and authentication; a busy or history-bearing NPC cannot silently swap accounts and lose native context.

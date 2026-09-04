@@ -10,7 +10,7 @@ const releaseDate = new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\] - (\
 if (!releaseDate) throw new Error(`CHANGELOG.md has no dated v${version} release`);
 // The site transparently documents source-available work after the latest
 // formal release, so its editorial date is intentionally newer than v2.0.1.
-const expectedLastModified = "2026-09-01";
+const expectedLastModified = "2026-09-04";
 const errors = [];
 
 const fail = (scope, message) => errors.push(`${scope}: ${message}`);

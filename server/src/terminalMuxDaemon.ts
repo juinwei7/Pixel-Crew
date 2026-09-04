@@ -113,7 +113,7 @@ function environment(): Record<string, string> {
   return Object.entries(process.env).reduce<Record<string, string>>((result, [key, value]) => {
     if (value !== undefined) result[key] = value;
     return result;
-  }, { TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "Pixel Crew", TERM_PROGRAM_VERSION: "2.2.2" });
+  }, { TERM: "xterm-256color", COLORTERM: "truecolor", TERM_PROGRAM: "Pixel Crew", TERM_PROGRAM_VERSION: "2.3.0" });
 }
 
 function shellCommand(): { file: string; args: string[]; shell: string } {

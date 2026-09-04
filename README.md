@@ -18,6 +18,8 @@ Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pi
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
 - **Choose an LLM when recruiting** — the new-NPC workspace screen lists both Claude Code and Codex, their shared logins, and every authenticated named account. The selected provider and account are assigned together, so a new worker starts with the intended local CLI identity.
+- **Persistent Black Window workbench** — open real Claude Code or Codex CLI sessions in movable, resizable panes grouped into workspace tabs. Terminal identity and layout survive navigation and reloads, synchronize safely across browser tabs, and include account/model controls, font sizing, and editable local voice input.
+- **Shared global memory** — maintain one local Markdown brief that every Claude and Codex session receives through its provider-native instruction mechanism, with the same data included in Pixel Crew backups.
 - **Pixel / Professional modes** — use the pixel office as the simple default, then switch from the top bar into a full-screen Professional Workbench for reports, managed workspaces, split panes, usage, and follow-up commands. A collapsible Studio rail switches between local workspaces (with `Alt+1`–`Alt+9`) and exposes a read-only branch / commit / dirty-file / ahead-behind summary.
 - **Persistent Boss task log** — assign work through one chat-first Boss Desk. Tasks, discovery questions, replies, department progress, and final reports persist across navigation and restart; each stage shows the linked Mission’s planning state, current step, and owner, while deliberate restart is limited to that task’s linked Missions and NPCs.
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
@@ -73,6 +75,8 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 ## 功能
 
 - **多 Worker**：建立多個獨立的 Claude 或 Codex session，任務之間可以自由切換。
+- **持久化黑窗工作台**：直接在瀏覽器裡開啟真正的 Claude Code／Codex CLI，以 Workspace 分頁管理多個可拖曳、縮放、分割、最小化與最大化的終端視窗。終端身分與版面會跨導覽、重整及多瀏覽器分頁安全同步，並提供帳號／模型、字體大小與可編輯的本機語音輸入。
+- **全域共享記憶**：用一份保存在本機的 Markdown 簡報，透過各 provider 的原生指示機制套用到所有 Claude 與 Codex session；備份時也會一併保存。
 - **像素／專業模式**：像素辦公室是簡單的預設入口；從頂欄切到全螢幕「專業工作台」後，可閱讀報告、管理工作室、比較分割窗格、查看用量並繼續下指令。左側「工作室」欄可用 `Alt+1`–`Alt+9` 快速切換本機工作資料夾，並只讀顯示 branch、HEAD commit、未提交檔案與 ahead/behind。
 - **專業工作台分割窗格**：可分割成最多四個各自選擇 NPC 的閱讀窗格；用 `Alt+[`／`Alt+]` 在窗格間切換，同時保留目前工作室、provider、模型、報告搜尋、釘選、複製與 Markdown 匯出。
 - **受管理的 Provider 帳號**：可建立彼此隔離、具名稱的 Claude Code 或 Codex 登入，並逐一指定給 NPC。新增 NPC 時的工作資料夾畫面會列出兩種 LLM 的共用登入與所有已登入的具名稱帳號，選定後會一併指派 provider 與帳號。各帳號保有獨立的本機 CLI home 與認證；忙碌或已有對話歷史的 NPC 不會被悄悄換帳號而遺失原生上下文。
