@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-04
+
+### Added
+
+- Added a persistent Black Window workbench for real Claude Code and Codex CLI sessions, with workspace tabs, movable/resizable/splittable panes, minimize/maximize controls, provider account and model settings, terminal font sizing, and editable local voice input.
+- Added a shared local Markdown memory that is applied to Claude and Codex through their native instruction mechanisms and included in backup export and restore.
+
+### Changed
+
+- Improved per-account Claude and Codex work-energy reporting, including clearer reset timing and synchronized native controls.
+- Refined Professional mode navigation, responsive layout, and mode-specific keyboard handling.
+
+### Fixed
+
+- Persist and synchronize Black Window terminal identity and layout without orphaning daemon sessions or allowing stale browser-tab updates to overwrite newer state.
+- Replaced browser-native confirmation and alert prompts with accessible in-app dialogs and toasts, centralized destructive-action confirmation, and revalidated live state after asynchronous confirmations.
+
 ## [2.2.2] - 2026-09-01
 
 ### Fixed
@@ -149,7 +166,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.1.2...v2.2.0
