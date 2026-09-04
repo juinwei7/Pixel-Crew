@@ -23,6 +23,12 @@ test("does not toggle panels from unrelated editable controls", () => {
   assert.equal(keyboardShortcut(event("k", { ctrlKey: true }), true), "command_palette");
 });
 
+test("leaves every key chord to a focused black-window terminal", () => {
+  assert.equal(keyboardShortcut(event("Escape"), true, true), null);
+  assert.equal(keyboardShortcut(event("k", { metaKey: true }), true, true), null);
+  assert.equal(keyboardShortcut(event("J", { ctrlKey: true }), true, true), null);
+});
+
 test("Escape dismisses nested focus-mode layers from the inside out", () => {
   assert.equal(topDismissibleLayer(true, true, true), "command_palette");
   assert.equal(topDismissibleLayer(false, true, true), "task_search");

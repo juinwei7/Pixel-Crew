@@ -614,8 +614,10 @@ export function App() {
       const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || globalMemoryModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
         || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
       if (overlayModalOpen) return;
+      // Black Window is a persistent workspace, not a dismissible overlay.
+      // Escape belongs to its CLI or the currently focused control; mode
+      // changes are explicit through the Pixel / Professional buttons.
       if (blackWindowMode) {
-        exitBlackWindowMode();
         return;
       }
       const layer = topDismissibleLayer(commandPaletteOpen, taskSearchOpen, taskFocusMode);

@@ -22,7 +22,10 @@ export function topDismissibleLayer(commandPaletteOpen: boolean, taskSearchOpen:
   return null;
 }
 
-export function keyboardShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey">, editable = false): KeyboardShortcut | null {
+export function keyboardShortcut(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey">, editable = false, terminal = false): KeyboardShortcut | null {
+  // xterm owns its complete keyboard surface. Let Escape and command chords
+  // reach the shell/TUI without also triggering Pixel Crew's global actions.
+  if (terminal) return null;
   if (event.key === "Escape") return "escape";
   const command = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
@@ -47,6 +50,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const editable = isEditable(event.target);
+      const terminal = event.target instanceof HTMLElement && Boolean(event.target.closest(".black-window-terminal"));
       const studioIndex = focusStudioShortcut(event, editable);
       if (studioIndex !== null && handlers.onStudioShortcut?.(studioIndex)) {
         event.preventDefault();
@@ -57,7 +61,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
         event.preventDefault();
         return;
       }
-      const shortcut = keyboardShortcut(event, editable);
+      const shortcut = keyboardShortcut(event, editable, terminal);
       if (!shortcut) return;
       if (shortcut !== "escape") event.preventDefault();
       if (shortcut === "command_palette") handlers.onCommandPalette();
