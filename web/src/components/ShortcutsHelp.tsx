@@ -14,7 +14,7 @@ const GROUPS: Group[] = [
       { keys: [MOD, "J"], label: t("展開 / 收合任務日誌") },
       { keys: [MOD, "⇧", "A"], label: t("跳到待核准的 NPC") },
       { keys: ["?"], label: t("顯示這張快捷鍵說明") },
-      { keys: ["Esc"], label: t("關閉目前的面板 / 回到像素模式") },
+      { keys: ["Esc"], label: t("關閉目前的面板 / 離開專業模式") },
     ],
   },
   {

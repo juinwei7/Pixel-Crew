@@ -241,7 +241,7 @@ export const enModalsD: Record<string, string> = {
   "關閉": "Close",
   "關閉交接視窗": "Close handoff dialog",
   "關閉待送訊息": "Close queued messages",
-  "關閉目前的面板 / 回到像素模式": "Close Current Panel / Return to Pixel Mode",
+  "關閉目前的面板 / 離開專業模式": "Close Current Panel / Exit Professional Mode",
   "附件讀取失敗，可重試": "Failed to read attachment, you can retry",
   "附加圖片或文件": "Attach image or document",
   "隨時按 ": "Press ",
