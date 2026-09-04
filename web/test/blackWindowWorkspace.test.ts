@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blackWindowAccountValue, blackWindowAgentStartCommand, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow } from "../src/blackWindowWorkspace";
+import { BLACK_WINDOW_FONT_SIZE_DEFAULT, BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow } from "../src/blackWindowWorkspace";
 import type { AccountWithAuth } from "../src/types";
 
 test("new black windows begin as unstarted Codex Agent panes", () => {
@@ -11,6 +11,22 @@ test("new black windows begin as unstarted Codex Agent panes", () => {
   assert.equal(entry.provider, "codex");
   assert.equal(entry.title, "CODEX");
   assert.equal(entry.z, 9);
+  assert.equal(entry.fontSize, BLACK_WINDOW_FONT_SIZE_DEFAULT);
+});
+
+test("terminal font size is rounded and clamped to a readable range", () => {
+  assert.equal(clampBlackWindowFontSize(undefined), BLACK_WINDOW_FONT_SIZE_DEFAULT);
+  assert.equal(clampBlackWindowFontSize(15.6), 16);
+  assert.equal(clampBlackWindowFontSize(-100), BLACK_WINDOW_FONT_SIZE_MIN);
+  assert.equal(clampBlackWindowFontSize(100), BLACK_WINDOW_FONT_SIZE_MAX);
+});
+
+test("legacy layouts receive the default terminal font size", () => {
+  const workspace = newBlackWorkspace("/repo");
+  const legacy: Partial<ReturnType<typeof newBlackWindow>> = { ...newBlackWindow("/repo", 0, 1, workspace.id) };
+  delete legacy.fontSize;
+  const parsed = parseBlackWindowLayout({ version: 2, workspaces: [workspace], windows: [legacy] }, "/repo");
+  assert.equal(parsed.windows[0]?.fontSize, BLACK_WINDOW_FONT_SIZE_DEFAULT);
 });
 
 test("legacy Raw Shell panes migrate to unstarted Codex panes", () => {

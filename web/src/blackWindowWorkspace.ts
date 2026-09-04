@@ -25,6 +25,7 @@ export type BlackWindow = {
   accountId: string | null;
   model: string;
   autoApproveMode: AutoApproveMode;
+  fontSize: number;
 };
 
 export type BlackWindowLayout = { version: 2; workspaces: BlackWorkspace[]; windows: BlackWindow[]; selectedId: string | null; selectedWorkspaceId: string | null; railCollapsed: boolean };
@@ -88,6 +89,14 @@ export function mergeDraggedWindowGeometry(incoming: BlackWindowLayout, current:
 export const BLACK_WINDOW_LAYOUT_KEY = "pixel-crew:black-window-layout-v1";
 export const MIN_WINDOW_WIDTH = 360;
 export const MIN_WINDOW_HEIGHT = 240;
+export const BLACK_WINDOW_FONT_SIZE_DEFAULT = 13;
+export const BLACK_WINDOW_FONT_SIZE_MIN = 10;
+export const BLACK_WINDOW_FONT_SIZE_MAX = 24;
+
+export function clampBlackWindowFontSize(value: unknown): number {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : BLACK_WINDOW_FONT_SIZE_DEFAULT;
+  return Math.min(BLACK_WINDOW_FONT_SIZE_MAX, Math.max(BLACK_WINDOW_FONT_SIZE_MIN, numeric));
+}
 
 function id(prefix: string): string { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`; }
 function titleFromPath(path: string): string { return path.split(/[/\\]/).filter(Boolean).at(-1) || "WORKSPACE"; }
@@ -102,7 +111,7 @@ export function newBlackWindow(workspacePath: string, offset = 0, z = 1, workspa
     x: 28 + (offset % 7) * 26, y: 30 + (offset % 7) * 22,
     width: 720, height: 500, z, minimized: false, maximized: false,
     mode: "agent", agentStarted: false, provider: "codex", accountSource: "ambient", accountId: null,
-    model: "", autoApproveMode: "off",
+    model: "", autoApproveMode: "off", fontSize: BLACK_WINDOW_FONT_SIZE_DEFAULT,
   };
 }
 
@@ -158,6 +167,7 @@ function normalizeWindow(window: BlackWindow, workspacePath: string, index: numb
     accountId: window.accountSource === "managed" && typeof window.accountId === "string" ? window.accountId : null,
     model: typeof window.model === "string" ? window.model : "",
     autoApproveMode: ["off", "safe", "full", "invincible"].includes(String(window.autoApproveMode)) ? window.autoApproveMode as BlackWindow["autoApproveMode"] : "off",
+    fontSize: clampBlackWindowFontSize(window.fontSize),
   };
 }
 

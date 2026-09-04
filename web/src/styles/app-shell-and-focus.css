@@ -130,6 +130,8 @@
 .black-window__bar select { min-width: 60px; max-width: 120px; min-height: 23px; padding: 2px; color: #8ba99b; font-size: 9px; }
 .black-window__bar button { min-width: 24px; min-height: 23px; padding: 2px 5px; border-color: #29373a; border-radius: 4px; background: #101719; color: #98ada5; font: 700 11px var(--mono); }
 .black-window__bar button:hover { border-color: #69c9a1; color: #c7ffe0; }
+.black-window__bar button:disabled { opacity: .35; cursor: default; }
+.black-window__bar .black-window__font { min-width: 30px; padding-inline: 4px; font-size: 10px; }
 .black-window-terminal { display: grid; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; background: #050606; color: #d6f8cf; font-family: var(--mono); }
 .black-window-terminal__screen { min-width: 0; min-height: 0; padding: 9px 10px; overflow: hidden; }
 .black-window-terminal__screen .xterm { height: 100%; }

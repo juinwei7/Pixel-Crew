@@ -24,7 +24,7 @@ function sendTerminal(socket: WebSocket | null, message: unknown): void {
 
 export type BlackWindowTerminalHandle = { inject(command: string): void; launch(command: string): Promise<boolean>; interrupt(): void; destroy(): Promise<boolean> };
 
-type Props = { sessionId: string; workspacePath: string; terminalLabel: string; active: boolean; launchCommand?: string | null; onActivate?(): void; onStatus?(status: "connecting" | "ready" | "closed" | "error"): void; onReady?(state: { restored: boolean }): void };
+type Props = { sessionId: string; workspacePath: string; terminalLabel: string; active: boolean; fontSize: number; launchCommand?: string | null; onActivate?(): void; onStatus?(status: "connecting" | "ready" | "closed" | "error"): void; onReady?(state: { restored: boolean }): void };
 
 /**
  * A real xterm.js terminal backed by an OS pseudo-terminal. Nothing is
@@ -32,10 +32,11 @@ type Props = { sessionId: string; workspacePath: string; terminalLabel: string; 
  * positioning, full-screen programs and interactive CLIs flow between the
  * browser terminal and the local PTY.
  */
-export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, launchCommand, onActivate, onStatus, onReady }, ref) {
+export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, fontSize, launchCommand, onActivate, onStatus, onReady }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const pendingLaunchRef = useRef<((ok: boolean) => void) | null>(null);
   const onReadyRef = useRef(onReady);
   const [status, setStatus] = useState<"connecting" | "ready" | "closed" | "error">("connecting");
@@ -54,14 +55,18 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
-      fontFamily: "var(--mono), Menlo, Monaco, 'Courier New', monospace",
-      fontSize: 13,
+      // xterm measures its own character cells and cannot resolve CSS custom
+      // properties here. A concrete font stack keeps glyph and cell widths in
+      // sync when fontSize changes.
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace",
+      fontSize,
       fontWeight: "500",
       lineHeight: 1.25,
       scrollback: 10_000,
       theme: { background: "#050606", foreground: "#d6f8cf", cursor: "#86ed89", selectionBackground: "#285441", black: "#050606", brightBlack: "#65726c", green: "#86ed89", brightGreen: "#bfffd4" },
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
     terminal.focus();
@@ -111,8 +116,31 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       terminal.dispose();
       if (socketRef.current === socket) socketRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
+      if (fitRef.current === fit) fitRef.current = null;
     };
   }, [sessionId, workspacePath]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.fontSize = fontSize;
+    // xterm re-measures its character cell asynchronously after a font-size
+    // option change. Fitting immediately reuses the previous cell width, so
+    // larger glyphs overlap even though their pixel size is correct. Give the
+    // renderer one frame to measure and fit on the following frame.
+    let fitFrame = 0;
+    const measureFrame = window.requestAnimationFrame(() => {
+      fitFrame = window.requestAnimationFrame(() => {
+        fitRef.current?.fit();
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        sendTerminal(socketRef.current, { type: "terminal_resize", cols: terminal.cols, rows: terminal.rows });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(measureFrame);
+      if (fitFrame) window.cancelAnimationFrame(fitFrame);
+    };
+  }, [fontSize]);
 
   useEffect(() => {
     if (launchCommand === undefined) return;
