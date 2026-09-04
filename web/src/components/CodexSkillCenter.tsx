@@ -39,6 +39,7 @@ export function CodexSkillCenter({
   activeWorkerId,
   onRun,
   onDirtyChange,
+  confirm,
 }: {
   workspacePath: string;
   revision: number;
@@ -46,6 +47,7 @@ export function CodexSkillCenter({
   activeWorkerId: string | null;
   onRun(workerId: string, message: string): Promise<string | null>;
   onDirtyChange(dirty: boolean): void;
+  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
 }) {
   const [skills, setSkills] = useState<SkillDocument[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -120,16 +122,16 @@ export function CodexSkillCenter({
       : skills;
   }, [skills, query]);
 
-  function select(skill: SkillDocument) {
-    if (dirty && !window.confirm(t("目前 Skill 修改尚未儲存，確定要切換嗎？"))) return;
+  async function select(skill: SkillDocument) {
+    if (dirty && !(await confirm(t("目前 Skill 修改尚未儲存，確定要切換嗎？")))) return;
     setSelectedName(skill.name);
     setName(skill.name);
     setContent(skill.content);
     setNotice(null);
   }
 
-  function create() {
-    if (dirty && !window.confirm(t("目前 Skill 修改尚未儲存，確定要建立新的嗎？"))) return;
+  async function create() {
+    if (dirty && !(await confirm(t("目前 Skill 修改尚未儲存，確定要建立新的嗎？")))) return;
     setSelectedName(null);
     setName("new-skill");
     setContent(NEW_SKILL);
@@ -166,7 +168,7 @@ export function CodexSkillCenter({
   }
 
   async function remove() {
-    if (!selected || !window.confirm(t("確定刪除 {name} Skill 及其 references/scripts 資產嗎？", { name: selected.name }))) return;
+    if (!selected || !(await confirm(t("確定刪除 {name} Skill 及其 references/scripts 資產嗎？", { name: selected.name }), "danger"))) return;
     setSaving(true);
     try {
       await apiRequest<{ ok: boolean }>("/api/skills", {
@@ -276,8 +278,8 @@ export function CodexSkillCenter({
               <div className={`command-editor__notice ${notice?.ok ? "command-editor__notice--ok" : ""}`}>
                 {notice?.text ?? (dirty ? t("有尚未儲存的修改") : t("所有修改已儲存"))}
               </div>
-              {externalChange && <button className="command-editor__reload" type="button" onClick={() => {
-                if (!window.confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？"))) return;
+              {externalChange && <button className="command-editor__reload" type="button" onClick={async () => {
+                if (!(await confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？")))) return;
                 forceReload.current = true;
                 setExternalChange(false);
                 setReloadNonce((value) => value + 1);

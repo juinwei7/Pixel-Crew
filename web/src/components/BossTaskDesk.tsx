@@ -35,6 +35,7 @@ type Props = {
   onClose(): void;
   composerHost?: Element | null;
   focusMode?: boolean;
+  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
 };
 
 const statusLabel: Record<BossTask["status"], string> = {
@@ -87,7 +88,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onClose, composerHost, focusMode = false }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -206,7 +207,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
 
   async function deleteRecord() {
     if (!selected || working || !terminalStatuses.includes(selected.status)) return;
-    if (!window.confirm(t("確定永久刪除 Boss 任務「{title}」？此動作無法復原。", { title: selected.title }))) return;
+    if (!(await confirm(t("確定永久刪除 Boss 任務「{title}」？此動作無法復原。", { title: selected.title }), "danger"))) return;
     setWorking(true);
     setError(null);
     const result = await onDelete(selected.id);
@@ -228,7 +229,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     if (preview.error) { setError(preview.error); return; }
     const missionCount = preview.data?.missions?.length ?? 0;
     const memberNames = preview.data?.members?.map((member) => member.name).join("、") || t("相關 NPC");
-    if (!window.confirm(t("清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。", { count: missionCount, members: memberNames }))) return;
+    if (!(await confirm(t("清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。", { count: missionCount, members: memberNames }), "danger"))) return;
     setWorking(true); setError(null);
     const committed = await onRestart(selected.id, true);
     setWorking(false);

@@ -147,6 +147,21 @@
 .warroom-result__prio--P4 { background: rgba(132,171,190,.15); color: #aebdca; }
 .warroom-result__note { margin-top: 12px; color: #7d8ea3; font-size: 11px; }
 
+/* In-app replacement for window.confirm — must sit above every other
+   warroom-result instance (including ones it's confirming an action inside
+   of, e.g. deleting a command while CommandCenter is open), hence the
+   higher z-index than the base .warroom-result. */
+.confirm-dialog { z-index: 25060; }
+.confirm-dialog__card { width: min(420px, 92vw); padding: 20px 22px; }
+.confirm-dialog__message { margin: 0 0 18px; line-height: 1.6; font-size: 13.5px; color: #e6edf5; white-space: pre-wrap; }
+.confirm-dialog__actions { display: flex; justify-content: flex-end; gap: 10px; }
+.confirm-dialog__btn { padding: 9px 18px; border-radius: 8px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color: #cdd8e6; font: 700 12.5px var(--mono); cursor: pointer; }
+.confirm-dialog__btn--cancel:hover { background: rgba(255,255,255,.08); }
+.confirm-dialog__btn--confirm { border-color: rgba(0,229,255,.4); background: rgba(0,229,255,.12); color: #8deeff; }
+.confirm-dialog__btn--confirm:hover { background: rgba(0,229,255,.2); }
+.confirm-dialog__btn--danger { border-color: rgba(255,46,136,.5); background: rgba(255,46,136,.14); color: #ff8fa5; }
+.confirm-dialog__btn--danger:hover { background: rgba(255,46,136,.24); }
+
 /* Remote access is deliberately usable on the phone that it helps connect.
    Keep the desktop dashboard compact, but turn its horizontal controls into
    full-width, thumb-friendly rows before they can overflow a narrow viewport. */

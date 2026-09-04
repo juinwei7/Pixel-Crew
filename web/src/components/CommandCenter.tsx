@@ -38,6 +38,7 @@ export function CommandCenter({
   revisions,
   onRun,
   onClose,
+  confirm,
 }: {
   workspacePath: string;
   provider: ProviderId;
@@ -46,6 +47,7 @@ export function CommandCenter({
   revisions: WorkflowRevisions;
   onRun(workerId: string, message: string): Promise<string | null>;
   onClose(): void;
+  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
 }) {
   const [providerView, setProviderView] = useState<ProviderId>(provider);
   const [codexDirty, setCodexDirty] = useState(false);
@@ -127,33 +129,33 @@ export function CommandCenter({
     return () => { cancelled = true; };
   }, [workspacePath, providerView, revisions.claude, reloadNonce]);
 
-  function switchProviderView(next: ProviderId) {
+  async function switchProviderView(next: ProviderId) {
     if (next === providerView) return;
     const activeDirty = providerView === "claude" ? dirty : codexDirty;
-    if (activeDirty && !window.confirm(t("目前修改尚未儲存，確定要切換 Provider 嗎？"))) return;
+    if (activeDirty && !(await confirm(t("目前修改尚未儲存，確定要切換 Provider 嗎？")))) return;
     setProviderView(next);
     setNotice(null);
   }
 
-  function select(command: CommandDocument) {
-    if (dirty && !window.confirm(t("目前修改尚未儲存，確定要切換指令嗎？"))) return;
+  async function select(command: CommandDocument) {
+    if (dirty && !(await confirm(t("目前修改尚未儲存，確定要切換指令嗎？")))) return;
     setSelectedName(command.name);
     setName(command.name);
     setContent(command.content);
     setNotice(null);
   }
 
-  function create() {
-    if (dirty && !window.confirm(t("目前修改尚未儲存，確定要建立新指令嗎？"))) return;
+  async function create() {
+    if (dirty && !(await confirm(t("目前修改尚未儲存，確定要建立新指令嗎？")))) return;
     setSelectedName(null);
     setName("");
     setContent(NEW_COMMAND);
     setNotice(null);
   }
 
-  function close() {
+  async function close() {
     const activeDirty = providerView === "claude" ? dirty : codexDirty;
-    if (activeDirty && !window.confirm(t("目前修改尚未儲存，確定要關閉嗎？"))) return;
+    if (activeDirty && !(await confirm(t("目前修改尚未儲存，確定要關閉嗎？")))) return;
     onClose();
   }
 
@@ -182,7 +184,7 @@ export function CommandCenter({
   }
 
   async function remove() {
-    if (!selected || !window.confirm(t("確定要刪除 /{name} 嗎？", { name: selected.name }))) return;
+    if (!selected || !(await confirm(t("確定要刪除 /{name} 嗎？", { name: selected.name }), "danger"))) return;
     setSaving(true);
     setNotice(null);
     try {
@@ -330,8 +332,8 @@ export function CommandCenter({
                   <div className={`command-editor__notice ${notice?.ok ? "command-editor__notice--ok" : ""}`}>
                     {notice?.text ?? (dirty ? t("有尚未儲存的修改") : t("所有修改已儲存"))}
                   </div>
-                  {externalChange && <button className="command-editor__reload" type="button" onClick={() => {
-                    if (!window.confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？"))) return;
+                  {externalChange && <button className="command-editor__reload" type="button" onClick={async () => {
+                    if (!(await confirm(t("載入外部版本會捨棄目前未儲存的修改，確定嗎？")))) return;
                     forceReload.current = true;
                     setExternalChange(false);
                     setReloadNonce((value) => value + 1);
@@ -351,6 +353,7 @@ export function CommandCenter({
           activeWorkerId={activeWorkerId}
           onRun={onRun}
           onDirtyChange={setCodexDirty}
+          confirm={confirm}
         />}
     </Modal>
   );
