@@ -110,7 +110,9 @@ test("initial snapshot is silent, then detects create, replace, and delete", asy
   const home = join(root, "home");
   const workspace = join(root, "repo");
   const codexHome = join(home, ".codex");
-  await Promise.all([mkdir(home), mkdir(workspace), mkdir(codexHome, { recursive: true })]);
+  // codexHome recursively creates `home`; creating both concurrently races
+  // and can make the non-recursive mkdir fail with EEXIST.
+  await Promise.all([mkdir(workspace), mkdir(codexHome, { recursive: true })]);
   const changes: McpConfigChange[] = [];
   const watcher = new McpConfigWatcher(
     () => [workspace],
