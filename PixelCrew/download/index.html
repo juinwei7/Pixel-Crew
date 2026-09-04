@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下載與 FAQ — Pixel Crew</title>
+<meta name="description" content="三種方式安裝 Pixel Crew：macOS 一行安裝、Windows 免安裝打包版、原始碼模式，加上安裝前最常見的問題。">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/download/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/download/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/download/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/download/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/download/">
+<meta property="og:title" content="下載與 FAQ — Pixel Crew">
+<meta property="og:description" content="macOS 一行安裝、Windows 免安裝打包版、原始碼模式三選一，以及安裝前最常見的疑問。">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="下載與 FAQ — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">跳到主要內容</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/">首頁</a>
+      <a href="/features/">產品導覽</a>
+      <a href="/changelog/">版本更新</a>
+      <a href="/download/" class="is-active" aria-current="page">下載</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/en/download/" hreflang="en" lang="en" aria-label="English version">EN</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">GET STARTED</span>
+  <h1>三種上車方式，挑一個。</h1>
+  <p class="lead">前提只有兩個：Node.js 22.13+（原始碼模式才需要），以及 Claude Code／Codex CLI 至少安裝並登入一個。</p>
+</div>
+
+<!-- ============================== 快速開始 ============================== -->
+<section class="section">
+  <div class="wrap">
+    <div class="starts">
+      <div class="start">
+        <span class="tag">MACOS</span>
+        <h3>一行安裝</h3>
+        <p>自帶執行環境的獨立 App，不需要 Node.js 與 npm。</p>
+        <pre>curl -fsSL https://github.com/juinwei7/\
+Pixel-Crew/releases/latest/download/\
+install-pixel-crew-macos.sh | /bin/bash</pre>
+      </div>
+      <div class="start">
+        <span class="tag">WINDOWS</span>
+        <h3>免安裝打包版</h3>
+        <p>下載 zip 解壓即用，附 SHA-256 校驗檔與安裝指引。</p>
+        <pre><span class="c"># Releases 頁下載後</span>
+install-pixel-crew.cmd
+start-pixel-crew.cmd</pre>
+      </div>
+      <div class="start">
+        <span class="tag">SOURCE</span>
+        <h3>原始碼模式</h3>
+        <p>任何平台，開發與客製都走這條。</p>
+        <pre>git clone https://github.com/\
+juinwei7/Pixel-Crew.git
+cd Pixel-Crew
+npm install
+npm run dev   <span class="c"># localhost:5173</span></pre>
+      </div>
+    </div>
+
+    <p class="req"><b>系統需求</b> ─ Node.js 22.13+（僅原始碼模式）・Claude Code 或 Codex CLI・macOS / Windows 10 22H2+ / Linux</p>
+  </div>
+</section>
+
+<!-- ============================== FAQ ============================== -->
+<section class="section faq">
+  <div class="wrap">
+    <span class="eyebrow">FAQ</span>
+    <h2>常見問題</h2>
+
+    <details>
+      <summary>部門跟直接派任務給一個 NPC 有什麼不同？</summary>
+      <p>直接派任務只有一個 NPC 處理到底。部門至少兩位 NPC 共用同一個工作資料夾，其中一位是主管；你只要寫目標與驗收標準交給主管，主管會自己決定找專家諮詢、請人審查，或啟動一段 2 到 5 步的任務鏈，中間卡住時才會停下來問你。</p>
+    </details>
+    <details>
+      <summary>部門會自己 commit、push 我的程式碼嗎？</summary>
+      <p>不會。無論走 Quick Consult、Quick Review 還是完整的 Mission，部門都不會自動 commit、push、merge、tag 或建立 release，也不會碰任何登入認證；一般 CLI 的核准提示仍然照常生效。</p>
+    </details>
+    <details>
+      <summary>要付費嗎？會多花我的額度嗎？</summary>
+      <p>Pixel Crew 本身完全免費（MIT 開源）。它不經手任何計費——你用的是自己 CLI 訂閱或帳號的額度，用量跟直接在終端機跑 CLI 一樣，介面右上還有用量電量條幫你盯著。</p>
+    </details>
+    <details>
+      <summary>支援哪些 agent？</summary>
+      <p>目前支援 Anthropic 的 <code>claude</code>（Claude Code）與 OpenAI 的 <code>codex</code> CLI，兩者可以在同一間辦公室混用，也支援互相交接工作。裝一個就能用，不必兩個都有。</p>
+    </details>
+    <details>
+      <summary>我的程式碼跟對話會被送到哪裡？</summary>
+      <p>Agent 與模型供應商之間的傳輸由官方 CLI 自己處理，跟你直接用 CLI 完全相同。Pixel Crew 新增的部分（對話歷史、NPC 設定）只存在本機 SQLite，伺服器只綁 localhost，沒有任何遙測或雲端同步。</p>
+    </details>
+    <details>
+      <summary>自動核准安全嗎？</summary>
+      <p>三段可調，而且是每個 NPC 獨立設定。「安全」模式只放行唯讀操作白名單；「完全」模式仍有危險指令黑名單（<code>rm</code> 系列、磁碟操作、權限變更等）強制人工確認。不確定就維持預設的「關閉」，每一條指令都會問你。</p>
+    </details>
+    <details>
+      <summary>可以同時開很多個 agent 嗎？</summary>
+      <p>可以，上限 20 個 NPC，並且可以分屬不同的工作資料夾（房間）。左側人員列表支援搜尋、篩選（執行中／需處理／依 provider），畫布可縮放平移，人多也不會迷路。</p>
+    </details>
+    <details>
+      <summary>跟 Anthropic 或 OpenAI 是什麼關係？</summary>
+      <p>沒有任何關係。Pixel Crew 是獨立的非官方工具，未受 Anthropic 或 OpenAI 授權、背書或贊助；「Claude」「Codex」等商標屬於其各自所有者。它做的事情是編排並視覺化你自己安裝、自己登入的官方 CLI。</p>
+    </details>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew 是獨立的非官方開源專案，與 Anthropic、OpenAI 均無隸屬、授權、背書或贊助關係。
+      「Claude」、「Claude Code」、「Codex」及相關商標屬於其各自所有者。
+      本工具僅編排與視覺化使用者自行安裝並登入的官方 CLI；使用各 CLI 請遵守其服務條款。
+      頁面中的所有截圖與錄影均為實際軟體畫面。
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

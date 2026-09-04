@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download &amp; FAQ — Pixel Crew</title>
+<meta name="description" content="Three ways to install Pixel Crew: a one-line macOS install, a portable Windows build, or run from source — plus the most common questions before you install.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/en/download/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/download/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/download/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/download/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/en/download/">
+<meta property="og:title" content="Download &amp; FAQ — Pixel Crew">
+<meta property="og:description" content="A one-line macOS install, a portable Windows build, or run from source — plus the most common questions before you install.">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="zh_TW">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Download &amp; FAQ — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/en/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/en/">Home</a>
+      <a href="/en/features/">Features</a>
+      <a href="/en/changelog/">Changelog</a>
+      <a href="/en/download/" class="is-active" aria-current="page">Download</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/download/" hreflang="zh-Hant" lang="zh-Hant" aria-label="繁體中文版本">中文</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">GET STARTED</span>
+  <h1>Three ways in — pick one.</h1>
+  <p class="lead">Just two prerequisites: Node.js 22.13+ (source mode only), and at least one of the Claude Code / Codex CLIs installed and signed in.</p>
+</div>
+
+<!-- ============================== GET STARTED ============================== -->
+<section class="section">
+  <div class="wrap">
+    <div class="starts">
+      <div class="start">
+        <span class="tag">MACOS</span>
+        <h3>One-line install</h3>
+        <p>A self-contained app with its own runtime — no Node.js or npm needed.</p>
+        <pre>curl -fsSL https://github.com/juinwei7/\
+Pixel-Crew/releases/latest/download/\
+install-pixel-crew-macos.sh | /bin/bash</pre>
+      </div>
+      <div class="start">
+        <span class="tag">WINDOWS</span>
+        <h3>Portable build</h3>
+        <p>Download the zip, unzip, and run — includes a SHA-256 checksum and setup guide.</p>
+        <pre><span class="c"># After downloading from Releases</span>
+install-pixel-crew.cmd
+start-pixel-crew.cmd</pre>
+      </div>
+      <div class="start">
+        <span class="tag">SOURCE</span>
+        <h3>Run from source</h3>
+        <p>Any platform — this is the path for development and customization.</p>
+        <pre>git clone https://github.com/\
+juinwei7/Pixel-Crew.git
+cd Pixel-Crew
+npm install
+npm run dev   <span class="c"># localhost:5173</span></pre>
+      </div>
+    </div>
+
+    <p class="req"><b>REQUIREMENTS</b> ─ Node.js 22.13+ (source mode only)・Claude Code or Codex CLI・macOS / Windows 10 22H2+ / Linux</p>
+  </div>
+</section>
+
+<!-- ============================== FAQ ============================== -->
+<section class="section faq">
+  <div class="wrap">
+    <span class="eyebrow">FAQ</span>
+    <h2>Frequently asked questions</h2>
+
+    <details>
+      <summary>How is a department different from assigning a task to one NPC?</summary>
+      <p>Assigning a task directly means a single NPC handles it start to finish. A department has at least two NPCs sharing one workspace, one of them the lead — you just write a goal and acceptance criteria and hand it to the lead, who decides whether to consult an expert, ask for a review, or run a 2-to-5-step task chain, stopping to ask you only when something's actually blocked.</p>
+    </details>
+    <details>
+      <summary>Will a department auto-commit or push my code?</summary>
+      <p>No. Whether it's running Quick Consult, Quick Review, or a full Mission, a department never auto-commits, pushes, merges, tags, or releases, and it never touches your authentication; normal CLI approval prompts still apply.</p>
+    </details>
+    <details>
+      <summary>Is it free? Does it use more of my allowance?</summary>
+      <p>Pixel Crew itself is completely free and MIT-licensed. It never handles billing — you're using your own CLI subscription or account allowance, exactly as if you ran the CLI directly; the usage meters in the top bar help you keep an eye on it.</p>
+    </details>
+    <details>
+      <summary>Which agents are supported?</summary>
+      <p>It currently supports Anthropic's <code>claude</code> (Claude Code) and OpenAI's <code>codex</code> CLI. Both can share one office and hand work back and forth. Installing just one is enough to get started.</p>
+    </details>
+    <details>
+      <summary>Where do my code and conversations go?</summary>
+      <p>Traffic between an agent and its model provider is handled entirely by the official CLI, exactly as it would be if you ran that CLI directly. What Pixel Crew adds — conversation history, NPC settings — lives only in local SQLite; the server only binds to localhost, with no telemetry or cloud sync.</p>
+    </details>
+    <details>
+      <summary>Is auto-approval safe?</summary>
+      <p>It has three levels, set independently per NPC. "Safe" only allows a read-only command allowlist. "Full" still forces a manual confirmation for a blocklist of dangerous commands (<code>rm</code> and friends, disk operations, permission changes, etc). If you're unsure, leave it on the default "off" — every command will ask first.</p>
+    </details>
+    <details>
+      <summary>Can I run a lot of agents at once?</summary>
+      <p>Yes — up to 20 NPCs, and they can be split across different working folders (rooms). The personnel list on the left supports search and filters (running / needs attention / by provider), and the canvas pans and zooms, so it stays easy to navigate even with a full office.</p>
+    </details>
+    <details>
+      <summary>Is Pixel Crew affiliated with Anthropic or OpenAI?</summary>
+      <p>No. Pixel Crew is an independent, unofficial tool, not authorized, endorsed, or sponsored by Anthropic or OpenAI; "Claude," "Codex," and related trademarks belong to their respective owners. What it does is orchestrate and visualize the official CLIs you've installed and signed into yourself.</p>
+    </details>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew is an independent, unofficial open-source project with no affiliation, authorization,
+      endorsement, or sponsorship from Anthropic or OpenAI. "Claude," "Claude Code," "Codex," and related
+      trademarks belong to their respective owners. This tool only orchestrates and visualizes official CLIs
+      installed and signed into by the user themselves; use each CLI according to its own terms of service.
+      All screenshots and recordings on this page are from the real application.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

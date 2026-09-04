@@ -24,4 +24,46 @@
       <image:caption>Pixel Crew multi-agent office for Claude Code and Codex</image:caption>
     </image:image>
   </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/features/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/features/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/features/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/features/"/>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/en/features/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/features/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/features/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/features/"/>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/changelog/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/changelog/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/changelog/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/changelog/"/>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/en/changelog/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/changelog/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/changelog/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/changelog/"/>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/download/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/download/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/download/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/download/"/>
+  </url>
+  <url>
+    <loc>https://pixelcrew.weibuilds.com/en/download/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <xhtml:link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/download/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/download/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/download/"/>
+  </url>
 </urlset>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>版本更新 — Pixel Crew</title>
+<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.3.0 持久化黑窗工作台與全域共享記憶的完整內容。">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Pixel Crew">
+<meta name="application-name" content="Pixel Crew">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0c">
+<link rel="canonical" href="https://pixelcrew.weibuilds.com/changelog/">
+<link rel="alternate" hreflang="zh-Hant" href="https://pixelcrew.weibuilds.com/changelog/">
+<link rel="alternate" hreflang="en" href="https://pixelcrew.weibuilds.com/en/changelog/">
+<link rel="alternate" hreflang="x-default" href="https://pixelcrew.weibuilds.com/changelog/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pixelcrew.weibuilds.com/changelog/">
+<meta property="og:title" content="版本更新 — Pixel Crew">
+<meta property="og:description" content="2.3.0 持久化黑窗工作台的完整內容，以及每一個正式版本的變更紀錄。">
+<meta property="og:site_name" content="Pixel Crew">
+<meta property="og:locale" content="zh_TW">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="版本更新 — Pixel Crew">
+<meta name="twitter:image" content="https://pixelcrew.weibuilds.com/assets/hero.webp">
+</head>
+<body>
+<a class="skip-link" href="#main-content">跳到主要內容</a>
+
+<div class="wrap">
+  <nav class="nav">
+    <a class="nav-logo" href="/"><i aria-hidden="true"></i>PIXEL CREW</a>
+    <div class="nav-links">
+      <a href="/">首頁</a>
+      <a href="/features/">產品導覽</a>
+      <a href="/changelog/" class="is-active" aria-current="page">版本更新</a>
+      <a href="/download/">下載</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB ↗</a>
+      <a class="lang-link" href="/en/changelog/" hreflang="en" lang="en" aria-label="English version">EN</a>
+    </div>
+  </nav>
+</div>
+
+<div class="wrap page-head" id="main-content" tabindex="-1">
+  <span class="eyebrow">CHANGELOG</span>
+  <h1>每次更新，帶來了什麼。</h1>
+  <p class="lead">從更專心地閱讀 AI 產出，到現在讓 NPC 自己組部門協作；這裡記錄 Pixel Crew 每個正式版本的改變。</p>
+</div>
+
+<!-- ============================== 最新版本詳解 ============================== -->
+<section class="launch wrap">
+  <div class="launch-shell">
+    <div class="launch-head">
+      <div>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.0</span>
+        <h2>真正的 CLI 終端，現在能留在 Pixel Crew 裡持續工作。</h2>
+        <p>2.3.0 帶來持久化黑窗工作台：把 Claude Code 與 Codex 放進可自由編排的 Workspace 與終端窗格，保留 session 身分並跨重整同步。全域共享記憶、帳號用量與一致的安全確認，讓像素、專業與黑窗三種模式共用同一套可靠本機工作流程。</p>
+      </div>
+      <div class="launch-meta">
+        <span class="launch-version">v2.3.0</span>
+        <time class="launch-date" datetime="2026-09-04">2026.09.04</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">查看完整版本內容 ↗</a>
+      </div>
+    </div>
+
+    <div class="upgrade-grid">
+      <article class="upgrade-card"><span class="index">01 / BLACK WINDOW</span><b>一個工作台，多個真正的 CLI</b><p>以 Workspace 分頁整理 Claude Code 與 Codex 終端；窗格可拖曳、縮放、分割、最小化與最大化。離開畫面或重新整理後，daemon 仍保留真正的 session 與終端身分。</p></article>
+      <article class="upgrade-card"><span class="index">02 / SYNC</span><b>多個瀏覽器分頁也不互相覆蓋</b><p>版面變更帶有版本檢查，遇到其他分頁先更新時會採用最新狀態；拖曳中的本機幾何也能與遠端修改安全合併，避免讓 CLI 變成無法存取的孤兒程序。</p></article>
+      <article class="upgrade-card"><span class="index">03 / AGENT CONTROLS</span><b>終端裡也能選帳號、模型與權限</b><p>每個 Agent pane 都能指定 Claude／Codex、共用或具名稱帳號、模型與 auto-approve 模式。需要重啟 session 的變更會先清楚確認，再安全替換終端身分。</p></article>
+      <article class="upgrade-card"><span class="index">04 / TERMINAL UX</span><b>字體與語音輸入都留在工作流裡</b><p>可調整並保存每個終端的字體大小；本機 Whisper 語音可先轉成可編輯文字，再輸入目前 CLI，不會自動執行或傳送控制字元。</p></article>
+      <article class="upgrade-card"><span class="index">05 / GLOBAL MEMORY</span><b>所有 Agent 共用一份本機簡報</b><p>在介面維護共享 Markdown 記憶，Claude 與 Codex 會透過各自原生指示機制讀取。內容只留在本機，也會納入可驗證的備份與還原流程。</p></article>
+      <article class="upgrade-card"><span class="index">06 / SAFETY</span><b>危險動作只確認一次，而且不會失焦</b><p>移除 NPC、刪除 Workspace、重啟服務與捨棄未儲存修改，統一使用可鍵盤操作的應用程式內確認視窗；等待回覆期間若狀態已改變，操作會重新檢查並安全取消。</p></article>
+    </div>
+
+    <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-create.webp" width="1606" height="1416" loading="lazy" decoding="async" alt="建立部門對話框：填入部門目的、成員人數與 provider，AI 草擬出互補的角色與 persona 清單，供使用者選定一位部門主管"></div><figcaption>DEPARTMENTS — 既有協作流程</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-mission.webp" width="703" height="693" loading="lazy" decoding="async" alt="交給部門對話框：填入任務目標與每行一條的驗收標準，按下確認並交給部門後由主管自動路由"></div><figcaption>MISSION — 既有任務路由</figcaption></figure>
+      <figure class="proof"><div class="proof-media"><img src="/assets/department-attention.webp" width="920" height="760" loading="lazy" decoding="async" alt="需要你決定的狀態畫面：Mission 因為審查結果不明確而停下，等待使用者確認下一步"></div><figcaption>NEEDS ATTENTION — 只有真正卡住才打斷你</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== 更早版本 ============================== -->
+<section class="section release-notes">
+  <div class="wrap">
+    <div class="release-head">
+      <div>
+        <span class="eyebrow">EARLIER RELEASES</span>
+        <h2>再往前的版本紀錄。</h2>
+      </div>
+      <a class="btn" href="https://github.com/juinwei7/Pixel-Crew/releases">查看所有 Releases ↗</a>
+    </div>
+
+    <div class="release-list">
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.2.2</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>Windows 麥克風錄音修正</h3>
+        <p>改善本機 Whisper 的 Windows 麥克風錄音，支援較小聲的語音；如權限遭拒、找不到裝置或被其他程式占用，現在會直接說明原因。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.2.2">完整 v2.2.2 發布內容 ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.1.1</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>手機工作台與遠端存取更可靠</h3>
+        <p>Focus Reader、遠端存取、工作流程管理與相關視窗現在能更妥善地配合手機螢幕與觸控操作。當本機遠端轉接站無法啟動時，設定頁也會直接顯示可用的診斷資訊。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.1">完整 v2.1.1 發布內容 ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.1.0</span>
+          <time class="release-date" datetime="2026-09-01">2026.09.01</time>
+        </div>
+        <h3>帳號隔離、Focus 工作台與本機語音輸入</h3>
+        <p>每位 NPC 現在可指定 Claude Code／Codex 帳號，並可使用 <code>/goal</code>、最多四窗格 Focus Reader 與可預覽並強制限制的多 Agent 執行邊界。HUD 會分帳號讀取用量；Boss Desk 顯示即時部門步驟，並能只針對連結的 Mission／NPC 清空重派。另加入選用的本機語音輸入：模型下載後可離線把語音轉成可編輯草稿，不會自動送出。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.1.0">完整 v2.1.0 發布內容 ↗</a>
+      </article>
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.0.1</span>
+          <time class="release-date" datetime="2026-07-28">2026.07.28</time>
+        </div>
+        <h3>老闆任務日誌與跨部門編排上線</h3>
+        <p>從持久化的 Boss Desk 直接交辦工作，決策模型會建立跨部門依賴圖並整合成一份報告；同時新增 session 中模型切換、即時 MCP 設定同步，並修正跨機器登入偵測缺少診斷資訊的問題。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.0.1">完整 v2.0.1 發布內容 ↗</a>
+      </article>
+
+      <div class="release-archive">
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v2.0.0</span><time class="release-date" datetime="2026-07-22">2026.07.22</time></div>
+          <h3>部門管理與唯讀協作正式登場</h3>
+          <p>現在可以直接建立部門，讓部門主管自己決定 Quick Consult、Quick Review，或啟動一段 2 到 5 步的完整 Mission；審查沒過最多自動修正兩輪，危險動作永遠留給你核准。</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.3</span><time class="release-date" datetime="2026-07-21">2026.07.21</time></div>
+          <h3>把管理、備份與專心工作流帶進同一個駕駛艙</h3>
+          <p>從 MCP 連線、資料備份到專心模式管理，1.0.3 讓日常維護更完整，也讓長時間工作更安全可靠。</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.2</span><time class="release-date" datetime="2026-07-20">2026.07.20</time></div>
+          <h3>閱讀、輸入與多 NPC 工作流全面升級</h3>
+          <p>加入專心閱讀、全畫面附件拖曳、session 狀態保存、Codex 指令預載與持久 NPC 排序。</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.1</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Windows 自包含版本</h3>
+          <p>新增 Windows x64 免安裝 ZIP，內建經過驗證的 Node.js runtime 與 production dependencies，並提供固定的 latest-release 下載連結。</p>
+        </article>
+        <article class="release-card">
+          <div class="release-meta"><span class="release-version">v1.0.0</span><time class="release-date" datetime="2026-07-17">2026.07.17</time></div>
+          <h3>Pixel Crew 首次公開發布</h3>
+          <p>多 Agent 像素辦公室、Claude／Codex 原生整合、核准流程、persona、跨 LLM 交接、用量監控、任務日誌與像素工作坊正式登場。</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== FOOTER ============================== -->
+<footer>
+  <div class="wrap">
+    <div class="foot-links">
+      <a href="https://github.com/juinwei7/Pixel-Crew">GITHUB</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/releases">RELEASES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/issues">ISSUES</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/SECURITY.md">SECURITY</a>
+      <a href="https://github.com/juinwei7/Pixel-Crew/blob/main/LICENSE">MIT LICENSE</a>
+    </div>
+    <p class="legal">
+      Pixel Crew 是獨立的非官方開源專案，與 Anthropic、OpenAI 均無隸屬、授權、背書或贊助關係。
+      「Claude」、「Claude Code」、「Codex」及相關商標屬於其各自所有者。
+      本工具僅編排與視覺化使用者自行安裝並登入的官方 CLI；使用各 CLI 請遵守其服務條款。
+      頁面中的所有截圖與錄影均為實際軟體畫面。
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

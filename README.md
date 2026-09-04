@@ -14,6 +14,17 @@
 
 Pixel Crew puts multiple **Claude Code** and **Codex** sessions into a single pixel-art office. Each session is an NPC you can task, watch stream its output/thinking/tool calls in real time, and approve or deny permission requests — all running against the **official CLIs already installed on your machine**. Pixel Crew never asks you to paste an API key; authentication and usage stay in the underlying CLIs.
 
+![Pixel Crew pixel office with multiple Claude Code and Codex NPCs moving between workstations](./PixelCrew/assets/task.webp)
+
+## Three ways to work
+
+| Pixel Office | Professional Workbench | Black Window (v2.3.0) |
+| --- | --- | --- |
+| See NPCs move between stations while tasks and approvals stream in real time. | Read, search, compare, and continue reports across managed Studios and up to four panes. | Arrange real, daemon-backed Claude Code and Codex terminals whose identity and layout survive navigation and reloads. |
+| ![Pixel Crew pixel office in motion](./PixelCrew/assets/task.webp) | ![Pixel Crew Professional Workbench](./PixelCrew/assets/mode-professional.webp) | ![Pixel Crew Black Window with a real Codex CLI](./PixelCrew/assets/mode-blackwindow.webp) |
+
+Version **2.3.0** also adds conflict-safe layout synchronization across browser tabs, per-terminal account/model/permission/font controls, editable local voice input, shared global Markdown memory, and consistent keyboard-accessible in-app confirmations. See the [full v2.3.0 release notes](https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0) or explore the [visual product tour](https://pixelcrew.weibuilds.com/features/).
+
 ## Highlights
 
 - **Multiple workers** — up to 20 independent Claude or Codex sessions, switchable at any time.
@@ -71,6 +82,17 @@ Pixel Crew is an **independent, unofficial** tool. It is not affiliated with, en
 Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公室。你可以同時建立多位「工人」、分派不同任務，並即時查看文字輸出、思考狀態、工具呼叫與執行結果。
 
 實際執行工作的仍是你電腦上的官方 CLI。Pixel Crew 負責管理 session、整理串流事件並呈現操作介面，不要求在專案內另外保存 API key；認證與用量取決於本機 Claude Code 或 Codex CLI 的設定。
+
+![Pixel Crew 像素辦公室中的 Claude Code、Codex NPC 走向工作站](./PixelCrew/assets/task.webp)
+
+## 三種工作模式
+
+| 像素辦公室 | 專業工作台 | 黑窗工作台（v2.3.0） |
+| --- | --- | --- |
+| 看 NPC 依照工具走到工作站，任務與核准即時出現在辦公室。 | 在 Studios 與最多四個窗格中閱讀、搜尋、比較並接續報告。 | 排列真正的 Claude Code／Codex 終端；daemon 保留終端身分，導覽與重整也不會中斷。 |
+| ![Pixel Crew 動態像素辦公室](./PixelCrew/assets/task.webp) | ![Pixel Crew 專業工作台](./PixelCrew/assets/mode-professional.webp) | ![Pixel Crew 黑窗工作台中的 Codex CLI](./PixelCrew/assets/mode-blackwindow.webp) |
+
+**2.3.0** 也加入多瀏覽器分頁的衝突安全版面同步、每個終端獨立的帳號／模型／權限／字體控制、可編輯的本機語音輸入、全域共享 Markdown 記憶，以及一致且支援鍵盤操作的應用程式內確認。詳見 [v2.3.0 完整發布內容](https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0)與[圖文產品導覽](https://pixelcrew.weibuilds.com/features/)。
 
 ## 功能
 
