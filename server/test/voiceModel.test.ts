@@ -4,7 +4,17 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VoiceModelManager } from "../src/voice/voiceModel.js";
+import { VoiceModelManager, type VoiceModelState } from "../src/voice/voiceModel.js";
+
+// start() resolves the actual download on a detached promise, so tests must
+// poll rather than sleep a fixed guess — a fixed sleep is flaky under CI load.
+async function waitUntilSettled(manager: VoiceModelManager, timeoutMs = 2000): Promise<VoiceModelState> {
+  const deadline = Date.now() + timeoutMs;
+  while (manager.getState().status === "downloading" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return manager.getState();
+}
 
 function fakeResponse(chunks: Uint8Array[], headers: Record<string, string> = {}) {
   return {
@@ -27,9 +37,7 @@ test("downloads, verifies checksum, and marks the model ready", async () => {
 
   const started = manager.start();
   assert.equal(started.status, "downloading");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  const state = manager.getState();
+  const state = await waitUntilSettled(manager);
   assert.equal(state.status, "ready");
   assert.equal(state.bytesDownloaded, bytes.length);
   assert.ok(existsSync(manager.modelPath));
@@ -43,9 +51,7 @@ test("rejects a checksum mismatch and leaves no partial file behind", async () =
   const manager = new VoiceModelManager(dir, async () => fakeResponse([bytes]), "0".repeat(64));
 
   manager.start();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  const state = manager.getState();
+  const state = await waitUntilSettled(manager);
   assert.equal(state.status, "failed");
   assert.match(state.error ?? "", /完整性驗證失敗/);
   assert.equal(existsSync(manager.modelPath), false);
@@ -58,9 +64,7 @@ test("reports a failed download without leaving a partial file", async () => {
   const manager = new VoiceModelManager(dir, async () => { throw new Error("network unavailable"); }, "irrelevant");
 
   manager.start();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  const state = manager.getState();
+  const state = await waitUntilSettled(manager);
   assert.equal(state.status, "failed");
   assert.match(state.error ?? "", /network unavailable/);
   assert.deepEqual(readdirSync(dir), []);
@@ -82,7 +86,7 @@ test("does not start a second download while one is already running or ready", a
   manager.start();
   assert.equal(calls, 1);
   release();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await waitUntilSettled(manager);
   manager.start();
   assert.equal(calls, 1);
   rmSync(dir, { recursive: true, force: true });
