@@ -32,7 +32,7 @@ type Props = { sessionId: string; workspacePath: string; terminalLabel: string; 
  * positioning, full-screen programs and interactive CLIs flow between the
  * browser terminal and the local PTY.
  */
-export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, launchCommand = null, onActivate, onStatus, onReady }, ref) {
+export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, launchCommand, onActivate, onStatus, onReady }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -115,6 +115,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
   }, [sessionId, workspacePath]);
 
   useEffect(() => {
+    if (launchCommand === undefined) return;
     const socket = socketRef.current;
     sendTerminal(socket, { type: "terminal_configure", launchCommand });
   }, [launchCommand]);
@@ -127,7 +128,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       sendTerminal(socket, { type: "terminal_input", data: `${command.replace(/\r?\n$/, "")}\r` });
     },
     launch(command) {
-      if (!writable || socketRef.current?.readyState !== WebSocket.OPEN || pendingLaunchRef.current) return Promise.resolve(false);
+      if (status !== "ready" || socketRef.current?.readyState !== WebSocket.OPEN || pendingLaunchRef.current) return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
         const timer = window.setTimeout(() => {
           if (!pendingLaunchRef.current) return;
@@ -135,6 +136,11 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
           resolve(false);
         }, 3_000);
         pendingLaunchRef.current = (ok) => { window.clearTimeout(timer); resolve(ok); };
+        // Clicking Launch is an explicit request to control this persistent
+        // pane. Claim and launch are ordered on the same WebSocket, so a tab
+        // that was read-only can start the Agent without requiring a separate
+        // click inside the terminal first.
+        if (!writable) sendTerminal(socketRef.current, { type: "terminal_claim" });
         sendTerminal(socketRef.current, { type: "terminal_launch", launchCommand: command });
       });
     },
@@ -155,7 +161,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
         return false;
       }
     },
-  }), [sessionId, writable]);
+  }), [sessionId, status, writable]);
 
   return <section className="black-window-terminal" aria-label={t("黑窗 CLI 終端")} onPointerDown={(event) => { event.stopPropagation(); onActivate?.(); }} onClick={() => {
     if (status === "ready" && !writable) sendTerminal(socketRef.current, { type: "terminal_claim" });

@@ -78,6 +78,29 @@
 .black-workspace__new { border-color: #2f7e64 !important; }
 .black-workspace__settings { display: flex; align-items: center; min-width: 0; gap: 6px; padding-left: 8px; border-left: 1px solid #263139; }
 .black-workspace__settings strong { max-width: 104px; overflow: hidden; color: #78e8a8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.black-account-picker, .black-workspace__advanced { position: relative; }
+.black-account-picker > summary, .black-workspace__advanced > summary { min-height: 32px; display: flex; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid #2b3c42; border-radius: 7px; background: #11171b; color: #d3e0dc; cursor: pointer; font: 700 11px var(--mono); list-style: none; white-space: nowrap; }
+.black-account-picker > summary::-webkit-details-marker, .black-workspace__advanced > summary::-webkit-details-marker { display: none; }
+.black-account-picker > summary b { color: #758b85; font-size: 10px; }
+.black-account-picker > summary > span, .black-account-picker__menu i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #6a7470; }
+.black-account-picker > summary > span.online, .black-account-picker__menu i.online { background: #65e8a4; box-shadow: 0 0 7px rgba(101,232,164,.55); }
+.black-account-picker > summary > span.offline, .black-account-picker__menu i.offline { background: #d69b59; }
+.black-account-picker[open] > summary, .black-workspace__advanced[open] > summary { border-color: #4fbd9a; color: #bfffd4; }
+.black-account-picker__menu, .black-workspace__advanced > div { position: absolute; z-index: 20; top: calc(100% + 7px); right: 0; min-width: 250px; padding: 7px; border: 1px solid #30433f; border-radius: 9px; background: #0d1415; box-shadow: 0 16px 40px rgba(0,0,0,.55); }
+.black-account-picker__menu section { display: grid; gap: 3px; padding: 5px 0 8px; }
+.black-account-picker__menu section + section { border-top: 1px solid #24312f; }
+.black-account-picker__menu section > strong { max-width: none; padding: 2px 7px 4px; color: #71877f; font-size: 9px; letter-spacing: .13em; text-transform: uppercase; }
+.black-account-picker__menu button { width: 100%; display: grid; grid-template-columns: 9px minmax(0,1fr) auto; align-items: center; gap: 7px; border-color: transparent; background: transparent; text-align: left; }
+.black-account-picker__menu button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.black-account-picker__menu button small { color: #718078; font-size: 9px; }
+.black-account-picker__menu .black-account-picker__manage { display: block; border-top: 1px solid #24312f; border-radius: 0; color: #7fdcb1; text-align: center; }
+.black-workspace__launch { min-width: 92px; border-color: #347c61 !important; color: #bfffd4 !important; }
+.black-workspace__launch:disabled { border-color: #293438 !important; color: #71807a !important; cursor: default; }
+.black-workspace__advanced > summary { min-width: 34px; justify-content: center; padding-inline: 8px; font-size: 16px; }
+.black-workspace__advanced > div { display: grid; gap: 9px; min-width: 270px; }
+.black-workspace__advanced label { display: grid; gap: 4px; color: #7f938b; font: 9px var(--mono); }
+.black-workspace__advanced input, .black-workspace__advanced select { width: 100%; max-width: none; }
+.black-workspace__advanced button { border-color: #347c61; color: #bfffd4; }
 .black-workspace__main { position: absolute; z-index: 0; inset: 62px 0 0; display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 0; }
 .black-workspace__main--rail-collapsed { grid-template-columns: 44px minmax(0, 1fr); }
 .black-workspace__rail { z-index: 3; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; border-right: 1px solid #263139; background: #0a0e10; box-shadow: 5px 0 18px rgba(0,0,0,.18); }
@@ -1305,10 +1328,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   border-color: rgba(201, 210, 220, 0.13);
   background: rgba(255, 255, 255, 0.035);
   color: #a9b5c0;
-}
-
-.game-root--focus .command-composer__prompt {
-  color: #8da9b7;
 }
 
 .game-root--focus .command-composer > textarea {

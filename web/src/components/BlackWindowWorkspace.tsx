@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { AccountWithAuth, AutoApproveMode, ProviderId, ProviderUsageState } from "../types";
-import { clampWindow, destroyWorkspaceTerminalTabs, loadBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowLayout, saveBlackWindowLayout, snapWindow, type BlackWindow, type BlackWindowLayout } from "../blackWindowWorkspace";
+import type { AccountWithAuth, AutoApproveMode, ProviderAuthState, ProviderId, ProviderUsageState } from "../types";
+import { blackWindowAccountValue, blackWindowAgentStartCommand, clampWindow, destroyWorkspaceTerminalTabs, loadBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, saveBlackWindowLayout, snapWindow, type BlackWindow, type BlackWindowAgentConfig, type BlackWindowLayout } from "../blackWindowWorkspace";
 import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWindowTerminal";
 import { EnergyHud } from "./EnergyHud";
 import { t } from "../i18n";
 
-type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
+type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
 type DragState = { id: string; kind: "move" | "resize"; edge?: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"; startX: number; startY: number; window: BlackWindow };
+type AdvancedDraft = { model: string; autoApproveMode: AutoApproveMode };
 
 // Which workspace tab / window a browser tab has focused is that tab's own
 // view state, not shared mux content — persisting or broadcasting it would
@@ -36,27 +37,18 @@ async function destroyTerminalTab(id: string): Promise<boolean> {
   }
 }
 
-function quote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
-function agentStartCommand(entry: BlackWindow, account: AccountWithAuth | undefined): string | null {
-  if (!entry.provider) return null;
-  const home = entry.accountSource === "managed" && account?.homeDir ? (entry.provider === "codex" ? "CODEX_HOME=" : "CLAUDE_CONFIG_DIR=") + quote(account.homeDir) + " " : "";
-  if (entry.provider === "codex") {
-    const options = ["--no-alt-screen", entry.model ? "--model " + quote(entry.model) : ""];
-    if (entry.autoApproveMode === "safe") options.push("--ask-for-approval on-request");
-    if (entry.autoApproveMode === "full") options.push("--approve-for-me");
-    if (entry.autoApproveMode === "invincible") options.push("--dangerously-bypass-approvals-and-sandbox");
-    return home + "codex " + options.filter(Boolean).join(" ");
-  }
-  const permission = entry.autoApproveMode === "off" ? "manual" : entry.autoApproveMode === "safe" ? "acceptEdits" : entry.autoApproveMode === "full" ? "auto" : "bypassPermissions";
-  return home + "claude " + [entry.model ? "--model " + quote(entry.model) : "", "--permission-mode " + permission, entry.autoApproveMode === "invincible" ? "--dangerously-skip-permissions" : ""].filter(Boolean).join(" ");
-}
+function providerLabel(provider: ProviderId): string { return provider === "codex" ? "Codex" : "Claude"; }
+function authenticated(status: ProviderAuthState["status"] | undefined): boolean { return status === "authenticated"; }
 
-export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, accountUsage, totalCostUsd, onRefreshUsage, onPixel, onProfessional, muxLayoutEvent }: Props) {
+export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAuth, usage, accountUsage, totalCostUsd, onRefreshUsage, onOpenAccounts, onPixel, onProfessional, muxLayoutEvent }: Props) {
   const [layout, setLayout] = useState<BlackWindowLayout>(() => loadBlackWindowLayout(defaultWorkspacePath));
   const [muxHydrated, setMuxHydrated] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [dragWorkspaceId, setDragWorkspaceId] = useState<string | null>(null);
+  const [restartingId, setRestartingId] = useState<string | null>(null);
+  const [terminalStatuses, setTerminalStatuses] = useState<Record<string, "connecting" | "ready" | "closed" | "error">>({});
+  const [advancedDraft, setAdvancedDraft] = useState<AdvancedDraft>({ model: "", autoApproveMode: "off" });
   const terminalRefs = useRef(new Map<string, BlackWindowTerminalHandle | null>());
   const dragRef = useRef<DragState | null>(null);
   const pendingMuxLayoutRef = useRef<Props["muxLayoutEvent"]>(null);
@@ -69,6 +61,10 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, ac
   const selectedWorkspace = layout.workspaces.find((workspace) => workspace.id === layout.selectedWorkspaceId) ?? layout.workspaces[0] ?? null;
   const visibleWindows = layout.windows.filter((entry) => entry.workspaceId === selectedWorkspace?.id);
   const selected = visibleWindows.find((entry) => entry.id === layout.selectedId) ?? visibleWindows.at(-1) ?? null;
+
+  useEffect(() => {
+    setAdvancedDraft({ model: selected?.model ?? "", autoApproveMode: selected?.autoApproveMode ?? "off" });
+  }, [selected?.id, selected?.model, selected?.autoApproveMode]);
 
   const receiveMuxLayout = (event: NonNullable<Props["muxLayoutEvent"]>) => {
     if (event.layout === lastSyncedLayoutRef.current) return;
@@ -273,15 +269,84 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, ac
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", done);
   };
-  const injectModel = () => { if (selected?.provider && selected.model) terminalRefs.current.get(selected.id)?.inject("/model " + selected.model); };
+  const selectedAccount = selected?.accountId ? accounts.find((item) => item.id === selected.accountId && item.provider === selected.provider) : undefined;
+  const selectedAuthStatus = selected?.provider
+    ? selected?.accountSource === "managed" ? selectedAccount?.auth?.status : defaultAuth[selected.provider]?.status
+    : undefined;
+  const selectedAccountLabel = selected?.provider
+    ? selected.accountSource === "managed"
+      ? selectedAccount ? `${providerLabel(selected.provider)} · ${selectedAccount.label}` : `${providerLabel(selected.provider)} · ${t("帳號已不存在")}`
+      : `${providerLabel(selected.provider)} · ${t("共用登入")}`
+    : t("選擇帳號");
+
+  const accountStatus = (provider: ProviderId, accountId: string | null): ProviderAuthState["status"] | undefined => accountId
+    ? accounts.find((account) => account.id === accountId && account.provider === provider)?.auth?.status
+    : defaultAuth[provider]?.status;
+  const accountLabel = (provider: ProviderId, accountId: string | null): string => accountId
+    ? `${providerLabel(provider)} · ${accounts.find((account) => account.id === accountId)?.label ?? t("帳號已不存在")}`
+    : `${providerLabel(provider)} · ${t("共用登入")}`;
+
+  const restartAgent = async (config: BlackWindowAgentConfig, nextLabel: string, reason: "account" | "settings" = "account"): Promise<boolean> => {
+    if (!selected?.provider || restartingId) return false;
+    const nextAccount = config.accountId ? accounts.find((account) => account.id === config.accountId && account.provider === config.provider) : undefined;
+    const nextStatus = config.accountSource === "managed" ? nextAccount?.auth?.status : defaultAuth[config.provider!]?.status;
+    if (!authenticated(nextStatus)) { onOpenAccounts(config.provider!); return false; }
+    const nextEntry = { ...selected, ...config };
+    if (!blackWindowAgentStartCommand(nextEntry, nextAccount)) return false;
+    const confirmation = reason === "account"
+      ? t("切換為「{account}」需要結束目前 Agent session 並重新啟動。確定繼續？", { account: nextLabel })
+      : t("套用新的進階設定需要結束目前 Agent session 並重新啟動。確定繼續？");
+    if (!window.confirm(confirmation)) return false;
+    const oldId = selected.id;
+    setRestartingId(oldId);
+    const destroyed = await (terminalRefs.current.get(oldId)?.destroy() ?? Promise.resolve(false));
+    if (!destroyed) {
+      setRestartingId(null);
+      window.alert(t("無法重新啟動 CLI，原本的 session 已保留。"));
+      return false;
+    }
+    terminalRefs.current.delete(oldId);
+    setLayout((current) => restartBlackWindow(current, oldId, config));
+    setRestartingId(null);
+    return true;
+  };
+
+  const chooseAccount = async (value: string) => {
+    if (!selected) return;
+    const choice = parseBlackWindowAccountValue(value);
+    if (!choice) return;
+    if (choice.provider === selected.provider && choice.accountSource === selected.accountSource && choice.accountId === selected.accountId) return;
+    const config: BlackWindowAgentConfig = { ...choice, model: selected.model, autoApproveMode: selected.autoApproveMode };
+    if (selected.agentStarted) {
+      await restartAgent(config, accountLabel(choice.provider!, choice.accountId));
+      return;
+    }
+    update(selected.id, { ...choice, title: choice.provider?.toUpperCase() ?? "CODEX" });
+  };
+
   const launchAgent = async () => {
     if (!selected?.provider) return;
+    if (!authenticated(selectedAuthStatus)) { onOpenAccounts(selected.provider); return; }
     const account = selected.accountId ? accounts.find((item) => item.id === selected.accountId) : undefined;
-    const command = agentStartCommand(selected, account);
+    const command = blackWindowAgentStartCommand(selected, account);
     if (command) {
       const launched = await terminalRefs.current.get(selected.id)?.launch(command);
       if (launched) update(selected.id, { agentStarted: true });
+      else window.alert(t("Agent 無法啟動，請確認 CLI 與帳號登入狀態。"));
     }
+  };
+
+  const applyAdvanced = async () => {
+    if (!selected?.provider) return;
+    const config: BlackWindowAgentConfig = {
+      provider: selected.provider,
+      accountSource: selected.accountSource,
+      accountId: selected.accountId,
+      model: advancedDraft.model.trim(),
+      autoApproveMode: advancedDraft.autoApproveMode,
+    };
+    if (selected.agentStarted) await restartAgent(config, selectedAccountLabel, "settings");
+    else update(selected.id, { model: config.model, autoApproveMode: config.autoApproveMode });
   };
   return <section className="black-workspace" aria-label={t("黑窗工程工作台")}>
     <header className="black-workspace__toolbar">
@@ -292,13 +357,21 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, ac
       <button type="button" className="black-workspace__new" onClick={addPane}>＋ {t("新 CLI")}</button><button type="button" onClick={() => addWorkspace()}>＋ {t("新分頁")}</button>
       <button type="button" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
       {selected && <div className="black-workspace__settings">
-        <select value={selected.provider ?? "codex"} onChange={(event) => { const provider = event.target.value as ProviderId; update(selected.id, { title: provider.toUpperCase(), mode: "agent", provider, accountId: null, agentStarted: false }); }} aria-label={t("CLI 類型")}>
-          <option value="claude">Claude</option>
-          <option value="codex">Codex</option>
-        </select>
-        {selected.mode === "agent" && <><select value={selected.accountSource} onChange={(event) => update(selected.id, { accountSource: event.target.value as BlackWindow["accountSource"], accountId: null })} aria-label={t("帳號來源")}><option value="ambient">{t("系統終端登入")}</option><option value="managed">{t("Pixel Crew 帳號")}</option></select>
-          {selected.accountSource === "managed" && <select value={selected.accountId ?? ""} onChange={(event) => update(selected.id, { accountId: event.target.value || null })} aria-label={t("Pixel Crew 帳號")}><option value="">{t("選擇帳號")}</option>{accounts.filter((account) => account.provider === selected.provider).map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select>}
-          <input value={selected.model} onChange={(event) => update(selected.id, { model: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") injectModel(); }} placeholder={t("模型")}/><select value={selected.autoApproveMode} onChange={(event) => update(selected.id, { autoApproveMode: event.target.value as AutoApproveMode })} aria-label={t("核准模式")}><option value="off">{t("手動核准")}</option><option value="safe">{t("安全")}</option><option value="full">{t("完全")}</option><option value="invincible">{t("無限制")}</option></select><button type="button" onClick={launchAgent} disabled={!selected.provider}>{t("啟動 Agent")}</button><button type="button" onClick={injectModel} disabled={!selected.model}>{t("注入模型")}</button></>}
+        <details className="black-account-picker">
+          <summary aria-label={t("切換 CLI 帳號")}><span className={authenticated(selectedAuthStatus) ? "online" : "offline"}/>{selectedAccountLabel}<b>▾</b></summary>
+          <div className="black-account-picker__menu">
+            {(["codex", "claude"] as ProviderId[]).map((provider) => <section key={provider}><strong>{providerLabel(provider)}</strong>
+              <button type="button" aria-label={`${providerLabel(provider)} · ${t("共用登入")} · ${authenticated(accountStatus(provider, null)) ? t("已登入") : t("未登入")}`} className={blackWindowAccountValue(provider, null) === blackWindowAccountValue(selected.provider ?? "codex", selected.accountId) && selected.accountSource === "ambient" ? "active" : ""} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void chooseAccount(blackWindowAccountValue(provider, null)); }}><i className={authenticated(accountStatus(provider, null)) ? "online" : "offline"}/><span>{t("共用登入")}</span><small>{authenticated(accountStatus(provider, null)) ? t("已登入") : t("未登入")}</small></button>
+              {accounts.filter((account) => account.provider === provider).map((account) => <button type="button" aria-label={`${providerLabel(provider)} · ${account.label} · ${authenticated(account.auth?.status) ? t("已登入") : t("未登入")}`} key={account.id} className={selected.accountId === account.id ? "active" : ""} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void chooseAccount(blackWindowAccountValue(provider, account.id)); }}><i className={authenticated(account.auth?.status) ? "online" : "offline"}/><span>{account.label}</span><small>{authenticated(account.auth?.status) ? t("已登入") : t("未登入")}</small></button>)}
+            </section>)}
+            <button type="button" className="black-account-picker__manage" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onOpenAccounts(selected.provider ?? "codex"); }}>＋ {t("管理／新增帳號")}</button>
+          </div>
+        </details>
+        <button type="button" className="black-workspace__launch" onClick={() => void launchAgent()} disabled={Boolean(restartingId) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}>{restartingId === selected.id ? t("重新啟動中…") : selected.agentStarted ? t("Agent 運行中") : terminalStatuses[selected.id] !== "ready" ? t("正在連線…") : authenticated(selectedAuthStatus) ? t("啟動 Agent") : t("登入帳號")}</button>
+        <details className="black-workspace__advanced">
+          <summary aria-label={t("進階設定")}>⋯</summary>
+          <div><label>{t("模型")}<input value={advancedDraft.model} onChange={(event) => setAdvancedDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("使用預設模型")}/></label><label>{t("核准模式")}<select value={advancedDraft.autoApproveMode} onChange={(event) => setAdvancedDraft((current) => ({ ...current, autoApproveMode: event.target.value as AutoApproveMode }))}><option value="off">{t("手動核准")}</option><option value="safe">{t("安全")}</option><option value="full">{t("完全")}</option><option value="invincible">{t("無限制")}</option></select></label><button type="button" disabled={Boolean(restartingId) || (advancedDraft.model.trim() === selected.model && advancedDraft.autoApproveMode === selected.autoApproveMode)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void applyAdvanced(); }}>{selected.agentStarted ? t("套用並重新啟動") : t("儲存設定")}</button></div>
+        </details>
       </div>}
     </header>
     <div className={"black-workspace__main " + (layout.railCollapsed ? "black-workspace__main--rail-collapsed" : "")}>
@@ -318,7 +391,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, ac
           <header className="black-window__bar" onPointerDown={(event) => beginPointer(event, entry, "move")}><span className="black-window__dot"/><strong>{entry.title}</strong><code title={entry.workspacePath}>{entry.workspacePath}</code>
             <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => terminalRefs.current.get(entry.id)?.interrupt()} title="Ctrl+C">^C</button><button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => update(entry.id, { minimized: !entry.minimized })}>{entry.minimized ? "□" : "−"}</button><button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => close(entry.id)}>×</button>
           </header>
-          <BlackWindowTerminal ref={(node) => terminalRefs.current.set(entry.id, node)} sessionId={entry.id} workspacePath={entry.workspacePath} launchCommand={entry.agentStarted ? agentStartCommand(entry, entry.accountId ? accounts.find((account) => account.id === entry.accountId) : undefined) : null} terminalLabel={entry.agentStarted ? t("Agent 已附掛；設定僅作用於這個 CLI") : t("Agent 尚未啟動")} active={entry.id === selected?.id} onActivate={() => focus(entry.id)}/>
+          <BlackWindowTerminal ref={(node) => terminalRefs.current.set(entry.id, node)} sessionId={entry.id} workspacePath={entry.workspacePath} launchCommand={entry.agentStarted ? blackWindowAgentStartCommand(entry, entry.accountId ? accounts.find((account) => account.id === entry.accountId) : undefined) ?? undefined : null} terminalLabel={entry.agentStarted ? entry.accountSource === "managed" && !accounts.some((account) => account.id === entry.accountId && account.provider === entry.provider) ? t("帳號不可用；請重新選擇") : t("Agent 已附掛；設定僅作用於這個 CLI") : t("Agent 尚未啟動")} active={entry.id === selected?.id} onActivate={() => focus(entry.id)} onStatus={(status) => setTerminalStatuses((current) => current[entry.id] === status ? current : { ...current, [entry.id]: status })}/>
           {!entry.maximized && !entry.minimized && (["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const).map((edge) => <i key={edge} className={"black-window__resize black-window__resize--" + edge} onPointerDown={(event) => beginPointer(event, entry, "resize", edge)}/>)}
         </article>)}
         {!visibleWindows.length && <div className="black-workspace__empty"><strong>{selectedWorkspace?.title ?? t("新的分頁")}</strong><span>{t("這個分頁尚未有 CLI。")}</span><button type="button" onClick={addPane}>＋ {t("新增 CLI")}</button></div>}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { GlobalMemoryNoteDto } from "../types";
 import { apiRequest } from "../api";
+import { shouldSubmitComposerKey } from "../composerCore";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
 
@@ -8,6 +9,14 @@ type Props = {
   globalMemoryEvent: { notes: GlobalMemoryNoteDto[]; seq: number } | null;
   onClose(): void;
 };
+
+// Textarea grows with its content up to this many rows, then scrolls
+// internally — must match the line-height/padding in the
+// .global-memory-modal__add textarea CSS rule.
+const NOTE_INPUT_LINE_HEIGHT = 18;
+const NOTE_INPUT_VERTICAL_PADDING = 14;
+const NOTE_INPUT_MAX_ROWS = 10;
+const NOTE_INPUT_MAX_HEIGHT = NOTE_INPUT_LINE_HEIGHT * NOTE_INPUT_MAX_ROWS + NOTE_INPUT_VERTICAL_PADDING;
 
 export function GlobalMemoryModal({ globalMemoryEvent, onClose }: Props) {
   const [notes, setNotes] = useState<GlobalMemoryNoteDto[] | null>(null);
@@ -17,6 +26,18 @@ export function GlobalMemoryModal({ globalMemoryEvent, onClose }: Props) {
   // mount-time GET below is still in flight; once any of those newer
   // updates arrives, the stale GET must not overwrite them when it resolves.
   const hasNewerUpdate = useRef(false);
+  const noteInputRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+
+  // Driven by scrollHeight (not a line-count heuristic) so it reacts to
+  // every way the value can change — typing, paste, cut, select-all+delete —
+  // including a single long line that only grows tall because it wraps.
+  useEffect(() => {
+    const el = noteInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, NOTE_INPUT_MAX_HEIGHT)}px`;
+  }, [newNote]);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,12 +108,21 @@ export function GlobalMemoryModal({ globalMemoryEvent, onClose }: Props) {
         </ul>
       )}
       <div className="global-memory-modal__add">
-        <input
+        <textarea
+          ref={noteInputRef}
           value={newNote}
+          rows={1}
           maxLength={200}
           placeholder={t("例：使用者姓名、慣用稱呼、跨專案偏好")}
           onChange={(event) => setNewNote(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addNote(); } }}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
+          onKeyDown={(event) => {
+            if (shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, isComposing: composingRef.current, repeat: event.repeat })) {
+              event.preventDefault();
+              void addNote();
+            }
+          }}
         />
         <button type="button" onClick={() => void addNote()} disabled={!newNote.trim()}>{t("＋記住")}</button>
       </div>

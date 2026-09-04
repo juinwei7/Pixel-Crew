@@ -1,4 +1,4 @@
-export const MAX_COMPOSER_LINES = 6;
+export const MAX_COMPOSER_LINES = 10;
 
 export function explicitComposerLineCount(value: string): number {
   return Math.max(1, Math.min(MAX_COMPOSER_LINES, value.split("\n").length));

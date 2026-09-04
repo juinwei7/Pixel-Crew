@@ -315,8 +315,7 @@
 .command-composer__file-input { display: none; }
 .command-composer__attach { width: 32px; height: 32px; flex: none; padding: 0; border: 1px solid rgba(0, 229, 255,.16); border-radius: 8px; background: rgba(0, 229, 255,.045); color: #8deeff; cursor: pointer; font: 300 19px/1 var(--mono); }
 .command-composer__attach:hover { border-color: rgba(0, 229, 255,.38); background: rgba(0, 229, 255,.1); }
-.command-composer__prompt { color: var(--cyan); font: 700 18px var(--mono); }
-.command-composer > textarea { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.45 inherit; resize: none; max-height: 160px; overflow-y: auto; padding: 3px 0; }
+.command-composer > textarea { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.45 inherit; resize: none; max-height: 200px; overflow-y: auto; padding: 3px 0; }
 .command-composer > textarea:disabled { opacity: .5; }
 .command-composer__submit { min-width: 70px; min-height: 34px; border: 1px solid rgba(0, 255, 163,.26); border-radius: 9px; background: rgba(0, 255, 163,.12); color: #80e6bf; cursor: pointer; }
 .command-composer__submit:disabled { opacity: .35; cursor: default; }
@@ -1210,7 +1209,7 @@ input:focus-visible {
 .task-composer__toolbar { min-width: 0; }
 .task-composer__row { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .task-composer__row > :not(textarea) { flex: 0 0 auto; }
-.task-composer__row textarea { box-sizing: border-box; min-width: 0; min-height: 40px; max-height: 150px; flex: 1 1 auto; overflow-y: auto; resize: none; border: 1px solid rgba(0, 229, 255,.24); border-radius: 10px; background: rgba(6,15,31,.84); color: var(--text); font: 11px/22px inherit; padding: 8px 11px; transition: border-color .15s ease, box-shadow .15s ease; }
+.task-composer__row textarea { box-sizing: border-box; min-width: 0; min-height: 40px; max-height: 240px; flex: 1 1 auto; overflow-y: auto; resize: none; border: 1px solid rgba(0, 229, 255,.24); border-radius: 10px; background: rgba(6,15,31,.84); color: var(--text); font: 11px/22px inherit; padding: 8px 11px; transition: border-color .15s ease, box-shadow .15s ease; }
 .task-composer__row textarea:focus { border-color: rgba(0, 229, 255,.58); outline: none; box-shadow: 0 0 0 2px rgba(0, 229, 255,.055); }
 .task-composer__row textarea:disabled { cursor: not-allowed; opacity: .5; }
 .task-composer__attach { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid rgba(0, 229, 255,.27); border-radius: 10px; background: rgba(5,17,31,.9); color: var(--cyan); cursor: pointer; font: 22px/1 var(--mono); }
@@ -1424,9 +1423,9 @@ input:focus-visible {
 .global-memory-modal__list li button { flex: 0 0 auto; width: 26px; height: 26px; border: 1px solid var(--panel-border); border-radius: 7px; background: transparent; color: #8394ab; font-size: 14px; cursor: pointer; }
 .global-memory-modal__list li button:hover { border-color: rgba(255, 46, 136, 0.4); color: #ff9aae; }
 .global-memory-modal__empty { padding: 9px; color: #8394ab; font-size: 11px; text-align: center; }
-.global-memory-modal__add { display: flex; gap: 6px; }
-.global-memory-modal__add input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.02); color: var(--text); font-size: 12px; }
-.global-memory-modal__add button { flex: 0 0 auto; padding: 0 14px; border: 1px solid rgba(255, 183, 94, 0.35); border-radius: 8px; background: rgba(255, 183, 94, 0.08); color: #ffcf8a; font: 700 11px var(--mono); cursor: pointer; }
+.global-memory-modal__add { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.global-memory-modal__add textarea { width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--panel-border); border-radius: 8px; background: rgba(255, 255, 255, 0.02); color: var(--text); font: 12px/18px inherit; resize: none; overflow-y: auto; }
+.global-memory-modal__add button { flex: 0 0 auto; padding: 0 14px; height: 30px; border: 1px solid rgba(255, 183, 94, 0.35); border-radius: 8px; background: rgba(255, 183, 94, 0.08); color: #ffcf8a; font: 700 11px var(--mono); cursor: pointer; }
 .global-memory-modal__add button:hover:not(:disabled) { background: rgba(255, 183, 94, 0.16); }
 .global-memory-modal__add button:disabled { opacity: .45; cursor: default; }
 .global-memory-modal__error { margin-top: 10px; padding: 8px 10px; border: 1px solid rgba(255, 46, 136, 0.35); border-radius: 8px; background: rgba(255, 46, 136, 0.08); color: #ff9aae; font-size: 11px; }
