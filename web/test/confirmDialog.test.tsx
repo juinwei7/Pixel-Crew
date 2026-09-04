@@ -12,12 +12,10 @@ test("renders the message and default confirm/cancel labels", () => {
   assert.doesNotMatch(html, /confirm-dialog__btn--danger/);
 });
 
-test("danger tone marks the confirm button and custom labels override defaults", () => {
+test("danger tone marks the confirm button", () => {
   const html = renderToStaticMarkup(
-    <ConfirmDialog message="刪除後無法復原" confirmLabel="刪除" cancelLabel="保留" tone="danger" onConfirm={() => {}} onCancel={() => {}} />
+    <ConfirmDialog message="刪除後無法復原" tone="danger" onConfirm={() => {}} onCancel={() => {}} />
   );
   assert.match(html, /刪除後無法復原/);
-  assert.match(html, /刪除/);
-  assert.match(html, /保留/);
   assert.match(html, /confirm-dialog__btn--danger/);
 });

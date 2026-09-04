@@ -4,6 +4,7 @@ import { apiRequest } from "../api";
 import { compatibleWorkflowTargets, workflowInvocation, type WorkflowTarget } from "../workflowTypes";
 import { parseWorkflowDocument, updateWorkflowDocument, workflowText } from "../workflowDocument";
 import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
+import { type ConfirmTone } from "./ConfirmDialog";
 
 const NEW_SKILL = `---
 name: new-skill
@@ -47,7 +48,7 @@ export function CodexSkillCenter({
   activeWorkerId: string | null;
   onRun(workerId: string, message: string): Promise<string | null>;
   onDirtyChange(dirty: boolean): void;
-  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
+  confirm(message: string, tone?: ConfirmTone): Promise<boolean>;
 }) {
   const [skills, setSkills] = useState<SkillDocument[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -215,7 +216,7 @@ export function CodexSkillCenter({
       <aside className="command-library command-library--codex">
         <div className="command-library__actions">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("搜尋 Skill…")} aria-label={t("搜尋 Skill")} />
-          <button type="button" onClick={create}>{t("＋ 新增")}</button>
+          <button type="button" onClick={() => void create()}>{t("＋ 新增")}</button>
         </div>
         <div className="command-library__scope">
           <span>CODEX REPO</span>
@@ -229,7 +230,7 @@ export function CodexSkillCenter({
               type="button"
               key={skill.name}
               className={`command-library__item ${selectedName === skill.name ? "command-library__item--active" : ""}`}
-              onClick={() => select(skill)}
+              onClick={() => void select(skill)}
             >
               <code>${skill.name}</code>
               <span>{skill.description || t("尚未填寫觸發情境")}</span>
@@ -245,7 +246,7 @@ export function CodexSkillCenter({
             <div className="command-editor__glyph command-editor__glyph--codex">$</div>
             <h3>{t("建立可重複使用的 Codex Skill")}</h3>
             <p>{t("Skill 可以被明確呼叫，也能由 Codex 根據 description 自動選用。")}</p>
-            <button type="button" onClick={create}>{t("建立第一個 Skill")}</button>
+            <button type="button" onClick={() => void create()}>{t("建立第一個 Skill")}</button>
           </div>
         ) : (
           <>

@@ -4,9 +4,11 @@ import { BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAcco
 import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWindowTerminal";
 import { EnergyHud } from "./EnergyHud";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { type ConfirmTone } from "./ConfirmDialog";
+import { type Toast } from "./ToastRegion";
 import { t } from "../i18n";
 
-type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null; confirm(message: string, tone?: "default" | "danger"): Promise<boolean>; notify(message: string, tone?: "ok" | "error" | "info"): void };
+type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null; confirm(message: string, tone?: ConfirmTone): Promise<boolean>; notify(message: string, tone?: Toast["tone"]): void };
 type DragState = { id: string; kind: "move" | "resize"; edge?: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"; startX: number; startY: number; window: BlackWindow };
 type AdvancedDraft = { model: string; autoApproveMode: AutoApproveMode };
 
@@ -43,6 +45,13 @@ function authenticated(status: ProviderAuthState["status"] | undefined): boolean
 
 export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAuth, usage, accountUsage, totalCostUsd, onRefreshUsage, onOpenAccounts, onPixel, onProfessional, muxLayoutEvent, confirm, notify }: Props) {
   const [layout, setLayout] = useState<BlackWindowLayout>(() => loadBlackWindowLayout(defaultWorkspacePath));
+  // Mirrors `layout` for reads that happen after an `await confirm(...)` —
+  // confirm() is non-blocking (unlike the window.confirm it replaced), so a
+  // synced muxLayoutEvent can change the layout while a dialog is pending;
+  // re-reading through this ref instead of a stale closure avoids acting on
+  // panes/workspaces that no longer exist by the time the user answers.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const [muxHydrated, setMuxHydrated] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
@@ -173,9 +182,13 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
   });
   const deleteWorkspace = async (workspaceId: string) => {
     const workspace = layout.workspaces.find((item) => item.id === workspaceId);
-    const panes = layout.windows.filter((item) => item.workspaceId === workspaceId);
+    const initialPaneCount = layout.windows.filter((item) => item.workspaceId === workspaceId).length;
     if (!workspace) return;
-    if (!(await confirm(t("刪除「{name}」與其中 {count} 個 CLI session？這無法復原。", { name: workspace.title, count: panes.length }), "danger"))) return;
+    if (!(await confirm(t("刪除「{name}」與其中 {count} 個 CLI session？這無法復原。", { name: workspace.title, count: initialPaneCount }), "danger"))) return;
+    // Re-read the pane list — confirm() doesn't block the page, so panes may
+    // have been added/removed by a synced layout update while it was pending.
+    if (!layoutRef.current.workspaces.some((item) => item.id === workspaceId)) return;
+    const panes = layoutRef.current.windows.filter((item) => item.workspaceId === workspaceId);
     const destroyed = await destroyWorkspaceTerminalTabs(panes.map((pane) => pane.id), destroyTerminalTab);
     if (!destroyed) { notify(t("刪除 Workspace 的 CLI 失敗，請再試一次。"), "error"); return; }
     for (const pane of panes) terminalRefs.current.delete(pane.id);
@@ -299,6 +312,13 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
       : t("套用新的進階設定需要結束目前 Agent session 並重新啟動。確定繼續？");
     if (!(await confirm(confirmation))) return false;
     const oldId = selected.id;
+    // The dialog above doesn't block the page anymore, so re-check the pane
+    // is still there before acting on it — it may have been closed (or moved
+    // to a different workspace) by a synced layout update while it was open.
+    if (!layoutRef.current.windows.some((item) => item.id === oldId)) {
+      notify(t("這個 CLI session 已不存在，操作已取消。"), "error");
+      return false;
+    }
     setRestartingId(oldId);
     const destroyed = await (terminalRefs.current.get(oldId)?.destroy() ?? Promise.resolve(false));
     if (!destroyed) {

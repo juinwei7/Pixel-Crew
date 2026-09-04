@@ -548,18 +548,6 @@ body {
 }
 .npc-radial__input--error { border-color: var(--err) !important; }
 .npc-radial__error { color: #ff9aae; font-size: 9px; }
-.npc-radial__confirm { display: flex; gap: 5px; }
-.npc-radial__confirm button {
-  flex: 1;
-  min-height: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #dce9f7;
-  cursor: pointer;
-  font-size: 10px;
-}
-.npc-radial__confirm-danger { border-color: rgba(255, 46, 136, 0.4) !important; background: rgba(255, 46, 136, 0.12) !important; color: #ff9aae !important; }
 .department-rename { position: fixed; z-index: 120; display: grid; width: 190px; gap: 5px; transform: translate(-50%, 8px); padding: 8px; border: 1px solid rgba(0, 229, 255,.34); border-radius: 9px; background: rgba(5,14,29,.98); box-shadow: 0 14px 34px rgba(0,0,0,.48); }
 .department-rename input { width: 100%; height: 30px; padding: 0 9px; border: 1px solid rgba(0, 229, 255,.24); border-radius: 6px; outline: none; background: rgba(1,7,17,.86); color: #e4eef9; font: 11px var(--sans); }
 .department-rename input:focus { border-color: rgba(0, 229, 255,.72); box-shadow: 0 0 0 2px rgba(0, 229, 255,.08); }

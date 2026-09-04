@@ -7,6 +7,7 @@ import { parseWorkflowDocument, workflowText } from "../workflowDocument";
 import { CodexSkillCenter } from "./CodexSkillCenter";
 import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
 import { Modal } from "./Modal";
+import { type ConfirmTone } from "./ConfirmDialog";
 import { t } from "../i18n";
 
 const NEW_COMMAND = `---
@@ -47,7 +48,7 @@ export function CommandCenter({
   revisions: WorkflowRevisions;
   onRun(workerId: string, message: string): Promise<string | null>;
   onClose(): void;
-  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
+  confirm(message: string, tone?: ConfirmTone): Promise<boolean>;
 }) {
   const [providerView, setProviderView] = useState<ProviderId>(provider);
   const [codexDirty, setCodexDirty] = useState(false);
@@ -239,14 +240,14 @@ export function CommandCenter({
             <button
               type="button"
               className={providerView === "claude" ? "command-center__provider--active" : ""}
-              onClick={() => switchProviderView("claude")}
+              onClick={() => void switchProviderView("claude")}
             >
               CLAUDE CODE
             </button>
             <button
               type="button"
               className={providerView === "codex" ? "command-center__provider--active" : ""}
-              onClick={() => switchProviderView("codex")}
+              onClick={() => void switchProviderView("codex")}
             >
               CODEX
             </button>
@@ -255,7 +256,7 @@ export function CommandCenter({
             <span>{t("目前房間")}</span>
             <strong>{roomName(workspacePath)}</strong>
           </div>
-          <button className="command-center__close" type="button" onClick={close} aria-label={t("關閉")}>×</button>
+          <button className="command-center__close" type="button" onClick={() => void close()} aria-label={t("關閉")}>×</button>
         </header>
 
         {providerView === "claude" ? <div className="command-center__body">
@@ -267,7 +268,7 @@ export function CommandCenter({
                 placeholder={t("搜尋名稱或用途…")}
                 aria-label={t("搜尋指令")}
               />
-              <button type="button" onClick={create}>{t("＋ 新增")}</button>
+              <button type="button" onClick={() => void create()}>{t("＋ 新增")}</button>
             </div>
             <div className="command-library__scope">
               <span>PROJECT</span>
@@ -283,7 +284,7 @@ export function CommandCenter({
                   type="button"
                   key={command.name}
                   className={`command-library__item ${selectedName === command.name ? "command-library__item--active" : ""}`}
-                  onClick={() => select(command)}
+                  onClick={() => void select(command)}
                 >
                   <code>/{command.name}</code>
                   <span>{command.description || t("尚未填寫用途說明")}</span>
@@ -299,7 +300,7 @@ export function CommandCenter({
                 <div className="command-editor__glyph">/</div>
                 <h3>{t("選擇一個指令開始編輯")}</h3>
                 <p>{t("或建立新的工作流程，儲存後就能直接從輸入框的 `/` 選單使用。")}</p>
-                <button type="button" onClick={create}>{t("建立第一個指令")}</button>
+                <button type="button" onClick={() => void create()}>{t("建立第一個指令")}</button>
               </div>
             ) : (
               <>

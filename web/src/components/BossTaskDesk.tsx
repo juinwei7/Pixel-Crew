@@ -4,6 +4,7 @@ import { t } from "../i18n";
 import type { BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
+import { type ConfirmTone } from "./ConfirmDialog";
 
 type DecisionModelOption = { provider: ProviderId; model: string; label: string };
 
@@ -35,7 +36,7 @@ type Props = {
   onClose(): void;
   composerHost?: Element | null;
   focusMode?: boolean;
-  confirm(message: string, tone?: "default" | "danger"): Promise<boolean>;
+  confirm(message: string, tone?: ConfirmTone): Promise<boolean>;
 };
 
 const statusLabel: Record<BossTask["status"], string> = {
@@ -106,6 +107,11 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const restoredSelection = useRef(false);
+  // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
+  // non-blocking, so a WS-driven status change can land while its dialog is
+  // still open; re-read through this ref instead of a stale closure.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const activeTasks = ordered.filter((task) => !task.archivedAt);
   const archivedTasks = ordered.filter((task) => task.archivedAt);
   const visibleTasks = showArchived ? archivedTasks : activeTasks;
@@ -208,6 +214,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   async function deleteRecord() {
     if (!selected || working || !terminalStatuses.includes(selected.status)) return;
     if (!(await confirm(t("確定永久刪除 Boss 任務「{title}」？此動作無法復原。", { title: selected.title }), "danger"))) return;
+    // Re-check against the latest tasks — confirm() doesn't block the page,
+    // so a WS push could have moved this task out of a terminal status while
+    // the dialog was open.
+    const current = tasksRef.current.find((task) => task.id === selected.id);
+    if (!current || !terminalStatuses.includes(current.status)) {
+      setError(t("這筆任務狀態已變更，無法刪除。"));
+      return;
+    }
     setWorking(true);
     setError(null);
     const result = await onDelete(selected.id);

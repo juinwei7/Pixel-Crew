@@ -6,14 +6,12 @@ export type ConfirmTone = "default" | "danger";
 
 type Props = {
   message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
   tone?: ConfirmTone;
   onConfirm(): void;
   onCancel(): void;
 };
 
-export function ConfirmDialog({ message, confirmLabel, cancelLabel, tone = "default", onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ message, tone = "default", onConfirm, onCancel }: Props) {
   useEffect(() => {
     const captureEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -32,10 +30,10 @@ export function ConfirmDialog({ message, confirmLabel, cancelLabel, tone = "defa
       <p className="confirm-dialog__message">{message}</p>
       <div className="confirm-dialog__actions">
         <button type="button" className="confirm-dialog__btn confirm-dialog__btn--cancel" onClick={onCancel} autoFocus={tone === "danger"}>
-          {cancelLabel ?? t("取消")}
+          {t("取消")}
         </button>
         <button type="button" className={`confirm-dialog__btn confirm-dialog__btn--confirm${tone === "danger" ? " confirm-dialog__btn--danger" : ""}`} onClick={onConfirm} autoFocus={tone !== "danger"}>
-          {confirmLabel ?? t("確定")}
+          {t("確定")}
         </button>
       </div>
     </Modal>
