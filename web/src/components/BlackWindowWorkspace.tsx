@@ -5,7 +5,7 @@ import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWind
 import { EnergyHud } from "./EnergyHud";
 import { t } from "../i18n";
 
-type Props = { defaultWorkspacePath: string; workspacePaths: string[]; accounts: AccountWithAuth[]; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
+type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
 type DragState = { id: string; kind: "move" | "resize"; edge?: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"; startX: number; startY: number; window: BlackWindow };
 
 // Which workspace tab / window a browser tab has focused is that tab's own
@@ -51,7 +51,7 @@ function agentStartCommand(entry: BlackWindow, account: AccountWithAuth | undefi
   return home + "claude " + [entry.model ? "--model " + quote(entry.model) : "", "--permission-mode " + permission, entry.autoApproveMode === "invincible" ? "--dangerously-skip-permissions" : ""].filter(Boolean).join(" ");
 }
 
-export function BlackWindowWorkspace({ defaultWorkspacePath, workspacePaths, accounts, usage, accountUsage, totalCostUsd, onRefreshUsage, onPixel, onProfessional, muxLayoutEvent }: Props) {
+export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, usage, accountUsage, totalCostUsd, onRefreshUsage, onPixel, onProfessional, muxLayoutEvent }: Props) {
   const [layout, setLayout] = useState<BlackWindowLayout>(() => loadBlackWindowLayout(defaultWorkspacePath));
   const [muxHydrated, setMuxHydrated] = useState(false);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
@@ -290,14 +290,9 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, workspacePaths, acc
       <EnergyHud usage={usage} accountUsage={accountUsage} accounts={accounts} onRefresh={onRefreshUsage} totalCostUsd={totalCostUsd}/>
       <div className="black-workspace__tabs">{visibleWindows.filter((entry) => entry.minimized).map((entry) => <button key={entry.id} onClick={() => focus(entry.id)}>{entry.title}</button>)}</div>
       <button type="button" className="black-workspace__new" onClick={addPane}>＋ {t("新 CLI")}</button><button type="button" onClick={() => addWorkspace()}>＋ {t("新分頁")}</button>
-      {workspacePaths.length > 1 && <select aria-label={t("在其他路徑開新分頁")} value="" onChange={(event) => { const path = event.target.value; if (path) addWorkspace(path); }}>
-        <option value="" disabled>{t("開在其他路徑…")}</option>
-        {workspacePaths.map((path) => <option key={path} value={path}>{path}</option>)}
-      </select>}
       <button type="button" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
       {selected && <div className="black-workspace__settings">
-        <select value={selected.mode === "agent" ? (selected.provider ?? "") : ""} onChange={(event) => { const value = event.target.value; if (!value) update(selected.id, { mode: "raw", provider: null, agentStarted: false }); else update(selected.id, { mode: "agent", provider: value as ProviderId, accountId: null, agentStarted: false }); }} aria-label={t("CLI 類型")}>
-          <option value="">{t("Raw Shell")}</option>
+        <select value={selected.provider ?? "codex"} onChange={(event) => { const provider = event.target.value as ProviderId; update(selected.id, { title: provider.toUpperCase(), mode: "agent", provider, accountId: null, agentStarted: false }); }} aria-label={t("CLI 類型")}>
           <option value="claude">Claude</option>
           <option value="codex">Codex</option>
         </select>
@@ -323,7 +318,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, workspacePaths, acc
           <header className="black-window__bar" onPointerDown={(event) => beginPointer(event, entry, "move")}><span className="black-window__dot"/><strong>{entry.title}</strong><code title={entry.workspacePath}>{entry.workspacePath}</code>
             <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => terminalRefs.current.get(entry.id)?.interrupt()} title="Ctrl+C">^C</button><button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => update(entry.id, { minimized: !entry.minimized })}>{entry.minimized ? "□" : "−"}</button><button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => close(entry.id)}>×</button>
           </header>
-          <BlackWindowTerminal ref={(node) => terminalRefs.current.set(entry.id, node)} sessionId={entry.id} workspacePath={entry.workspacePath} launchCommand={entry.mode === "agent" && entry.agentStarted ? agentStartCommand(entry, entry.accountId ? accounts.find((account) => account.id === entry.accountId) : undefined) : null} terminalLabel={entry.mode === "agent" && entry.agentStarted ? t("Agent 已附掛；設定僅作用於這個 CLI") : entry.mode === "agent" ? t("Agent 尚未啟動") : t("Raw Shell：刷新後可重新附掛")} active={entry.id === selected?.id} onActivate={() => focus(entry.id)}/>
+          <BlackWindowTerminal ref={(node) => terminalRefs.current.set(entry.id, node)} sessionId={entry.id} workspacePath={entry.workspacePath} launchCommand={entry.agentStarted ? agentStartCommand(entry, entry.accountId ? accounts.find((account) => account.id === entry.accountId) : undefined) : null} terminalLabel={entry.agentStarted ? t("Agent 已附掛；設定僅作用於這個 CLI") : t("Agent 尚未啟動")} active={entry.id === selected?.id} onActivate={() => focus(entry.id)}/>
           {!entry.maximized && !entry.minimized && (["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const).map((edge) => <i key={edge} className={"black-window__resize black-window__resize--" + edge} onPointerDown={(event) => beginPointer(event, entry, "resize", edge)}/>)}
         </article>)}
         {!visibleWindows.length && <div className="black-workspace__empty"><strong>{selectedWorkspace?.title ?? t("新的分頁")}</strong><span>{t("這個分頁尚未有 CLI。")}</span><button type="button" onClick={addPane}>＋ {t("新增 CLI")}</button></div>}

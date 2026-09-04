@@ -2,13 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowLayout, snapWindow } from "../src/blackWindowWorkspace";
 
-test("new black windows begin as isolated raw shells", () => {
+test("new black windows begin as unstarted Codex Agent panes", () => {
   const entry = newBlackWindow("/repo", 2, 9);
   assert.equal(entry.workspacePath, "/repo");
-  assert.equal(entry.mode, "raw");
+  assert.equal(entry.mode, "agent");
   assert.equal(entry.agentStarted, false);
-  assert.equal(entry.provider, null);
+  assert.equal(entry.provider, "codex");
+  assert.equal(entry.title, "CODEX");
   assert.equal(entry.z, 9);
+});
+
+test("legacy Raw Shell panes migrate to unstarted Codex panes", () => {
+  const workspace = newBlackWorkspace("/repo");
+  const legacy = { ...newBlackWindow("/repo", 0, 1, workspace.id), title: "RAW SHELL", mode: "raw" as const, provider: null };
+  const parsed = parseBlackWindowLayout({ version: 2, workspaces: [workspace], windows: [legacy] }, "/repo");
+  assert.equal(parsed.windows[0]?.mode, "agent");
+  assert.equal(parsed.windows[0]?.provider, "codex");
+  assert.equal(parsed.windows[0]?.title, "CODEX");
+  assert.equal(parsed.windows[0]?.agentStarted, false);
 });
 
 test("only explicitly started Agent panes arm automatic recovery", () => {
