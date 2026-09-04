@@ -1,4 +1,4 @@
-import type { AutoApproveMode, ProviderId } from "./types";
+import type { AccountWithAuth, AutoApproveMode, ProviderId } from "./types";
 
 export type BlackWindowMode = "raw" | "agent";
 export type AccountSource = "ambient" | "managed";
@@ -28,6 +28,40 @@ export type BlackWindow = {
 };
 
 export type BlackWindowLayout = { version: 2; workspaces: BlackWorkspace[]; windows: BlackWindow[]; selectedId: string | null; selectedWorkspaceId: string | null; railCollapsed: boolean };
+
+export type BlackWindowAgentConfig = Pick<BlackWindow, "provider" | "accountSource" | "accountId" | "model" | "autoApproveMode">;
+
+export function blackWindowAccountValue(provider: ProviderId, accountId: string | null): string {
+  return `${provider}:${accountId ?? ""}`;
+}
+
+export function parseBlackWindowAccountValue(value: string): Pick<BlackWindowAgentConfig, "provider" | "accountSource" | "accountId"> | null {
+  const separator = value.indexOf(":");
+  if (separator < 0) return null;
+  const provider = value.slice(0, separator);
+  if (provider !== "codex" && provider !== "claude") return null;
+  const accountId = value.slice(separator + 1) || null;
+  return { provider, accountSource: accountId ? "managed" : "ambient", accountId };
+}
+
+function shellQuote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
+
+export function blackWindowAgentStartCommand(entry: BlackWindow, account: AccountWithAuth | undefined): string | null {
+  if (!entry.provider) return null;
+  if (entry.accountSource === "managed" && (!account || account.provider !== entry.provider || account.id !== entry.accountId)) return null;
+  const home = entry.accountSource === "managed" && account?.homeDir
+    ? (entry.provider === "codex" ? "CODEX_HOME=" : "CLAUDE_CONFIG_DIR=") + shellQuote(account.homeDir) + " "
+    : "";
+  if (entry.provider === "codex") {
+    const options = ["--no-alt-screen", entry.model ? "--model " + shellQuote(entry.model) : ""];
+    if (entry.autoApproveMode === "safe") options.push("--ask-for-approval on-request");
+    if (entry.autoApproveMode === "full") options.push("--approve-for-me");
+    if (entry.autoApproveMode === "invincible") options.push("--dangerously-bypass-approvals-and-sandbox");
+    return home + "codex " + options.filter(Boolean).join(" ");
+  }
+  const permission = entry.autoApproveMode === "off" ? "manual" : entry.autoApproveMode === "safe" ? "acceptEdits" : entry.autoApproveMode === "full" ? "auto" : "bypassPermissions";
+  return home + "claude " + [entry.model ? "--model " + shellQuote(entry.model) : "", "--permission-mode " + permission, entry.autoApproveMode === "invincible" ? "--dangerously-skip-permissions" : ""].filter(Boolean).join(" ");
+}
 
 /** Destroy every daemon-owned terminal before its workspace disappears. */
 export async function destroyWorkspaceTerminalTabs(
@@ -72,6 +106,27 @@ export function newBlackWindow(workspacePath: string, offset = 0, z = 1, workspa
   };
 }
 
+/** Replace the daemon tab identity while retaining the pane itself. Account or
+ * launch-option changes cannot mutate a running CLI process, so confirmed
+ * changes restart it as a fresh terminal and propagate that identity to every
+ * browser through the shared layout. */
+export function restartBlackWindow(layout: BlackWindowLayout, windowId: string, config: BlackWindowAgentConfig, nextId = id("terminal")): BlackWindowLayout {
+  if (!layout.windows.some((window) => window.id === windowId)) return layout;
+  return {
+    ...layout,
+    selectedId: layout.selectedId === windowId ? nextId : layout.selectedId,
+    windows: layout.windows.map((window) => window.id === windowId ? {
+      ...window,
+      ...config,
+      id: nextId,
+      title: config.provider?.toUpperCase() ?? "CODEX",
+      mode: "agent",
+      agentStarted: true,
+      minimized: false,
+    } : window),
+  };
+}
+
 function validWindow(value: unknown): value is BlackWindow {
   if (!value || typeof value !== "object") return false;
   const w = value as Record<string, unknown>;
@@ -100,7 +155,7 @@ function normalizeWindow(window: BlackWindow, workspacePath: string, index: numb
     agentStarted: typeof window.agentStarted === "boolean" ? window.agentStarted : window.mode === "agent",
     provider,
     accountSource: window.accountSource === "managed" ? "managed" as const : "ambient" as const,
-    accountId: typeof window.accountId === "string" ? window.accountId : null,
+    accountId: window.accountSource === "managed" && typeof window.accountId === "string" ? window.accountId : null,
     model: typeof window.model === "string" ? window.model : "",
     autoApproveMode: ["off", "safe", "full", "invincible"].includes(String(window.autoApproveMode)) ? window.autoApproveMode as BlackWindow["autoApproveMode"] : "off",
   };

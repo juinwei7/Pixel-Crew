@@ -187,6 +187,7 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     const ownerPong = await client.next();
     assert.equal(ownerPong.type, "pong");
     assert.equal(ownerPong.requestId, "still-owner");
+    assert.equal(ownerPong.protocolVersion, 2);
 
     const emptySnapshotPath = join(dataDirectory, "empty-snapshot.sqlite");
     client.send({ type: "snapshot", path: emptySnapshotPath });

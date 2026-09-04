@@ -362,7 +362,10 @@ export function TaskComposer({
     aria-busy={Boolean(busy || working)}
     placeholder={placeholder}
     aria-label={dock ? "輸入 Agent 指令" : undefined}
-    style={dock ? undefined : { height: composerTextareaHeight(draftValue) }}
+    // Line-height/padding here must match the .command-composer > textarea /
+    // .task-composer__row textarea CSS rules — otherwise the computed inline
+    // height under- or over-shoots the CSS max-height cap for that variant.
+    style={{ height: dock ? composerTextareaHeight(draftValue, 18.85, 6) : composerTextareaHeight(draftValue, 22, 16) }}
     onPaste={(event) => {
       const files = Array.from(event.clipboardData.items).map((item) => item.kind === "file" ? item.getAsFile() : null).filter((file): file is File => Boolean(file));
       if (files.length > 0) {
@@ -396,7 +399,18 @@ export function TaskComposer({
       )}
       <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專業模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {attachmentsBlock}
-        {toolbar && <div className="command-composer__toolbar">{toolbar}</div>}
+        <div className="command-composer__toolbar">
+          {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title={t("指令面板（⌘/Ctrl K）")}>
+            ⌘ <span>{palette.provider === "claude" ? "CLAUDE" : "CODEX"}</span>
+          </button>}
+          {fileInput}
+          <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title={t("附加圖片或文件")} aria-label={t("附加圖片或文件")}>＋</button>
+          {voiceEnabled && !disabled && <VoiceInputButton onTranscript={(text) => {
+            setDraftValue((current) => insertVoiceTranscript(current, text));
+            requestAnimationFrame(() => textareaRef.current?.focus());
+          }} />}
+          {toolbar}
+        </div>
         {palette?.open && (
           <div className="command-palette" role="listbox" aria-label={t("{provider} 指令面板", { provider: palette.provider })}>
             <div className="command-palette__head"><span>{palette.provider === "claude" ? "CLAUDE COMMANDS" : "CODEX COMMANDS + SKILLS"}</span><kbd>Esc</kbd></div>
@@ -412,17 +426,7 @@ export function TaskComposer({
             <button className="command-palette__manage" type="button" onClick={palette.onManage}>{t("管理 {label}…", { label: palette.provider === "claude" ? t("Claude 指令") : t("Codex 工作流") })}</button>
           </div>
         )}
-        {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title={t("指令面板（⌘/Ctrl K）")}>
-          ⌘ <span>{palette.provider === "claude" ? "CLAUDE" : "CODEX"}</span>
-        </button>}
         {leading}
-        {fileInput}
-        <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title={t("附加圖片或文件")} aria-label={t("附加圖片或文件")}>＋</button>
-        {voiceEnabled && !disabled && <VoiceInputButton onTranscript={(text) => {
-          setDraftValue((current) => insertVoiceTranscript(current, text));
-          requestAnimationFrame(() => textareaRef.current?.focus());
-        }} />}
-        <span className="command-composer__prompt">›</span>
         {textareaField}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}

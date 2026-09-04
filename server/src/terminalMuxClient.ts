@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { terminalMuxPipeName } from "./terminalMuxPipeName.js";
 import { commandInvocation } from "./platform/processes.js";
+import { TERMINAL_MUX_PROTOCOL_VERSION } from "./terminalMuxProtocol.js";
 
 export const terminalMuxSocketPath = process.platform === "win32"
   ? terminalMuxPipeName(config.dataDirectory)
@@ -14,22 +15,57 @@ export const terminalMuxSocketPath = process.platform === "win32"
 
 let starting: Promise<void> | null = null;
 
-function canConnect(): Promise<boolean> {
+type DaemonProbe = "compatible" | "incompatible" | "unavailable";
+
+function probeDaemon(): Promise<DaemonProbe> {
   return new Promise((resolve) => {
     const socket = createConnection(terminalMuxSocketPath);
     const requestId = randomUUID(); let buffer = "";
-    const finish = (value: boolean) => { socket.removeAllListeners(); socket.destroy(); resolve(value); };
+    const finish = (value: DaemonProbe) => { socket.removeAllListeners(); socket.destroy(); resolve(value); };
     socket.once("connect", () => socket.write(`${JSON.stringify({ type: "ping", requestId })}\n`));
-    socket.once("error", () => finish(false));
+    socket.once("error", () => finish("unavailable"));
     socket.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8"); const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       try {
-        const reply = JSON.parse(buffer.slice(0, newline)) as { type?: unknown; requestId?: unknown };
-        finish(reply.type === "pong" && reply.requestId === requestId);
-      } catch { finish(false); }
+        const reply = JSON.parse(buffer.slice(0, newline)) as { type?: unknown; requestId?: unknown; protocolVersion?: unknown };
+        if (reply.type !== "pong" || reply.requestId !== requestId) { finish("unavailable"); return; }
+        finish(reply.protocolVersion === TERMINAL_MUX_PROTOCOL_VERSION ? "compatible" : "incompatible");
+      } catch { finish("unavailable"); }
     });
-    socket.setTimeout(500, () => finish(false));
+    socket.setTimeout(500, () => finish("unavailable"));
+  });
+}
+
+/** Ask an older but responsive daemon to release its PTYs, database, and
+ * socket before starting the compatible build. This avoids ever creating two
+ * mux owners against the same SQLite file. */
+function stopIncompatibleDaemon(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(terminalMuxSocketPath); let buffer = ""; let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      error ? reject(error) : resolve();
+    };
+    socket.once("connect", () => socket.write(`${JSON.stringify({ type: "shutdown" })}\n`));
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      // The incompatible owner may finish or be stopped by another concurrent
+      // ensure call between our probe and this connection attempt.
+      if (error.code === "ECONNREFUSED" || error.code === "ENOENT") finish();
+      else finish(error);
+    });
+    socket.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      try {
+        const reply = JSON.parse(buffer.slice(0, newline)) as { type?: unknown };
+        reply.type === "shutting_down" ? finish() : finish(new Error("Incompatible terminal mux refused shutdown"));
+      } catch { finish(new Error("Incompatible terminal mux sent invalid JSON")); }
+    });
+    socket.setTimeout(3_000, () => finish(new Error("Incompatible terminal mux shutdown timed out")));
   });
 }
 
@@ -41,9 +77,14 @@ function daemonEntry(): string {
 
 /** Ensure one mux owner is alive; it intentionally outlives a web-server restart. */
 export async function ensureTerminalMuxDaemon(): Promise<void> {
-  if (await canConnect()) return;
+  const initialProbe = await probeDaemon();
+  if (initialProbe === "compatible") return;
   if (!starting) {
     starting = (async () => {
+      // The mux outlives the web process. After an application update it can
+      // therefore be healthy but too old to understand new messages (for
+      // example `launch`), which previously produced a misleading UI timeout.
+      if (initialProbe === "incompatible") await stopIncompatibleDaemon();
       const entry = daemonEntry();
       const usingTs = entry.endsWith(".ts");
       const root = resolve(dirname(fileURLToPath(new URL(import.meta.url))), "../..");
@@ -59,7 +100,7 @@ export async function ensureTerminalMuxDaemon(): Promise<void> {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (spawnFailure.current) throw new Error(`Terminal mux daemon failed to start: ${spawnFailure.current.message}`);
-        if (await canConnect()) return;
+        if (await probeDaemon() === "compatible") return;
       }
       throw new Error("Terminal mux daemon did not start");
     })().finally(() => { starting = null; });

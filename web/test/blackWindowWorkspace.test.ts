@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowLayout, snapWindow } from "../src/blackWindowWorkspace";
+import { blackWindowAccountValue, blackWindowAgentStartCommand, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow } from "../src/blackWindowWorkspace";
+import type { AccountWithAuth } from "../src/types";
 
 test("new black windows begin as unstarted Codex Agent panes", () => {
   const entry = newBlackWindow("/repo", 2, 9);
@@ -33,6 +34,51 @@ test("only explicitly started Agent panes arm automatic recovery", () => {
   delete legacyAgent.agentStarted;
   const parsed = parseBlackWindowLayout({ version: 2, workspaces: [workspace], windows: [legacyAgent] }, "/repo");
   assert.equal(parsed.windows[0]?.agentStarted, true);
+});
+
+test("combined account values preserve provider and distinguish shared from named accounts", () => {
+  assert.equal(blackWindowAccountValue("codex", null), "codex:");
+  assert.deepEqual(parseBlackWindowAccountValue("codex:"), { provider: "codex", accountSource: "ambient", accountId: null });
+  assert.deepEqual(parseBlackWindowAccountValue("claude:account-2"), { provider: "claude", accountSource: "managed", accountId: "account-2" });
+  assert.equal(parseBlackWindowAccountValue("other:account-2"), null);
+});
+
+test("ambient account layouts cannot retain a stale managed account id", () => {
+  const workspace = newBlackWorkspace("/repo");
+  const stale = { ...newBlackWindow("/repo", 0, 1, workspace.id), accountSource: "ambient" as const, accountId: "old-account" };
+  const parsed = parseBlackWindowLayout({ version: 2, workspaces: [workspace], windows: [stale] }, "/repo");
+  assert.equal(parsed.windows[0]?.accountId, null);
+});
+
+test("managed Agent commands use only the exact matching account home", () => {
+  const pane = { ...newBlackWindow("/repo"), accountSource: "managed" as const, accountId: "account-1" };
+  const account = { id: "account-1", provider: "codex", label: "Work", homeDir: "/private/accounts/work account", auth: null, createdAt: "", updatedAt: "" } satisfies AccountWithAuth;
+  assert.equal(blackWindowAgentStartCommand(pane, account), "CODEX_HOME='/private/accounts/work account' codex --no-alt-screen");
+  assert.equal(blackWindowAgentStartCommand(pane, undefined), null);
+  assert.equal(blackWindowAgentStartCommand(pane, { ...account, id: "account-2" }), null);
+  assert.equal(blackWindowAgentStartCommand(pane, { ...account, provider: "claude" }), null);
+});
+
+test("confirmed Agent restart replaces only terminal identity and launch configuration", () => {
+  const layout = freshBlackWindowLayout("/repo");
+  const original = layout.windows[0];
+  const restarted = restartBlackWindow(layout, original.id, {
+    provider: "claude",
+    accountSource: "managed",
+    accountId: "account-2",
+    model: "sonnet",
+    autoApproveMode: "safe",
+  }, "terminal-restarted");
+  const pane = restarted.windows[0];
+  assert.equal(pane.id, "terminal-restarted");
+  assert.equal(restarted.selectedId, "terminal-restarted");
+  assert.equal(pane.workspaceId, original.workspaceId);
+  assert.equal(pane.workspacePath, original.workspacePath);
+  assert.equal(pane.x, original.x);
+  assert.equal(pane.provider, "claude");
+  assert.equal(pane.accountId, "account-2");
+  assert.equal(pane.agentStarted, true);
+  assert.equal(pane.title, "CLAUDE");
 });
 
 test("legacy maximized panes reopen at their saved window geometry", () => {

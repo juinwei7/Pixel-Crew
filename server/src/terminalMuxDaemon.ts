@@ -17,6 +17,7 @@ import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProt
 import { terminalMuxPipeName } from "./terminalMuxPipeName.js";
 import { terminalLaunchCommand } from "./terminalLaunch.js";
 import { terminalClientBufferWouldOverflow } from "./terminalFlowControl.js";
+import { TERMINAL_MUX_PROTOCOL_VERSION } from "./terminalMuxProtocol.js";
 
 const MAX_INPUT_BYTES = 64_000;
 const MAX_SCROLLBACK_BYTES = 1_500_000;
@@ -250,7 +251,7 @@ function attach(client: Client, message: Extract<Input, { type: "attach" }>): vo
 }
 
 function handle(client: Client, message: Input): void {
-  if (message.type === "ping") { send(client, { type: "pong", requestId: message.requestId }); return; }
+  if (message.type === "ping") { send(client, { type: "pong", requestId: message.requestId, protocolVersion: TERMINAL_MUX_PROTOCOL_VERSION }); return; }
   if (message.type === "layout_get") {
     const result = db.prepare("SELECT value FROM mux_meta WHERE key = 'black_window_layout'").get() as { value?: unknown } | undefined;
     const revision = db.prepare("SELECT value FROM mux_meta WHERE key = 'black_window_layout_revision'").get() as { value?: unknown } | undefined;

@@ -182,6 +182,7 @@ export function App() {
   const [globalMemoryModalOpen, setGlobalMemoryModalOpen] = useState(false);
   const [codexCommandsModalOpen, setCodexCommandsModalOpen] = useState(false);
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
+  const [accountsModalProvider, setAccountsModalProvider] = useState<ProviderId | null>(null);
   const [opsModalOpen, setOpsModalOpen] = useState(false);
   const [remoteModalOpen, setRemoteModalOpen] = useState(false);
   const [kanbanModalOpen, setKanbanModalOpen] = useState(false);
@@ -978,7 +979,7 @@ export function App() {
         onOpenMcp={() => setMcpModalOpen(true)}
         onOpenGlobalMemory={() => setGlobalMemoryModalOpen(true)}
         onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
-        onOpenAccounts={() => setAccountsModalOpen(true)}
+        onOpenAccounts={() => { setAccountsModalProvider(activeProvider); setAccountsModalOpen(true); }}
         onOpenBackup={() => setBackupModalOpen(true)}
         onOpenOps={() => setOpsModalOpen(true)}
         onOpenKanban={() => setKanbanModalOpen(true)}
@@ -1010,10 +1011,12 @@ export function App() {
       {blackWindowMode && <Suspense fallback={<div className="system-banner" role="status">{t("正在載入黑窗工作台…")}</div>}><BlackWindowWorkspace
         defaultWorkspacePath={activeWorkspace}
         accounts={Object.values(accounts)}
+        defaultAuth={auth}
         usage={providerUsage}
         accountUsage={accountUsage}
         totalCostUsd={stats.totalCostUsd}
         onRefreshUsage={refreshUsage}
+        onOpenAccounts={(provider) => { setAccountsModalProvider(provider); setAccountsModalOpen(true); }}
         onPixel={exitBlackWindowMode}
         onProfessional={() => { exitBlackWindowMode(); requestAnimationFrame(enterTaskFocusMode); }}
         muxLayoutEvent={muxLayoutEvent}
@@ -1396,8 +1399,8 @@ export function App() {
         onLogin={startAccountLogin}
         onSubmitLoginCode={submitAccountLoginCode}
         onCancelLogin={cancelAccountLogin}
-        onClose={() => setAccountsModalOpen(false)}
-        initialProvider={activeProvider}
+        onClose={() => { setAccountsModalOpen(false); setAccountsModalProvider(null); }}
+        initialProvider={accountsModalProvider ?? activeProvider}
         defaultAuth={auth}
         defaultCodexLogin={defaultCodexLogin}
         defaultClaudeLogin={defaultClaudeLogin}
