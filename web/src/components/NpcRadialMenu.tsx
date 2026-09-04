@@ -46,11 +46,10 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona, onRoom, onRemove, onClose, direction = "right" }: Props) {
-  const [mode, setMode] = useState<"ring" | "rename" | "confirm-remove">("ring");
+  const [mode, setMode] = useState<"ring" | "rename">("ring");
   const [draft, setDraft] = useState(worker.name);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const hasHistory = worker.busy || worker.turns.length > 0;
 
   useEffect(() => {
     // Mount collapsed at the sprite's center, then flip the class on the next
@@ -82,7 +81,9 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
     { key: "room", label: t("切換房間"), danger: false, act: () => { onRoom(worker.id); onClose(); } },
     ...(canRemove ? [{
       key: "remove", label: t("移除人員"), danger: true,
-      act: () => { if (hasHistory) setMode("confirm-remove"); else { onRemove(worker.id); onClose(); } },
+      // onRemove (handleRemoveWorker in App.tsx) already gates this behind
+      // its own ConfirmDialog — no local confirm step needed here.
+      act: () => { onRemove(worker.id); onClose(); },
     }] : []),
   ];
 
@@ -118,15 +119,6 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
             }}
           />
           {error && <small className="npc-radial__error">{error}</small>}
-        </div>
-      )}
-      {mode === "confirm-remove" && (
-        <div className="npc-radial__panel">
-          <small>{t("確定移除 {name}？", { name: worker.name })}</small>
-          <div className="npc-radial__confirm">
-            <button type="button" className="npc-radial__confirm-danger" onClick={() => { onRemove(worker.id); onClose(); }}>{t("移除")}</button>
-            <button type="button" onClick={() => setMode("ring")}>{t("取消")}</button>
-          </div>
         </div>
       )}
     </div>

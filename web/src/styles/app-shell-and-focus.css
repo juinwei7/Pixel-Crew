@@ -627,9 +627,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .crew-row__menu > button { width: 100%; min-height: 32px; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: #9eb0c7; cursor: pointer; font-size: 10px; text-align: left; }
 .crew-row__menu > button:hover { background: rgba(0, 229, 255,.07); color: var(--cyan); }
 .crew-row__menu > .crew-row__danger { color: #e78ba0; }
-.crew-row__confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-.crew-row__confirm span { grid-column: 1 / -1; padding: 5px; color: #ff9aae; font-size: 10px; }
-.crew-row__confirm button { padding: 6px; border: 1px solid rgba(143,184,232,.14); border-radius: 5px; background: transparent; color: #9eb0c7; cursor: pointer; font-size: 9px; }
 .crew-rail--collapsed .crew-row { justify-content: center; padding: 6px 2px; }
 .crew-rail--collapsed .crew-row__select { justify-content: center; }
 .crew-rail--collapsed .crew-row__status { position: absolute; right: 2px; bottom: 2px; background: #07101f; }
@@ -814,10 +811,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 .focus-controls__danger { color: #e78ba0; border-color: rgba(231, 139, 160, 0.24); }
 .focus-controls__danger:hover { border-color: rgba(231, 139, 160, 0.5); color: #ff9aae; }
-
-.focus-controls__confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
-.focus-controls__confirm span { grid-column: 1 / -1; padding: 5px; color: #ff9aae; font: 9px var(--mono); }
-.focus-controls__confirm button { min-height: 30px; padding: 6px; border: 1px solid rgba(143, 184, 232, 0.14); border-radius: 5px; background: transparent; color: #9eb0c7; cursor: pointer; font: 9px var(--mono); }
 
 .focus-controls__empty {
   margin: 0;

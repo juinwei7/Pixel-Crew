@@ -37,6 +37,7 @@ test("Boss Desk is a persistent chat log with inline discovery reply", () => {
     onUpdate={async () => ({ error: "unused" })}
     onDelete={async () => ({ error: "unused" })}
     onClose={() => {}}
+    confirm={async () => true}
   />);
   assert.match(html, /BOSS DESK · TASK LOG/);
   assert.match(html, /老闆任務日誌/);
@@ -68,6 +69,7 @@ test("renders Boss messages and final reports as Markdown in every desk layout",
       onUpdate={async () => ({ error: "unused" })}
       onDelete={async () => ({ error: "unused" })}
       onClose={() => {}}
+    confirm={async () => true}
       focusMode={focusMode}
     />);
     assert.match(html, /<strong>分析<\/strong>台股/);
@@ -96,6 +98,7 @@ test("renders a multi-department execution graph inside the same task log", () =
     onUpdate={async () => ({ error: "unused" })}
     onDelete={async () => ({ error: "unused" })}
     onClose={() => {}}
+    confirm={async () => true}
   />);
   assert.match(html, /跨部門執行/);
   assert.match(html, /PM · Plan MVP/);
@@ -124,6 +127,7 @@ test("new Boss tasks use a compact chat-first starter state", () => {
     onUpdate={async () => ({ error: "unused" })}
     onDelete={async () => ({ error: "unused" })}
     onClose={() => {}}
+    confirm={async () => true}
   />);
   assert.match(html, /今天想完成什麼？/);
   assert.match(html, /規劃並開發一套簡易 ERP/);
@@ -142,6 +146,7 @@ test("Boss records remain visible across NPC workspaces and expose safe organiza
     onUpdate={async () => ({ error: "unused" })}
     onDelete={async () => ({ error: "unused" })}
     onClose={() => {}}
+    confirm={async () => true}
   />);
   assert.match(html, /Other workspace task/);
   assert.match(html, /other/);

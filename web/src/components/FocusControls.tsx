@@ -23,7 +23,6 @@ export function FocusControls({
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,7 +38,6 @@ export function FocusControls({
     if (!open) {
       setRenaming(false);
       setRenameError(null);
-      setConfirmRemove(false);
     }
   }, [open]);
 
@@ -50,10 +48,6 @@ export function FocusControls({
     if (renaming) {
       setRenaming(false);
       setRenameError(null);
-      return;
-    }
-    if (confirmRemove) {
-      setConfirmRemove(false);
       return;
     }
     setOpen(false);
@@ -103,7 +97,7 @@ export function FocusControls({
                       <button type="button" onClick={() => void saveName()}>{t("儲存")}</button>
                     </span>
                   ) : (
-                    <button type="button" onClick={() => { setRenaming(true); setConfirmRemove(false); setDraft(active.name); setRenameError(null); }}>
+                    <button type="button" onClick={() => { setRenaming(true); setDraft(active.name); setRenameError(null); }}>
                       {t("{name} · 改名", { name: active.name })}
                     </button>
                   )}
@@ -112,32 +106,16 @@ export function FocusControls({
                   <button type="button" onClick={() => { onPersona(); setOpen(false); }}>{t("職務與指示")}</button>
                 </div>
                 {workerCount > 1 && (
-                  confirmRemove ? (
-                    <div className="focus-controls__confirm">
-                      <span>{t("確定移除 {name}？", { name: active.name })}</span>
-                      <button type="button" className="focus-controls__danger" onClick={() => { onRemove(active.id); setConfirmRemove(false); setOpen(false); }}>{t("移除")}</button>
-                      <button type="button" onClick={() => setConfirmRemove(false)}>{t("取消")}</button>
-                    </div>
-                  ) : (
-                    <div className="focus-controls__actions">
-                      <button
-                        type="button"
-                        className="focus-controls__danger"
-                        onClick={() => {
-                          if (active.busy || active.turns.length > 0) {
-                            setRenaming(false);
-                            setRenameError(null);
-                            setConfirmRemove(true);
-                          } else {
-                            onRemove(active.id);
-                            setOpen(false);
-                          }
-                        }}
-                      >
-                        {t("移除人員")}
-                      </button>
-                    </div>
-                  )
+                  <div className="focus-controls__actions">
+                    {/* onRemove (handleRemoveWorker in App.tsx) already gates this behind its own ConfirmDialog — no local confirm step needed here. */}
+                    <button
+                      type="button"
+                      className="focus-controls__danger"
+                      onClick={() => { onRemove(active.id); setOpen(false); }}
+                    >
+                      {t("移除人員")}
+                    </button>
+                  </div>
                 )}
               </>
             ) : <p className="focus-controls__empty">{t("尚未選擇 NPC")}</p>}

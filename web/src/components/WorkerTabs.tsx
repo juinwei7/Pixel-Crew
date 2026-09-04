@@ -68,7 +68,6 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ id: string; overIndex: number; rowH: number } | null>(null);
   const suppressClickRef = useRef(false);
@@ -101,7 +100,6 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
       if (event.key !== "Escape") return;
       dragCleanupRef.current?.();
       setMenuId(null);
-      setConfirmRemoveId(null);
       setFiltersOpen(false);
       if (editingId === null) setSearchOpen(false);
     };
@@ -247,7 +245,6 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
     const closeOutside = (event: PointerEvent) => {
       if (railRef.current?.contains(event.target as Node)) return;
       setMenuId(null);
-      setConfirmRemoveId(null);
       setFiltersOpen(false);
     };
     window.addEventListener("pointerdown", closeOutside);
@@ -294,16 +291,15 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
     return (
       <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} data-worker-id={draggable ? worker.id : undefined} style={shift !== 0 ? { transform: `translateY(${shift}px)` } : undefined} className={`crew-row crew-row--${status} ${npcSelected ? "crew-row--active" : ""}${draggable ? " crew-row--draggable" : ""}${dragging ? " crew-row--dragging" : ""}`} title={t("{name} · {room} · {status}", { name: worker.name, room: roomName(worker.workspacePath), status: statusCopy(status) })}>
         {editing ? <div className="crew-row__select crew-row__select--editing">{selectContents}</div> : <button type="button" className="crew-row__select" aria-current={npcSelected ? "true" : undefined} aria-keyshortcuts={draggable ? "Alt+ArrowUp Alt+ArrowDown" : undefined} onPointerDown={draggable ? (event) => beginRowDrag(event, worker.id) : undefined} onKeyDown={draggable ? (event) => moveRowByKeyboard(event, worker.id) : undefined} onClick={() => { if (suppressClickRef.current) { suppressClickRef.current = false; return; } onSelect(worker.id); setMenuId(null); }}>{selectContents}</button>}
-        {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={t("{name} 更多操作", { name: worker.name })} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); const opening = !menuOpen; if (opening) { const btn = event.currentTarget.getBoundingClientRect(); const railBottom = railRef.current?.getBoundingClientRect().bottom ?? window.innerHeight; setMenuDropUp(railBottom - btn.bottom < MENU_ESTIMATED_HEIGHT); } setMenuId(opening ? worker.id : null); setConfirmRemoveId(null); }}>•••</button>}
+        {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={t("{name} 更多操作", { name: worker.name })} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); const opening = !menuOpen; if (opening) { const btn = event.currentTarget.getBoundingClientRect(); const railBottom = railRef.current?.getBoundingClientRect().bottom ?? window.innerHeight; setMenuDropUp(railBottom - btn.bottom < MENU_ESTIMATED_HEIGHT); } setMenuId(opening ? worker.id : null); }}>•••</button>}
         {menuOpen && !collapsed && (
           <div className={`crew-row__menu ${menuDropUp ? "crew-row__menu--up" : ""}`} onClick={(event) => event.stopPropagation()}>
-            {confirmRemoveId === worker.id ? <div className="crew-row__confirm"><span>{t("確定移除？")}</span><button type="button" onClick={() => { onClose(worker.id); setMenuId(null); }}>{t("移除")}</button><button type="button" onClick={() => setConfirmRemoveId(null)}>{t("取消")}</button></div> : <>
-              <button type="button" onClick={() => { setEditingId(worker.id); setDraft(worker.name); setRenameError(null); }}>{t("重新命名")}</button>
-              <button type="button" onClick={() => { onPersona(worker.id); setMenuId(null); }}>{t("個性 / 職務")}</button>
-              <button type="button" onClick={() => { onAvatar(worker.id); setMenuId(null); }}>{t("像素角色")}</button>
-              <button type="button" onClick={() => { onRoom(worker.id); setMenuId(null); }}>{t("切換房間")}</button>
-              {workers.length > 1 && <button type="button" className="crew-row__danger" onClick={() => worker.busy || worker.turns.length > 0 ? setConfirmRemoveId(worker.id) : (onClose(worker.id), setMenuId(null))}>{t("移除人員")}</button>}
-            </>}
+            <button type="button" onClick={() => { setEditingId(worker.id); setDraft(worker.name); setRenameError(null); }}>{t("重新命名")}</button>
+            <button type="button" onClick={() => { onPersona(worker.id); setMenuId(null); }}>{t("個性 / 職務")}</button>
+            <button type="button" onClick={() => { onAvatar(worker.id); setMenuId(null); }}>{t("像素角色")}</button>
+            <button type="button" onClick={() => { onRoom(worker.id); setMenuId(null); }}>{t("切換房間")}</button>
+            {/* handleRemoveWorker (App.tsx) already gates this behind its own ConfirmDialog — no local confirm step needed here. */}
+            {workers.length > 1 && <button type="button" className="crew-row__danger" onClick={() => { onClose(worker.id); setMenuId(null); }}>{t("移除人員")}</button>}
           </div>
         )}
       </div>

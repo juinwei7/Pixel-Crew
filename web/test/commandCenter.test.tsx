@@ -12,6 +12,7 @@ test("renders distinct Claude and Codex command experiences", () => {
     revisions: { claude: 0, codex: 0 },
     onRun: async () => null,
     onClose: () => undefined,
+    confirm: async () => true,
   } as const;
   const claude = renderToStaticMarkup(
     <CommandCenter {...shared} provider="claude" />,
