@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BLACK_WINDOW_FONT_SIZE_DEFAULT, BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow } from "../src/blackWindowWorkspace";
+import { BLACK_WINDOW_FONT_SIZE_DEFAULT, BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow, terminalVoiceInput } from "../src/blackWindowWorkspace";
 import type { AccountWithAuth } from "../src/types";
 
 test("new black windows begin as unstarted Codex Agent panes", () => {
@@ -27,6 +27,11 @@ test("legacy layouts receive the default terminal font size", () => {
   delete legacy.fontSize;
   const parsed = parseBlackWindowLayout({ version: 2, workspaces: [workspace], windows: [legacy] }, "/repo");
   assert.equal(parsed.windows[0]?.fontSize, BLACK_WINDOW_FONT_SIZE_DEFAULT);
+});
+
+test("terminal voice input stays editable and cannot execute control characters", () => {
+  assert.equal(terminalVoiceInput("  幫我檢查這個功能\n但先不要執行\r\u0003  "), "幫我檢查這個功能 但先不要執行");
+  assert.equal(terminalVoiceInput("\n\r\u0003"), "");
 });
 
 test("legacy Raw Shell panes migrate to unstarted Codex panes", () => {

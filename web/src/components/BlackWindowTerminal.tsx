@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { t } from "../i18n";
 import { runtimeWsOrigin } from "../runtimeOrigin";
+import { terminalVoiceInput } from "../blackWindowWorkspace";
 
 type TerminalMessage =
   | { type: "terminal_ready"; workspacePath: string; shell: string; persistent?: boolean; restored?: boolean; writable?: boolean }
@@ -22,7 +23,7 @@ function sendTerminal(socket: WebSocket | null, message: unknown): void {
   try { socket.send(JSON.stringify(message)); } catch { /* A close can race the readyState check. */ }
 }
 
-export type BlackWindowTerminalHandle = { inject(command: string): void; launch(command: string): Promise<boolean>; interrupt(): void; destroy(): Promise<boolean> };
+export type BlackWindowTerminalHandle = { inject(command: string): void; insertText(text: string): void; launch(command: string): Promise<boolean>; interrupt(): void; destroy(): Promise<boolean> };
 
 type Props = { sessionId: string; workspacePath: string; terminalLabel: string; active: boolean; fontSize: number; launchCommand?: string | null; onActivate?(): void; onStatus?(status: "connecting" | "ready" | "closed" | "error"): void; onReady?(state: { restored: boolean }): void };
 
@@ -154,6 +155,16 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     inject(command) {
       const socket = socketRef.current;
       sendTerminal(socket, { type: "terminal_input", data: `${command.replace(/\r?\n$/, "")}\r` });
+    },
+    insertText(text) {
+      const data = terminalVoiceInput(text);
+      const socket = socketRef.current;
+      if (!data || status !== "ready" || socket?.readyState !== WebSocket.OPEN) return;
+      // Keep voice input consistent with clicking the terminal: claim a
+      // persistent read-only pane first, then type without submitting it.
+      if (!writable) sendTerminal(socket, { type: "terminal_claim" });
+      sendTerminal(socket, { type: "terminal_input", data });
+      terminalRef.current?.focus();
     },
     launch(command) {
       if (status !== "ready" || socketRef.current?.readyState !== WebSocket.OPEN || pendingLaunchRef.current) return Promise.resolve(false);

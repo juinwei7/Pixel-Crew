@@ -3,6 +3,7 @@ import type { AccountWithAuth, AutoApproveMode, ProviderAuthState, ProviderId, P
 import { BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, destroyWorkspaceTerminalTabs, loadBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, saveBlackWindowLayout, snapWindow, type BlackWindow, type BlackWindowAgentConfig, type BlackWindowLayout } from "../blackWindowWorkspace";
 import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWindowTerminal";
 import { EnergyHud } from "./EnergyHud";
+import { VoiceInputButton } from "./VoiceInputButton";
 import { t } from "../i18n";
 
 type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null };
@@ -357,6 +358,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
       <button type="button" className="black-workspace__new" onClick={addPane}>＋ {t("新 CLI")}</button><button type="button" onClick={() => addWorkspace()}>＋ {t("新分頁")}</button>
       <button type="button" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
       {selected && <div className="black-workspace__settings">
+        <VoiceInputButton placement="toolbar" disabled={terminalStatuses[selected.id] !== "ready"} label={t("語音輸入至目前 CLI")} onTranscript={(text) => terminalRefs.current.get(selected.id)?.insertText(text)} />
         <details className="black-account-picker">
           <summary aria-label={t("切換 CLI 帳號")}><span className={authenticated(selectedAuthStatus) ? "online" : "offline"}/>{selectedAccountLabel}<b>▾</b></summary>
           <div className="black-account-picker__menu">

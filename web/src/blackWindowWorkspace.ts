@@ -98,6 +98,13 @@ export function clampBlackWindowFontSize(value: unknown): number {
   return Math.min(BLACK_WINDOW_FONT_SIZE_MAX, Math.max(BLACK_WINDOW_FONT_SIZE_MIN, numeric));
 }
 
+export function terminalVoiceInput(text: string): string {
+  // A transcript is editable input, not an instruction to execute. Collapse
+  // line breaks and control characters so speech can never synthesize Enter,
+  // Ctrl+C, or another terminal control sequence.
+  return text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function id(prefix: string): string { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`; }
 function titleFromPath(path: string): string { return path.split(/[/\\]/).filter(Boolean).at(-1) || "WORKSPACE"; }
 
