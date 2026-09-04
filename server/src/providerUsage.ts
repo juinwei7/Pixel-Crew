@@ -1,10 +1,14 @@
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { config } from "./config.js";
 import type { AuthStatus, ProviderId } from "./providers/types.js";
 import type { LocalStore } from "./store.js";
 import type { ProviderAccount } from "./store.js";
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { codexChildEnv } from "./codexEnv.js";
+import { claudeChildEnv } from "./claudeEnv.js";
+import { ensurePrivateDirectorySync } from "./platform/fileProtection.js";
 import { t } from "./i18n.js";
 const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
@@ -82,12 +86,13 @@ type CodexRateSnapshot = {
   secondary?: CodexRateWindow | null;
 };
 
-function codexWindowLabel(window: CodexRateWindow, fallback: string): string {
-  const minutes = Number(window.windowDurationMins);
-  if (!Number.isFinite(minutes) || minutes <= 0) return fallback;
-  if (minutes < 60) return t("{n} 分鐘", { n: minutes });
-  if (minutes < 1440) return t("{n} 小時", { n: Math.round(minutes / 60) });
-  return t("{n} 天", { n: Math.round(minutes / 1440) });
+// Codex's app-server only reports a raw window duration (e.g. 300 minutes),
+// with no semantic name — but its primary/secondary windows are the same
+// concept as Claude's session/week limits, so label them the same way
+// instead of surfacing the literal duration. "本週期" (not "本週") because a
+// plan's secondary window isn't guaranteed to be exactly seven days.
+function codexWindowLabel(kind: "primary" | "secondary"): string {
+  return kind === "primary" ? t("本次時段") : t("本週期");
 }
 
 function codexResetTime(value: unknown): string | null {
@@ -107,15 +112,20 @@ export function normalizeCodexUsage(payload: any): UsageWindow[] {
   const windows: UsageWindow[] = [];
   const seen = new Set<string>();
   for (const [snapshotIndex, snapshot] of snapshots.entries()) {
+    // Multiple rate-limit groups (distinct model tiers each with their own
+    // primary/secondary quota) would otherwise all produce an identical
+    // "本次時段"/"本週期" label with no way to tell which pool is which.
+    const qualifier = snapshots.length > 1 ? safeText(snapshot.limitId || snapshot.limitName || `#${snapshotIndex + 1}`, 40) : null;
     for (const [kind, value] of [["primary", snapshot.primary], ["secondary", snapshot.secondary]] as const) {
       if (!value || value.usedPercent == null) continue;
       const id = `${safeText(snapshot.limitId || snapshot.limitName || snapshotIndex, 60)}-${kind}`;
       if (seen.has(id)) continue;
       seen.add(id);
       const usedPercent = percent(value.usedPercent);
+      const label = codexWindowLabel(kind);
       windows.push({
         id: `codex-${id}`,
-        label: codexWindowLabel(value, kind === "primary" ? t("短期") : t("長期")),
+        label: qualifier ? `${label} · ${qualifier}` : label,
         usedPercent,
         remainingPercent: 100 - usedPercent,
         resetsAt: codexResetTime(value.resetsAt),
@@ -169,8 +179,160 @@ async function readCodexUsage(codexHome = config.defaultCodexHome): Promise<Usag
   });
 }
 
-async function readUsage(_provider: ProviderId, homeDir: string): Promise<UsageWindow[]> {
-  return readCodexUsage(homeDir);
+/**
+ * Claude's `/usage` only returns real quota text inside a session that
+ * already has at least one completed turn — a brand-new session's first
+ * turn gets an empty SDK result instead (verified against the real CLI).
+ * So each account gets one hidden, UI-invisible "shadow" session: bootstrap
+ * it once with a trivial real turn, then forever `--resume` it to ask
+ * `/usage` in a fresh headless process. `/usage` itself never reaches the
+ * model (the CLI answers it locally — $0 cost, near-instant), so only the
+ * one-time bootstrap per account costs anything.
+ */
+function probeWorkspaceDir(): string {
+  const dir = join(config.dataDirectory, "usage-probe-workspace");
+  ensurePrivateDirectorySync(dir);
+  return dir;
+}
+
+type HeadlessTurnResult = { resultText: string };
+
+/** Spawns `claude -p` for exactly one turn, feeds it one message, and resolves with the final `result` line's text. */
+function runHeadlessClaudeTurn(args: string[], env: NodeJS.ProcessEnv, messageText: string): Promise<HeadlessTurnResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawnCli(config.claudeBin, args, { cwd: probeWorkspaceDir(), env });
+    const rl = createInterface({ input: child.stdout });
+    let settled = false;
+    let stderr = "";
+    const finish = (error?: Error, result?: HeadlessTurnResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rl.close();
+      void terminateProcessTree(child);
+      if (error) reject(error);
+      else resolve(result!);
+    };
+    const timer = setTimeout(() => finish(new Error(t("Claude 用量查詢逾時"))), 30_000);
+    child.stdin.on("error", () => {});
+    child.stderr.on("data", (chunk) => { stderr = `${stderr}${chunk.toString()}`.slice(-4_000); });
+    child.on("error", (error) => finish(error));
+    child.on("close", (code) => {
+      if (!settled) finish(new Error(stderr.trim() || `claude exited with code ${code}`));
+    });
+    rl.on("line", (line) => {
+      if (settled || !line.trim()) return;
+      let parsed: any;
+      try { parsed = JSON.parse(line); } catch { return; }
+      if (parsed.type !== "result") return;
+      const isError = Boolean(parsed.is_error) || String(parsed.subtype ?? "").startsWith("error");
+      const resultText = String(
+        parsed.result
+        ?? parsed.error?.message
+        ?? parsed.message
+        ?? (Array.isArray(parsed.errors) ? parsed.errors.join("; ") : "")
+        ?? "",
+      );
+      if (isError) finish(new Error(safeText(resultText, 300) || t("Claude 用量查詢失敗")));
+      else finish(undefined, { resultText });
+    });
+    child.stdin.write(`${JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: messageText }] },
+    })}\n`);
+    child.stdin.end();
+  });
+}
+
+async function bootstrapClaudeProbeSession(homeDir: string): Promise<string> {
+  const sessionId = randomUUID();
+  const args = [
+    "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--permission-mode", "plan", "--model", "haiku", "--session-id", sessionId,
+  ];
+  await runHeadlessClaudeTurn(args, claudeChildEnv(process.env, homeDir), "Reply with exactly: OK");
+  return sessionId;
+}
+
+// A stale probe session (its transcript deleted out from under it, e.g. by
+// the user clearing Claude's own session history) fails --resume outright;
+// forget it so the next refresh cycle bootstraps a fresh one automatically
+// instead of erroring forever.
+function looksLikeMissingSession(message: string): boolean {
+  return /no conversation found|session .*not found|could not find|invalid session/i.test(message);
+}
+
+export async function readClaudeUsage(accountKey: string, homeDir: string, store: LocalStore): Promise<UsageWindow[]> {
+  let sessionId = store.loadClaudeUsageProbeSession(accountKey);
+  if (!sessionId) {
+    sessionId = await bootstrapClaudeProbeSession(homeDir);
+    store.saveClaudeUsageProbeSession(accountKey, sessionId);
+  }
+  const args = [
+    "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--permission-mode", "plan", "--resume", sessionId,
+  ];
+  try {
+    const { resultText } = await runHeadlessClaudeTurn(args, claudeChildEnv(process.env, homeDir), "/usage");
+    const windows = parseClaudeUsage(resultText);
+    if (windows.length === 0) throw new Error(t("Claude 沒有回傳可用的訂閱用量"));
+    return windows;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (looksLikeMissingSession(message)) store.deleteClaudeUsageProbeSession(accountKey);
+    throw error instanceof Error ? error : new Error(message);
+  }
+}
+
+/** One query strategy per provider — Codex is a stateless RPC call, Claude drives its own hidden session. */
+export interface UsageSource {
+  fetch(homeDir: string, accountKey: string, store: LocalStore): Promise<UsageWindow[]>;
+}
+
+export const codexUsageSource: UsageSource = {
+  fetch: (homeDir) => readCodexUsage(homeDir),
+};
+
+export const claudeUsageSource: UsageSource = {
+  fetch: (homeDir, accountKey, store) => readClaudeUsage(accountKey, homeDir, store),
+};
+
+export function usageSourceFor(provider: ProviderId): UsageSource {
+  return provider === "claude" ? claudeUsageSource : codexUsageSource;
+}
+
+// Shared by ProviderUsageRegistry (default slot) and AccountUsageRegistry
+// (named accounts) — both need the exact same "still checking auth? keep
+// waiting; confirmed signed out? relabel any stale 'live' windows as
+// 'cache'; otherwise throttle to one live fetch per 60s" decision, they just
+// differ in *how* a decision gets published/persisted.
+type RefreshDecision =
+  | { action: "keep" }
+  | { action: "settle"; state: ProviderUsageState; sourceChanged: boolean }
+  | { action: "cached" }
+  | { action: "fetch" };
+
+function decideRefresh(previous: ProviderUsageState, status: AuthStatus | null, force: boolean): RefreshDecision {
+  if (status === "checking" || status == null) {
+    // Transient — a real answer is imminent (e.g. the 3s re-poll while
+    // unauthenticated). Keep whatever was already shown untouched so this
+    // doesn't flicker the same way the auth badge itself used to.
+    if (!previous.loading && !previous.error) return { action: "keep" };
+    return { action: "settle", state: { ...previous, loading: false, error: null }, sourceChanged: false };
+  }
+  if (status !== "authenticated") {
+    // Confirmed signed out (unauthenticated/cli_missing/error) — never
+    // spawn the CLI, and if we're still holding onto a previous session's
+    // "live" windows, relabel them "cache" so the UI shows the existing
+    // 快取 badge instead of implying the numbers are current.
+    const relabeled: ProviderUsageState = previous.windows.length > 0 && previous.source === "live"
+      ? { ...previous, loading: false, error: null, source: "cache" }
+      : { ...previous, loading: false, error: null };
+    if (!previous.loading && !previous.error && previous.source === relabeled.source) return { action: "keep" };
+    return { action: "settle", state: relabeled, sourceChanged: previous.source !== relabeled.source };
+  }
+  if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return { action: "cached" };
+  return { action: "fetch" };
 }
 
 function idleState(provider: ProviderId, value: unknown): ProviderUsageState {
@@ -226,45 +388,15 @@ export class ProviderUsageRegistry {
     const running = this.active.get(provider);
     if (running) return running;
     const previous = this.states[provider];
-    const status = this.getAuthStatus(provider);
-    if (status === "checking") {
-      // Transient — a real answer is imminent (e.g. the 3s re-poll while
-      // unauthenticated). Keep whatever was already shown untouched so this
-      // doesn't flicker the same way the auth badge itself used to.
-      const idle: ProviderUsageState = { ...previous, loading: false, error: null };
-      if (previous.loading || previous.error) this.publish(idle, false);
-      return Promise.resolve(idle);
+    const decision = decideRefresh(previous, this.getAuthStatus(provider), force);
+    if (decision.action === "keep" || decision.action === "cached") return Promise.resolve(previous);
+    if (decision.action === "settle") {
+      this.publish(decision.state, decision.sourceChanged);
+      return Promise.resolve(decision.state);
     }
-    if (status !== "authenticated") {
-      // Confirmed signed out (unauthenticated/cli_missing/error) — never
-      // spawn the CLI, and if we're still holding onto a previous session's
-      // "live" windows, relabel them "cache" so the UI shows the existing
-      // 快取 badge instead of implying the numbers are current. Persist the
-      // relabel too, so a page reload before the next real fetch doesn't
-      // flash the stale "live" label again.
-      const relabeled: ProviderUsageState = previous.windows.length > 0 && previous.source === "live"
-        ? { ...previous, loading: false, error: null, source: "cache" }
-        : { ...previous, loading: false, error: null };
-      if (previous.loading || previous.error || previous.source !== relabeled.source) {
-        this.publish(relabeled, previous.source !== relabeled.source);
-      }
-      return Promise.resolve(relabeled);
-    }
-    // `/usage` is an interactive-only Claude Code command. Running
-    // `claude -p /usage` creates an empty SDK turn instead of returning plan
-    // quota, so never present that unrelated result as account-wide usage.
-    if (provider === "claude") {
-      const state = {
-        ...previous,
-        loading: false,
-        error: previous.windows.length ? null : t("等待既有 Claude 工作階段回報訂閱用量"),
-      };
-      if (previous.loading || previous.error !== state.error) this.publish(state, false);
-      return Promise.resolve(state);
-    }
-    if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish({ ...previous, loading: true, error: null }, false);
-    const operation = readCodexUsage()
+    const homeDir = provider === "claude" ? config.defaultClaudeHome : config.defaultCodexHome;
+    const operation = usageSourceFor(provider).fetch(homeDir, "default", this.store)
       .then((windows) => {
         const state: ProviderUsageState = { provider, windows, loading: false, source: "live", updatedAt: new Date().toISOString(), error: null };
         this.publish(state, true);
@@ -306,7 +438,7 @@ export class AccountUsageRegistry {
     private readonly listAccounts: () => ProviderAccount[],
     private readonly getAuthStatus: (accountId: string) => AuthStatus | null,
     private readonly onUpdate: (accountId: string, state: ProviderUsageState) => void,
-    private readonly reader: (provider: ProviderId, homeDir: string) => Promise<UsageWindow[]> = readUsage,
+    private readonly reader: (provider: ProviderId, homeDir: string, accountId: string) => Promise<UsageWindow[]>,
   ) {}
 
   getStates(): Record<string, ProviderUsageState> {
@@ -342,31 +474,14 @@ export class AccountUsageRegistry {
     const account = this.listAccounts().find((candidate) => candidate.id === accountId);
     if (!account) return Promise.resolve(emptyState("claude"));
     const previous = this.states[accountId] ?? emptyState(account.provider);
-    const status = this.getAuthStatus(accountId);
-    if (status === "checking" || status == null) {
-      const idle = { ...previous, loading: false, error: null };
-      if (previous.loading || previous.error) this.publish(accountId, idle);
-      return Promise.resolve(idle);
+    const decision = decideRefresh(previous, this.getAuthStatus(accountId), force);
+    if (decision.action === "keep" || decision.action === "cached") return Promise.resolve(previous);
+    if (decision.action === "settle") {
+      this.publish(accountId, decision.state);
+      return Promise.resolve(decision.state);
     }
-    if (status !== "authenticated") {
-      const relabeled = previous.windows.length > 0 && previous.source === "live"
-        ? { ...previous, loading: false, error: null, source: "cache" as const }
-        : { ...previous, loading: false, error: null };
-      if (previous.loading || previous.error || previous.source !== relabeled.source) this.publish(accountId, relabeled);
-      return Promise.resolve(relabeled);
-    }
-    if (account.provider === "claude") {
-      const state = {
-        ...previous,
-        loading: false,
-        error: previous.windows.length ? null : t("等待既有 Claude 工作階段回報訂閱用量"),
-      };
-      if (previous.loading || previous.error !== state.error) this.publish(accountId, state);
-      return Promise.resolve(state);
-    }
-    if (!force && previous.updatedAt && Date.now() - Date.parse(previous.updatedAt) < 60_000) return Promise.resolve(previous);
     this.publish(accountId, { ...previous, loading: true, error: null });
-    const operation = this.reader(account.provider, account.homeDir)
+    const operation = this.reader(account.provider, account.homeDir, accountId)
       .then((windows) => {
         const state: ProviderUsageState = { provider: account.provider, windows, loading: false, source: "live", updatedAt: new Date().toISOString(), error: null };
         // An account could be deleted while its CLI query is still running.

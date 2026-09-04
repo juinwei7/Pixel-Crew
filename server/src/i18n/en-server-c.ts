@@ -140,11 +140,7 @@ export const enServerC: Record<string, string> = {
   // providerUsage.ts
   "本次時段": "This session",
   "本週": "This week",
-  "{n} 分鐘": "{n} min",
-  "{n} 小時": "{n} hr",
-  "{n} 天": "{n} days",
-  "短期": "Short-term",
-  "長期": "Long-term",
+  "本週期": "This cycle",
   "Claude /usage 沒有回傳可辨識的用量區間": "Claude /usage did not return any recognizable usage windows",
   "Codex 用量查詢逾時": "Codex usage query timed out",
   "Codex 沒有回傳可用的 rate-limit 區間": "Codex did not return any usable rate-limit windows",

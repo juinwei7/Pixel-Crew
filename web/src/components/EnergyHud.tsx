@@ -16,10 +16,16 @@ type FocusSubject = {
   model: string;
 };
 
-function headline(state: ProviderUsageState): number | null {
-  const shared = state.windows.filter((window) => window.scope !== "model");
+function headline(state?: ProviderUsageState): number | null {
+  const shared = state?.windows.filter((window) => window.scope !== "model") ?? [];
   if (shared.length === 0) return null;
   return Math.min(...shared.map((window) => window.remainingPercent));
+}
+
+function lowestRemaining(state?: ProviderUsageState): number | null {
+  const windows = state?.windows ?? [];
+  if (windows.length === 0) return null;
+  return Math.min(...windows.map((window) => window.remainingPercent));
 }
 
 function tone(remaining: number | null): "good" | "warn" | "low" | "empty" {
@@ -29,12 +35,29 @@ function tone(remaining: number | null): "good" | "warn" | "low" | "empty" {
   return "good";
 }
 
+// A provider's own CLI text ("resets Sep 4 at 2:10pm (Asia/Taipei)") isn't
+// safe to re-parse — CLI output shape is empirical, not a stable contract —
+// so only a real ISO instant (Codex's resetsAt) gets reformatted here. It's
+// deliberately written in the same "Mon D at H:MMam" cadence Claude's own
+// text already uses, so the two providers don't read as two conventions.
+function formatResetInstant(date: Date): string {
+  if (lang === "zh") {
+    return t("{month} 月 {day} 日 {time}", {
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      time: date.toLocaleTimeString("zh-TW", { hour: "numeric", minute: "2-digit", hour12: true }),
+    });
+  }
+  const day = date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).replace(" ", "").toLowerCase();
+  return `${day} at ${time}`;
+}
+
 function resetCopy(value: string | null): string {
   if (!value) return t("重置時間未提供");
-  const locale = lang === "zh" ? "zh-TW" : "en-US";
   if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
     const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return t("重置：{time}", { time: `${date.toLocaleDateString(locale, { month: "numeric", day: "numeric" })} ${date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}` });
+    if (!Number.isNaN(date.getTime())) return t("重置：{time}", { time: formatResetInstant(date) });
   }
   return t("重置：{time}", { time: value.replace(/^resets\s+/i, "") });
 }
@@ -51,29 +74,124 @@ function ProviderMeter({ provider, state }: { provider: ProviderId; state: Provi
   );
 }
 
-function WindowRow({ window }: { window: UsageWindow }) {
+function sourceLabel(state: ProviderUsageState | undefined): string {
+  if (!state) return t("尚無資料");
+  return state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料");
+}
+
+type AccountRowData = {
+  key: string;
+  name: string;
+  statusLabel: string;
+  state: ProviderUsageState | undefined;
+  authenticated: boolean;
+};
+
+// The shared/ambient login is not a special case — it's simply this
+// provider's first account row, using the exact same component as any named
+// Pixel Crew account below it (see the redesign brief: these used to be two
+// visually different block styles for what is structurally the same thing).
+function buildAccountRows(provider: ProviderId, usage: Props["usage"], accountUsage: NonNullable<Props["accountUsage"]>, accounts: NonNullable<Props["accounts"]>): AccountRowData[] {
+  const shared: AccountRowData = {
+    key: `shared-${provider}`,
+    name: t("共用登入"),
+    statusLabel: `${t("系統終端登入")} · ${sourceLabel(usage[provider])}`,
+    state: usage[provider],
+    authenticated: true,
+  };
+  const named = accounts.filter((account) => account.provider === provider).map((account) => {
+    const authenticated = account.auth?.status === "authenticated";
+    return {
+      key: account.id,
+      name: account.label,
+      statusLabel: authenticated ? `${t("Pixel Crew 帳號")} · ${sourceLabel(accountUsage[account.id])}` : t("尚未登入"),
+      state: accountUsage[account.id],
+      authenticated,
+    };
+  });
+  return [shared, ...named];
+}
+
+function MeterChip({ window }: { window: UsageWindow }) {
   return (
-    <div className={`energy-detail__window energy-detail__window--${tone(window.remainingPercent)}`} title={t("剩餘 {pct}%（已用 {used}%）", { pct: window.remainingPercent, used: window.usedPercent })}>
-      <div><strong>{window.label}</strong><span>{resetCopy(window.resetsAt)}</span></div>
-      <div className="energy-detail__bar"><i style={{ width: `${window.remainingPercent}%` }} /></div>
+    <span className={`energy-account__chip energy-account__chip--${tone(window.remainingPercent)}`} title={t("剩餘 {pct}%（已用 {used}%）", { pct: window.remainingPercent, used: window.usedPercent })}>
+      <span className="energy-account__chip-label">{window.label}</span>
+      <span className="energy-account__chip-track"><i style={{ width: `${window.remainingPercent}%` }} /></span>
+      <span className="energy-account__chip-pct">{window.remainingPercent}%</span>
+    </span>
+  );
+}
+
+function DetailRow({ window }: { window: UsageWindow }) {
+  return (
+    <div className={`energy-account__detail-row energy-account__detail-row--${tone(window.remainingPercent)}`}>
+      <span className="energy-account__detail-name">{window.label}</span>
+      <span className="energy-account__detail-reset">{resetCopy(window.resetsAt)}</span>
       <b>{window.remainingPercent}%</b>
     </div>
   );
 }
 
+// Windows sort worst-first within a row so the one number that actually
+// needs attention is always the leftmost chip, whether collapsed or open.
+function AccountRow({ row }: { row: AccountRowData }) {
+  const windows = [...(row.state?.windows ?? [])].sort((a, b) => a.remainingPercent - b.remainingPercent);
+  const empty = !row.authenticated || windows.length === 0;
+  const railTone = row.authenticated ? tone(lowestRemaining(row.state)) : "empty";
+  const emptyCopy = !row.authenticated ? t("尚未登入") : row.state?.loading ? t("正在讀取工作能量…") : row.state?.error || t("Provider 沒有提供用量資料");
+  return (
+    <details className="energy-account">
+      <summary>
+        <span className={`energy-account__rail energy-account__rail--${railTone}`} aria-hidden="true" />
+        <span className="energy-account__id"><strong>{row.name}</strong><span>{row.statusLabel}</span></span>
+        <span className="energy-account__chips">
+          {empty ? <span className="energy-account__empty">{emptyCopy}</span> : windows.map((window) => <MeterChip key={window.id} window={window} />)}
+        </span>
+        <span className="energy-account__chevron" aria-hidden="true">▸</span>
+      </summary>
+      {!empty && <div className="energy-account__detail">
+        {row.state?.error && <p className="energy-detail__error">{row.state.error}</p>}
+        {windows.map((window) => <DetailRow key={window.id} window={window} />)}
+      </div>}
+    </details>
+  );
+}
+
+// The one thing worth seeing before expanding anything: across every
+// account on every provider, which windows are actually running low.
+function GlanceStrip({ entries }: { entries: Array<{ provider: ProviderId; row: AccountRowData }> }) {
+  const items = entries
+    .map(({ provider, row }) => ({ provider, row, remaining: row.authenticated ? lowestRemaining(row.state) : null }))
+    .filter((entry): entry is typeof entry & { remaining: number } => entry.remaining !== null)
+    .sort((a, b) => a.remaining - b.remaining)
+    .slice(0, 4);
+  if (!items.length) return null;
+  return (
+    <div className="energy-glance">
+      {items.map(({ provider, row, remaining }) => (
+        <span key={`${provider}-${row.key}`} className={`energy-glance__chip energy-glance__chip--${tone(remaining)}`}>
+          <i aria-hidden="true" />{row.name === t("共用登入") ? (provider === "claude" ? "Claude" : "Codex") : row.name}
+          <strong>{remaining}%</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function UsageDetails({ usage, accountUsage = {}, accounts = [] }: Pick<Props, "usage" | "accountUsage" | "accounts">) {
+  const grouped = (["claude", "codex"] as ProviderId[]).map((provider) => ({ provider, rows: buildAccountRows(provider, usage, accountUsage, accounts) }));
+  const entries = grouped.flatMap(({ provider, rows }) => rows.map((row) => ({ provider, row })));
   return <>
-    {(["claude", "codex"] as ProviderId[]).map((provider) => {
-      const state = usage[provider];
-      return <section key={`default-${provider}`}><h3>{provider === "claude" ? "Claude Code" : "Codex"}<small>{t("共用登入")} · {state.source === "cache" ? t("快取") : state.updatedAt ? t("即時") : t("尚無資料")}</small></h3>{state.windows.length > 0 ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{state.loading ? t("正在讀取工作能量…") : state.error || t("Provider 沒有提供用量資料")}</p>}{state.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
-    })}
-    {accounts.map((account) => {
-      const state = accountUsage[account.id];
-      const authenticated = account.auth?.status === "authenticated";
-      const label = `${account.provider === "claude" ? "Claude Code" : "Codex"} · ${account.label}`;
-      const status = !authenticated ? t("尚未登入") : state?.source === "cache" ? t("快取") : state?.updatedAt ? t("即時") : t("尚無資料");
-      return <section key={account.id} className="energy-detail__account"><h3>{label}<small>{status}</small></h3>{state?.windows.length ? state.windows.map((window) => <WindowRow key={window.id} window={window} />) : <p>{!authenticated ? t("尚未登入") : state?.loading ? t("正在讀取工作能量…") : state?.error || t("Provider 沒有提供用量資料")}</p>}{state?.error && state.windows.length > 0 && <p className="energy-detail__error">{state.error}</p>}</section>;
-    })}
+    <GlanceStrip entries={entries} />
+    {grouped.map(({ provider, rows }) => (
+      <section key={provider} className="energy-provider">
+        <h3 className="energy-provider__label">
+          {provider === "claude" ? "Claude Code" : "Codex"}
+          {rows.length > 1 && <small>· {t("{n} 個帳號", { n: rows.length })}</small>}
+        </h3>
+        {rows.map((row) => <AccountRow key={row.key} row={row} />)}
+      </section>
+    ))}
   </>;
 }
 
@@ -120,7 +238,7 @@ export function EnergyHud({ usage, accountUsage = {}, accounts = [], onRefresh, 
           <header><div><span>OFFICE POWER</span><strong>{t("帳號工作能量")}</strong></div><button type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? t("更新中…") : t("重新整理")}</button></header>
           <UsageDetails usage={usage} accountUsage={accountUsage} accounts={accounts} />
           {error && <div className="energy-detail__error">{error}</div>}
-          <footer>{t("每個帳號分開顯示 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
+          <footer>{t("依剩餘量由低到高排序 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
         </div>
       )}
     </div>
@@ -178,7 +296,7 @@ export function FocusEnergy({ usage, accountUsage = {}, accounts = [], onRefresh
         </div>}
         <UsageDetails usage={usage} accountUsage={accountUsage} accounts={accounts} />
         {error && <div className="energy-detail__error">{error}</div>}
-        <footer>{t("每個帳號分開顯示 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
+        <footer>{t("依剩餘量由低到高排序 · Claude 累計花費 US$ {cost} · Codex 以配額百分比計費，無美元金額", { cost: totalCostUsd.toFixed(2) })}</footer>
       </aside>
     </div>
   );

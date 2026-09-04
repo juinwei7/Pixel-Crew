@@ -643,6 +643,40 @@ test("provider accounts round-trip across Codex and Claude, and deleting one fal
   }
 });
 
+test("claude usage probe sessions round-trip and are forgotten when their account is deleted", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cockpit-store-usage-probe-"));
+  const path = join(dir, "test.sqlite");
+  const stores: LocalStore[] = [];
+  try {
+    const store = new LocalStore(path);
+    stores.push(store);
+
+    assert.equal(store.loadClaudeUsageProbeSession("default"), null);
+    store.saveClaudeUsageProbeSession("default", "session-a");
+    assert.equal(store.loadClaudeUsageProbeSession("default"), "session-a");
+
+    // Re-saving under the same key overwrites, it does not duplicate.
+    store.saveClaudeUsageProbeSession("default", "session-b");
+    assert.equal(store.loadClaudeUsageProbeSession("default"), "session-b");
+
+    const claudeAccount = { id: "acct-claude", provider: "claude" as const, label: "bob", homeDir: "/data/accounts/acct-claude", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    assert.equal(store.saveAccount(claudeAccount), true);
+    store.saveClaudeUsageProbeSession("acct-claude", "session-c");
+    assert.equal(store.loadClaudeUsageProbeSession("acct-claude"), "session-c");
+
+    store.deleteAccount("acct-claude");
+    assert.equal(store.loadClaudeUsageProbeSession("acct-claude"), null);
+    // Unrelated keys survive the delete.
+    assert.equal(store.loadClaudeUsageProbeSession("default"), "session-b");
+
+    store.deleteClaudeUsageProbeSession("default");
+    assert.equal(store.loadClaudeUsageProbeSession("default"), null);
+  } finally {
+    for (const store of stores.reverse()) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a pre-migration workers table (no account_id column) backfills to NULL, not an error", () => {
   const dir = mkdtempSync(join(tmpdir(), "cockpit-store-legacy-codex-account-"));
   let store: LocalStore | null = null;

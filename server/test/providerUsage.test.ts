@@ -50,10 +50,25 @@ test("normalizes Codex primary and secondary rate-limit windows", () => {
   });
 
   assert.deepEqual(windows.map(({ label, remainingPercent }) => ({ label, remainingPercent })), [
-    { label: "5 小時", remainingPercent: 85 },
-    { label: "7 天", remainingPercent: 30 },
+    { label: "本次時段", remainingPercent: 85 },
+    { label: "本週期", remainingPercent: 30 },
   ]);
   assert.match(windows[0].resetsAt ?? "", /^2027-/);
+});
+
+test("disambiguates windows from multiple Codex rate-limit groups instead of showing identical labels", () => {
+  const windows = normalizeCodexUsage({
+    rateLimitsByLimitId: {
+      codex: { limitId: "codex", primary: { usedPercent: 0, resetsAt: 1_800_000_000, windowDurationMins: 300 }, secondary: { usedPercent: 83, resetsAt: 1_800_086_400, windowDurationMins: 10_080 } },
+      "gpt-5": { limitId: "gpt-5", primary: { usedPercent: 0, resetsAt: 1_800_500_000 } },
+    },
+  });
+
+  assert.deepEqual(windows.map(({ label }) => label), [
+    "本次時段 · codex",
+    "本週期 · codex",
+    "本次時段 · gpt-5",
+  ]);
 });
 
 test("ignores malformed reset timestamps without crashing", () => {
@@ -83,27 +98,32 @@ test("does not spawn the provider CLI for a provider that has not started", asyn
   }
 });
 
-test("reads Codex and leaves unavailable Claude subscription usage unqueried", async () => {
+test("queries both Codex and Claude accounts through the injected reader", async () => {
   const accounts = [
     { id: "claude-work", provider: "claude" as const, label: "work", homeDir: "/accounts/claude-work", createdAt: "", updatedAt: "" },
     { id: "codex-personal", provider: "codex" as const, label: "personal", homeDir: "/accounts/codex-personal", createdAt: "", updatedAt: "" },
   ];
-  const reads: Array<[string, string]> = [];
+  const reads: Array<[string, string, string]> = [];
   const registry = new AccountUsageRegistry(
     () => accounts,
     () => "authenticated",
     () => undefined,
-    async (provider, homeDir) => {
-      reads.push([provider, homeDir]);
+    async (provider, homeDir, accountId) => {
+      reads.push([provider, homeDir, accountId]);
       return [{ id: homeDir, label: "5 小時", usedPercent: 25, remainingPercent: 75, resetsAt: null, scope: "rate" }];
     },
   );
 
   const states = await registry.refreshAll(true);
-  assert.deepEqual(reads, [["codex", "/accounts/codex-personal"]]);
+  assert.deepEqual(reads.sort(), [
+    ["claude", "/accounts/claude-work", "claude-work"],
+    ["codex", "/accounts/codex-personal", "codex-personal"],
+  ]);
   assert.equal(states["claude-work"]?.provider, "claude");
+  assert.equal(states["claude-work"]?.source, "live");
   assert.equal(states["codex-personal"]?.provider, "codex");
-  assert.match(states["claude-work"]?.error ?? "", /等待既有 Claude 工作階段/);
+  // report() can still update a Claude account opportunistically (e.g. a
+  // real worker turn happened to mention usage) without a fetch in between.
   registry.report("claude-work", parseClaudeUsage("Current session: 57% used · resets Sep 1 at 6:29pm (Asia/Taipei)"));
   assert.equal(registry.getStates()["claude-work"]?.windows[0]?.remainingPercent, 43);
 });
