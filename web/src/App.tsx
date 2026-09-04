@@ -1009,7 +1009,6 @@ export function App() {
 
       {blackWindowMode && <Suspense fallback={<div className="system-banner" role="status">{t("正在載入黑窗工作台…")}</div>}><BlackWindowWorkspace
         defaultWorkspacePath={activeWorkspace}
-        workspacePaths={workspacePaths}
         accounts={Object.values(accounts)}
         usage={providerUsage}
         accountUsage={accountUsage}

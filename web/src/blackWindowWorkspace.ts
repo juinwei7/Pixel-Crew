@@ -64,10 +64,10 @@ export function newBlackWorkspace(workspacePath: string, index = 0): BlackWorksp
 
 export function newBlackWindow(workspacePath: string, offset = 0, z = 1, workspaceId = "workspace-default"): BlackWindow {
   return {
-    id: id("terminal"), workspaceId, title: "RAW SHELL", workspacePath,
+    id: id("terminal"), workspaceId, title: "CODEX", workspacePath,
     x: 28 + (offset % 7) * 26, y: 30 + (offset % 7) * 22,
     width: 720, height: 500, z, minimized: false, maximized: false,
-    mode: "raw", agentStarted: false, provider: null, accountSource: "ambient", accountId: null,
+    mode: "agent", agentStarted: false, provider: "codex", accountSource: "ambient", accountId: null,
     model: "", autoApproveMode: "off",
   };
 }
@@ -86,17 +86,19 @@ function validWorkspace(value: unknown): value is BlackWorkspace {
 }
 
 function normalizeWindow(window: BlackWindow, workspacePath: string, index: number, workspaceId: string): BlackWindow {
+  const provider = window.provider === "codex" || window.provider === "claude" ? window.provider : "codex";
   return {
     ...newBlackWindow(window.workspacePath || workspacePath, index, Math.max(1, window.z), workspaceId), ...window, workspaceId,
+    title: window.title === "RAW SHELL" ? provider.toUpperCase() : window.title,
     width: Math.max(MIN_WINDOW_WIDTH, window.width), height: Math.max(MIN_WINDOW_HEIGHT, window.height),
     // Maximize was removed from the Black Window UI. Clear legacy persisted
     // state so an old layout cannot leave a pane stuck without a restore button.
     maximized: false,
-    mode: window.mode === "agent" ? "agent" as const : "raw" as const,
+    mode: "agent",
     // Layouts written before this field existed already configured daemon
     // recovery whenever they were in Agent mode, so preserve that behavior.
     agentStarted: typeof window.agentStarted === "boolean" ? window.agentStarted : window.mode === "agent",
-    provider: window.provider === "codex" || window.provider === "claude" ? window.provider : null,
+    provider,
     accountSource: window.accountSource === "managed" ? "managed" as const : "ambient" as const,
     accountId: typeof window.accountId === "string" ? window.accountId : null,
     model: typeof window.model === "string" ? window.model : "",
