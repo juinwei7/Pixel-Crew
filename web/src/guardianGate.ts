@@ -1,12 +1,12 @@
 import { t } from "./i18n";
+import { runtimeHttpOrigin } from "./runtimeOrigin";
 
 // 分享訪客監護解鎖：當轉接站以 403 { error: "guardian_required" } 擋下受限操作時，
 // 跳出深色 modal 收監護密碼，POST /__gate/guardian 換取短時效解鎖 cookie，成功後由呼叫端重試一次。
 // 純前端 UI；安全判斷完全在轉接站（_tsproxy.mjs），這裡拿不到密碼也繞不過閘門。
 
-const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
-const SERVER_URL = viteEnv?.VITE_SERVER_URL?.trim() || browserOrigin;
+const SERVER_URL = runtimeHttpOrigin(browserOrigin);
 
 let pending: Promise<boolean> | null = null;
 

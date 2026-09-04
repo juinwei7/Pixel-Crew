@@ -17,6 +17,7 @@ test("parses UI preferences field by field and bounds task log width", () => {
   assert.equal(parsed.taskLogOpen, false);
   assert.equal(parsed.crewFilter, "attention");
   assert.equal(parsed.taskFocusMode, true);
+  assert.equal(parsed.blackWindowMode, false);
 });
 
 test("invalid UI preference fields fall back independently", () => {
@@ -40,7 +41,7 @@ test("migrates the panel-layout regression once while preserving other v2 prefer
     taskLogView: "activity",
     crewRailCollapsed: true,
   }, 1_024);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.taskLogOpen, true);
   assert.equal(migrated.taskLogWidth, 544);
   assert.equal(migrated.taskLogView, "activity");

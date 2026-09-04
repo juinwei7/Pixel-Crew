@@ -1,5 +1,6 @@
 import { t } from "./i18n";
 import { requestGuardianUnlock } from "./guardianGate";
+import { runtimeHttpOrigin } from "./runtimeOrigin";
 
 // 分享訪客碰到受限操作時，轉接站回 403 { error: "guardian_required" }。
 // 攔下它、跳監護密碼、成功後重試一次（只重試一次，避免無出口迴圈）。
@@ -15,9 +16,8 @@ function friendlyError(error: string | undefined, status: number): string {
   return error ?? t("請求失敗（{status}）", { status: String(status) });
 }
 
-const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
-const SERVER_URL = viteEnv?.VITE_SERVER_URL?.trim() || browserOrigin;
+const SERVER_URL = runtimeHttpOrigin(browserOrigin);
 
 export function apiAssetUrl(path: string): string {
   return `${SERVER_URL}${path}`;

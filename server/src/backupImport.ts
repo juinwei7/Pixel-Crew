@@ -84,9 +84,10 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
       // from consuming disk before the manifest/database checks run.
       const normalized = entryPath.replace(/^\.\//, "").replace(/\/+$/, "");
       const isDirectory = "type" in entry && entry.type === "Directory";
-      const allowedDirectory = normalized === "db" || normalized === "avatars";
+      const allowedDirectory = normalized === "db" || normalized === "avatars" || normalized === "mux";
       const allowedFile = normalized === "manifest.json"
         || /^db\/cockpit\.sqlite(?:-(?:wal|shm))?$/.test(normalized)
+        || /^mux\/terminal-mux\.sqlite(?:-(?:wal|shm))?$/.test(normalized)
         || /^avatars\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:png|gif)$/i.test(normalized);
       if ((isDirectory && !allowedDirectory) || (!isDirectory && !allowedFile)) {
         rejected = t("備份檔案包含未知項目：{path}", { path: entryPath });
@@ -103,7 +104,7 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
   } catch {
     throw new BackupValidationError(t("不是有效的 Pixel Crew 備份檔案"));
   }
-  if (manifest.formatVersion !== 1) {
+  if (manifest.formatVersion !== 1 && manifest.formatVersion !== 2) {
     throw new BackupValidationError(t("備份檔案版本不受支援，請使用相容版本的 Pixel Crew 匯出"));
   }
 
@@ -128,6 +129,27 @@ export async function extractAndValidateBackup(tarGzPath: string, stagingDir: st
     workerCount = countRow?.count ?? 0;
   } finally {
     db.close();
+  }
+
+  // The mux database is optional (old backups predate Black Window), but if
+  // present it must be a real healthy SQLite file before a later daemon opens
+  // it after restore.
+  const muxPath = join(stagingDir, "mux", "terminal-mux.sqlite");
+  if (existsSync(muxPath)) {
+    if (!readMagicHeader(muxPath).equals(SQLITE_MAGIC)) throw new BackupValidationError(t("黑窗工作階段資料庫格式無效"));
+    const muxDb = new DatabaseSync(muxPath, { readOnly: true });
+    try {
+      const integrity = muxDb.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check?: string }>;
+      if (integrity.length !== 1 || integrity[0]?.integrity_check !== "ok") throw new BackupValidationError(t("黑窗工作階段資料庫完整性檢查失敗"));
+      const requiredColumns: Record<string, string[]> = {
+        mux_terminal_tabs: ["id", "cwd", "launch_command", "state", "scrollback", "created_at", "updated_at"],
+        mux_meta: ["key", "value", "updated_at"],
+      };
+      for (const [table, required] of Object.entries(requiredColumns)) {
+        const columns = new Set((muxDb.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name?: string }>).map((column) => column.name));
+        if (!required.every((column) => columns.has(column))) throw new BackupValidationError(t("黑窗工作階段資料庫缺少必要的資料表或欄位"));
+      }
+    } finally { muxDb.close(); }
   }
 
   const warnings: string[] = [];
@@ -176,7 +198,7 @@ function moveOrCopy(src: string, dest: string): void {
   }
 }
 
-type DataPaths = { dbPath: string; avatarDir: string };
+type DataPaths = { dbPath: string; avatarDir: string; muxDbPath?: string };
 
 // Moves the current live DB (+ sidecars, if any) and avatars directory out
 // of the way into `snapshotDir`, kept on disk as a safety net even after a
@@ -190,6 +212,11 @@ export function snapshotCurrentData(paths: DataPaths, snapshotDir: string): void
     if (existsSync(`${paths.dbPath}${suffix}`)) moveOrCopy(`${paths.dbPath}${suffix}`, join(dbDir, `cockpit.sqlite${suffix}`));
   }
   if (existsSync(paths.avatarDir)) moveOrCopy(paths.avatarDir, join(snapshotDir, "avatars"));
+  if (paths.muxDbPath && existsSync(paths.muxDbPath)) {
+    const muxDir = join(snapshotDir, "mux"); ensurePrivateDirectorySync(muxDir);
+    moveOrCopy(paths.muxDbPath, join(muxDir, "terminal-mux.sqlite"));
+    for (const suffix of ["-wal", "-shm"]) if (existsSync(`${paths.muxDbPath}${suffix}`)) moveOrCopy(`${paths.muxDbPath}${suffix}`, join(muxDir, `terminal-mux.sqlite${suffix}`));
+  }
 }
 
 // Moves the validated staged backup contents into the live dbPath/avatarDir
@@ -203,6 +230,11 @@ export function swapInRestoredData(paths: DataPaths, stagingDir: string): void {
   }
   const stagedAvatars = join(stagingDir, "avatars");
   if (existsSync(stagedAvatars)) moveOrCopy(stagedAvatars, paths.avatarDir);
+  const stagedMux = join(stagingDir, "mux", "terminal-mux.sqlite");
+  if (paths.muxDbPath && existsSync(stagedMux)) {
+    moveOrCopy(stagedMux, paths.muxDbPath);
+    for (const suffix of ["-wal", "-shm"]) { const sidecar = join(stagingDir, "mux", `terminal-mux.sqlite${suffix}`); if (existsSync(sidecar)) moveOrCopy(sidecar, `${paths.muxDbPath}${suffix}`); }
+  }
 }
 
 // Reverses snapshotCurrentData: clears whatever partial state a failed swap
@@ -210,6 +242,7 @@ export function swapInRestoredData(paths: DataPaths, stagingDir: string): void {
 export function restoreFromSnapshot(paths: DataPaths, snapshotDir: string): void {
   for (const suffix of ["", "-wal", "-shm"]) rmSync(`${paths.dbPath}${suffix}`, { force: true });
   rmSync(paths.avatarDir, { recursive: true, force: true });
+  if (paths.muxDbPath) for (const suffix of ["", "-wal", "-shm"]) rmSync(`${paths.muxDbPath}${suffix}`, { force: true });
   const dbDir = join(snapshotDir, "db");
   const snapshotDb = join(dbDir, "cockpit.sqlite");
   if (existsSync(snapshotDb)) moveOrCopy(snapshotDb, paths.dbPath);
@@ -219,6 +252,11 @@ export function restoreFromSnapshot(paths: DataPaths, snapshotDir: string): void
   }
   const snapshotAvatars = join(snapshotDir, "avatars");
   if (existsSync(snapshotAvatars)) moveOrCopy(snapshotAvatars, paths.avatarDir);
+  const snapshotMux = join(snapshotDir, "mux", "terminal-mux.sqlite");
+  if (paths.muxDbPath && existsSync(snapshotMux)) {
+    moveOrCopy(snapshotMux, paths.muxDbPath);
+    for (const suffix of ["-wal", "-shm"]) { const sidecar = join(snapshotDir, "mux", `terminal-mux.sqlite${suffix}`); if (existsSync(sidecar)) moveOrCopy(sidecar, `${paths.muxDbPath}${suffix}`); }
+  }
 }
 
 export type RestoreMarker = {

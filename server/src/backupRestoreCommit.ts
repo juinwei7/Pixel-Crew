@@ -18,6 +18,8 @@ export async function commitBackupRestore(input: {
   dataDirectory: string;
   dbPath: string;
   avatarDir: string;
+  muxDbPath?: string;
+  stopTerminalMux?(): Promise<void>;
   exit(code: number): void;
 }): Promise<void> {
   const { response: res } = input;
@@ -31,9 +33,9 @@ export async function commitBackupRestore(input: {
   let exitCode = 0;
   let responseBody: { ok: boolean; message: string; preRestoreSnapshot?: string };
   try {
-    input.flush(); input.checkpoint(); input.closeStore();
+    input.flush(); input.checkpoint(); await input.stopTerminalMux?.(); input.closeStore();
     try {
-      const paths = { dbPath: input.dbPath, avatarDir: input.avatarDir };
+      const paths = { dbPath: input.dbPath, avatarDir: input.avatarDir, muxDbPath: input.muxDbPath };
       snapshotCurrentData(paths, snapshotDir);
       try {
         swapInRestoredData(paths, input.pending.stagingDir);

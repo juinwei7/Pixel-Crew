@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { deflateSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
@@ -74,15 +75,16 @@ function crc32(data: Buffer): number {
 async function buildArchive(stagingDir: string, archivePath: string): Promise<void> {
   await tar.create(
     { gzip: true, cwd: stagingDir, file: archivePath, portable: true } as any,
-    ["manifest.json", "db", "avatars"],
+    ["manifest.json", "db", "avatars", "mux"],
   );
 }
 
-test("full round trip: export a real DB+avatars, validate the archive, then restore into a fresh location", async () => {
+test("full round trip: export a real DB+avatars+mux, validate the archive, then restore into a fresh location", async () => {
   const root = mkdtempSync(join(tmpdir(), "pixel-crew-backup-roundtrip-"));
   try {
     const dbPath = join(root, "cockpit.sqlite");
     const avatarDir = join(root, "avatars");
+    const muxDbPath = join(root, "terminal-mux.sqlite");
     mkdirSync(avatarDir);
 
     const store = new LocalStore(dbPath);
@@ -97,8 +99,17 @@ test("full round trip: export a real DB+avatars, validate the archive, then rest
     const avatarStore = new AvatarStore(avatarDir);
     const avatarId = await avatarStore.save(makePng(24, 32).toString("base64"));
 
+    const { DatabaseSync } = await import("node:sqlite");
+    const muxDb = new DatabaseSync(muxDbPath);
+    muxDb.exec(`
+      CREATE TABLE mux_terminal_tabs (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, launch_command TEXT, state TEXT NOT NULL, scrollback TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE mux_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+    `);
+    muxDb.prepare("INSERT INTO mux_terminal_tabs (id, cwd, launch_command, state, scrollback, created_at, updated_at) VALUES (?, ?, NULL, 'running', '', 'now', 'now')").run("terminal-1", "/repo");
+    muxDb.close();
+
     const stagingDir = join(root, "staging");
-    stageExportDirectory({ dbPath, avatarDir }, stagingDir);
+    stageExportDirectory({ dbPath, avatarDir, muxDbPath }, stagingDir);
     const archivePath = join(root, "backup.tar.gz");
     await buildArchive(stagingDir, archivePath);
 
@@ -110,10 +121,11 @@ test("full round trip: export a real DB+avatars, validate the archive, then rest
 
     const restoredDbPath = join(root, "restored", "cockpit.sqlite");
     const restoredAvatarDir = join(root, "restored", "avatars");
+    const restoredMuxDbPath = join(root, "restored", "terminal-mux.sqlite");
     mkdirSync(join(root, "restored"));
     const snapshotDir = join(root, "pre-restore");
-    snapshotCurrentData({ dbPath: restoredDbPath, avatarDir: restoredAvatarDir }, snapshotDir);
-    swapInRestoredData({ dbPath: restoredDbPath, avatarDir: restoredAvatarDir }, validateDir);
+    snapshotCurrentData({ dbPath: restoredDbPath, avatarDir: restoredAvatarDir, muxDbPath: restoredMuxDbPath }, snapshotDir);
+    swapInRestoredData({ dbPath: restoredDbPath, avatarDir: restoredAvatarDir, muxDbPath: restoredMuxDbPath }, validateDir);
 
     const restored = new LocalStore(restoredDbPath);
     try {
@@ -126,6 +138,15 @@ test("full round trip: export a real DB+avatars, validate the archive, then rest
     const restoredAvatar = new AvatarStore(restoredAvatarDir);
     const readBack = await restoredAvatar.read(avatarId);
     assert.deepEqual(readBack?.data, makePng(24, 32));
+
+    assert.ok(existsSync(restoredMuxDbPath), "restored mux database must exist");
+    const restoredMuxDb = new DatabaseSync(restoredMuxDbPath, { readOnly: true });
+    try {
+      const row = restoredMuxDb.prepare("SELECT cwd FROM mux_terminal_tabs WHERE id = ?").get("terminal-1") as { cwd?: string } | undefined;
+      assert.equal(row?.cwd, "/repo");
+    } finally {
+      restoredMuxDb.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -232,6 +253,7 @@ test("rejects an archive whose db file has the wrong magic header", async () => 
     const stagingDir = join(root, "staging");
     mkdirSync(join(stagingDir, "db"), { recursive: true });
     mkdirSync(join(stagingDir, "avatars"), { recursive: true });
+    mkdirSync(join(stagingDir, "mux"), { recursive: true });
     writeFileSync(join(stagingDir, "db", "cockpit.sqlite"), "not a real sqlite file at all");
     writeFileSync(join(stagingDir, "manifest.json"), JSON.stringify({ formatVersion: 1, exportedAt: "x", appVersion: "1.0.0" }));
 
@@ -253,6 +275,7 @@ test("rejects a structurally valid but schema-empty SQLite file", async () => {
     const stagingDir = join(root, "staging");
     mkdirSync(join(stagingDir, "db"), { recursive: true });
     mkdirSync(join(stagingDir, "avatars"), { recursive: true });
+    mkdirSync(join(stagingDir, "mux"), { recursive: true });
     // A real, empty SQLite database — passes the magic header and integrity
     // check, but lacks the tables Pixel Crew actually needs.
     const emptyDb = new LocalStore(join(root, "throwaway-real.sqlite"));
@@ -272,6 +295,27 @@ test("rejects a structurally valid but schema-empty SQLite file", async () => {
       extractAndValidateBackup(archivePath, join(root, "validate")),
       /缺少必要的資料表/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a healthy SQLite mux database with an incompatible schema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pixel-crew-backup-bad-mux-schema-"));
+  try {
+    const stagingDir = join(root, "staging");
+    mkdirSync(join(stagingDir, "db"), { recursive: true });
+    mkdirSync(join(stagingDir, "avatars"), { recursive: true });
+    mkdirSync(join(stagingDir, "mux"), { recursive: true });
+    const store = new LocalStore(join(stagingDir, "db", "cockpit.sqlite"));
+    store.close();
+    const muxDb = new DatabaseSync(join(stagingDir, "mux", "terminal-mux.sqlite"));
+    muxDb.exec("CREATE TABLE mux_terminal_tabs (id TEXT PRIMARY KEY, cwd TEXT NOT NULL)");
+    muxDb.close();
+    writeFileSync(join(stagingDir, "manifest.json"), JSON.stringify({ formatVersion: 2, exportedAt: "x", appVersion: "2.2.2" }));
+    const archivePath = join(root, "bad-mux-schema.tar.gz");
+    await buildArchive(stagingDir, archivePath);
+    await assert.rejects(extractAndValidateBackup(archivePath, join(root, "validate")), /黑窗工作階段資料庫缺少必要/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -343,6 +387,7 @@ test("restore commit snapshots, swaps data, clears the pending import, then exit
       stopWorkers: () => calls.push("stopWorkers"),
       flush: () => calls.push("flush"),
       checkpoint: () => calls.push("checkpoint"),
+      stopTerminalMux: async () => { calls.push("stopTerminalMux"); },
       closeStore: () => calls.push("closeStore"),
       discardPending: (token) => calls.push(`discard:${token}`),
       dataDirectory: root,
@@ -359,7 +404,7 @@ test("restore commit snapshots, swaps data, clears the pending import, then exit
       preRestoreSnapshot: (harness.body() as { preRestoreSnapshot: string }).preRestoreSnapshot,
     });
     assert.deepEqual(calls, [
-      "maintenance:true", "stopWorkers", "flush", "checkpoint", "closeStore", "discard:valid-import",
+      "maintenance:true", "stopWorkers", "flush", "checkpoint", "stopTerminalMux", "closeStore", "discard:valid-import",
     ]);
     assert.equal(exitCode, 0);
     assert.equal(readFileSync(dbPath, "utf8"), "RESTORED_DB_CONTENT");

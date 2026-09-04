@@ -247,8 +247,8 @@ NPC 主要輸入框的麥克風按鈕會在首次使用時請你確認下載 **W
 
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
-| `VITE_SERVER_URL` | 同源/Vite proxy | 只有刻意使用另一個 loopback port 時才需設定 |
-| `VITE_WS_URL` | 同源/Vite proxy | 只有刻意使用另一個 loopback port 時才需設定 |
+| `VITE_SERVER_URL` | 同源/Vite proxy | 僅開發模式；只有刻意使用另一個 loopback port 時才需設定 |
+| `VITE_WS_URL` | 同源/Vite proxy | 僅開發模式；只有刻意使用另一個 loopback port 時才需設定 |
 
 ## 本機資料與安全性
 

@@ -27,6 +27,10 @@ export default defineConfig({
           // in three.js. Isolate it into its own vendor chunk so that lazy
           // chunk stays feature-code-sized instead of ~95% vendor library.
           if (id.includes("node_modules/three/")) return "three-vendor";
+          // Black Window is lazy, and xterm is almost all of that route's
+          // weight. Keep it in an audited vendor chunk so feature code remains
+          // within the generic lazy-chunk budget.
+          if (id.includes("node_modules/@xterm/")) return "xterm-vendor";
           return undefined;
         },
       },

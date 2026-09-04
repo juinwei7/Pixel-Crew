@@ -74,6 +74,14 @@ async function main() {
     cwd: payloadRoot,
     stdio: "inherit",
   });
+  // npm runs with --ignore-scripts in the release staging area, so explicitly
+  // prove the shipped node-pty package contains both ConPTY and the older
+  // Windows fallback binaries. Otherwise Black Window can pass TypeScript and
+  // still fail only after an end user launches the packaged EXE.
+  const ptyPrebuild = join(payloadRoot, "node_modules", "node-pty", "prebuilds", "win32-x64");
+  for (const file of ["conpty.node", "conpty_console_list.node", "pty.node", "winpty-agent.exe", "winpty.dll"]) {
+    await requireFile(join(ptyPrebuild, file), `node-pty Windows runtime (${file})`);
+  }
   await rm(join(payloadRoot, "scripts", "windows", "pixel-crew-tray.ps1"), { force: true });
   await rm(join(payloadRoot, "scripts", "windows", "start-pixel-crew.ps1"), { force: true });
   await auditBundle(payloadRoot, payloadRoot);
