@@ -68,7 +68,7 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
-import { AccountUsageRegistry, parseClaudeUsage, ProviderUsageRegistry } from "./providerUsage.js";
+import { AccountUsageRegistry, parseClaudeUsage, ProviderUsageRegistry, usageSourceFor } from "./providerUsage.js";
 import {
   composePersonaPrompt,
   normalizePersona,
@@ -321,6 +321,7 @@ const accountUsageRegistry = new AccountUsageRegistry(
   (accountId, usage) => {
     broadcast({ type: "account_usage_updated", accountId, usage });
   },
+  (provider, homeDir, accountId) => usageSourceFor(provider).fetch(homeDir, accountId, store),
 );
 const codexAccountLoginTracker = new CodexAccountLoginTracker(async (state) => {
   broadcast({
@@ -474,10 +475,6 @@ type Worker = {
 };
 
 const workers = new Map<string, Worker>();
-// Account-scoped background `/usage` requests currently in flight. There is
-// at most one per Claude account, and each is sent only through an existing
-// idle worker session (not a newly created `-p` session).
-const claudeUsagePolls = new Map<string, string>();
 
 // 舊版的共用 turn_end hook 會把 persist:false 的短命 worker 又存回 SQLite。
 // 服務重啟後，這些 worker 不可能再接回原本的編排 promise，會永遠顯示成閒置。
@@ -1444,9 +1441,6 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
       if (worker.accountId) accountUsageRegistry.report(worker.accountId, windows);
       else usageRegistry.report("claude", windows);
     }
-  }
-  if ((event.type === "turn_end" || event.type === "error") && claudeUsagePolls.get(worker.id)) {
-    claudeUsagePolls.delete(worker.id);
   }
   if (event.type === "turn_end") void usageRegistry.refresh(worker.runner.provider);
   if (event.type === "turn_end") {
@@ -2661,9 +2655,6 @@ app.get("/api/usage", (_req, res) => {
 });
 
 app.post("/api/usage/refresh", async (_req, res) => {
-  // Codex can answer directly; Claude refreshes through the idle session and
-  // publishes the eventual result over the existing usage WebSocket event.
-  refreshClaudeUsageSessions();
   const [usage, accountUsage] = await Promise.all([
     usageRegistry.refreshAll(true),
     accountUsageRegistry.refreshAll(true),
@@ -7517,53 +7508,8 @@ void Promise.all(store.listAccounts().map(async (account) => {
 const usageRefreshTimer = setInterval(() => {
   void usageRegistry.refreshAll(true);
   void accountUsageRegistry.refreshAll(true);
-  refreshClaudeUsageSessions();
 }, 5 * 60_000);
 usageRefreshTimer.unref();
-
-/**
- * Claude currently returns account usage when `/usage` runs inside an already
- * authenticated, established session. A fresh non-interactive `-p` session
- * only reports its own empty turn, so use one idle existing NPC per account.
- */
-function refreshClaudeUsageSessions(): void {
-  const coveredAccounts = new Set<string>();
-  for (const worker of workers.values()) {
-    if (
-      !worker.persistent
-      || worker.runner.provider !== "claude"
-      || !workerProviderReady(worker)
-      || worker.runner.busy
-      || worker.resumeCandidate
-      || handoffInProgress(worker)
-      || collaborationInProgress(worker.id)
-      || missionInProgress(worker.id)
-      || worker.runner.getPersistenceState().completedTurns < 1
-    ) continue;
-    const accountKey = worker.accountId ? `account:${worker.accountId}` : "default";
-    if (coveredAccounts.has(accountKey) || claudeUsagePolls.has(worker.id)) continue;
-    // A different worker belonging to this account may still be polling.
-    if ([...claudeUsagePolls.values()].includes(accountKey)) continue;
-    coveredAccounts.add(accountKey);
-    claudeUsagePolls.set(worker.id, accountKey);
-    // Keep the normal transcript visible: this is an account-level refresh,
-    // but the result comes from this particular native conversation.
-    record(worker, { type: "user_message", text: "/usage" });
-    try {
-      worker.runner.send("/usage");
-      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
-    } catch (error) {
-      claudeUsagePolls.delete(worker.id);
-      const message = error instanceof Error ? error.message : t("無法讀取工作能量");
-      record(worker, { type: "error", message });
-    }
-  }
-}
-
-// Let auth restoration and worker warmup settle first, then populate every
-// account that already owns an established Claude conversation.
-const initialClaudeUsagePoll = setTimeout(refreshClaudeUsageSessions, 15_000);
-initialClaudeUsagePoll.unref();
 
 // A Mission/collaboration turn is deliberately kept open while a background
 // "async agent" tool call is outstanding (see applyMissionActivityEvent), but
@@ -7666,7 +7612,6 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`pixel-crew received ${signal}; shutting down`);
   clearInterval(usageRefreshTimer);
-  clearTimeout(initialClaudeUsagePoll);
   clearInterval(missionActivityTimeoutSweep);
   workflowWatcher.stop();
   mcpConfigWatcher.stop();

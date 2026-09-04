@@ -271,6 +271,15 @@ export class LocalStore {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- Each Claude account (the default slot or a named account) owns one
+      -- hidden "shadow" session used solely to answer /usage in the
+      -- background. See readClaudeUsage() in providerUsage.ts.
+      CREATE TABLE IF NOT EXISTS claude_usage_probes (
+        account_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS cost_log (
         day TEXT NOT NULL,
         worker_id TEXT NOT NULL,
@@ -898,6 +907,7 @@ export class LocalStore {
           this.db.prepare("UPDATE workers SET account_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE account_id = ?").run(id);
         }
         this.db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+        this.db.prepare("DELETE FROM claude_usage_probes WHERE account_key = ?").run(id);
         this.db.exec("COMMIT");
       } catch (error) {
         this.db.exec("ROLLBACK");
@@ -1123,6 +1133,31 @@ export class LocalStore {
           payload = excluded.payload,
           updated_at = CURRENT_TIMESTAMP
       `).run(provider, JSON.stringify(payload));
+    });
+  }
+
+  loadClaudeUsageProbeSession(accountKey: string): string | null {
+    const row = this.db.prepare(
+      "SELECT session_id FROM claude_usage_probes WHERE account_key = ?",
+    ).get(accountKey) as { session_id?: string } | undefined;
+    return row?.session_id || null;
+  }
+
+  saveClaudeUsageProbeSession(accountKey: string, sessionId: string): void {
+    this.safeWrite("save claude usage probe session", () => {
+      this.db.prepare(`
+        INSERT INTO claude_usage_probes (account_key, session_id, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(account_key) DO UPDATE SET
+          session_id = excluded.session_id,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(accountKey, sessionId);
+    });
+  }
+
+  deleteClaudeUsageProbeSession(accountKey: string): void {
+    this.safeWrite("delete claude usage probe session", () => {
+      this.db.prepare("DELETE FROM claude_usage_probes WHERE account_key = ?").run(accountKey);
     });
   }
 

@@ -391,21 +391,60 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .energy-detail header strong { color: #dce8f5; font-size: 17px; }
 .energy-detail header button { min-height: 34px; padding: 6px 11px; border: 1px solid rgba(0, 229, 255,.18); border-radius: 7px; background: rgba(0, 229, 255,.055); color: var(--cyan); font-size: 11px; cursor: pointer; }
 .energy-detail header button:disabled { opacity: .45; }
-.energy-detail section { padding: 14px 2px 5px; }
-.energy-detail section.energy-detail__account { margin-top: 7px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.065); }
-.energy-detail h3 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 9px; color: #c9d9eb; font: 700 13px var(--mono); }
-.energy-detail h3 small { color: #607590; font: 9px var(--mono); }
-.energy-detail__window { display: grid; grid-template-columns: minmax(120px,1fr) 110px 36px; align-items: center; gap: 10px; padding: 9px 7px; color: #00ffa3; border-radius: 7px; }
-.energy-detail__window:hover { background: rgba(255,255,255,.025); }
-.energy-detail__window > div:first-child { min-width: 0; display: grid; gap: 3px; }
-.energy-detail__window strong { color: #afc0d5; font-size: 13px; }
-.energy-detail__window span { overflow: hidden; color: #607590; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.energy-detail__window > b { font: 700 12px var(--mono); text-align: right; }
-.energy-detail__window--warn { color: #ffb000; }
-.energy-detail__window--low { color: #ff2e88; }
 .energy-detail p { margin: 6px 0; padding: 9px; border-radius: 6px; background: rgba(255,255,255,.02); color: #72859f; font-size: 11px; }
 .energy-detail .energy-detail__error { color: #ff8ca2; }
 .energy-detail footer { margin-top: 10px; padding-top: 11px; border-top: 1px solid rgba(255,255,255,.055); color: #526983; font: 9px var(--mono); letter-spacing: .08em; text-align: center; }
+
+/* Worst-first glance strip: the one thing worth seeing before opening
+   anything — see EnergyHud.tsx's GlanceStrip. */
+.energy-glance { display: flex; flex-wrap: wrap; gap: 7px; padding: 3px 2px 14px; }
+.energy-glance__chip { display: flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 999px; background: rgba(255,255,255,.03); color: #8fa0b8; font-size: 10px; }
+.energy-glance__chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; }
+.energy-glance__chip strong { margin-left: 3px; font: 700 11px var(--mono); }
+.energy-glance__chip--good { color: #00ffa3; }
+.energy-glance__chip--warn { color: #ffb000; }
+.energy-glance__chip--low { color: #ff2e88; }
+.energy-glance__chip--empty { color: #526681; }
+
+/* Provider group: shared login is just this group's first account row, not
+   a visually distinct block — see EnergyHud.tsx's buildAccountRows. */
+.energy-provider { padding: 12px 2px 4px; }
+.energy-provider + .energy-provider { margin-top: 4px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.065); }
+.energy-provider__label { display: flex; align-items: baseline; gap: 7px; margin: 0 0 7px; color: #c9d9eb; font: 700 13px var(--mono); }
+.energy-provider__label small { color: #607590; font: 400 9px var(--mono); }
+
+.energy-account { border: 1px solid rgba(255,255,255,.055); border-radius: 9px; background: rgba(255,255,255,.012); margin-bottom: 6px; overflow: hidden; }
+.energy-account:last-child { margin-bottom: 0; }
+.energy-account > summary { display: grid; grid-template-columns: 3px minmax(90px,1fr) auto 12px; align-items: center; gap: 12px; padding: 8px 10px 8px 0; cursor: pointer; list-style: none; }
+.energy-account > summary::-webkit-details-marker { display: none; }
+.energy-account > summary::marker { content: ""; }
+.energy-account:hover > summary { background: rgba(255,255,255,.02); }
+.energy-account__rail { align-self: stretch; width: 3px; border-radius: 3px; background: #526681; }
+.energy-account__rail--good { background: #00ffa3; box-shadow: 0 0 6px #00ffa3; }
+.energy-account__rail--warn { background: #ffb000; box-shadow: 0 0 6px #ffb000; }
+.energy-account__rail--low { background: #ff2e88; box-shadow: 0 0 6px #ff2e88; }
+.energy-account__id { min-width: 0; display: grid; gap: 2px; }
+.energy-account__id strong { overflow: hidden; color: #d9e3f2; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.energy-account__id span { overflow: hidden; color: #607590; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.energy-account__chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.energy-account__empty { color: #72859f; font-size: 10.5px; }
+.energy-account__chip { display: grid; grid-template-columns: auto 40px auto; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid rgba(255,255,255,.06); border-radius: 6px; background: rgba(255,255,255,.03); color: #00ffa3; font-size: 10px; }
+.energy-account__chip--warn { color: #ffb000; }
+.energy-account__chip--low { color: #ff2e88; }
+.energy-account__chip-label { overflow: hidden; color: #7d91ad; text-overflow: ellipsis; white-space: nowrap; }
+.energy-account__chip-track { height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.09); }
+.energy-account__chip-track i { display: block; height: 100%; border-radius: inherit; background: currentColor; box-shadow: 0 0 5px currentColor; }
+.energy-account__chip-pct { font: 700 10px var(--mono); text-align: right; }
+.energy-account__chevron { color: #526681; font-size: 10px; transition: transform .15s ease; }
+.energy-account[open] > summary .energy-account__chevron { transform: rotate(90deg); }
+.energy-account__detail { display: grid; gap: 5px; padding: 2px 10px 10px 15px; border-top: 1px solid rgba(255,255,255,.045); }
+.energy-account__detail-row { display: grid; grid-template-columns: minmax(70px,1fr) auto 34px; align-items: center; gap: 10px; padding: 6px 7px; color: #00ffa3; border-radius: 6px; }
+.energy-account__detail-row:hover { background: rgba(255,255,255,.02); }
+.energy-account__detail-name { overflow: hidden; color: #afc0d5; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.energy-account__detail-reset { overflow: hidden; color: #607590; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.energy-account__detail-row > b { font: 700 11px var(--mono); text-align: right; }
+.energy-account__detail-row--warn { color: #ffb000; }
+.energy-account__detail-row--low { color: #ff2e88; }
 
 /* Crew rail */
 .crew-rail {
@@ -1667,39 +1706,33 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   white-space: nowrap;
 }
 
-.focus-energy__panel section {
-  padding: 14px 0 2px;
+.focus-energy__panel .energy-provider {
+  padding: 12px 0 2px;
 }
 
-.focus-energy__panel h3 {
-  display: flex;
-  justify-content: space-between;
-  margin: 0 0 7px;
+.focus-energy__panel .energy-provider__label {
   color: #c4ccd4;
   font: 650 11px var(--mono);
 }
 
-.focus-energy__panel h3 small {
+.focus-energy__panel .energy-provider__label small {
   color: #64717e;
   font: 8px var(--mono);
 }
 
-.focus-energy__panel .energy-detail__window {
-  grid-template-columns: minmax(0, 1fr) 48px 30px;
-  gap: 6px;
-  padding: 8px 4px;
-}
-
-.focus-energy__panel .energy-detail__window strong {
+.focus-energy__panel .energy-account__id strong {
   font-size: 11px;
 }
 
-.focus-energy__panel .energy-detail__window span {
+.focus-energy__panel .energy-account__id span,
+.focus-energy__panel .energy-account__chip,
+.focus-energy__panel .energy-account__detail-reset {
   font-size: 8px;
 }
 
-.focus-energy__panel .energy-detail__window > b {
-  font-size: 10px;
+.focus-energy__panel .energy-account__chip-pct,
+.focus-energy__panel .energy-account__detail-row > b {
+  font-size: 9px;
 }
 
 .focus-energy__panel p,
