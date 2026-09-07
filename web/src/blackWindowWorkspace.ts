@@ -73,6 +73,25 @@ export async function destroyWorkspaceTerminalTabs(
   return results.every(Boolean);
 }
 
+/** Share one destructive request across every UI surface targeting the same
+ * daemon tab. The entry is removed only after settlement so a later retry is
+ * possible, while concurrent close/restart/workspace-delete actions all await
+ * the same authoritative result. */
+export function dedupeTerminalDestroy(
+  pending: Map<string, Promise<boolean>>,
+  id: string,
+  destroy: () => Promise<boolean>,
+): Promise<boolean> {
+  const existing = pending.get(id);
+  if (existing) return existing;
+  let request!: Promise<boolean>;
+  request = Promise.resolve().then(destroy).finally(() => {
+    if (pending.get(id) === request) pending.delete(id);
+  });
+  pending.set(id, request);
+  return request;
+}
+
 /** Rebase the geometry controlled by an active pointer gesture onto a newer
  * shared layout without discarding unrelated remote edits. */
 export function mergeDraggedWindowGeometry(incoming: BlackWindowLayout, current: BlackWindowLayout, id: string): BlackWindowLayout {
@@ -103,6 +122,25 @@ export function terminalVoiceInput(text: string): string {
   // line breaks and control characters so speech can never synthesize Enter,
   // Ctrl+C, or another terminal control sequence.
   return text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** The highest z-order pane is the one the owner interacted with most recently. */
+export function topmostBlackWindow(windows: BlackWindow[]): BlackWindow | null {
+  return windows.reduce<BlackWindow | null>((top, window) => !top || window.z > top.z ? window : top, null);
+}
+
+export function workspaceHasRunningAgent(windows: BlackWindow[]): boolean {
+  return windows.some((window) => window.agentStarted);
+}
+
+export function reorderBlackWorkspaces(workspaces: BlackWorkspace[], id: string, offset: -1 | 1): BlackWorkspace[] {
+  const sourceIndex = workspaces.findIndex((workspace) => workspace.id === id);
+  const targetIndex = sourceIndex + offset;
+  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= workspaces.length) return workspaces;
+  const next = [...workspaces];
+  const [source] = next.splice(sourceIndex, 1);
+  next.splice(targetIndex, 0, source);
+  return next;
 }
 
 function id(prefix: string): string { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`; }
@@ -231,6 +269,27 @@ export function clampWindow(entry: BlackWindow, viewport = { width: globalThis.w
   const width = Math.min(Math.max(MIN_WINDOW_WIDTH, entry.width), Math.max(MIN_WINDOW_WIDTH, viewport.width - 20));
   const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, entry.height), Math.max(MIN_WINDOW_HEIGHT, viewport.height - 20));
   return { ...entry, width, height, x: Math.max(8, Math.min(entry.x, Math.max(8, viewport.width - width - 8))), y: Math.max(8, Math.min(entry.y, Math.max(8, viewport.height - height - 8))) };
+}
+
+export type BlackWindowKeyboardDirection = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight";
+
+/** Keyboard equivalent for dragging a pane header. Shift switches from moving to resizing. */
+export function keyboardAdjustBlackWindow(
+  entry: BlackWindow,
+  direction: BlackWindowKeyboardDirection,
+  resize: boolean,
+  viewport = { width: globalThis.window.innerWidth, height: globalThis.window.innerHeight },
+  step = 16,
+): BlackWindow {
+  if (entry.maximized || entry.minimized) return entry;
+  if (resize) {
+    const width = entry.width + (direction === "ArrowRight" ? step : direction === "ArrowLeft" ? -step : 0);
+    const height = entry.height + (direction === "ArrowDown" ? step : direction === "ArrowUp" ? -step : 0);
+    return clampWindow({ ...entry, width, height }, viewport);
+  }
+  const x = entry.x + (direction === "ArrowRight" ? step : direction === "ArrowLeft" ? -step : 0);
+  const y = entry.y + (direction === "ArrowDown" ? step : direction === "ArrowUp" ? -step : 0);
+  return clampWindow({ ...entry, x, y }, viewport);
 }
 
 export function snapWindow(window: BlackWindow, peers: BlackWindow[], viewport = { width: globalThis.window.innerWidth, height: globalThis.window.innerHeight }): BlackWindow {

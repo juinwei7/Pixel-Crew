@@ -1051,8 +1051,8 @@ export function App() {
 
       <button
         className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`}
-        aria-hidden={taskFocusMode || undefined}
-        inert={taskFocusMode ? "" : undefined}
+        aria-hidden={taskFocusMode || blackWindowMode || undefined}
+        inert={taskFocusMode || blackWindowMode ? "" : undefined}
         // Capture the pointer so a tap OR a swipe off the button both toggle: on a
         // phone the log is a bottom sheet, and users instinctively press this arrow
         // and drag to dismiss. Without capture the drag was eaten by the canvas
@@ -1069,6 +1069,8 @@ export function App() {
       <div
         ref={focusLayerRef}
         className="task-focus-layer"
+        aria-hidden={blackWindowMode || undefined}
+        inert={blackWindowMode ? "" : undefined}
         aria-label={taskFocusMode ? t("專業模式工作台") : undefined}
         role={taskFocusMode ? "region" : undefined}
       >
@@ -1321,7 +1323,7 @@ export function App() {
       </div>
 
       <WorkerTabs
-        inert={taskFocusMode}
+        inert={taskFocusMode || blackWindowMode}
         workers={workerList}
         activeId={activeId}
         departments={departmentList}
@@ -1523,7 +1525,7 @@ export function App() {
         </div>
       </div>}
 
-      <footer className="app-copyright" aria-label={t("版權資訊")}>© 2026 weiwei</footer>
+      <footer className="app-copyright" aria-label={t("版權資訊")} aria-hidden={blackWindowMode || undefined} inert={blackWindowMode ? "" : undefined}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
       {confirmRequest && <ConfirmDialog message={confirmRequest.message} tone={confirmRequest.tone} onConfirm={() => resolveConfirm(true)} onCancel={() => resolveConfirm(false)} />}
     </div>

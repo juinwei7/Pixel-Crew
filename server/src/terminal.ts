@@ -96,7 +96,7 @@ export function attachTerminalSocket(socket: WebSocket, normalizeWorkspacePath: 
     try {
       await ensureTerminalMuxDaemon();
     } catch (error) {
-      send(socket, { type: "terminal_error", message: error instanceof Error ? error.message : "Unable to start terminal mux" }); opening = false; openingTabId = null; return;
+      send(socket, { type: "terminal_error", message: error instanceof Error ? error.message : "Unable to start terminal mux", recoverable: true }); opening = false; openingTabId = null; return;
     }
     if (stopped || cancelledOpenTabs.has(input.sessionId as string)) { opening = false; openingTabId = null; return; }
     const connection = connectTerminalMux(); mux = connection;
@@ -112,7 +112,7 @@ export function attachTerminalSocket(socket: WebSocket, normalizeWorkspacePath: 
       finishOpening();
       if (mux === connection) mux = null;
       connection.destroy();
-      send(socket, { type: "terminal_error", message: "Terminal mux attach timed out" });
+      send(socket, { type: "terminal_error", message: "Terminal mux attach timed out", recoverable: true });
     }, 3_000);
     connection.on("connect", () => {
       if (cancelledOpenTabs.has(input.sessionId as string)) { finishOpening(); connection.destroy(); return; }
@@ -123,29 +123,30 @@ export function attachTerminalSocket(socket: WebSocket, normalizeWorkspacePath: 
       if (terminalClientBufferWouldOverflow(0, Buffer.byteLength(muxBuffer))) {
         finishOpening();
         connection.destroy();
-        send(socket, { type: "terminal_error", message: "Terminal mux output exceeded the client buffer limit" });
+        send(socket, { type: "terminal_error", message: "Terminal mux output exceeded the client buffer limit", recoverable: true });
         return;
       }
       let newline: number;
       while ((newline = muxBuffer.indexOf("\n")) >= 0) {
         const line = muxBuffer.slice(0, newline); muxBuffer = muxBuffer.slice(newline + 1);
         try {
-          const message = JSON.parse(line) as { type?: string; data?: unknown; message?: unknown; workspacePath?: unknown; shell?: unknown; persistent?: unknown; restored?: unknown; writable?: unknown; code?: unknown; signal?: unknown; tabId?: unknown };
+          const message = JSON.parse(line) as { type?: string; data?: unknown; message?: unknown; workspacePath?: unknown; shell?: unknown; persistent?: unknown; restored?: unknown; writable?: unknown; agentRunning?: unknown; code?: unknown; signal?: unknown; tabId?: unknown };
           if (message.type === "output" && typeof message.data === "string") send(socket, { type: "terminal_output", data: message.data });
-          else if (message.type === "ready") { finishOpening(); send(socket, { type: "terminal_ready", workspacePath: message.workspacePath, shell: message.shell, persistent: message.persistent, restored: message.restored, writable: message.writable === true }); }
+          else if (message.type === "ready") { finishOpening(); send(socket, { type: "terminal_ready", workspacePath: message.workspacePath, shell: message.shell, persistent: message.persistent, restored: message.restored, writable: message.writable === true, agentRunning: typeof message.agentRunning === "boolean" ? message.agentRunning : undefined }); }
           else if (message.type === "access") send(socket, { type: "terminal_access", writable: message.writable === true });
           else if (message.type === "launched") send(socket, { type: "terminal_launched" });
+          else if (message.type === "agent_exit") send(socket, { type: "terminal_agent_exit", code: typeof message.code === "number" ? message.code : null });
           // A "denied" write attempt while read-only is not a connection failure —
           // keep it out of terminal_error so the pane doesn't flip to an error state.
           else if (message.type === "denied") send(socket, { type: "terminal_denied" });
-          else if (message.type === "error") { finishOpening(); send(socket, { type: "terminal_error", message: message.message }); }
+          else if (message.type === "error") { finishOpening(); send(socket, { type: "terminal_error", message: message.message, recoverable: true }); }
           else if (message.type === "exit") { finishOpening(); send(socket, { type: "terminal_exit", code: message.code ?? null, signal: message.signal ?? null }); }
           else if (message.type === "destroyed") { finishOpening(); if (mux === connection) mux = null; connection.destroy(); send(socket, { type: "terminal_exit", code: null, signal: null, destroyed: true }); }
         } catch { /* Ignore invalid daemon framing; the connection remains isolated. */ }
       }
     });
-    connection.once("error", (error) => { finishOpening(); if (mux === connection) mux = null; send(socket, { type: "terminal_error", message: error.message || "Terminal mux connection failed" }); });
-    connection.once("close", () => { finishOpening(); if (!stopped && mux === connection) { mux = null; send(socket, { type: "terminal_error", message: "Terminal mux disconnected; reconnect the pane to attach again" }); } });
+    connection.once("error", (error) => { finishOpening(); if (mux === connection) mux = null; send(socket, { type: "terminal_error", message: error.message || "Terminal mux connection failed", recoverable: true }); });
+    connection.once("close", () => { finishOpening(); if (!stopped && mux === connection) { mux = null; send(socket, { type: "terminal_error", message: "Terminal mux disconnected; reconnecting the pane", recoverable: true }); } });
   };
 
   socket.on("message", (buffer) => {

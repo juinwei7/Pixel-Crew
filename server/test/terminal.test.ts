@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { isTerminalTabId } from "../src/terminal.js";
 import { terminalMuxPipeName } from "../src/terminalMuxPipeName.js";
+import { TERMINAL_MUX_PROTOCOL_VERSION } from "../src/terminalMuxProtocol.js";
 import { commandInvocation } from "../src/platform/processes.js";
 import { parseTerminalLaunchCommand, terminalLaunchCommand } from "../src/terminalLaunch.js";
 import { MAX_TERMINAL_CLIENT_BUFFER_BYTES, terminalClientBufferWouldOverflow } from "../src/terminalFlowControl.js";
@@ -36,6 +37,15 @@ test("terminal launch commands round-trip quoted values without becoming shell s
   assert.doesNotMatch(windows ?? "", /A B|TEMP|calc|model/);
   const posix = terminalLaunchCommand(source, "darwin");
   assert.equal(posix, "CODEX_HOME='C:\\Users\\A B%TEMP%' 'codex' '--no-alt-screen' '--model' 'model\" & calc & rem'");
+  const completionToken = "123e4567-e89b-12d3-a456-426614174000";
+  const trackedPosix = terminalLaunchCommand(source, "darwin", completionToken);
+  assert.match(trackedPosix ?? "", /^\/bin\/sh -c /);
+  assert.match(trackedPosix ?? "", /pixel-crew-agent-exit;123e4567-e89b-12d3-a456-426614174000/);
+  const trackedWindows = terminalLaunchCommand(source, "win32", completionToken);
+  const encoded = trackedWindows?.split(" ").at(-1) ?? "";
+  const windowsScript = Buffer.from(encoded, "base64").toString("utf16le");
+  assert.match(windowsScript, /pixel-crew-agent-exit;123e4567-e89b-12d3-a456-426614174000/);
+  assert.equal(terminalLaunchCommand(source, "darwin", "bad;token"), null);
 });
 
 test("terminal launch commands reject arbitrary restored shell text and mismatched account homes", () => {
@@ -187,7 +197,7 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     const ownerPong = await client.next();
     assert.equal(ownerPong.type, "pong");
     assert.equal(ownerPong.requestId, "still-owner");
-    assert.equal(ownerPong.protocolVersion, 2);
+    assert.equal(ownerPong.protocolVersion, TERMINAL_MUX_PROTOCOL_VERSION);
 
     const emptySnapshotPath = join(dataDirectory, "empty-snapshot.sqlite");
     client.send({ type: "snapshot", path: emptySnapshotPath });
@@ -200,9 +210,52 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     const ready = await client.waitFor((message) => message.type === "ready" || message.type === "error");
     assert.equal(ready.type, "ready", `attach failed: ${JSON.stringify(ready)}`);
     assert.equal(ready.restored, false);
+    assert.equal(ready.agentRunning, false);
     assert.equal(typeof ready.pid, "number");
     const ptyPid = ready.pid as number;
     assert.equal(processExists(ptyPid), true);
+
+    // A second browser can observe the same persistent terminal, but its
+    // viewport must not reflow the current writer's interactive program.
+    const spectatorSocket = await connect(socketPath);
+    const spectator = rpcClient(spectatorSocket);
+    spectator.send({ type: "attach", tabId, workspacePath: dataDirectory, cols: 120, rows: 40 });
+    const spectatorReady = await spectator.waitFor((message) => message.type === "ready" || message.type === "error");
+    assert.equal(spectatorReady.type, "ready");
+    assert.equal(spectatorReady.writable, false);
+    client.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    const writerSize = await client.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__24x80"));
+    assert.match(String(writerSize.data), /__SIZE__24x80/);
+
+    spectator.send({ type: "resize", cols: 140, rows: 50 });
+    client.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    const unchangedSize = await client.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__24x80"));
+    assert.match(String(unchangedSize.data), /__SIZE__24x80/);
+
+    spectator.send({ type: "claim" });
+    const claimed = await spectator.waitFor((message) => message.type === "access" && message.writable === true);
+    assert.equal(claimed.writable, true);
+    spectator.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    const claimedSize = await spectator.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__50x140"));
+    assert.match(String(claimedSize.data), /__SIZE__50x140/);
+
+    // If the writer disappears while a viewer remains, a later attach must
+    // not silently seize control. The remaining viewer (or the newcomer) has
+    // to claim explicitly, preserving the mux's user-action ownership rule.
+    spectatorSocket.destroy();
+    assert.equal((await client.waitFor((message) => message.type === "access" && message.writable === false)).writable, false);
+    const newcomerSocket = await connect(socketPath);
+    const newcomer = rpcClient(newcomerSocket);
+    newcomer.send({ type: "attach", tabId, workspacePath: dataDirectory, cols: 100, rows: 32 });
+    const newcomerReady = await newcomer.waitFor((message) => message.type === "ready" || message.type === "error");
+    assert.equal(newcomerReady.type, "ready");
+    assert.equal(newcomerReady.writable, false);
+
+    // Return control to the original browser before exercising the rest of
+    // the lifecycle so later launch/configure assertions keep their intent.
+    client.send({ type: "claim" });
+    assert.equal((await client.waitFor((message) => message.type === "access" && message.writable === true)).writable, true);
+    newcomerSocket.destroy();
 
     // Switching an Agent pane back to Raw Shell must clear the durable launch
     // hint. Otherwise a later daemon restart would unexpectedly launch the old
@@ -230,16 +283,30 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
       snapshotDb.close();
     }
 
-    // An explicit launch both writes to the PTY and arms recovery. Merely
-    // selecting Agent mode in the UI no longer does this before the click.
+    // An explicit launch writes to the PTY and arms recovery while it runs.
+    // Once the child command returns to the persistent shell, the daemon must
+    // emit a distinct Agent exit and disarm recovery without killing the PTY.
     client.send({ type: "launch", launchCommand: "codex --version" });
     assert.equal((await client.waitFor((message) => message.type === "launched" || message.type === "error")).type, "launched");
+    const agentExit = await client.waitFor((message) => message.type === "agent_exit" || message.type === "error");
+    assert.equal(agentExit.type, "agent_exit");
+    assert.equal(agentExit.code, 0);
+    // A stale browser may still believe the Agent is running until it receives
+    // this event. Reattaching that old layout must not re-arm or relaunch the
+    // completed command; daemon lifecycle state is authoritative.
+    const staleSocket = await connect(socketPath);
+    const stale = rpcClient(staleSocket);
+    stale.send({ type: "attach", tabId, workspacePath: dataDirectory, cols: 90, rows: 28, launchCommand: "codex --version" });
+    const staleReady = await stale.waitFor((message) => message.type === "ready" || message.type === "error");
+    assert.equal(staleReady.type, "ready");
+    assert.equal(staleReady.agentRunning, false);
+    staleSocket.destroy();
     client.send({ type: "checkpoint" });
     assert.equal((await client.waitFor((message) => message.type === "checkpointed" || message.type === "error")).type, "checkpointed");
     const liveDb = new DatabaseSync(join(dataDirectory, "terminal-mux.sqlite"), { readOnly: true });
     try {
       const launched = liveDb.prepare("SELECT launch_command FROM mux_terminal_tabs WHERE id = ?").get(tabId) as { launch_command?: string | null } | undefined;
-      assert.equal(launched?.launch_command, "codex --version");
+      assert.equal(launched?.launch_command, null);
     } finally {
       liveDb.close();
     }
@@ -249,6 +316,16 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     client.send({ type: "snapshot", path: "relative.sqlite" });
     const rejected = await client.waitFor((message) => message.type === "error" || message.type === "snapshotted");
     assert.equal(rejected.type, "error");
+
+    // A normal shell exit must detach every viewer from the dead PTY. Browser
+    // ResizeObservers can still emit after the exit frame; that late resize
+    // must be ignored instead of throwing inside (and killing) the daemon.
+    client.send({ type: "input", data: "exit\r" });
+    assert.equal((await client.waitFor((message) => message.type === "exit")).type, "exit");
+    client.send({ type: "resize", cols: 90, rows: 28 });
+    client.send({ type: "ping", requestId: "after-shell-exit" });
+    const afterExitPong = await client.waitFor((message) => message.type === "pong" && message.requestId === "after-shell-exit");
+    assert.equal(afterExitPong.requestId, "after-shell-exit");
 
     const exited = new Promise<number | null>((resolvePromise) => child.once("exit", (code) => resolvePromise(code)));
     client.send({ type: "shutdown" });
@@ -263,6 +340,7 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     await exited;
     await waitForProcessExit(ptyPid);
     socket.destroy();
+    spectatorSocket.destroy();
 
     // A fresh connection attempt must fail fast now that the daemon is gone
     // (rather than hang, which is what an un-drained server.close() risked).

@@ -52,15 +52,25 @@ function powershellUtf8(value: string): string {
 /** Build a command safe for the daemon's interactive platform shell. Windows
  * uses an encoded PowerShell program so cmd.exe never parses account paths,
  * model names, or other argument data as metacharacters. */
-export function terminalLaunchCommand(command: string, platform: NodeJS.Platform = process.platform): string | null {
+export function terminalLaunchCommand(command: string, platform: NodeJS.Platform = process.platform, completionToken?: string): string | null {
   const spec = parseTerminalLaunchCommand(command);
   if (!spec) return null;
+  if (completionToken !== undefined && !/^[a-zA-Z0-9-]{8,120}$/.test(completionToken)) return null;
   if (platform !== "win32") {
     const environment = spec.environment ? `${spec.environment.name}=${posixQuote(spec.environment.value)} ` : "";
-    return environment + [spec.executable, ...spec.args].map(posixQuote).join(" ");
+    const launch = environment + [spec.executable, ...spec.args].map(posixQuote).join(" ");
+    if (!completionToken) return launch;
+    // The interactive login shell may be fish or another non-POSIX shell.
+    // Delegate the private completion wrapper to /bin/sh while keeping the
+    // terminal itself in the user's chosen shell.
+    const tracked = `${launch}; __pixel_crew_status=$?; printf '\\033]777;pixel-crew-agent-exit;${completionToken};%s\\007' "$__pixel_crew_status"`;
+    return `/bin/sh -c ${posixQuote(tracked)}`;
   }
   const setEnvironment = spec.environment ? `$env:${spec.environment.name}=${powershellUtf8(spec.environment.value)};` : "";
   const args = spec.args.map(powershellUtf8).join(",");
-  const script = `${setEnvironment}$launchArgs=@(${args});& (${powershellUtf8(spec.executable)}) @launchArgs; exit $LASTEXITCODE`;
+  const completion = completionToken
+    ? `$status=$LASTEXITCODE;[Console]::Write(([char]27).ToString()+']777;pixel-crew-agent-exit;${completionToken};'+$status+([char]7));exit $status`
+    : "exit $LASTEXITCODE";
+  const script = `${setEnvironment}$launchArgs=@(${args});& (${powershellUtf8(spec.executable)}) @launchArgs;${completion}`;
   return `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`;
 }
