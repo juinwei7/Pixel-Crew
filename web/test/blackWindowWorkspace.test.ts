@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BLACK_WINDOW_FONT_SIZE_DEFAULT, BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, restartBlackWindow, snapWindow, terminalVoiceInput } from "../src/blackWindowWorkspace";
+import { BLACK_WINDOW_FONT_SIZE_DEFAULT, BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, dedupeTerminalDestroy, destroyWorkspaceTerminalTabs, freshBlackWindowLayout, keyboardAdjustBlackWindow, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, reorderBlackWorkspaces, restartBlackWindow, snapWindow, terminalVoiceInput, topmostBlackWindow, workspaceHasRunningAgent } from "../src/blackWindowWorkspace";
 import type { AccountWithAuth } from "../src/types";
 
 test("new black windows begin as unstarted Codex Agent panes", () => {
@@ -12,6 +12,20 @@ test("new black windows begin as unstarted Codex Agent panes", () => {
   assert.equal(entry.title, "CODEX");
   assert.equal(entry.z, 9);
   assert.equal(entry.fontSize, BLACK_WINDOW_FONT_SIZE_DEFAULT);
+});
+
+test("workspace switching restores the most recently focused pane by z-order", () => {
+  const workspace = newBlackWorkspace("/repo", 0);
+  const first = { ...newBlackWindow("/repo", 0, 12, workspace.id), id: "first" };
+  const newestButBehind = { ...newBlackWindow("/repo", 1, 4, workspace.id), id: "newest" };
+  assert.equal(topmostBlackWindow([first, newestButBehind])?.id, "first");
+  assert.equal(topmostBlackWindow([]), null);
+});
+
+test("workspace activity only lights for an Agent that has actually started", () => {
+  const pane = newBlackWindow("/repo");
+  assert.equal(workspaceHasRunningAgent([pane]), false);
+  assert.equal(workspaceHasRunningAgent([{ ...pane, agentStarted: true }]), true);
 });
 
 test("terminal font size is rounded and clamped to a readable range", () => {
@@ -127,6 +141,16 @@ test("window geometry is bounded inside the engineering desktop", () => {
   assert.ok(bounded.y >= 8);
 });
 
+test("keyboard pane controls move and resize within desktop bounds", () => {
+  const entry = { ...newBlackWindow("/repo"), x: 32, y: 32, width: 500, height: 400 };
+  assert.equal(keyboardAdjustBlackWindow(entry, "ArrowRight", false, { width: 1200, height: 800 }).x, 48);
+  assert.equal(keyboardAdjustBlackWindow(entry, "ArrowDown", true, { width: 1200, height: 800 }).height, 416);
+  const minimum = keyboardAdjustBlackWindow({ ...entry, width: MIN_WINDOW_WIDTH, height: MIN_WINDOW_HEIGHT }, "ArrowLeft", true, { width: 1200, height: 800 });
+  assert.equal(minimum.width, MIN_WINDOW_WIDTH);
+  const bounded = keyboardAdjustBlackWindow({ ...entry, x: 8 }, "ArrowLeft", false, { width: 1200, height: 800 });
+  assert.equal(bounded.x, 8);
+});
+
 test("dragging near an edge snaps the window without touching peers", () => {
   const entry = { ...newBlackWindow("/repo"), x: 16, y: 16 };
   const snapped = snapWindow(entry, [], { width: 1200, height: 800 });
@@ -138,6 +162,14 @@ test("a new Workspace's title is the trailing repo folder, on POSIX or Windows p
   assert.equal(newBlackWorkspace("/Users/dev/repo").title, "repo");
   assert.equal(newBlackWorkspace("C:\\Users\\alice\\AppData\\Local\\repo").title, "repo");
   assert.equal(newBlackWorkspace("C:\\Users\\alice\\repo\\").title, "repo");
+});
+
+test("keyboard Workspace reordering moves one slot and preserves boundary identity", () => {
+  const workspaces = [newBlackWorkspace("/one"), newBlackWorkspace("/two", 1), newBlackWorkspace("/three", 2)];
+  const moved = reorderBlackWorkspaces(workspaces, workspaces[1].id, -1);
+  assert.deepEqual(moved.map((workspace) => workspace.id), [workspaces[1].id, workspaces[0].id, workspaces[2].id]);
+  assert.equal(reorderBlackWorkspaces(moved, workspaces[1].id, -1), moved);
+  assert.equal(reorderBlackWorkspaces(workspaces, "missing", 1), workspaces);
 });
 
 test("workspace deletion waits for every direct daemon destroy and reports partial failure", async () => {
@@ -154,6 +186,24 @@ test("workspace deletion waits for every direct daemon destroy and reports parti
   releaseSecond();
   assert.equal(await deleting, false);
   assert.deepEqual(completed, ["terminal-a", "terminal-b"]);
+});
+
+test("concurrent terminal destruction shares one request and unlocks after settlement", async () => {
+  const pending = new Map<string, Promise<boolean>>();
+  let calls = 0;
+  let release!: (value: boolean) => void;
+  const result = new Promise<boolean>((resolve) => { release = resolve; });
+  const first = dedupeTerminalDestroy(pending, "terminal-a", () => { calls += 1; return result; });
+  const second = dedupeTerminalDestroy(pending, "terminal-a", () => { calls += 1; return Promise.resolve(false); });
+  assert.equal(first, second);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  assert.equal(pending.get("terminal-a"), first);
+  release(true);
+  assert.equal(await second, true);
+  assert.equal(pending.has("terminal-a"), false);
+  assert.equal(await dedupeTerminalDestroy(pending, "terminal-a", async () => { calls += 1; return false; }), false);
+  assert.equal(calls, 2);
 });
 
 test("a remote layout received during dragging keeps remote edits and the local final geometry", () => {

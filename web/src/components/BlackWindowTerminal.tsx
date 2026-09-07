@@ -7,12 +7,13 @@ import { runtimeWsOrigin } from "../runtimeOrigin";
 import { terminalVoiceInput } from "../blackWindowWorkspace";
 
 type TerminalMessage =
-  | { type: "terminal_ready"; workspacePath: string; shell: string; persistent?: boolean; restored?: boolean; writable?: boolean }
+  | { type: "terminal_ready"; workspacePath: string; shell: string; persistent?: boolean; restored?: boolean; writable?: boolean; agentRunning?: boolean }
   | { type: "terminal_output"; data: string }
-  | { type: "terminal_error"; message: string }
+  | { type: "terminal_error"; message: string; recoverable?: boolean }
   | { type: "terminal_exit"; code: number | null; signal: number | null; destroyed?: boolean }
   | { type: "terminal_access"; writable: boolean }
   | { type: "terminal_launched" }
+  | { type: "terminal_agent_exit"; code: number | null }
   | { type: "terminal_denied" };
 
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
@@ -25,7 +26,7 @@ function sendTerminal(socket: WebSocket | null, message: unknown): void {
 
 export type BlackWindowTerminalHandle = { inject(command: string): void; insertText(text: string): void; launch(command: string): Promise<boolean>; interrupt(): void; destroy(): Promise<boolean> };
 
-type Props = { sessionId: string; workspacePath: string; terminalLabel: string; active: boolean; fontSize: number; launchCommand?: string | null; onActivate?(): void; onStatus?(status: "connecting" | "ready" | "closed" | "error"): void; onReady?(state: { restored: boolean }): void };
+type Props = { sessionId: string; workspacePath: string; terminalLabel: string; active: boolean; fontSize: number; launchCommand?: string | null; onActivate?(): void; onStatus?(status: "connecting" | "ready" | "closed" | "error"): void; onReady?(state: { restored: boolean; agentRunning?: boolean }): void; onExit?(): void };
 
 /**
  * A real xterm.js terminal backed by an OS pseudo-terminal. Nothing is
@@ -33,23 +34,39 @@ type Props = { sessionId: string; workspacePath: string; terminalLabel: string; 
  * positioning, full-screen programs and interactive CLIs flow between the
  * browser terminal and the local PTY.
  */
-export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, fontSize, launchCommand, onActivate, onStatus, onReady }, ref) {
+export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(function BlackWindowTerminal({ sessionId, workspacePath, terminalLabel, active, fontSize, launchCommand, onActivate, onStatus, onReady, onExit }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const pendingLaunchRef = useRef<((ok: boolean) => void) | null>(null);
   const onReadyRef = useRef(onReady);
+  const onExitRef = useRef(onExit);
+  const activeRef = useRef(active);
+  const launchCommandRef = useRef(launchCommand);
+  const reconnectAttemptRef = useRef(0);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [status, setStatus] = useState<"connecting" | "ready" | "closed" | "error">("connecting");
   const [shell, setShell] = useState("");
   const [writable, setWritable] = useState(false);
+  // `undefined` means no completion has been observed, while `null` means the
+  // daemon knows the Agent ended but could not recover a trustworthy code.
+  // Keep this pane-local so the reason remains visible after layout sync has
+  // already changed agentStarted back to false.
+  const [agentExitCode, setAgentExitCode] = useState<number | null | undefined>(undefined);
 
   useEffect(() => { onStatus?.(status); }, [onStatus, status]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
+  useEffect(() => { onExitRef.current = onExit; }, [onExit]);
+  useEffect(() => { activeRef.current = active; }, [active]);
+  launchCommandRef.current = launchCommand;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    let disposed = false;
+    let terminalEnded = false;
+    let reconnectTimer: number | undefined;
     setStatus("connecting");
     setShell("");
     setWritable(false);
@@ -70,7 +87,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
-    terminal.focus();
+    if (activeRef.current) terminal.focus();
     terminalRef.current = terminal;
 
     const socket = new WebSocket(terminalWsUrl);
@@ -81,33 +98,57 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     };
     const observer = new ResizeObserver(resize);
     observer.observe(host);
+    const scheduleReconnect = () => {
+      if (disposed || terminalEnded || reconnectTimer !== undefined) return;
+      const delay = Math.min(8_000, 800 * 2 ** reconnectAttemptRef.current++);
+      reconnectTimer = window.setTimeout(() => setConnectionEpoch((current) => current + 1), delay);
+    };
     const input = terminal.onData((data) => {
       if (!terminal.options.disableStdin) sendTerminal(socket, { type: "terminal_input", data });
     });
     socket.onopen = () => {
-      sendTerminal(socket, { type: "terminal_open", sessionId, workspacePath, cols: terminal.cols, rows: terminal.rows, launchCommand });
+      // Layout sync can change the recovery command while this socket is still
+      // connecting. Read the current prop here instead of the effect closure,
+      // otherwise an old null can erase the daemon's persisted Agent command.
+      sendTerminal(socket, { type: "terminal_open", sessionId, workspacePath, cols: terminal.cols, rows: terminal.rows, launchCommand: launchCommandRef.current });
       resize();
     };
     socket.onmessage = (event) => {
       let message: TerminalMessage | null = null;
       try { message = JSON.parse(String(event.data)) as TerminalMessage; } catch { return; }
       if (message.type === "terminal_ready") {
+        reconnectAttemptRef.current = 0;
         setShell(message.shell);
         setStatus("ready");
         setWritable(message.writable === true);
         terminal.options.disableStdin = message.writable !== true;
-        terminal.focus();
-        onReadyRef.current?.({ restored: message.restored === true });
+        if (activeRef.current) terminal.focus();
+        if (message.agentRunning === true) setAgentExitCode(undefined);
+        else if (message.agentRunning === false && launchCommandRef.current) {
+          // The Agent may have completed while this browser was disconnected.
+          // Its exact code is unavailable, but the daemon can still tell us
+          // that the persistent shell survived and is ready for another run.
+          setAgentExitCode((current) => current === undefined ? null : current);
+        }
+        onReadyRef.current?.({ restored: message.restored === true, agentRunning: message.agentRunning });
       } else if (message.type === "terminal_output") terminal.write(message.data);
-      else if (message.type === "terminal_error") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setStatus("error"); terminal.writeln(`\r\n[Pixel Crew terminal error: ${message.message}]`); }
+      else if (message.type === "terminal_error") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setStatus("error"); terminal.writeln(`\r\n[Pixel Crew terminal error: ${message.message}]`); if (message.recoverable) scheduleReconnect(); }
       else if (message.type === "terminal_access") { setWritable(message.writable); terminal.options.disableStdin = !message.writable; }
-      else if (message.type === "terminal_launched") { pendingLaunchRef.current?.(true); pendingLaunchRef.current = null; }
+      else if (message.type === "terminal_launched") { setAgentExitCode(undefined); pendingLaunchRef.current?.(true); pendingLaunchRef.current = null; }
+      else if (message.type === "terminal_agent_exit") { setAgentExitCode(message.code); onExitRef.current?.(); }
       else if (message.type === "terminal_denied") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setWritable(false); terminal.options.disableStdin = true; }
-      else if (message.type === "terminal_exit") { setWritable(false); terminal.options.disableStdin = true; setStatus("closed"); terminal.writeln(message.destroyed ? "\r\n[terminal destroyed]" : `\r\n[shell exited · ${message.signal || message.code || 0}]`); }
+      else if (message.type === "terminal_exit") { terminalEnded = true; setWritable(false); terminal.options.disableStdin = true; setStatus("closed"); terminal.writeln(message.destroyed ? "\r\n[terminal destroyed]" : `\r\n[shell exited · ${message.signal || message.code || 0}]`); if (!message.destroyed) onExitRef.current?.(); }
     };
     socket.onerror = () => setStatus("error");
-    socket.onclose = () => { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setStatus((current) => current === "error" ? current : "closed"); };
+    socket.onclose = () => {
+      pendingLaunchRef.current?.(false); pendingLaunchRef.current = null;
+      if (disposed || terminalEnded) return;
+      setStatus((current) => current === "error" ? current : "closed");
+      scheduleReconnect();
+    };
     return () => {
+      disposed = true;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       observer.disconnect();
       input.dispose();
       pendingLaunchRef.current?.(false);
@@ -119,7 +160,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
     };
-  }, [sessionId, workspacePath]);
+  }, [connectionEpoch, sessionId, workspacePath]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -144,10 +185,13 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
   }, [fontSize]);
 
   useEffect(() => {
-    if (launchCommand === undefined) return;
+    // A configure effect that ran while CONNECTING was previously dropped by
+    // sendTerminal. Re-run after terminal_ready so the durable recovery hint
+    // always converges to the latest layout without launching the Agent twice.
+    if (launchCommand === undefined || status !== "ready") return;
     const socket = socketRef.current;
     sendTerminal(socket, { type: "terminal_configure", launchCommand });
-  }, [launchCommand]);
+  }, [launchCommand, status]);
 
   useEffect(() => { if (active) terminalRef.current?.focus(); }, [active]);
 
@@ -168,6 +212,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     },
     launch(command) {
       if (status !== "ready" || socketRef.current?.readyState !== WebSocket.OPEN || pendingLaunchRef.current) return Promise.resolve(false);
+      setAgentExitCode(undefined);
       return new Promise<boolean>((resolve) => {
         const timer = window.setTimeout(() => {
           if (!pendingLaunchRef.current) return;
@@ -184,15 +229,18 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       });
     },
     interrupt() {
+      if (status !== "ready" || socketRef.current?.readyState !== WebSocket.OPEN) return;
+      // Interrupt is an explicit control action, just like Launch. A second
+      // browser may currently be the writer, so claim first; WebSocket message
+      // ordering guarantees the daemon transfers control before Ctrl+C arrives.
+      if (!writable) sendTerminal(socketRef.current, { type: "terminal_claim" });
       sendTerminal(socketRef.current, { type: "terminal_interrupt" });
     },
     async destroy() {
-      // The WS bridge can be mid-reconnect (or never opened) when the pane
-      // is closed, in which case terminal_destroy is silently dropped and
-      // the daemon-owned PTY would leak with no way back to it from the UI.
-      // The REST endpoint reaches the daemon directly regardless of this
-      // pane's socket state, so it — not the WS message — is authoritative.
-      sendTerminal(socketRef.current, { type: "terminal_destroy", sessionId });
+      // Use exactly one authoritative request. A former best-effort WS send
+      // raced this REST call, so the daemon could delete the PTY through WS
+      // while a transient REST failure made the UI claim it was still alive.
+      // REST reaches the daemon even while this pane's socket is reconnecting.
       try {
         const response = await fetch(`/api/terminal-mux/tabs/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
         return response.ok;
@@ -202,11 +250,19 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     },
   }), [sessionId, status, writable]);
 
+  const agentResult = agentExitCode === undefined
+    ? terminalLabel
+    : agentExitCode === 0
+      ? t("Agent 已正常結束；shell 可繼續使用")
+      : agentExitCode === null
+        ? t("Agent 已結束；shell 可繼續使用")
+        : t("Agent 已結束（退出碼 {code}）；shell 可繼續使用", { code: agentExitCode });
+
   return <section className="black-window-terminal" aria-label={t("黑窗 CLI 終端")} onPointerDown={(event) => { event.stopPropagation(); onActivate?.(); }} onClick={() => {
     if (status === "ready" && !writable) sendTerminal(socketRef.current, { type: "terminal_claim" });
     terminalRef.current?.focus();
   }}>
     <div ref={hostRef} className="black-window-terminal__screen" />
-    <footer>{terminalLabel} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀；點擊取得控制權")}`}` : status === "connecting" ? t("正在建立 PTY…") : status === "closed" ? t("已結束") : t("連線失敗")}</footer>
+    <footer role="status" aria-live="polite">{agentResult} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀；點擊取得控制權")}`}` : status === "connecting" ? t("正在建立 PTY…") : status === "closed" ? t("已結束") : t("連線失敗")}</footer>
   </section>;
 });

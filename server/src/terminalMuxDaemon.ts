@@ -23,6 +23,7 @@ const MAX_INPUT_BYTES = 64_000;
 const MAX_SCROLLBACK_BYTES = 1_500_000;
 const MAX_COLS = 500;
 const MAX_ROWS = 300;
+const MAX_AGENT_COMPLETION_TAIL = 65_536;
 const dataDirectory = process.env.PIXEL_CREW_DATA_DIR?.trim() || process.env.PIXEL_CREW_MUX_DATA_DIR?.trim();
 
 if (!dataDirectory) throw new Error("PIXEL_CREW_DATA_DIR is required to run terminal mux daemon");
@@ -51,8 +52,8 @@ type Input =
   | { type: "claim" };
 
 type TerminalRecord = { id: string; cwd: string; launchCommand: string | null; state: string; scrollback: string; createdAt: string; updatedAt: string };
-type RunningTerminal = { record: TerminalRecord; pty: IPty; clients: Set<Client>; writer: Client | null; flushTimer: NodeJS.Timeout | null; deleted: boolean };
-type Client = { id: string; socket: Socket; buffer: string; terminal: RunningTerminal | null };
+type RunningTerminal = { record: TerminalRecord; pty: IPty; clients: Set<Client>; writer: Client | null; flushTimer: NodeJS.Timeout | null; deleted: boolean; agentToken: string | null; agentCompletionTail: string };
+type Client = { id: string; socket: Socket; buffer: string; terminal: RunningTerminal | null; cols: number; rows: number };
 
 const terminals = new Map<string, RunningTerminal>();
 const require = createRequire(import.meta.url);
@@ -166,6 +167,43 @@ function closeTerminal(terminal: RunningTerminal, state: string): void {
   terminal.record.updatedAt = new Date().toISOString();
   save(terminal.record);
   terminals.delete(terminal.record.id);
+  terminal.writer = null;
+  for (const client of terminal.clients) client.terminal = null;
+  terminal.clients.clear();
+}
+
+function detectAgentCompletion(terminal: RunningTerminal, data: string): void {
+  const token = terminal.agentToken;
+  if (!token) return;
+  const prefix = `\u001b]777;pixel-crew-agent-exit;${token};`;
+  const combined = terminal.agentCompletionTail + data;
+  const start = combined.indexOf(prefix);
+  const end = start < 0 ? -1 : combined.indexOf("\u0007", start + prefix.length);
+  if (start < 0 || end < 0) {
+    // Once the prefix itself has been seen, keep everything from that point
+    // on instead of a fixed-size suffix — trimming to the last N bytes here
+    // could cut the prefix away again before its terminator lands in a later
+    // chunk. Still bounded so a terminator that never arrives cannot grow
+    // this without limit.
+    const tail = start >= 0 ? combined.slice(start) : combined.slice(-256);
+    terminal.agentCompletionTail = tail.length > MAX_AGENT_COMPLETION_TAIL ? "" : tail;
+    return;
+  }
+  const rawCode = combined.slice(start + prefix.length, end);
+  const parsed = /^-?\d+$/.test(rawCode) ? Number(rawCode) : Number.NaN;
+  const code = Number.isSafeInteger(parsed) ? parsed : null;
+  terminal.agentToken = null;
+  terminal.agentCompletionTail = "";
+  terminal.record.launchCommand = null;
+  // Keep the private OSC marker out of durable scrollback. xterm ignores the
+  // unknown sequence live, but a restored pane should not replay protocol data.
+  const persistedStart = terminal.record.scrollback.lastIndexOf(prefix);
+  if (persistedStart >= 0) {
+    const persistedEnd = terminal.record.scrollback.indexOf("\u0007", persistedStart + prefix.length);
+    if (persistedEnd >= 0) terminal.record.scrollback = terminal.record.scrollback.slice(0, persistedStart) + terminal.record.scrollback.slice(persistedEnd + 1);
+  }
+  flush(terminal);
+  broadcast(terminal, { type: "agent_exit", code });
 }
 
 function makeTerminal(record: TerminalRecord, cols: number, rows: number): RunningTerminal {
@@ -177,13 +215,17 @@ function makeTerminal(record: TerminalRecord, cols: number, rows: number): Runni
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : "Unable to start terminal");
   }
-  const terminal: RunningTerminal = { record: { ...record, state: "running" }, pty, clients: new Set(), writer: null, flushTimer: null, deleted: false };
+  let agentToken = record.launchCommand ? randomUUID() : null;
+  let recoveryLaunch = record.launchCommand && agentToken ? terminalLaunchCommand(record.launchCommand, process.platform, agentToken) : null;
+  if (record.launchCommand && !recoveryLaunch) { record.launchCommand = null; agentToken = null; }
+  const terminal: RunningTerminal = { record: { ...record, state: "running" }, pty, clients: new Set(), writer: null, flushTimer: null, deleted: false, agentToken, agentCompletionTail: "" };
   terminals.set(record.id, terminal);
   save(terminal.record);
   pty.onData((data) => {
     terminal.record.scrollback = (terminal.record.scrollback + data).slice(-MAX_SCROLLBACK_BYTES);
     scheduleFlush(terminal);
     broadcast(terminal, { type: "output", data });
+    detectAgentCompletion(terminal, data);
   });
   pty.onExit(({ exitCode, signal }) => {
     if (terminal.deleted) return;
@@ -193,10 +235,7 @@ function makeTerminal(record: TerminalRecord, cols: number, rows: number): Runni
   // Feeding the command through the interactive shell preserves the exact
   // environment and capabilities of a normal terminal.  It is persisted for
   // reboot recovery, never interpreted by the web client.
-  if (record.launchCommand) {
-    const launch = terminalLaunchCommand(record.launchCommand);
-    if (launch) pty.write(`${launch}\r`);
-  }
+  if (recoveryLaunch) pty.write(`${recoveryLaunch}\r`);
   return terminal;
 }
 
@@ -204,7 +243,14 @@ function detach(client: Client): void {
   const terminal = client.terminal;
   if (!terminal) return;
   terminal.clients.delete(client);
-  if (terminal.writer === client) { terminal.writer = [...terminal.clients].at(-1) ?? null; announceWriter(terminal); }
+  if (terminal.writer === client) {
+    // Mirror attach()'s own rule: only an explicit claim (or the first-ever
+    // attach) may hand write access to a specific client. Auto-promoting
+    // whichever viewer happens to still be attached would reflow the PTY to
+    // an arbitrary tab's size behind the interactive program's back.
+    terminal.writer = null;
+    announceWriter(terminal);
+  }
   client.terminal = null;
 }
 
@@ -214,19 +260,21 @@ function attach(client: Client, message: Extract<Input, { type: "attach" }>): vo
   const launchCommand = message.launchCommand === undefined ? undefined : valueString(message.launchCommand, 8_000);
   if (!id || !cwd) { send(client, { type: "error", message: "Invalid terminal tab or workspace" }); return; }
   detach(client);
+  let terminal = terminals.get(id);
   let record = row(id);
   const restored = Boolean(record);
   const now = new Date().toISOString();
+  client.cols = dimension(message.cols, 100, MAX_COLS);
+  client.rows = dimension(message.rows, 30, MAX_ROWS);
   if (!record) record = { id, cwd, launchCommand: launchCommand ?? null, state: "created", scrollback: "", createdAt: now, updatedAt: now };
   else {
-    // A workspace selection is a user edit and is authoritative. Empty / bad
-    // launch command values never erase a previously persisted recovery spec.
+    // The workspace path is layout-owned, but an existing terminal's Agent
+    // lifecycle is daemon-owned. A stale browser snapshot must not re-arm a
+    // command that already completed while every browser was disconnected.
     record.cwd = cwd;
-    if (launchCommand !== undefined) record.launchCommand = launchCommand || null;
   }
-  let terminal = terminals.get(id);
   try {
-    if (!terminal) terminal = makeTerminal(record, dimension(message.cols, 100, MAX_COLS), dimension(message.rows, 30, MAX_ROWS));
+    if (!terminal) terminal = makeTerminal(record, client.cols, client.rows);
     else {
       // The live PTY cannot retroactively change directory just because a
       // pane re-attaches with a different workspacePath — only the
@@ -235,17 +283,23 @@ function attach(client: Client, message: Extract<Input, { type: "attach" }>): vo
       terminal.record.launchCommand = record.launchCommand;
       terminal.record.updatedAt = now;
       save(terminal.record);
-      terminal.pty.resize(dimension(message.cols, 100, MAX_COLS), dimension(message.rows, 30, MAX_ROWS));
+      // A read-only viewer must not reflow the interactive program under the
+      // current writer. Keep this client's size for a later explicit claim.
+      if (terminal.writer === client) terminal.pty.resize(client.cols, client.rows);
     }
   } catch (error) { send(client, { type: "error", message: error instanceof Error ? error.message : "Unable to start terminal" }); return; }
+  const firstClient = terminal.clients.size === 0;
   terminal.clients.add(client);
   // Attaching (including a reconnect) must never silently steal input from
   // whoever already holds it — only an explicit "claim" does that. The first
   // client to ever attach still becomes the writer since there is no one to
   // take control from.
-  if (!terminal.writer) terminal.writer = client;
+  if (!terminal.writer && firstClient) {
+    terminal.writer = client;
+    terminal.pty.resize(client.cols, client.rows);
+  }
   client.terminal = terminal;
-  send(client, { type: "ready", workspacePath: terminal.record.cwd, shell: shellCommand().shell, pid: terminal.pty.pid, persistent: true, restored, writable: terminal.writer === client });
+  send(client, { type: "ready", workspacePath: terminal.record.cwd, shell: shellCommand().shell, pid: terminal.pty.pid, persistent: true, restored, writable: terminal.writer === client, agentRunning: Boolean(terminal.agentToken) });
   announceWriter(terminal);
   if (terminal.record.scrollback) send(client, { type: "output", data: terminal.record.scrollback });
 }
@@ -330,14 +384,18 @@ function handle(client: Client, message: Input): void {
   const terminal = client.terminal;
   if (!terminal) return;
   if (message.type === "claim") {
-    if (terminal.writer !== client) { terminal.writer = client; announceWriter(terminal); }
+    if (terminal.writer !== client) {
+      terminal.writer = client;
+      terminal.pty.resize(client.cols, client.rows);
+      announceWriter(terminal);
+    }
     return;
   }
   if (message.type === "configure") {
     const command = message.launchCommand === null ? null : valueString(message.launchCommand, 8_000);
     if (message.launchCommand !== null && command === null) { send(client, { type: "error", message: "Invalid launch command" }); return; }
     if (command !== null && !terminalLaunchCommand(command)) { send(client, { type: "error", message: "Invalid launch command" }); return; }
-    terminal.record.launchCommand = command;
+    if (!terminal.agentToken) terminal.record.launchCommand = command;
     flush(terminal);
     send(client, { type: "configured" });
     return;
@@ -345,25 +403,47 @@ function handle(client: Client, message: Input): void {
   if (message.type === "launch") {
     if (terminal.writer !== client) { send(client, { type: "denied", message: "Terminal is read-only because another pane has write access" }); return; }
     const command = valueString(message.launchCommand, 8_000);
-    const launch = command === null ? null : terminalLaunchCommand(command);
+    // Multiple browser tabs (or a double click before layout propagation) can
+    // repeat the same intent. Confirm the already-running Agent without
+    // writing a second interactive CLI into the same shell — but only when
+    // the request actually matches what's running; a caller asking for a
+    // different command was never applied and must not be told it succeeded.
+    if (terminal.agentToken) {
+      if (command === terminal.record.launchCommand) { send(client, { type: "launched" }); return; }
+      send(client, { type: "error", message: "An Agent is already running with a different launch command" });
+      return;
+    }
+    const token = randomUUID();
+    const launch = command === null ? null : terminalLaunchCommand(command, process.platform, token);
     if (!launch) { send(client, { type: "error", message: "Invalid launch command" }); return; }
     // The user's explicit launch action is the point at which this becomes a
     // recovery command. Persist it before writing so an immediate server or
     // machine restart cannot lose that intent.
     const previousLaunchCommand = terminal.record.launchCommand;
+    const previousAgentToken = terminal.agentToken;
+    const previousCompletionTail = terminal.agentCompletionTail;
     terminal.record.launchCommand = command;
+    terminal.agentToken = token;
+    terminal.agentCompletionTail = "";
     flush(terminal);
     try {
       terminal.pty.write(`${launch}\r`);
       send(client, { type: "launched" });
     } catch (error) {
       terminal.record.launchCommand = previousLaunchCommand;
+      terminal.agentToken = previousAgentToken;
+      terminal.agentCompletionTail = previousCompletionTail;
       flush(terminal);
       send(client, { type: "error", message: error instanceof Error ? error.message : "Unable to launch Agent" });
     }
     return;
   }
-  if (message.type === "resize") { terminal.pty.resize(dimension(message.cols, 100, MAX_COLS), dimension(message.rows, 30, MAX_ROWS)); return; }
+  if (message.type === "resize") {
+    client.cols = dimension(message.cols, client.cols, MAX_COLS);
+    client.rows = dimension(message.rows, client.rows, MAX_ROWS);
+    if (terminal.writer === client) terminal.pty.resize(client.cols, client.rows);
+    return;
+  }
   if (message.type === "interrupt") {
     if (terminal.writer === client) terminal.pty.write("\u0003");
     else send(client, { type: "denied", message: "Terminal is read-only because another pane has write access" });
@@ -388,7 +468,7 @@ function parse(line: string): Input | null {
 const allClients = new Set<Client>();
 
 const server = createServer((socket) => {
-  const client: Client = { id: randomUUID(), socket, buffer: "", terminal: null };
+  const client: Client = { id: randomUUID(), socket, buffer: "", terminal: null, cols: 100, rows: 30 };
   allClients.add(client);
   socket.setNoDelay(true);
   socket.on("data", (chunk: Buffer) => {
