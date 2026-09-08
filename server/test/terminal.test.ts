@@ -182,7 +182,9 @@ function removeMuxTestDirectory(directory: string): void {
   }
 }
 
-const terminalSizeProbe = `node -e "console.log('__SIZE__'+process.stdout.rows+'x'+process.stdout.columns)"\r`;
+const terminalSizeProbe = process.platform === "win32"
+  ? `powershell.exe -NoLogo -NoProfile -Command "Write-Output ('__SIZE__' + [Console]::WindowHeight + 'x' + [Console]::WindowWidth)"\r`
+  : `stty size | awk '{print "__SIZE__"$1"x"$2}'\r`;
 
 test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdown only acks once fully stopped", { timeout: 20_000 }, async () => {
   // macOS exposes /tmp as /private/tmp; the explicit real path also works in
