@@ -182,6 +182,8 @@ function removeMuxTestDirectory(directory: string): void {
   }
 }
 
+const terminalSizeProbe = `node -e "console.log('__SIZE__'+process.stdout.rows+'x'+process.stdout.columns)"\r`;
+
 test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdown only acks once fully stopped", { timeout: 20_000 }, async () => {
   // macOS exposes /tmp as /private/tmp; the explicit real path also works in
   // restricted runners that disallow binding sockets below the per-user temp alias.
@@ -242,19 +244,19 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     const spectatorReady = await spectator.waitFor((message) => message.type === "ready" || message.type === "error");
     assert.equal(spectatorReady.type, "ready");
     assert.equal(spectatorReady.writable, false);
-    client.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    client.send({ type: "input", data: terminalSizeProbe });
     const writerSize = await client.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__24x80"));
     assert.match(String(writerSize.data), /__SIZE__24x80/);
 
     spectator.send({ type: "resize", cols: 140, rows: 50 });
-    client.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    client.send({ type: "input", data: terminalSizeProbe });
     const unchangedSize = await client.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__24x80"));
     assert.match(String(unchangedSize.data), /__SIZE__24x80/);
 
     spectator.send({ type: "claim" });
     const claimed = await spectator.waitFor((message) => message.type === "access" && message.writable === true);
     assert.equal(claimed.writable, true);
-    spectator.send({ type: "input", data: "stty size | awk '{print \"__SIZE__\"$1\"x\"$2}'\r" });
+    spectator.send({ type: "input", data: terminalSizeProbe });
     const claimedSize = await spectator.waitFor((message) => message.type === "output" && String(message.data).includes("__SIZE__50x140"));
     assert.match(String(claimedSize.data), /__SIZE__50x140/);
 
