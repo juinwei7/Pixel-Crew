@@ -59,7 +59,7 @@ test("black window CLI controls and pane switcher have descriptive semantics", (
   assert.match(blackWindow, /if \(Math\.hypot\(dx, dy\) < 4\) return/);
   assert.match(blackWindow, /viewport: canvasViewport\(\)/);
   assert.match(blackWindow, /return state\.moved \? mergeDraggedWindowGeometry\(incoming, locallyFinished, state\.id\) : incoming/);
-  assert.match(blackTerminal, /<footer role="status" aria-live="polite">/);
+  assert.match(blackTerminal, /<span role="status" aria-live="polite">/);
   assert.match(blackTerminal, /if \(activeRef\.current\) terminal\.focus\(\)/);
   assert.match(blackTerminal, /if \(!writable\) sendTerminal\(socketRef\.current, \{ type: "terminal_claim" \}\);\s*sendTerminal\(socketRef\.current, \{ type: "terminal_interrupt" \}\)/);
   assert.match(blackTerminal, /if \(status !== "ready" \|\| socketRef\.current\?\.readyState !== WebSocket\.OPEN\) return/);
