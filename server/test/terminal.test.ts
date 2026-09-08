@@ -119,6 +119,7 @@ function rpcClient(socket: Socket) {
   let buffer = "";
   const pending: Array<Record<string, unknown>> = [];
   const waiters: Array<(value: Record<string, unknown>) => void> = [];
+  const recent: Array<Record<string, unknown>> = [];
   socket.on("data", (chunk: Buffer) => {
     buffer += chunk.toString("utf8");
     let newline: number;
@@ -126,6 +127,8 @@ function rpcClient(socket: Socket) {
       const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
       if (!line) continue;
       const message = JSON.parse(line) as Record<string, unknown>;
+      recent.push(message);
+      if (recent.length > 8) recent.shift();
       const waiter = waiters.shift();
       if (waiter) waiter(message); else pending.push(message);
     }
@@ -136,7 +139,10 @@ function rpcClient(socket: Socket) {
       const queued = pending.shift();
       if (queued) return Promise.resolve(queued);
       return new Promise((resolvePromise, reject) => {
-        const timer = setTimeout(() => reject(new Error("terminal mux daemon did not reply in time")), timeoutMs);
+        const timer = setTimeout(() => {
+          const received = JSON.stringify(recent).slice(-2_000);
+          reject(new Error(`terminal mux daemon did not reply in time; recent messages: ${received}`));
+        }, timeoutMs);
         waiters.push((value) => { clearTimeout(timer); resolvePromise(value); });
       });
     },
