@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -90,13 +90,13 @@ test("Windows pipe names resolve directory junction aliases", { skip: process.pl
 // tabId regex — actually gets exercised: startup, attach, the atomic
 // VACUUM INTO snapshot RPC, and that "shutdown" only acks once the daemon
 // has genuinely released its socket and database file.
-function startDaemon(dataDirectory: string): ChildProcess {
+function startDaemon(dataDirectory: string, executablePath = process.env.PATH): ChildProcess {
   const serverDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const entry = join(serverDir, "src", "terminalMuxDaemon.ts");
   const invocation = commandInvocation(process.execPath, ["--import", "tsx", entry]);
   return spawn(invocation.file, invocation.args, {
     stdio: ["ignore", "ignore", "pipe"],
-    env: { ...process.env, PIXEL_CREW_DATA_DIR: dataDirectory },
+    env: { ...process.env, PATH: executablePath, PIXEL_CREW_DATA_DIR: dataDirectory },
   });
 }
 
@@ -175,8 +175,15 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
   // restricted runners that disallow binding sockets below the per-user temp alias.
   const socketTempRoot = process.platform === "darwin" ? "/private/tmp" : tmpdir();
   const dataDirectory = mkdtempSync(join(socketTempRoot, "pixel-crew-mux-daemon-"));
+  // The lifecycle test launches an Agent command but must not depend on Codex
+  // being installed on a developer machine or hosted CI runner.
+  const testBin = join(dataDirectory, "test-bin");
+  mkdirSync(testBin);
+  if (process.platform === "win32") writeFileSync(join(testBin, "codex.cmd"), "@echo off\r\nexit /b 0\r\n");
+  else writeFileSync(join(testBin, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const testPath = `${testBin}${delimiter}${process.env.PATH ?? ""}`;
   const socketPath = process.platform === "win32" ? terminalMuxPipeName(dataDirectory) : join(dataDirectory, "terminal-mux.sock");
-  const child = startDaemon(dataDirectory);
+  const child = startDaemon(dataDirectory, testPath);
   let stderr = "";
   child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
   try {
@@ -191,7 +198,7 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     // A concurrent launcher must yield to the listener that already owns the
     // socket. In particular it must not unlink that live socket and create a
     // second daemon against the same SQLite database.
-    const contender = startDaemon(dataDirectory);
+    const contender = startDaemon(dataDirectory, testPath);
     assert.equal(await childExit(contender), 0);
     client.send({ type: "ping", requestId: "still-owner" });
     const ownerPong = await client.next();
