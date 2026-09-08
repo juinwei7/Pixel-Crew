@@ -117,9 +117,9 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   return (
     <Modal label={t("營運面板")} eyebrow="📊 OPERATIONS" title={t("營運面板")} cardClassName="warroom-result__card ops-modal" onClose={onClose}>
         <div className="ops-modal__tabs" role="tablist">
-          <button type="button" role="tab" className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("💰 成本日報")}</button>
-          <button type="button" role="tab" className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("⏰ 排程任務")}</button>
-          <button type="button" role="tab" className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("📈 本機診斷")}</button>
+          <button type="button" role="tab" aria-selected={tab === "costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("💰 成本日報")}</button>
+          <button type="button" role="tab" aria-selected={tab === "schedules"} className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("⏰ 排程任務")}</button>
+          <button type="button" role="tab" aria-selected={tab === "diagnostics"} className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("📈 本機診斷")}</button>
         </div>
 
         {tab === "costs" && (
@@ -134,12 +134,13 @@ export function OpsModal({ workers, notify, onClose }: Props) {
                       type="number"
                       min="0"
                       step="0.5"
+                      aria-label={t("{name} 的每日預算上限", { name: worker.name })}
                       placeholder={t("無上限")}
                       value={budgets[worker.id] ?? ""}
                       onChange={(event) => setBudgets((prev) => ({ ...prev, [worker.id]: event.target.value }))}
                     />
                   </span>
-                  <button type="button" onClick={() => void saveBudget(worker.id)}>{t("儲存")}</button>
+                  <button type="button" aria-label={t("儲存 {name} 的每日預算", { name: worker.name })} onClick={() => void saveBudget(worker.id)}>{t("儲存")}</button>
                 </div>
               ))}
             </div>
@@ -185,6 +186,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
               <textarea
                 value={newPrompt}
                 onChange={(event) => setNewPrompt(event.target.value)}
+                aria-label={t("排程指示")}
                 placeholder={t("例：查一下今天的科技新聞，挑三則重要的整理成摘要給我")}
                 rows={2}
               />

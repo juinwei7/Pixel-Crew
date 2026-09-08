@@ -358,6 +358,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
                     <button
                       type="button"
                       className="mcp-modal__tools-toggle"
+                      aria-expanded={expanded}
                       onClick={() => setExpandedTools((current) => ({ ...current, [server.name]: !current[server.name] }))}
                     >
                       {expanded ? t("隱藏工具") : t("查看工具")}
@@ -433,7 +434,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
           <div className="mcp-modal__add-title">
             {t("新增 MCP SERVER")}
             {provider === "claude" && (
-              <button type="button" className="mcp-modal__mode-toggle" onClick={() => setAddMode((mode) => (mode === "form" ? "json" : "form"))}>
+              <button type="button" className="mcp-modal__mode-toggle" aria-pressed={addMode === "json"} onClick={() => setAddMode((mode) => (mode === "form" ? "json" : "form"))}>
                 {addMode === "form" ? t("進階：貼上 JSON") : t("改用表單")}
               </button>
             )}
@@ -442,7 +443,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
           <input className="mcp-modal__input" placeholder={t("名稱（英數、-、_、.）")} value={name} onChange={(e) => setName(e.target.value)} />
 
           {provider === "claude" && (
-            <select className="mcp-modal__input" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
+            <select className="mcp-modal__input" aria-label={t("MCP 設定範圍")} value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
               <option value="local">{t("本機（此專案私有）")}</option>
               <option value="project">{t("專案共享（.mcp.json）")}</option>
               <option value="user">{t("全域（所有專案）")}</option>
@@ -462,13 +463,14 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
             </>
           ) : (
             <>
-              <div className="mcp-modal__transport">
+              <div className="mcp-modal__transport" role="group" aria-label={t("MCP 傳輸方式")}>
                 {(["stdio", "http", "sse"] as const)
                   .filter((option) => !(provider === "codex" && option === "sse"))
                   .map((option) => (
                     <button
                       key={option}
                       type="button"
+                      aria-pressed={transport === option}
                       className={transport === option ? "mcp-modal__transport-active" : ""}
                       onClick={() => setTransport(option)}
                     >
@@ -513,7 +515,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
 
               {transport !== "stdio" && (
                 <div className="mcp-modal__rows">
-                  <button type="button" className="mcp-modal__mode-toggle" onClick={() => setAdvancedOpen((open) => !open)}>
+                  <button type="button" className="mcp-modal__mode-toggle" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen((open) => !open)}>
                     {advancedOpen ? t("隱藏進階選項") : t("進階選項（OAuth）")}
                   </button>
                   {advancedOpen && (

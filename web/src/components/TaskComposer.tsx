@@ -361,7 +361,7 @@ export function TaskComposer({
     disabled={disabled || (working && !queueEnabled)}
     aria-busy={Boolean(busy || working)}
     placeholder={placeholder}
-    aria-label={dock ? "輸入 Agent 指令" : undefined}
+    aria-label={dock ? t("輸入 Agent 指令") : undefined}
     // Line-height/padding here must match the .command-composer > textarea /
     // .task-composer__row textarea CSS rules — otherwise the computed inline
     // height under- or over-shoots the CSS max-height cap for that variant.

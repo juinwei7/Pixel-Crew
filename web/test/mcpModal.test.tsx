@@ -60,6 +60,9 @@ test("renders scope, transport, and status badges for a mixed server list", () =
   assert.match(html, /專案共享（\.mcp\.json）/);
   assert.match(html, /claude\.ai 帳號/);
   assert.match(html, /stdio/);
+  assert.match(html, /aria-label="MCP 設定範圍"/);
+  assert.match(html, /aria-label="MCP 傳輸方式"/);
+  assert.match(html, /aria-pressed="true"[^>]*>stdio</);
   assert.match(html, /僅能在真人互動式終端核准/);
   assert.match(html, /登入/);
   // A pending_approval server surfaces the reset-choices action for Claude.
@@ -164,6 +167,7 @@ test("Codex server with an available tool catalog shows the count and hides the 
     { name: "my-hub", status: "enabled", toolsStatus: "available", tools: [{ name: "core_list", description: "List cores" }] },
   ], "codex");
   assert.match(html, /查看工具（1）/);
+  assert.match(html, /aria-expanded="false"/);
   // Collapsed by default — renderToStaticMarkup can't simulate the click.
   assert.doesNotMatch(html, /core_list/);
   assert.doesNotMatch(html, /工具清單目前無法讀取/);

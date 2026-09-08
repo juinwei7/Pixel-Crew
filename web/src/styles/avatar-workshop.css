@@ -888,17 +888,19 @@
   .persona-editor__header { padding-right: 42px; }
   .avatar-workshop__close, .department-creator__close, .persona-editor__close, .persona-editor__template-delete { min-width: 44px; min-height: 44px; }
   .avatar-workshop__source-tabs { overflow-x: auto; padding-bottom: 2px; }
-  .avatar-workshop__source-tabs button { min-height: 40px; flex: 0 0 auto; }
+  .avatar-workshop__source-tabs button { min-height: 44px; flex: 0 0 auto; }
   .avatar-workshop__actions, .persona-editor__footer, .department-creator footer { align-items: stretch; flex-wrap: wrap; }
-  .avatar-workshop__actions > *, .persona-editor__footer > *, .department-creator footer > * { min-height: 40px; }
+  .avatar-workshop__actions > *, .persona-editor__footer > *, .department-creator footer > * { min-height: 44px; }
+  .department-creator footer button { min-height: 44px; }
+  .persona-editor button, .department-creator button { min-height: 44px; }
   .persona-editor__memory-add { align-items: stretch; flex-direction: column; }
   .persona-editor__memory-add input, .persona-editor__field input, .persona-editor__field textarea,
   .department-creator__field input, .department-creator__field select,
   .department-creator__members article input:not([type="radio"]), .department-creator__members article select,
-  .department-creator__members article textarea { min-height: 40px; font-size: 16px; }
-  .persona-editor__memory-add button { min-height: 40px; }
+  .department-creator__members article textarea { min-height: 44px; font-size: 16px; }
+  .persona-editor__memory-add button { min-height: 44px; }
   .department-creator__members article > div, .department-creator__members article .department-creator__row { grid-template-columns: 1fr; }
   .mission-card__approval > div { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .mission-card__approval button, .mission-card__resolution button { min-height: 40px; }
+  .mission-card__approval button, .mission-card__resolution button { min-height: 44px; }
   .mission-activity-row { align-items: flex-start; }
 }

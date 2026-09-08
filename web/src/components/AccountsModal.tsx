@@ -249,7 +249,7 @@ export function AccountsModal({
                 )}
               </>
             )}
-            <button type="button" className="mcp-modal__refresh" disabled={defaultPending} onClick={() => void defaultRefresh()}>↻</button>
+            <button type="button" className="mcp-modal__refresh" aria-label={t("重新整理")} title={t("重新整理")} disabled={defaultPending} onClick={() => void defaultRefresh()}>↻</button>
           </div>
         </div>
 
@@ -315,7 +315,7 @@ export function AccountsModal({
                     )}
                   </>
                 )}
-                <button type="button" className="mcp-modal__refresh" disabled={pendingId === account.id} onClick={() => void refresh(account.id)}>↻</button>
+                <button type="button" className="mcp-modal__refresh" aria-label={t("重新整理")} title={t("重新整理")} disabled={pendingId === account.id} onClick={() => void refresh(account.id)}>↻</button>
                 <button type="button" className="mcp-modal__remove" disabled={pendingId === account.id} onClick={() => void remove(account)}>{t("刪除")}</button>
               </div>
             </div>
