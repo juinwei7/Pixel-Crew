@@ -6,9 +6,108 @@ Goal: continue finding and fixing UI errors and worthwhile UX improvements auton
 
 ## Current state
 
-There are uncommitted UI changes in 15 source/test files. Do not discard or
-reset them. The latest full verification completed successfully after the
-final editor touch-target pass:
+### Active follow-up: Black Window on Windows and macOS
+
+Work resumed at the user's request on 2026-09-08. The cross-platform goal is not
+complete. The earlier audit below was committed as
+`322e593`; the new terminal changes are not yet committed.
+
+Review status: implementation and local verification are complete. Native
+desktop coverage still needs a Windows test desktop and an uninterrupted native
+IME session. Do not count synthetic input events or the local macOS build as
+evidence that those remaining checks passed.
+
+- Added a keyboard-accessible control-claim button for read-only terminals.
+- Distinguished automatic reconnection from a shell that actually exited;
+  disabled terminal input until the server grants write access and during
+  recoverable connection failures.
+- Avoided fitting hidden terminal hosts, including delayed font-size fits.
+- Improved footer readability and added Windows monospace font fallbacks.
+- Fixed account/advanced dropdown clipping inside the compact toolbar by using
+  viewport-bounded fixed panels below 820px. Both menus now support Escape and
+  return focus to their summary.
+- An isolated CSS fixture rendered the advanced panel at 760 x 500 and
+  375 x 500. Bounds were respectively 12..748 and 12..363, bottom 488;
+  hit testing reached the Save button and document widths matched the viewport.
+  The temporary fixture has been removed. Web production build passes.
+- Local macOS `npm run check` passes after these changes. Live Chrome confirms
+  normal terminal/footer layout at 1728 x 907; this is not proof of Windows
+  rendering or of the recovery/claim interactions.
+
+### Latest verification and resume instructions
+
+- Final local `npm run check` exited 0 after all implementation changes:
+  server/web tests, TypeScript, production build and bundle budget passed.
+- Added an isolated manual fixture at
+  `http://localhost:5173/test/fixtures/black-window-terminal.html` using real
+  React/xterm and a simulated WebSocket. It never creates a PTY or changes
+  account/workspace data. Source lives in `web/test/fixtures/`.
+- Verified keyboard Enter on Take control sends exactly one `terminal_claim`
+  and focuses the terminal. Hiding the terminal and increasing font size sends
+  no resize; restoring sends the new size. Disconnect displays Reconnecting
+  and opens a second connection with the same session ID.
+- Added IME guards to Workspace rename, settings-menu Escape and global
+  shortcuts, including the keyCode 229 fallback. Added `keyboardInput.test.ts`.
+  Native Windows/macOS IME sessions have NOT been exercised yet.
+- Follow-up verified on macOS Chrome: simulated `terminal_exit` followed by
+  socket close stays at one connection after the reconnect delay, with the
+  footer showing terminal ended. This verifies client handling of the exit
+  protocol; no live user shell was terminated.
+- Ordinary `b`, Enter and Chinese multiline paste produced exactly `b`, `\r`
+  and `測試 paste\r第二行` terminal-input messages in the isolated fixture.
+  Read-only keystrokes produced no terminal-input messages.
+- Found and fixed read-only xterm trapping Tab. Its custom key handler now
+  lets Tab use native focus navigation while stdin is disabled. Verified
+  real Tab reaches Take control, Enter sends one claim, and focus returns to
+  the terminal. Writable terminal Tab retains shell completion behavior.
+- Found and fixed simultaneous account/advanced menus. Opening either closes
+  its sibling through the real component's toggle handler. Verified account
+  opening closes Advanced and opening Advanced closes Accounts.
+- Verified real account-menu Escape and Escape from the Advanced model field
+  close the panel and restore focus to the corresponding summary.
+- Full real account menu at 375 x 500: bounds x=12..363, y=180..488;
+  document width 375, bottom Manage account action passed hit testing.
+  At 812 x 375: account bounds x=12..800, y=125..363; Advanced bounds
+  x=12..800, y=206..363; document width 812. Viewport override reset and
+  live menus closed after inspection. No account/settings action was submitted.
+- Final `npm run check` after these fixes exited 0 (tests, TypeScript,
+  production builds, SEO, bundle budget and diff whitespace). Initial sandbox
+  attempt failed on tsx IPC EPERM; the permitted outside-sandbox run passed.
+  Log: `/tmp/pixel-crew-ui-audit-check.log`.
+- Real PTY browser verification completed through `attachTerminalSocket`, the
+  production mux daemon, and the real BlackWindowTerminal/xterm component.
+  New reusable fixture: `web/test/fixtures/black-window-pty.html` and `.tsx`.
+  Run `node --import tsx web/test/fixtures/black-window-pty-server.mjs` from
+  repo root, then open the tokenized fixture URL it prints. The bridge binds
+  only a random 127.0.0.1 port, checks the Vite origin and per-run token,
+  accepts only the fixed audit tab/workspace, and uses temporary data paths.
+  Its precreated empty DB prevents legacy user-data migration. Stop it with
+  SIGINT/SIGTERM; it also expires after 10 minutes and shuts down its own mux.
+- On macOS `/bin/zsh`, `exit 7` produced `terminal_exit` code 7, signal 0.
+  Footer stayed "終端已結束", connection count stayed 1 well beyond the
+  reconnect delay, and pressing x afterward emitted no input. This now
+  proves the actual shell-to-browser exit path, not only a simulated frame.
+  The fixture service exited 0 after controlled shutdown, acknowledged mux
+  shutdown and removed `/private/tmp/pixel-crew-ui-pty-cmQCB1`.
+- Native IME attempt remains unverified: browser-level Ctrl+Space emitted a
+  NUL (it did not switch the OS input source). Native Chrome automation then
+  reported concurrent user window changes, so it was stopped before typing
+  through the native app. No native composition result is claimed.
+- Remaining: native Windows keyboard/paste/rendering and native Windows/macOS
+  IME candidate confirmation/cancellation. Current computer exposes macOS;
+  user has been asked for an available Windows test environment. Synthetic
+  composition guards are not proof of native IME behavior.
+- The CI workflow runs tests and builds on Windows, macOS and Linux. Its result
+  is the next automated cross-platform gate after these changes are pushed;
+  it does not replace the remaining native interaction checks.
+- Live user terminal tab: `929897357`. Reopen the fixture URL above when
+  needed; routine fixture tabs are ephemeral. Prefer it for failure injection.
+  No viewport override or test/build command remains running from this work.
+
+### Previous completed audit (committed)
+
+The previous audit changed 15 source/test files. Its full verification completed
+successfully after the final editor touch-target pass:
 
 ```sh
 npm run check
@@ -133,7 +232,7 @@ checks covered 320 x 568, 375 x 812 and 812 x 375 CSS px.
   the editor, keeps its provider/mode buttons tappable and avoids a 220px side
   rail on narrow screens.
 
-## Files currently changed
+## Files changed in the previous completed audit (historical)
 
 - `web/src/App.tsx`
 - `web/src/components/AccountsModal.tsx`

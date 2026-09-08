@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { focusStudioShortcut } from "../focusStudios";
 import { paneCycleShortcut } from "../focusPanes";
+import { isCompositionKey } from "../keyboardInput";
 
 type ShortcutHandlers = {
   onCommandPalette(): void;
@@ -49,6 +50,7 @@ function isEditable(target: EventTarget | null): boolean {
 export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isCompositionKey(event)) return;
       const editable = isEditable(event.target);
       const terminal = event.target instanceof HTMLElement && Boolean(event.target.closest(".black-window-terminal"));
       const studioIndex = focusStudioShortcut(event, editable);

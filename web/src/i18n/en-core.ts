@@ -1,5 +1,10 @@
 /** TopBar / EnergyHud / Modal 的英文字典（key = 中文原文）。 */
 export const enCore: Record<string, string> = {
+  "唯讀": "Read only",
+  "連線中斷，正在重新連線…": "Disconnected. Reconnecting…",
+  "正在建立終端連線…": "Connecting to terminal…",
+  "終端已結束": "Terminal exited",
+  "取得終端控制權": "Take terminal control",
   "交辦工作": "Assign work",
   "更多 Agent 設定": "More agent settings",
   "更多設定與功能": "More settings and tools",

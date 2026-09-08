@@ -49,6 +49,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
   const [status, setStatus] = useState<"connecting" | "ready" | "closed" | "error">("connecting");
   const [shell, setShell] = useState("");
   const [writable, setWritable] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   // `undefined` means no completion has been observed, while `null` means the
   // daemon knows the Agent ended but could not recover a trustworthy code.
   // Keep this pane-local so the reason remains visible after layout sync has
@@ -76,7 +77,8 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       // xterm measures its own character cells and cannot resolve CSS custom
       // properties here. A concrete font stack keeps glyph and cell widths in
       // sync when fontSize changes.
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace",
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Cascadia Mono', Consolas, 'Courier New', monospace",
+      disableStdin: true,
       fontSize,
       fontWeight: "500",
       lineHeight: 1.25,
@@ -87,12 +89,18 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
+    // A read-only pane cannot use shell completion. Let Tab reach the control
+    // claim button (or leave the pane) instead of trapping keyboard users.
+    terminal.attachCustomKeyEventHandler((event) => !(terminal.options.disableStdin && event.key === "Tab"));
     if (activeRef.current) terminal.focus();
     terminalRef.current = terminal;
 
     const socket = new WebSocket(terminalWsUrl);
     socketRef.current = socket;
     const resize = () => {
+      // Hidden/minimized panes have no usable geometry. Preserve the last PTY
+      // size until ResizeObserver sees the pane become visible again.
+      if (!host.clientWidth || !host.clientHeight) return;
       fit.fit();
       sendTerminal(socket, { type: "terminal_resize", cols: terminal.cols, rows: terminal.rows });
     };
@@ -100,6 +108,9 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     observer.observe(host);
     const scheduleReconnect = () => {
       if (disposed || terminalEnded || reconnectTimer !== undefined) return;
+      setReconnecting(true);
+      setWritable(false);
+      terminal.options.disableStdin = true;
       const delay = Math.min(8_000, 800 * 2 ** reconnectAttemptRef.current++);
       reconnectTimer = window.setTimeout(() => setConnectionEpoch((current) => current + 1), delay);
     };
@@ -118,6 +129,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       try { message = JSON.parse(String(event.data)) as TerminalMessage; } catch { return; }
       if (message.type === "terminal_ready") {
         reconnectAttemptRef.current = 0;
+        setReconnecting(false);
         setShell(message.shell);
         setStatus("ready");
         setWritable(message.writable === true);
@@ -132,12 +144,12 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
         }
         onReadyRef.current?.({ restored: message.restored === true, agentRunning: message.agentRunning });
       } else if (message.type === "terminal_output") terminal.write(message.data);
-      else if (message.type === "terminal_error") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setStatus("error"); terminal.writeln(`\r\n[Pixel Crew terminal error: ${message.message}]`); if (message.recoverable) scheduleReconnect(); }
+      else if (message.type === "terminal_error") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setStatus("error"); setReconnecting(false); setWritable(false); terminal.options.disableStdin = true; terminal.writeln(`\r\n[Pixel Crew terminal error: ${message.message}]`); if (message.recoverable) scheduleReconnect(); }
       else if (message.type === "terminal_access") { setWritable(message.writable); terminal.options.disableStdin = !message.writable; }
       else if (message.type === "terminal_launched") { setAgentExitCode(undefined); pendingLaunchRef.current?.(true); pendingLaunchRef.current = null; }
       else if (message.type === "terminal_agent_exit") { setAgentExitCode(message.code); onExitRef.current?.(); }
       else if (message.type === "terminal_denied") { pendingLaunchRef.current?.(false); pendingLaunchRef.current = null; setWritable(false); terminal.options.disableStdin = true; }
-      else if (message.type === "terminal_exit") { terminalEnded = true; setWritable(false); terminal.options.disableStdin = true; setStatus("closed"); terminal.writeln(message.destroyed ? "\r\n[terminal destroyed]" : `\r\n[shell exited · ${message.signal || message.code || 0}]`); if (!message.destroyed) onExitRef.current?.(); }
+      else if (message.type === "terminal_exit") { terminalEnded = true; setReconnecting(false); if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer); setWritable(false); terminal.options.disableStdin = true; setStatus("closed"); terminal.writeln(message.destroyed ? "\r\n[terminal destroyed]" : `\r\n[shell exited · ${message.signal || message.code || 0}]`); if (!message.destroyed) onExitRef.current?.(); }
     };
     socket.onerror = () => setStatus("error");
     socket.onclose = () => {
@@ -173,6 +185,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     let fitFrame = 0;
     const measureFrame = window.requestAnimationFrame(() => {
       fitFrame = window.requestAnimationFrame(() => {
+        if (!hostRef.current?.clientWidth || !hostRef.current.clientHeight) return;
         fitRef.current?.fit();
         terminal.refresh(0, Math.max(0, terminal.rows - 1));
         sendTerminal(socketRef.current, { type: "terminal_resize", cols: terminal.cols, rows: terminal.rows });
@@ -263,6 +276,13 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     terminalRef.current?.focus();
   }}>
     <div ref={hostRef} className="black-window-terminal__screen" />
-    <footer role="status" aria-live="polite">{agentResult} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀；點擊取得控制權")}`}` : status === "connecting" ? t("正在建立 PTY…") : status === "closed" ? t("已結束") : t("連線失敗")}</footer>
+    <footer>
+      <span role="status" aria-live="polite">{agentResult} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀")}`}` : reconnecting ? t("連線中斷，正在重新連線…") : status === "connecting" ? t("正在建立終端連線…") : status === "closed" ? t("終端已結束") : t("連線失敗")}</span>
+      {status === "ready" && !writable && <button type="button" onClick={(event) => {
+        event.stopPropagation();
+        sendTerminal(socketRef.current, { type: "terminal_claim" });
+        terminalRef.current?.focus();
+      }}>{t("取得終端控制權")}</button>}
+    </footer>
   </section>;
 });

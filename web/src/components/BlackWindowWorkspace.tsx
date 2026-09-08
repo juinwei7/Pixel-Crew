@@ -7,6 +7,7 @@ import { VoiceInputButton } from "./VoiceInputButton";
 import { type ConfirmTone } from "./ConfirmDialog";
 import { type Toast } from "./ToastRegion";
 import { t } from "../i18n";
+import { isCompositionKey } from "../keyboardInput";
 
 type Props = { defaultWorkspacePath: string; accounts: AccountWithAuth[]; defaultAuth: Record<ProviderId, ProviderAuthState>; usage: Record<ProviderId, ProviderUsageState>; accountUsage: Record<string, ProviderUsageState>; totalCostUsd: number; onRefreshUsage(): Promise<string | null>; onOpenAccounts(provider: ProviderId): void; onPixel(): void; onProfessional(): void; muxLayoutEvent: { layout: string; version: number; seq: number } | null; confirm(message: string, tone?: ConfirmTone): Promise<boolean>; notify(message: string, tone?: Toast["tone"]): void };
 type DragState = { id: string; kind: "move" | "resize"; edge?: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"; startX: number; startY: number; window: BlackWindow; viewport: { width: number; height: number }; moved: boolean };
@@ -42,6 +43,22 @@ async function destroyTerminalTab(id: string): Promise<boolean> {
 
 function providerLabel(provider: ProviderId): string { return provider === "codex" ? "Codex" : "Claude"; }
 function authenticated(status: ProviderAuthState["status"] | undefined): boolean { return status === "authenticated"; }
+
+function dismissSettingsMenu(event: React.KeyboardEvent<HTMLDetailsElement>): void {
+  if (isCompositionKey(event.nativeEvent) || event.key !== "Escape" || !event.currentTarget.open) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.currentTarget.open = false;
+  event.currentTarget.querySelector("summary")?.focus();
+}
+
+function closeOtherSettingsMenu(event: React.SyntheticEvent<HTMLDetailsElement>): void {
+  const menu = event.currentTarget;
+  if (!menu.open) return;
+  menu.parentElement?.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((other) => {
+    if (other !== menu) other.open = false;
+  });
+}
 
 function retainLiveTerminalState<T>(current: Record<string, T>, liveIds: Set<string>): Record<string, T> {
   const stale = Object.keys(current).filter((id) => !liveIds.has(id));
@@ -547,7 +564,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
       <button type="button" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
       {selected && <div className="black-workspace__settings">
         <VoiceInputButton placement="toolbar" disabled={terminalStatuses[selected.id] !== "ready"} label={t("語音輸入至目前 CLI")} onTranscript={(text) => terminalRefs.current.get(selected.id)?.insertText(text)} />
-        <details className="black-account-picker">
+        <details className="black-account-picker" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
           <summary aria-label={t("切換 CLI 帳號")}><span className={authenticated(selectedAuthStatus) ? "online" : "offline"}/>{selectedAccountLabel}<b>▾</b></summary>
           <div className="black-account-picker__menu">
             {(["codex", "claude"] as ProviderId[]).map((provider) => <section key={provider}><strong>{providerLabel(provider)}</strong>
@@ -558,7 +575,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
           </div>
         </details>
         <button type="button" className="black-workspace__launch" onClick={() => void launchAgent()} disabled={restartingId === selected.id || launchingId === selected.id || closingIds.has(selected.id) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}>{restartingId === selected.id ? t("重新啟動中…") : launchingId === selected.id ? t("啟動中…") : selected.agentStarted ? t("Agent 運行中") : terminalStatuses[selected.id] !== "ready" ? t("正在連線…") : authenticated(selectedAuthStatus) ? t("啟動 Agent") : t("登入帳號")}</button>
-        <details className="black-workspace__advanced">
+        <details className="black-workspace__advanced" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
           <summary aria-label={t("進階設定")}>⋯</summary>
           <div><label>{t("模型")}<input value={advancedDraft.model} onChange={(event) => setAdvancedDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("使用預設模型")}/></label><label>{t("核准模式")}<select value={advancedDraft.autoApproveMode} onChange={(event) => setAdvancedDraft((current) => ({ ...current, autoApproveMode: event.target.value as AutoApproveMode }))}><option value="off">{t("手動核准")}</option><option value="safe">{t("安全")}</option><option value="full">{t("完全")}</option><option value="invincible">{t("無限制")}</option></select></label><button type="button" disabled={Boolean(restartingId) || closingIds.has(selected.id) || (advancedDraft.model.trim() === selected.model && advancedDraft.autoApproveMode === selected.autoApproveMode)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void applyAdvanced(); }}>{selected.agentStarted ? t("套用並重新啟動") : t("儲存設定")}</button></div>
         </details>
@@ -571,7 +588,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
           const editing = editingWorkspaceId === workspace.id;
           return <div key={workspace.id} onDragOver={(event) => { if (dragWorkspaceId && dragWorkspaceId !== workspace.id) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData("text/plain") || dragWorkspaceId; if (sourceId) moveWorkspace(sourceId, workspace.id); setDragWorkspaceId(null); }} className={"black-workspace__workspace " + (workspace.id === selectedWorkspace?.id ? "active " : "") + (dragWorkspaceId === workspace.id ? "black-workspace__workspace--dragging" : "")} title={workspace.defaultWorkspacePath}>
             {editing
-              ? <div className="black-workspace__workspace-select"><i className={hasAgent ? "agent" : ""}/><span><input autoFocus value={workspaceNameDraft} aria-label={t("Workspace 名稱")} onChange={(event) => setWorkspaceNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") renameWorkspace(workspace.id, workspaceNameDraft); if (event.key === "Escape") setEditingWorkspaceId(null); }} onBlur={() => renameWorkspace(workspace.id, workspaceNameDraft)}/><small>{panes.length ? panes.length + " " + t("個 CLI") : t("尚未開啟")}</small></span></div>
+              ? <div className="black-workspace__workspace-select"><i className={hasAgent ? "agent" : ""}/><span><input autoFocus value={workspaceNameDraft} aria-label={t("Workspace 名稱")} onChange={(event) => setWorkspaceNameDraft(event.target.value)} onKeyDown={(event) => { if (isCompositionKey(event.nativeEvent)) return; if (event.key === "Enter") renameWorkspace(workspace.id, workspaceNameDraft); if (event.key === "Escape") { event.stopPropagation(); setEditingWorkspaceId(null); } }} onBlur={() => renameWorkspace(workspace.id, workspaceNameDraft)}/><small>{panes.length ? panes.length + " " + t("個 CLI") : t("尚未開啟")}</small></span></div>
               : <button type="button" draggable className="black-workspace__workspace-select" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" title={`${workspace.defaultWorkspacePath} · ${t("Alt 加上下方向鍵重新排序")}`} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", workspace.id); setDragWorkspaceId(workspace.id); }} onDragEnd={() => setDragWorkspaceId(null)} onKeyDown={(event) => moveWorkspaceWithKeyboard(event, workspace.id)} onClick={() => selectWorkspace(workspace.id)}><i className={hasAgent ? "agent" : ""}/><span><strong>{workspace.title}</strong><small>{panes.length ? panes.length + " " + t("個 CLI") : t("尚未開啟")}</small></span></button>}
             <button type="button" className="black-workspace__workspace-rename" aria-label={t("重新命名 Workspace")} onClick={() => { setEditingWorkspaceId(workspace.id); setWorkspaceNameDraft(workspace.title); }}>✎</button>
             <button type="button" className="black-workspace__workspace-delete" aria-label={deletingWorkspaceIds.has(workspace.id) ? t("正在刪除 Workspace…") : t("刪除 Workspace")} aria-busy={deletingWorkspaceIds.has(workspace.id) || undefined} disabled={deletingWorkspaceIds.has(workspace.id)} onClick={() => void deleteWorkspace(workspace.id)}>{deletingWorkspaceIds.has(workspace.id) ? "…" : "×"}</button>
