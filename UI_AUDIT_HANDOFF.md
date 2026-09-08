@@ -100,6 +100,10 @@ evidence that those remaining checks passed.
 - The CI workflow runs tests and builds on Windows, macOS and Linux. Its result
   is the next automated cross-platform gate after these changes are pushed;
   it does not replace the remaining native interaction checks.
+- Post-push review found that the existing real-PTY lifecycle test assumed a
+  `codex` executable was installed on hosted runners. macOS/Linux returned 127.
+  The test now creates a disposable cross-platform fake `codex` on PATH, so it
+  validates the mux lifecycle without depending on developer tooling.
 - Live user terminal tab: `929897357`. Reopen the fixture URL above when
   needed; routine fixture tabs are ephemeral. Prefer it for failure injection.
   No viewport override or test/build command remains running from this work.
