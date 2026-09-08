@@ -354,7 +354,10 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     await assert.rejects(() => connect(socketPath, 3));
   } finally {
     if (!child.killed) child.kill();
-    rmSync(dataDirectory, { recursive: true, force: true });
+    // Windows can release the exited PTY's cwd/executable handles a fraction
+    // after process exit. Use Node's bounded rimraf retry instead of turning
+    // that filesystem teardown delay into a lifecycle-test failure.
+    rmSync(dataDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     if (stderr) console.error("[terminal mux daemon stderr]", stderr);
   }
 });
