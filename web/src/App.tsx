@@ -632,7 +632,8 @@ export function App() {
       // reached from inside focus mode; without this guard, closing one of them
       // would also silently exit focus mode via the layer check below.
       const overlayModalOpen = workspaceOpen || departmentCreatorOpen || commandCenterOpen || mcpModalOpen || globalMemoryModalOpen || codexCommandsModalOpen || accountsModalOpen || backupModalOpen
-        || shortcutsHelpOpen || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
+        || opsModalOpen || remoteModalOpen || kanbanModalOpen || dayReportOpen || outboxOpen || tourOpen || shortcutsHelpOpen
+        || Boolean(avatarWorkerId) || Boolean(handoffTarget) || Boolean(personaWorkerId) || Boolean(pendingAutoApproveMode);
       if (overlayModalOpen) return;
       // Black Window is a persistent workspace, not a dismissible overlay.
       // Escape belongs to its CLI or the currently focused control; mode
@@ -656,7 +657,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, blackWindowMode, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, departmentCreatorOpen, exitBlackWindowMode, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, mcpModalOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, updatePreferences, warroomHistory, workspaceOpen]);
+  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, blackWindowMode, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, dayReportOpen, departmentCreatorOpen, exitBlackWindowMode, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, kanbanModalOpen, mcpModalOpen, opsModalOpen, outboxOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, remoteModalOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, tourOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -1113,11 +1114,11 @@ export function App() {
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
           {taskFocusMode && <FocusEnergy usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />}
           <div className="task-log-toolbar">
-            {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" aria-label={t("日誌模式")}>
-              <button type="button" className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
-              <button type="button" className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>{t("活動")}</button>
+            {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" role="group" aria-label={t("日誌模式")}>
+              <button type="button" aria-pressed={preferences.taskLogView === "summary"} className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
+              <button type="button" aria-pressed={preferences.taskLogView === "activity"} className={preferences.taskLogView === "activity" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "activity" })}>{t("活動")}</button>
             </div>}
-            {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label={t("搜尋任務日誌")} title={t("搜尋")}>
+            {!selectedDepartment && !bossAssignmentOpen && <button type="button" className={`task-log-toolbar__search ${taskSearchOpen ? "active" : ""}`} onClick={() => setTaskSearchOpen((open) => !open)} aria-label={t("搜尋任務日誌")} aria-expanded={taskSearchOpen} title={t("搜尋")}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg>
             </button>}
             {!taskFocusMode && <select aria-label={t("日誌寬度")} value={preferences.taskLogWidth < 510 ? "420" : preferences.taskLogWidth > 720 ? "820" : "600"} onChange={(event) => updatePreferences({ taskLogWidth: Number(event.target.value) })}>
@@ -1125,7 +1126,7 @@ export function App() {
             </select>}
             {taskFocusMode && !focusPhone && !selectedDepartment && !bossAssignmentOpen && <div className="focus-pane-toggle" role="group" aria-label={t("分割視窗數量")}>
               {([1, 2, 3, 4] as const).map((count) => (
-                <button key={count} type="button" className={focusPanes.length === count ? "active" : ""} title={t("分割成 {count} 個視窗", { count: String(count) })} onClick={() => setFocusPaneLayout(count)}>{count}</button>
+                <button key={count} type="button" aria-pressed={focusPanes.length === count} className={focusPanes.length === count ? "active" : ""} title={t("分割成 {count} 個視窗", { count: String(count) })} onClick={() => setFocusPaneLayout(count)}>{count}</button>
               ))}
             </div>}
             {taskFocusMode && <FocusControls
@@ -1161,7 +1162,7 @@ export function App() {
           focusMode={taskFocusMode}
           confirm={confirm}
         />}
-        {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus placeholder={taskSearchScope === "current" ? t("搜尋目前 NPC 的任務") : t("搜尋全部 NPC 的任務")} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" aria-label={t("搜尋範圍")}><button type="button" className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>{t("目前")}</button><button type="button" className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>{t("全部")}</button></div><button type="button" onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
+        {!bossAssignmentOpen && !selectedDepartment && taskSearchOpen && <div className="task-log-search"><span className="task-log-search__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></span><input value={taskSearch} autoFocus aria-label={taskSearchScope === "current" ? t("搜尋目前 NPC 的任務") : t("搜尋全部 NPC 的任務")} placeholder={taskSearchScope === "current" ? t("搜尋目前 NPC 的任務") : t("搜尋全部 NPC 的任務")} onChange={(event) => setTaskSearch(event.target.value)} /><div className="task-log-search__scope" role="group" aria-label={t("搜尋範圍")}><button type="button" aria-pressed={taskSearchScope === "current"} className={taskSearchScope === "current" ? "active" : ""} onClick={() => setTaskSearchScope("current")}>{t("目前")}</button><button type="button" aria-pressed={taskSearchScope === "all"} className={taskSearchScope === "all" ? "active" : ""} onClick={() => setTaskSearchScope("all")}>{t("全部")}</button></div><button type="button" aria-label={t("關閉搜尋")} onClick={() => { setTaskSearch(""); setTaskSearchOpen(false); }}>×</button></div>}
         {!bossAssignmentOpen && !selectedDepartment && active && pendingModelSwitch?.workerId === active.id && <ModelSwitchCard
           workerName={active.name}
           currentModelLabel={modelOptions.find((option) => option.id === (active.model ?? ""))?.label ?? active.model ?? t("預設模型")}

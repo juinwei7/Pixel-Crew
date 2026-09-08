@@ -62,6 +62,8 @@ export const enModalsC: Record<string, string> = {
 
   // McpModal
   "MCP 管理": "MCP management",
+  "MCP 設定範圍": "MCP configuration scope",
+  "MCP 傳輸方式": "MCP transport",
   "本機（此專案私有）": "Local (private to this project)",
   "專案共享（.mcp.json）": "Project shared (.mcp.json)",
   "全域（所有專案）": "Global (all projects)",
@@ -201,6 +203,9 @@ export const enModalsC: Record<string, string> = {
   "今日各 NPC": "Today by NPC",
   "（已刪除）": "(deleted)",
   "新增排程（每天固定時間把指示交給 NPC）": "New schedule (give an NPC instructions at a fixed time daily)",
+  "排程指示": "Scheduled instruction",
+  "{name} 的每日預算上限": "{name}'s daily budget limit",
+  "儲存 {name} 的每日預算": "Save {name}'s daily budget",
   "選擇 NPC": "Select NPC",
   "每日時間": "Daily time",
   "例：查一下今天的科技新聞，挑三則重要的整理成摘要給我": "e.g. Check today's tech news, pick three important stories, and summarize them for me",

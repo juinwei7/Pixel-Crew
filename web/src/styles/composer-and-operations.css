@@ -185,6 +185,29 @@
   .warroom-result__close { width: 44px; height: 44px; top: 5px; right: 4px; }
   .warroom-result__card > header h2 { max-width: calc(100% - 46px); line-height: 1.3; }
 
+  /* The command composer toolbar is a horizontal action strip. Its former
+     27–32px icon targets were hard to tap; at 44px the strip may overflow by
+     a few pixels, so make that overflow intentional and scrollable. */
+  .command-composer__toolbar {
+    width: 100%;
+    max-width: none;
+    gap: 6px;
+    overflow-x: auto;
+    padding-block: 2px;
+    scrollbar-width: none;
+  }
+  .command-composer__toolbar::-webkit-scrollbar { display: none; }
+  .command-composer__library,
+  .command-composer__attach,
+  .voice-input__mic,
+  .composer-roundtable-toggle { min-height: 44px; }
+  .command-composer__library,
+  .command-composer__attach,
+  .voice-input__mic,
+  .composer-roundtable-toggle--more { min-width: 44px; }
+  .command-composer__submit { min-height: 44px; }
+  .command-composer > textarea { min-height: 44px; }
+
   .remote-access-modal { align-items: end; padding: 0; }
   .remote-access-modal__card {
     width: 100%;
@@ -198,6 +221,12 @@
   }
   .remote-access-modal__card h2 { max-width: calc(100% - 42px); font-size: 17px; line-height: 1.35; }
   .remote-access-modal__close { width: 44px; height: 44px; top: 7px; right: 5px; }
+  .remote-access-modal button { min-height: 44px; }
+  .remote-access-modal details > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
   .remote-access-modal__steps { gap: 5px !important; }
   .remote-access-modal__steps > div > div:last-child { font-size: 10px !important; line-height: 1.3; }
   .remote-access-modal__url-layout { display: grid !important; gap: 14px !important; }
@@ -215,7 +244,7 @@
   .remote-access-modal__channel-actions > * { width: 100%; }
   .remote-access-modal__channel-actions button { margin-left: 0 !important; min-height: 44px; }
   .remote-access-modal__choice-row { flex-wrap: wrap; }
-  .remote-access-modal__choice-row button { min-height: 40px; flex: 1 1 94px; }
+  .remote-access-modal__choice-row button { min-height: 44px; flex: 1 1 94px; }
   .remote-access-modal__demo-actions { flex-wrap: wrap; }
   .remote-access-modal__demo-actions span { margin-left: 0 !important; }
   /* Remote setup has inline 14px input styles. Override them here so iOS does
@@ -223,6 +252,7 @@
   .remote-access-modal input,
   .remote-access-modal select,
   .remote-access-modal textarea { font-size: 16px !important; }
+
 }
 
 @media (max-width: 380px) {
@@ -629,6 +659,11 @@
   .top-bar__agent { padding-left: 4px; }
   .crew-rail:not(.crew-rail--collapsed) { width: min(230px, calc(100% - 20px)); }
   .command-composer { bottom: 10px; width: calc(100% - 20px); }
+  .command-composer .command-composer__library,
+  .command-composer .command-composer__attach,
+  .command-composer .voice-input__mic,
+  .command-composer .composer-roundtable-toggle,
+  .command-composer .command-composer__submit { min-height: 44px; }
   /* iOS Safari auto-zooms the whole page when a focused field is < 16px, and
      this in-app browser won't let the user pinch back out. Keep every typing
      surface at 16px so focusing never triggers the zoom. */
@@ -639,6 +674,33 @@
   .canvas-zoom input[type="range"] { display: none; }
   .command-composer__library span { display: none; }
   .command-composer__submit { min-width: 58px; }
+
+  /* The regular phone task log is a touch surface, not a shrunken desktop
+     toolbar. Its compact controls still fit on one row at 320px when each
+     action receives a reliable 44px hit area. */
+  .holo-panel:not(.holo-panel--focus) .holo-panel__heading { min-width: 0; flex: 1 1 auto; }
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar { flex: 0 0 auto; gap: 4px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__view button,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar .task-log-toolbar__search {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar select { min-width: 44px; min-height: 44px; }
+  .holo-panel:not(.holo-panel--focus) .copy-button { min-width: 44px; min-height: 44px; }
+  .holo-panel:not(.holo-panel--focus) .quest-log__latest { min-height: 44px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-search input { min-height: 44px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-search__scope button,
+  .holo-panel:not(.holo-panel--focus) .task-log-search > button:last-child {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .holo-panel:not(.holo-panel--focus) .task-log-search > button:last-child { padding: 0; }
+
+  /* At 0.9 scale the otherwise adequate energy control becomes a 33px tap
+     target. Keep it at actual size on phones; it still clears the log tools. */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud { scale: 1; }
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__summary { min-height: 44px; }
 }
 
 @media (max-width: 520px) {
@@ -691,7 +753,7 @@
   /* The width-drag handle (left edge) becomes a height-drag grabber at the top. */
   .holo-panel__resize {
     top: 0; bottom: auto; left: 0; right: 0;
-    width: auto; height: 22px;
+    width: auto; height: 24px;
     cursor: ns-resize;
   }
   .holo-panel__resize::after {
@@ -718,7 +780,14 @@
   /* Trim the top bar to essentials so it stops overflowing (the overflow was what
      made the whole page drag sideways). ROOM, the cryptic 🌐/🎨 icon buttons and
      the 🔔 bell move into the ••• menu, where they get plain-text labels. */
-  .top-bar { gap: 5px; padding: 8px 8px; }
+  .top-bar { gap: 5px; padding: 6px 8px; }
+  .top-bar__mode-switch button,
+  .top-bar > .top-bar__boss,
+  .top-bar .top-bar__more > summary,
+  .top-bar .top-bar__health { min-width: 44px; min-height: 44px; }
+  .top-bar__more-menu button,
+  .top-bar__more-menu select,
+  .top-bar__more-menu a { min-height: 44px; }
   .top-bar__room { display: none; }
   .top-bar__capability { display: none; }   /* 🌐 / 🎨 → ••• menu */
   .top-bar__bell { display: none; }          /* 🔔 → ••• menu */
@@ -773,8 +842,13 @@
 
 button:focus-visible,
 select:focus-visible,
-input:focus-visible {
-  outline: 2px solid rgba(0, 229, 255, 0.75);
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible {
+  /* Several specialized editors intentionally remove the browser default.
+     Keep one dependable keyboard indicator across every interactive surface. */
+  outline: 2px solid rgba(0, 229, 255, 0.75) !important;
   outline-offset: 2px;
 }
 
@@ -1461,7 +1535,7 @@ input:focus-visible {
 .kanban-modal { max-width: 1080px; width: min(1080px, 94vw); }
 .kanban__error { margin: 4px 0; color: #ff9d9d; font-size: 12px; }
 .kanban__empty { display: grid; gap: 14px; justify-items: center; padding: 36px 20px; color: #9fb2cc; font-size: 13px; line-height: 1.8; text-align: center; }
-.kanban__empty button { padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(255, 176, 0, 0.5); background: rgba(255, 176, 0, 0.12); color: #ffb000; font: 700 13px var(--mono); cursor: pointer; }
+.kanban__empty button { min-height: 44px; padding: 10px 22px; border-radius: 10px; border: 1px solid rgba(255, 176, 0, 0.5); background: rgba(255, 176, 0, 0.12); color: #ffb000; font: 700 13px var(--mono); cursor: pointer; }
 .kanban__empty button:hover { background: rgba(255, 176, 0, 0.22); }
 .kanban__columns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
 .kanban__column { display: flex; flex-direction: column; min-width: 0; border: 1px solid rgba(143, 184, 232, 0.16); border-radius: 12px; background: rgba(11, 18, 32, 0.45); }
@@ -1487,35 +1561,36 @@ input:focus-visible {
    widths. Avoid desktop multi-column density and keep all choices tappable. */
 @media (max-width: 600px) {
   .ops-modal__tabs { gap: 6px; }
-  .ops-modal__tabs button { min-height: 42px; font-size: 11px; }
+  .ops-modal__tabs button { min-height: 44px; font-size: 11px; }
   .ops-modal__body { max-height: 58dvh; padding-right: 0; }
   .ops-diagnostics__grid { grid-template-columns: 1fr; }
   .ops-diagnostics__reasons li, .ops-schedule__meta, .ops-budget__row { align-items: stretch; flex-direction: column; gap: 6px; }
   .ops-budget__input { width: 100%; }
-  .ops-budget__input input { width: 100%; min-height: 40px; font-size: 16px; }
-  .ops-budget__row button { min-height: 40px; }
+  .ops-budget__input input { width: 100%; min-height: 44px; font-size: 16px; }
+  .ops-budget__row button { min-height: 44px; }
   .ops-schedule__form { grid-template-columns: 1fr; }
-  .ops-schedule__form select, .ops-schedule__form input, .ops-schedule__form textarea { min-height: 40px; font-size: 16px; }
+  .ops-schedule__form select, .ops-schedule__form input, .ops-schedule__form textarea { min-height: 44px; font-size: 16px; }
+  .ops-schedule__form button { min-height: 44px; }
   .ops-schedule__actions { flex-wrap: wrap; }
-  .ops-schedule__actions button { min-height: 40px; flex: 1 1 120px; }
+  .ops-schedule__actions button { min-height: 44px; flex: 1 1 120px; }
   .day-report__nav { justify-content: space-between; gap: 6px; }
   .day-report__nav strong { min-width: 0; font-size: 11px; }
-  .day-report__nav button { min-height: 40px; }
+  .day-report__nav button { min-height: 44px; }
   .day-report__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .day-report__filter { align-items: stretch; flex-direction: column; gap: 5px; }
-  .day-report__filter select { min-height: 40px; font-size: 16px; }
+  .day-report__filter select { min-height: 44px; font-size: 16px; }
   .ops-costs__label--npc { width: 72px; }
   .ops-costs__value { width: 54px; font-size: 9px; }
   .day-report__event { align-items: flex-start; }
   .kanban-modal { width: 100%; }
   .kanban__columns { grid-template-columns: 1fr; }
   .kanban__cards { max-height: none; max-height: 38dvh; }
-  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; }
+  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; transform: none !important; }
   .tour-hole { display: none; }
   .tour-dialog__actions { align-items: stretch; flex-wrap: wrap; }
   .tour-dialog__progress { width: 100%; margin-right: 0; }
-  .tour-dialog__skip { min-height: 40px; margin-right: auto; }
-  .tour-dialog__btn { min-height: 40px; }
+  .tour-dialog__skip { min-height: 44px; margin-right: auto; }
+  .tour-dialog__btn { min-height: 44px; }
 }
 
 /* ===== 新手導覽（聚光燈＋導覽貓對話框） ===== */
@@ -1619,16 +1694,69 @@ input:focus-visible {
 /* Final phone pass for components whose desktop rules are declared later in
    this stylesheet. Keep no modal action below the recommended touch target. */
 @media (max-width: 600px) {
-  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; }
+  /* These components are declared after the shared phone rules above, so
+     their desktop dimensions must be corrected again at the end of the file. */
+  .global-memory-modal {
+    place-items: end center;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+  .global-memory-modal__card {
+    width: 100%;
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    padding: 22px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+  .global-memory-modal__close { top: 5px; right: 4px; width: 44px; height: 44px; }
+  .global-memory-modal h2 { padding-right: 40px; }
+  .global-memory-modal__list li button { width: 44px; height: 44px; }
+  .global-memory-modal__add textarea { min-height: 44px; font-size: 16px; }
+  .global-memory-modal__add button { min-height: 44px; }
+
+  .tour-dialog { width: auto; right: 12px !important; bottom: max(12px, env(safe-area-inset-bottom)) !important; left: 12px !important; top: auto !important; transform: none !important; }
   .tour-hole { display: none; }
   .tour-dialog__actions { align-items: stretch; flex-wrap: wrap; }
   .tour-dialog__progress { width: 100%; margin-right: 0; }
-  .tour-dialog__skip { min-height: 40px; margin-right: auto; }
-  .tour-dialog__btn { min-height: 40px; }
+  .tour-dialog__skip { min-height: 44px; margin-right: auto; }
+  .tour-dialog__btn { min-height: 44px; }
 
   .outbox-modal__list { max-height: 56dvh !important; }
   .outbox-modal__item { align-items: flex-start !important; min-height: 56px; }
   .outbox-modal__item > span:last-child { display: none; }
   .outbox-modal__actions { text-align: stretch !important; }
   .outbox-modal__actions button { width: 100%; min-height: 44px; }
+}
+
+/* A landscape phone is wide enough to miss the portrait breakpoint but still
+   needs phone-sized controls. Preserve report height by changing only the
+   interactive rows instead of applying the full bottom-sheet layout. */
+@media (max-height: 500px) and (min-width: 601px) and (max-width: 1100px) {
+  .holo-panel:not(.holo-panel--focus) .holo-panel__resize { width: 24px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__view button,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__search,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar select,
+  .holo-panel:not(.holo-panel--focus) .copy-button,
+  .holo-panel:not(.holo-panel--focus) .quest-log__latest,
+  .holo-panel:not(.holo-panel--focus) .task-log-search input,
+  .holo-panel:not(.holo-panel--focus) .task-log-search__scope button,
+  .holo-panel:not(.holo-panel--focus) .task-log-search > button:last-child,
+  .command-composer button,
+  .command-composer > textarea { min-height: 44px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__view button,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__search,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar select,
+  .holo-panel:not(.holo-panel--focus) .copy-button,
+  .holo-panel:not(.holo-panel--focus) .task-log-search__scope button,
+  .holo-panel:not(.holo-panel--focus) .task-log-search > button:last-child { min-width: 44px; }
+  .holo-panel:not(.holo-panel--focus) .task-log-search > button:last-child { padding: 0; }
+}
+
+/* Respect the operating system's reduced-motion preference across every
+   surface, including late-declared status pulses, skeletons and modal entry
+   effects. No component relies on animation/transition end for correctness. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

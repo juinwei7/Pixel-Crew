@@ -226,6 +226,7 @@ export function TopBar({
   }, []);
 
   const accountMenuSelect = accountSelect("top-bar__provider-select");
+  const closeCompactMenu = () => { if (moreRef.current) moreRef.current.open = false; };
 
   return (
     <header ref={topBarRef} className="top-bar">
@@ -246,7 +247,7 @@ export function TopBar({
       {children}
       <div className="top-bar__spacer" />
 
-      <div className="top-bar__agent" aria-label="Agent 設定">
+      <div className="top-bar__agent" aria-label={t("Agent 設定")}>
         <span className="top-bar__group-label">AGENT</span>
         {providerSelect()}
         {modelSelect()}
@@ -372,7 +373,7 @@ export function TopBar({
         <span className={lang === "en" ? "top-bar__lang--on" : "top-bar__lang--off"}>EN</span>
       </button>
       <details className="top-bar__more" ref={moreRef}>
-        <summary aria-label={t("更多 Agent 設定")}>•••</summary>
+        <summary aria-label={t("更多設定與功能")}>•••</summary>
         <div className="top-bar__more-menu">
           {/* Phone-only: the standalone 🌐/🔔 icons are hidden on small screens
               (too cryptic + crowd the bar), surfaced here with clear labels. */}
@@ -409,7 +410,21 @@ export function TopBar({
             className="top-bar__auto-approve-reset"
             onClick={() => onAutoApprove("safe")}
           >🛡 {t("回到安全")}</button>}
-          <button type="button" onClick={onOpenMcp}>{t("MCP 能力")} <strong>{connected}/{capabilities.mcpServers.length}</strong></button>
+          <div className="top-bar__more-compact-features" aria-label={t("功能")}>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenMcp(); }}>{t("MCP 能力")} <strong>{connected}/{capabilities.mcpServers.length}</strong></button>
+            {onOpenCodexCommands && active?.provider === "codex" && <button type="button" onClick={() => { closeCompactMenu(); onOpenCodexCommands(); }}>{t("Codex 原生指令管理")}</button>}
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenGlobalMemory(); }}>{t("🧠 全域記憶")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenAccounts(); }}>{t("🔑 帳號管理")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenKanban(); }}>{t("📋 任務看板")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenOps(); }}>{t("📊 營運面板")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenDayReport(); }}>{t("🌙 下班報告")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenOutbox(); }}>{t("📦 成品匣")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenBackup(); }}>{t("備份與還原")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenRemote(); }}>{t("🔗 遠端存取／手機控制")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenTour(); }}>{t("❓ 新手導覽")}</button>
+            <button type="button" disabled={restartPending} onClick={() => { closeCompactMenu(); onRestart(); }}>{restartPending ? t("⟳ 等空檔重啟中…") : t("⟳ 重啟伺服器")}</button>
+            {showBackgroundServiceStop && <button type="button" className="top-bar__menu-danger" onClick={() => { closeCompactMenu(); onShutdown?.(); }}>{t("⏻ 關閉背景服務")}</button>}
+          </div>
           {updateInfo?.updateAvailable && <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">{t("更新至 v{version}", { version: updateInfo.latestVersion ?? "" })}</a>}
         </div>
       </details>

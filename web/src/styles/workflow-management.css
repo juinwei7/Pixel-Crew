@@ -773,20 +773,22 @@
   .command-center__header h2 { font-size: 16px; }
   .command-center__header p, .command-center__eyebrow { display: none; }
   .command-center__providers { min-width: 0; margin-left: auto; }
-  .command-center__providers button { min-height: 40px; padding-inline: 7px; }
+  .command-center__providers button { min-height: 44px; padding-inline: 7px; }
   .command-center__close { width: 44px; height: 44px; flex: 0 0 auto; }
   .command-center__body { height: calc(100% - 68px); grid-template-columns: 1fr; grid-template-rows: 172px minmax(0, 1fr); }
   .command-library { min-height: 0; padding: 9px 12px; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
   .command-library__actions { flex-direction: row; }
-  .command-library__actions input { min-height: 40px; font-size: 16px; }
-  .command-library__actions button { min-height: 40px; }
+  .command-library__actions input { min-height: 44px; font-size: 16px; }
+  .command-library__actions button { min-height: 44px; }
   .command-library__scope { display: none; }
   .command-library__list { display: flex; gap: 7px; overflow-x: auto; overflow-y: hidden; padding: 3px 0 6px; }
   .command-library__item { flex: 0 0 min(220px, 70vw); min-height: 62px; }
   .command-editor { min-height: 0; padding: 14px 12px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; }
-  .command-editor__document textarea, .command-editor input, .command-editor select { font-size: 16px; }
+  .command-editor__document textarea, .command-editor input, .command-editor select { min-height: 44px; font-size: 16px; }
+  .command-center button { min-width: 44px; }
+  .command-editor button { min-height: 44px; }
   .command-editor__footer { flex-wrap: wrap; }
-  .command-editor__footer > * { min-height: 40px; }
+  .command-editor__footer > * { min-height: 44px; }
 }
 
 /* ---------- MCP chip + management modal ---------- */
@@ -971,16 +973,26 @@
   .mcp-modal__row { flex-wrap: wrap; padding: 10px; }
   .mcp-modal__actions { width: 100%; padding-left: 16px; }
   .mcp-modal__actions button, .mcp-modal__refresh, .accounts-modal__tab, .codex-commands-modal__add button,
-  .backup-modal__actions button, .backup-modal__export { min-height: 40px; }
+  .backup-modal__actions button, .backup-modal__export { min-height: 44px; }
+  .mcp-modal__actions button { min-width: 44px; }
+  .mcp-modal__refresh { min-width: 44px; }
+  .mcp-modal__tools-toggle, .mcp-modal__mode-toggle { min-height: 44px; }
   .mcp-modal__row-inputs { grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
-  .mcp-modal__row-inputs input { grid-column: 1 / -1; min-height: 40px; font-size: 16px; }
-  .mcp-modal__row-inputs button { min-height: 40px; }
+  .mcp-modal__row-inputs input { grid-column: 1 / -1; min-height: 44px; font-size: 16px; }
+  .mcp-modal__row-inputs button { min-height: 44px; }
   .codex-commands-modal__add, .backup-modal__encryption > div { align-items: stretch; flex-direction: column; }
-  .codex-commands-modal__add input, .mcp-modal__input, .backup-modal__input { min-height: 40px; font-size: 16px; }
-  .mcp-modal__transport button, .mcp-modal__submit { min-height: 40px; }
+  .codex-commands-modal__add input, .mcp-modal__input, .backup-modal__input { min-height: 44px; font-size: 16px; }
+  .backup-modal__input { width: 100%; }
+  .mcp-modal__transport button, .mcp-modal__submit { min-height: 44px; }
   .mcp-modal__row-inputs, .mcp-modal__transport { gap: 8px; }
   .backup-modal__summary-row { align-items: flex-start; gap: 10px; }
   .backup-modal__summary-row span:last-child { overflow-wrap: anywhere; text-align: right; }
+  .backup-modal__encryption summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .backup-modal input[type="file"] { width: 100%; min-height: 44px; }
   .backup-modal__actions { align-items: stretch; flex-direction: column-reverse; }
   .backup-modal__actions button { width: 100%; }
 }
