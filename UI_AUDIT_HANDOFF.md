@@ -105,7 +105,9 @@ evidence that those remaining checks passed.
   The test now creates a disposable cross-platform fake `codex` on PATH, so it
   validates the mux lifecycle without depending on developer tooling. A later
   Windows run completed the lifecycle but exposed delayed executable/cwd handle
-  release during fixture cleanup; cleanup now uses Node's bounded Windows retry.
+  release during fixture cleanup. Cleanup retries first, then tolerates only
+  Windows EBUSY/EPERM after process-exit and rejected-reconnect assertions pass;
+  hosted runners reclaim their own temporary root.
 - Live user terminal tab: `929897357`. Reopen the fixture URL above when
   needed; routine fixture tabs are ephemeral. Prefer it for failure injection.
   No viewport override or test/build command remains running from this work.

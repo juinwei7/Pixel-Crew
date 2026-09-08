@@ -170,6 +170,18 @@ async function waitForProcessExit(pid: number): Promise<void> {
   assert.fail(`PTY process ${pid} survived controlled mux shutdown`);
 }
 
+function removeMuxTestDirectory(directory: string): void {
+  try {
+    rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Hosted Windows runners can retain the exited ConPTY cwd handle after
+    // both the shell PID and daemon are gone. The runner reclaims its temp
+    // root; keep every other platform and error strict.
+    if (process.platform !== "win32" || (code !== "EBUSY" && code !== "EPERM")) throw error;
+  }
+}
+
 test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdown only acks once fully stopped", { timeout: 20_000 }, async () => {
   // macOS exposes /tmp as /private/tmp; the explicit real path also works in
   // restricted runners that disallow binding sockets below the per-user temp alias.
@@ -354,10 +366,7 @@ test("mux daemon lifecycle: attach spawns a real PTY, snapshot is atomic, shutdo
     await assert.rejects(() => connect(socketPath, 3));
   } finally {
     if (!child.killed) child.kill();
-    // Windows can release the exited PTY's cwd/executable handles a fraction
-    // after process exit. Use Node's bounded rimraf retry instead of turning
-    // that filesystem teardown delay into a lifecycle-test failure.
-    rmSync(dataDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    removeMuxTestDirectory(dataDirectory);
     if (stderr) console.error("[terminal mux daemon stderr]", stderr);
   }
 });
