@@ -9,6 +9,18 @@ describe("runtime origins", () => {
     assert.equal(runtimeWsOrigin("http://localhost:5173", env), "ws://localhost:8787");
   });
 
+  it("keeps remote development traffic on the authenticated browser origin", () => {
+    const env = { DEV: true, VITE_SERVER_URL: "http://localhost:8787", VITE_WS_URL: "ws://localhost:8787" };
+    assert.equal(runtimeHttpOrigin("https://crew.example.com", env), "https://crew.example.com");
+    assert.equal(runtimeWsOrigin("https://crew.example.com", env), "wss://crew.example.com");
+  });
+
+  it("still accepts development overrides from IPv6 loopback", () => {
+    const env = { DEV: true, VITE_SERVER_URL: "http://localhost:8787", VITE_WS_URL: "ws://localhost:8787" };
+    assert.equal(runtimeHttpOrigin("http://[::1]:5173", env), "http://localhost:8787");
+    assert.equal(runtimeWsOrigin("http://[::1]:5173", env), "ws://localhost:8787");
+  });
+
   it("always follows the served page origin in production", () => {
     const env = { DEV: false, VITE_SERVER_URL: "http://localhost:8787", VITE_WS_URL: "ws://localhost:8787" };
     assert.equal(runtimeHttpOrigin("https://pixel-crew.example", env), "https://pixel-crew.example");
