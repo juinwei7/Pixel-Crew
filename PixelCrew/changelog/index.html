@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>版本更新 — Pixel Crew</title>
-<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.3.0 持久化黑窗工作台與全域共享記憶的完整內容。">
+<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.3.1 遠端存取、黑窗穩定性與響應式無障礙修正。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/changelog/">
 <meta property="og:title" content="版本更新 — Pixel Crew">
-<meta property="og:description" content="2.3.0 持久化黑窗工作台的完整內容，以及每一個正式版本的變更紀錄。">
+<meta property="og:description" content="2.3.1 遠端存取與黑窗穩定性修正，以及每一個正式版本的變更紀錄。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
 <meta property="og:locale:alternate" content="en_US">
@@ -58,24 +58,24 @@
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.0</span>
-        <h2>真正的 CLI 終端，現在能留在 Pixel Crew 裡持續工作。</h2>
-        <p>2.3.0 帶來持久化黑窗工作台：把 Claude Code 與 Codex 放進可自由編排的 Workspace 與終端窗格，保留 session 身分並跨重整同步。全域共享記憶、帳號用量與一致的安全確認，讓像素、專業與黑窗三種模式共用同一套可靠本機工作流程。</p>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.1</span>
+        <h2>遠端連得進來，終端也更穩定。</h2>
+        <p>2.3.1 修正原始碼開發模式的遠端白畫面，讓畫面、API 與 WebSocket 經過同一個已驗證的入口；同時強化黑窗終端生命週期、響應式操作與無障礙體驗。</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.3.0</span>
-        <time class="launch-date" datetime="2026-09-04">2026.09.04</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">查看完整版本內容 ↗</a>
+        <span class="launch-version">v2.3.1</span>
+        <time class="launch-date" datetime="2026-09-09">2026.09.09</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.1">查看完整版本內容 ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / BLACK WINDOW</span><b>一個工作台，多個真正的 CLI</b><p>以 Workspace 分頁整理 Claude Code 與 Codex 終端；窗格可拖曳、縮放、分割、最小化與最大化。離開畫面或重新整理後，daemon 仍保留真正的 session 與終端身分。</p></article>
-      <article class="upgrade-card"><span class="index">02 / SYNC</span><b>多個瀏覽器分頁也不互相覆蓋</b><p>版面變更帶有版本檢查，遇到其他分頁先更新時會採用最新狀態；拖曳中的本機幾何也能與遠端修改安全合併，避免讓 CLI 變成無法存取的孤兒程序。</p></article>
-      <article class="upgrade-card"><span class="index">03 / AGENT CONTROLS</span><b>終端裡也能選帳號、模型與權限</b><p>每個 Agent pane 都能指定 Claude／Codex、共用或具名稱帳號、模型與 auto-approve 模式。需要重啟 session 的變更會先清楚確認，再安全替換終端身分。</p></article>
-      <article class="upgrade-card"><span class="index">04 / TERMINAL UX</span><b>字體與語音輸入都留在工作流裡</b><p>可調整並保存每個終端的字體大小；本機 Whisper 語音可先轉成可編輯文字，再輸入目前 CLI，不會自動執行或傳送控制字元。</p></article>
-      <article class="upgrade-card"><span class="index">05 / GLOBAL MEMORY</span><b>所有 Agent 共用一份本機簡報</b><p>在介面維護共享 Markdown 記憶，Claude 與 Codex 會透過各自原生指示機制讀取。內容只留在本機，也會納入可驗證的備份與還原流程。</p></article>
-      <article class="upgrade-card"><span class="index">06 / SAFETY</span><b>危險動作只確認一次，而且不會失焦</b><p>移除 NPC、刪除 Workspace、重啟服務與捨棄未儲存修改，統一使用可鍵盤操作的應用程式內確認視窗；等待回覆期間若狀態已改變，操作會重新檢查並安全取消。</p></article>
+      <article class="upgrade-card"><span class="index">01 / REMOTE ACCESS</span><b>開發模式不再只看到白畫面</b><p>轉接站會辨識正式版與 Vite 開發畫面，將 UI 送到正確服務，同時把 API 與應用程式 WebSocket 留在核心 server。</p></article>
+      <article class="upgrade-card"><span class="index">02 / SAME ORIGIN</span><b>手機不再連向自己的 localhost</b><p>遠端瀏覽器沿用 tunnel 網址呼叫 API 與 WebSocket，登入 cookie 與安全閘道能完整套用到每一個請求。</p></article>
+      <article class="upgrade-card"><span class="index">03 / GATEWAY SAFETY</span><b>擋住開發伺服器的檔案系統入口</b><p>遠端閘道拒絕 Vite 的 <code>/@fs/</code> 路徑，避免登入後繞過應用程式路由讀取工作樹檔案。</p></article>
+      <article class="upgrade-card"><span class="index">04 / TERMINAL LIFECYCLE</span><b>黑窗終端更能承受重整與中斷</b><p>強化 daemon-backed 終端的啟動、恢復、關閉與版面同步，降低終端失聯或留下無法操作程序的風險。</p></article>
+      <article class="upgrade-card"><span class="index">05 / RESPONSIVE + A11Y</span><b>窄螢幕、鍵盤與讀屏操作更一致</b><p>補齊工作台、工具視窗與輸入區的響應式行為、焦點語意與鍵盤互動，手機與桌面都更容易操作。</p></article>
+      <article class="upgrade-card"><span class="index">06 / CROSS-PLATFORM</span><b>PTY 測試更貼近 Windows 實際行為</b><p>穩定 ConPTY 尺寸偵測與延遲清理測試，讓 macOS、Linux 與 Windows 的終端生命週期持續受到 CI 驗證。</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
@@ -98,6 +98,15 @@
     </div>
 
     <div class="release-list">
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.3.0</span>
+          <time class="release-date" datetime="2026-09-04">2026.09.04</time>
+        </div>
+        <h3>持久化黑窗工作台與全域共享記憶</h3>
+        <p>把真正的 Claude Code 與 Codex 終端放進可編排的 Workspace，保留 session 身分與跨分頁版面同步；並讓所有 Agent 共用一份本機 Markdown 簡報。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">完整 v2.3.0 發布內容 ↗</a>
+      </article>
       <article class="release-card">
         <div class="release-meta">
           <span class="release-version">v2.2.2</span>
