@@ -1,4 +1,4 @@
-// Tailscale 轉接站 + 手機登入關卡：127.0.0.1:8790 -> 127.0.0.1:8787
+// Tailscale 轉接站 + 手機登入關卡：127.0.0.1:8790 -> Pixel Crew
 //
 // 設計：
 //  - 本體(8787)只信任 loopback Host/Origin（防 DNS rebinding），這裡把 Host 改寫成
@@ -34,6 +34,9 @@ const LISTEN_PORT = Number(process.env.PC_TSPROXY_PORT) || 8790;
 const TARGET_HOST = '127.0.0.1';
 const TARGET_PORT = Number(process.env.PC_TSPROXY_TARGET_PORT) || 8787; // 可覆寫（測試對 mock 上游用）
 const TARGET_HOSTHEADER = `${TARGET_HOST}:${TARGET_PORT}`;
+const DEV_WEB_HOST = process.env.PC_TSPROXY_DEV_WEB_HOST || '127.0.0.1';
+const DEV_WEB_PORT = Number(process.env.PC_TSPROXY_DEV_WEB_PORT) || 5173;
+const EXPLICIT_WEB_PORT = Number(process.env.PC_TSPROXY_WEB_PORT) || 0;
 
 const COOKIE = 'pc_gate';
 const STATE_COOKIE = 'pc_oauth_state';
@@ -662,23 +665,98 @@ ${as.supported ? `<div class="sec"><h2>開機自啟 ${as.enabled ? '<span class=
 <div class="divider"></div><a class="gbtn" href="/__gate/logout" style="background:#20305a;color:#e6ecff">登出</a>`, true);
 }
 
-function rewriteHeaders(headers) {
+const backendTarget = () => ({ host: TARGET_HOST, port: TARGET_PORT });
+function rewriteHeaders(headers, target = backendTarget()) {
   const h = { ...headers };
-  h.host = TARGET_HOSTHEADER;
+  h.host = `${target.host}:${target.port}`;
   delete h.origin;
   delete h.referer;
   return h;
 }
-function proxyHttp(clientReq, clientRes) {
-  const proxyReq = http.request({
-    host: TARGET_HOST, port: TARGET_PORT, method: clientReq.method,
-    path: clientReq.url, headers: rewriteHeaders(clientReq.headers),
-  }, (proxyRes) => {
-    clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(clientRes);
+const backendPath = (url) => /^(?:\/api(?:\/|\?|$)|\/internal(?:\/|\?|$)|\/healthz(?:\?|$)|\/ws(?:\/|\?|$))/.test(url);
+function forbiddenDevServerPath(url) {
+  try {
+    const pathname = decodeURIComponent(String(url || '/').split('?')[0]).replace(/\\/g, '/');
+    return pathname === '/@fs' || pathname.startsWith('/@fs/');
+  } catch {
+    return true;
+  }
+}
+let webTargetCache = null;
+let webTargetCheckedAt = 0;
+let webTargetCheck = null;
+
+// Production serves the app from 8787. Source development serves it from Vite
+// on 5173 while 8787 is API-only. Probe for the Pixel Crew HTML instead of
+// blindly preferring 5173: a packaged install must never expose an unrelated
+// local development server that happens to use the same port.
+function isPixelCrewWeb(host, port) {
+  return new Promise((resolve) => {
+    const r = http.request({
+      host, port, path: '/', method: 'GET',
+      headers: { Accept: 'text/html' }, timeout: 1000,
+    }, (up) => {
+      let body = '';
+      up.setEncoding('utf8');
+      up.on('data', (chunk) => {
+        if (body.length < 65536) body += chunk;
+      });
+      up.on('end', () => resolve(
+        up.statusCode >= 200
+        && up.statusCode < 400
+        && /<title>Pixel Crew<\/title>/i.test(body)
+      ));
+    });
+    r.once('timeout', () => { r.destroy(); resolve(false); });
+    r.once('error', () => resolve(false));
+    r.end();
   });
-  proxyReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
-  clientReq.pipe(proxyReq);
+}
+
+async function resolveWebTarget() {
+  if (EXPLICIT_WEB_PORT) return { host: TARGET_HOST, port: EXPLICIT_WEB_PORT };
+  const now = Date.now();
+  if (webTargetCache && now - webTargetCheckedAt < 2000) return webTargetCache;
+  if (webTargetCheck) return webTargetCheck;
+  webTargetCheck = (async () => {
+    let target = backendTarget();
+    if (!(await isPixelCrewWeb(TARGET_HOST, TARGET_PORT))
+        && await isPixelCrewWeb(DEV_WEB_HOST, DEV_WEB_PORT)) {
+      target = { host: DEV_WEB_HOST, port: DEV_WEB_PORT };
+    }
+    webTargetCache = target;
+    webTargetCheckedAt = Date.now();
+    webTargetCheck = null;
+    return target;
+  })().catch(() => {
+    webTargetCheck = null;
+    return backendTarget();
+  });
+  return webTargetCheck;
+}
+
+function proxyHttp(clientReq, clientRes) {
+  const url = clientReq.url || '/';
+  // Vite's /@fs escape hatch is useful for local development but must never
+  // become a remotely reachable authenticated file browser.
+  if (forbiddenDevServerPath(url)) {
+    clientRes.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    clientRes.end('not found');
+    return;
+  }
+  const targetPromise = backendPath(url) ? Promise.resolve(backendTarget()) : resolveWebTarget();
+  targetPromise.then((target) => {
+    if (clientRes.destroyed) return;
+    const proxyReq = http.request({
+      host: target.host, port: target.port, method: clientReq.method,
+      path: url, headers: rewriteHeaders(clientReq.headers, target),
+    }, (proxyRes) => {
+      clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(clientRes);
+    });
+    proxyReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
+    clientReq.pipe(proxyReq);
+  }).catch(() => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
 }
 // 透傳並緩衝回應（僅用於 shr 建立請求，建立回應通常很小）；2xx 時把 id 記進 session。
 function proxyCapture(clientReq, clientRes, onBody) {
@@ -1126,13 +1204,16 @@ const server = http.createServer((req, res) => {
 });
 
 // WebSocket / HTTP upgrade：同樣要先登入
-server.on('upgrade', (req, clientSocket, head) => {
+server.on('upgrade', async (req, clientSocket, head) => {
   if (needsSetup() || !authLevel(req)) {
     try { clientSocket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); clientSocket.destroy(); } catch {}
     return;
   }
-  const headers = rewriteHeaders(req.headers);
-  const upstream = net.connect(TARGET_PORT, TARGET_HOST, () => {
+  // /ws is Pixel Crew's application socket; other upgrade paths belong to
+  // Vite HMR when the source-development UI is selected.
+  const target = backendPath(req.url || '/') ? backendTarget() : await resolveWebTarget();
+  const headers = rewriteHeaders(req.headers, target);
+  const upstream = net.connect(target.port, target.host, () => {
     let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
     for (const [k, v] of Object.entries(headers)) {
       if (Array.isArray(v)) v.forEach((vv) => { raw += `${k}: ${vv}\r\n`; });
