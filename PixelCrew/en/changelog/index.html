@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog — Pixel Crew</title>
-<meta name="description" content="What changed in every Pixel Crew release, including the full 2.3.0 persistent Black Window workbench and shared global memory update.">
+<meta name="description" content="What changed in every Pixel Crew release, including the 2.3.1 remote access, Black Window stability, responsive, and accessibility fixes.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/en/changelog/">
 <meta property="og:title" content="Changelog — Pixel Crew">
-<meta property="og:description" content="Everything in 2.3.0's persistent Black Window workbench, plus the history of every release since launch.">
+<meta property="og:description" content="Pixel Crew 2.3.1 remote access and Black Window stability fixes, plus the history of every release since launch.">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="zh_TW">
@@ -58,24 +58,24 @@
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.0</span>
-        <h2>Real CLI terminals can now stay and keep working inside Pixel Crew.</h2>
-        <p>Version 2.3.0 introduces the persistent Black Window workbench: arrange Claude Code and Codex across workspaces and terminal panes while preserving session identity through navigation and reloads. Shared global memory, per-account usage, and consistent safety confirmations connect Pixel, Professional, and Black Window modes into one reliable local workflow.</p>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.1</span>
+        <h2>Remote access connects, and terminals stay steadier.</h2>
+        <p>Version 2.3.1 fixes the blank remote screen in source development by keeping the UI, API, and WebSocket behind one authenticated origin. It also hardens Black Window terminal lifecycles, responsive interaction, and accessibility.</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.3.0</span>
-        <time class="launch-date" datetime="2026-09-04">2026.09.04</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">View full release notes ↗</a>
+        <span class="launch-version">v2.3.1</span>
+        <time class="launch-date" datetime="2026-09-09">2026.09.09</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.1">View full release notes ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / BLACK WINDOW</span><b>One workbench, multiple real CLIs</b><p>Organize Claude Code and Codex terminals in workspace tabs. Panes move, resize, split, minimize, and maximize; leaving the view or reloading no longer discards the daemon-backed session or terminal identity.</p></article>
-      <article class="upgrade-card"><span class="index">02 / SYNC</span><b>Browser tabs no longer overwrite each other</b><p>Layout writes use version checks and adopt newer state when another tab wins the race. Local drag geometry merges safely with remote changes, preventing CLI processes from becoming orphaned or unreachable.</p></article>
-      <article class="upgrade-card"><span class="index">03 / AGENT CONTROLS</span><b>Choose account, model, and permissions in the terminal</b><p>Each Agent pane can select Claude or Codex, a shared or named account, its model, and auto-approve mode. Changes that require a new session are explained first, then replace terminal identity safely.</p></article>
-      <article class="upgrade-card"><span class="index">04 / TERMINAL UX</span><b>Font sizing and voice stay in the workflow</b><p>Save a readable font size per terminal. Local Whisper voice input becomes editable text in the active CLI and never executes automatically or passes control characters through.</p></article>
-      <article class="upgrade-card"><span class="index">05 / GLOBAL MEMORY</span><b>Every agent shares one local brief</b><p>Maintain shared Markdown memory in the app; Claude and Codex receive it through their native instruction mechanisms. It remains local and is included in validated backup and restore flows.</p></article>
-      <article class="upgrade-card"><span class="index">06 / SAFETY</span><b>Dangerous actions ask once and keep context</b><p>Removing an NPC, deleting a workspace, restarting services, or discarding edits now uses one keyboard-accessible in-app confirmation. If live state changes while it is open, the operation rechecks and cancels safely.</p></article>
+      <article class="upgrade-card"><span class="index">01 / REMOTE ACCESS</span><b>Source development no longer opens to a blank screen</b><p>The gateway detects production and Vite development UIs, sends the page to the right service, and keeps API and application WebSocket traffic on the core server.</p></article>
+      <article class="upgrade-card"><span class="index">02 / SAME ORIGIN</span><b>A phone no longer connects to its own localhost</b><p>Remote browsers use the tunnel origin for API and WebSocket requests, preserving the login cookie and gateway protection throughout the session.</p></article>
+      <article class="upgrade-card"><span class="index">03 / GATEWAY SAFETY</span><b>The development server's filesystem route is closed</b><p>The remote gateway rejects Vite's <code>/@fs/</code> path so an authenticated request cannot bypass application routes to read workspace files.</p></article>
+      <article class="upgrade-card"><span class="index">04 / TERMINAL LIFECYCLE</span><b>Black Window better survives reloads and interruptions</b><p>Daemon-backed terminal startup, recovery, shutdown, and layout synchronization are hardened to reduce disconnected terminals and unreachable processes.</p></article>
+      <article class="upgrade-card"><span class="index">05 / RESPONSIVE + A11Y</span><b>Narrow screens, keyboards, and screen readers behave consistently</b><p>Workbench surfaces, tool dialogs, and composers now have more complete responsive behavior, focus semantics, and keyboard interaction across phone and desktop layouts.</p></article>
+      <article class="upgrade-card"><span class="index">06 / CROSS-PLATFORM</span><b>PTY coverage better matches Windows behavior</b><p>ConPTY sizing and delayed-cleanup tests are stabilized so terminal lifecycle behavior remains covered across macOS, Linux, and Windows CI.</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew existing feature UI">
@@ -98,6 +98,15 @@
     </div>
 
     <div class="release-list">
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.3.0</span>
+          <time class="release-date" datetime="2026-09-04">2026.09.04</time>
+        </div>
+        <h3>Persistent Black Window workbench and shared global memory</h3>
+        <p>Put real Claude Code and Codex terminals into arranged workspaces while preserving session identity and conflict-safe layout sync, with one local Markdown brief shared by every agent.</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.0">Full v2.3.0 release notes ↗</a>
+      </article>
       <article class="release-card">
         <div class="release-meta">
           <span class="release-version">v2.2.2</span>

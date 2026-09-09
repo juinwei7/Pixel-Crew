@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-09-09
+
+### Changed
+
+- Hardened the persistent Black Window workbench across terminal lifecycle recovery, pane interactions, responsive layouts, keyboard use, and screen-reader semantics.
+- Rebuilt the bilingual product website with dedicated feature, download, and changelog pages.
+
+### Fixed
+
+- Made remote access work in source development by routing the Vite UI separately from API and WebSocket traffic, while keeping phone requests on the authenticated tunnel origin.
+- Blocked Vite's filesystem route at the remote gateway so development-mode remote access cannot expose arbitrary workspace files.
+- Stabilized cross-platform PTY lifecycle coverage, including Windows ConPTY sizing and delayed cleanup.
+
 ## [2.3.0] - 2026-09-04
 
 ### Added
@@ -166,7 +179,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.0...v2.2.1
