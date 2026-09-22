@@ -182,7 +182,9 @@ test("the committed icon files still match the artwork", () => {
     const committed = readFileSync(join(root, output.path));
     const stale = `${output.path} is stale — regenerate the icons with \`npm run icons\``;
     if (output.path.endsWith(".svg")) {
-      assert.ok(committed.equals(output.data), stale);
+      // Git checks text files out with CRLF on Windows, so compare the text
+      // rather than the bytes the working tree happens to hold.
+      assert.equal(committed.toString("utf8").replace(/\r\n/g, "\n"), output.data.toString("utf8"), stale);
       continue;
     }
     assert.equal(iconDigest(committed, output.path), iconDigest(output.data, output.path), stale);
