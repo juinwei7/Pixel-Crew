@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { inflateSync } from "node:zlib";
 
 // @ts-expect-error The icon toolchain is intentionally plain JavaScript.
 import { COMPACT, CREW, PALETTE, SIZES, layoutFor } from "../../scripts/icons/icon-art.mjs";
@@ -122,13 +124,68 @@ test("PNG output declares the size it was rendered at", () => {
   assert.equal(png[25], 6, "RGBA");
 });
 
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+/** The raw scanlines a PNG carries, independent of how they were compressed. */
+function pngScanlines(png: Buffer): Buffer {
+  const parts: Buffer[] = [];
+  let cursor = 8;
+  while (cursor + 8 <= png.length) {
+    const length = png.readUInt32BE(cursor);
+    const type = png.subarray(cursor + 4, cursor + 8).toString("latin1");
+    if (type === "IDAT") parts.push(png.subarray(cursor + 8, cursor + 8 + length));
+    if (type === "IEND") break;
+    cursor += length + 12;
+  }
+  return inflateSync(Buffer.concat(parts));
+}
+
+function icnsSlots(icns: Buffer): { type: string; payload: Buffer }[] {
+  const slots: { type: string; payload: Buffer }[] = [];
+  let cursor = 8;
+  while (cursor + 8 <= icns.length) {
+    const length = icns.readUInt32BE(cursor + 4);
+    slots.push({ type: icns.subarray(cursor, cursor + 4).toString("latin1"), payload: icns.subarray(cursor + 8, cursor + length) });
+    cursor += length;
+  }
+  return slots;
+}
+
+function icoFrames(ico: Buffer): { size: number; payload: Buffer }[] {
+  return Array.from({ length: ico.readUInt16LE(4) }, (_, index) => {
+    const entry = 6 + index * 16;
+    const length = ico.readUInt32LE(entry + 8);
+    const offset = ico.readUInt32LE(entry + 12);
+    return { size: ico[entry] === 0 ? 256 : ico[entry], payload: ico.subarray(offset, offset + length) };
+  });
+}
+
+const framePixels = (payload: Buffer) =>
+  payload.subarray(0, 4).equals(PNG_MAGIC) ? pngScanlines(payload) : payload;
+
+/** Structure plus decoded pixels, so the comparison survives a zlib change. */
+function iconDigest(file: Buffer, path: string): string {
+  const hash = createHash("sha256");
+  if (path.endsWith(".png")) hash.update(pngScanlines(file));
+  else if (path.endsWith(".icns")) for (const slot of icnsSlots(file)) hash.update(slot.type).update(framePixels(slot.payload));
+  else if (path.endsWith(".ico")) for (const frame of icoFrames(file)) hash.update(String(frame.size)).update(framePixels(frame.payload));
+  else throw new Error(`No pixel comparison is defined for ${path}`);
+  return hash.digest("hex");
+}
+
 test("the committed icon files still match the artwork", () => {
+  // Deflate output differs between zlib builds — CI runs Node 22 while a
+  // developer may be on a newer one — so identical artwork can still produce
+  // different bytes. Compare the decoded pixels instead of the compressed
+  // file, which also makes this check verify the artwork rather than a blob.
   for (const output of iconOutputs() as { path: string; data: Buffer }[]) {
     const committed = readFileSync(join(root, output.path));
-    assert.ok(
-      committed.equals(output.data),
-      `${output.path} is stale — regenerate the icons with \`npm run icons\``,
-    );
+    const stale = `${output.path} is stale — regenerate the icons with \`npm run icons\``;
+    if (output.path.endsWith(".svg")) {
+      assert.ok(committed.equals(output.data), stale);
+      continue;
+    }
+    assert.equal(iconDigest(committed, output.path), iconDigest(output.data, output.path), stale);
   }
 });
 
