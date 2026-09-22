@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { AccountUsageRegistry, normalizeCodexUsage, parseClaudeUsage, ProviderUsageRegistry } from "../src/providerUsage.js";
+import { AccountUsageRegistry, looksLikeUnsupportedUsageCommand, normalizeCodexUsage, parseClaudeUsage, ProviderUsageRegistry } from "../src/providerUsage.js";
 import { LocalStore } from "../src/store.js";
 
 test("parses Claude /usage JSON into account-wide remaining energy", () => {
@@ -38,6 +38,34 @@ test("parses the current Claude /usage response shape", () => {
     { label: "本次時段", remainingPercent: 43 },
     { label: "本週", remainingPercent: 56 },
   ]);
+});
+
+test("keeps a usage line that reports no reset time", () => {
+  // Real 2.1.236 output: the session window carries no `· resets …` suffix
+  // until one is scheduled, and requiring it dropped the line entirely.
+  const raw = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result: [
+      "You are currently using your subscription to power your Claude Code usage",
+      "",
+      "Current session: 0% used",
+      "Current week (all models): 16% used · resets Sep 24 at 7:59pm (Asia/Taipei)",
+    ].join("\n"),
+  });
+
+  assert.deepEqual(parseClaudeUsage(raw).map(({ label, remainingPercent, resetsAt }) => ({ label, remainingPercent, resetsAt })), [
+    { label: "本次時段", remainingPercent: 100, resetsAt: null },
+    { label: "本週", remainingPercent: 84, resetsAt: "Sep 24 at 7:59pm (Asia/Taipei)" },
+  ]);
+});
+
+test("recognizes an outdated CLI that cannot answer /usage", () => {
+  // 2.1.94 forwards `/usage` on instead of answering it locally; that has to
+  // read as "update your CLI", not as an unexplained empty usage response.
+  assert.equal(looksLikeUnsupportedUsageCommand("Unknown skill: usage"), true);
+  assert.equal(looksLikeUnsupportedUsageCommand("Unknown command: /usage"), true);
+  assert.equal(looksLikeUnsupportedUsageCommand("Current session: 0% used"), false);
 });
 
 test("normalizes Codex primary and secondary rate-limit windows", () => {

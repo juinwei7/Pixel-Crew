@@ -52,7 +52,10 @@ export function parseClaudeUsage(raw: string): UsageWindow[] {
     // Tests and older CLI versions may provide the human-readable result directly.
   }
   const windows: UsageWindow[] = [];
-  const pattern = /^(Current [^:]+):\s*(\d+)% used\s*[·-]\s*resets\s+(.+)$/gim;
+  // `· resets …` is optional — a newer CLI omits it on the session line when
+  // that window has no scheduled reset yet (verified against 2.1.236); requiring
+  // it silently dropped the whole line.
+  const pattern = /^(Current [^:]+):\s*(\d+)% used\s*(?:[·-]\s*resets\s+(.+))?$/gim;
   for (const match of result.matchAll(pattern)) {
     const sourceLabel = safeText(match[1], 80);
     const usedPercent = percent(match[2]);
@@ -262,6 +265,14 @@ function looksLikeMissingSession(message: string): boolean {
   return /no conversation found|session .*not found|could not find|invalid session/i.test(message);
 }
 
+// An outdated CLI does not answer `/usage` itself — it forwards the text and
+// replies "Unknown skill: usage" (seen on 2.1.94), which parses to zero windows
+// and would otherwise read as the same vague "no usage returned" as a real parse
+// miss, hiding the one thing the user can actually act on.
+export function looksLikeUnsupportedUsageCommand(text: string): boolean {
+  return /unknown (skill|command)|unrecognized command/i.test(text);
+}
+
 export async function readClaudeUsage(accountKey: string, homeDir: string, store: LocalStore): Promise<UsageWindow[]> {
   let sessionId = store.loadClaudeUsageProbeSession(accountKey);
   if (!sessionId) {
@@ -275,7 +286,11 @@ export async function readClaudeUsage(accountKey: string, homeDir: string, store
   try {
     const { resultText } = await runHeadlessClaudeTurn(args, claudeChildEnv(process.env, homeDir), "/usage");
     const windows = parseClaudeUsage(resultText);
-    if (windows.length === 0) throw new Error(t("Claude 沒有回傳可用的訂閱用量"));
+    if (windows.length === 0) {
+      throw new Error(looksLikeUnsupportedUsageCommand(resultText)
+        ? t("這個 Claude CLI 版本不支援 /usage，請更新 Claude Code CLI")
+        : t("Claude 沒有回傳可用的訂閱用量"));
+    }
     return windows;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
