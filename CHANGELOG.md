@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-22
+
+### Added
+
+- Gave the macOS app and the Windows executable a real icon; downloads previously showed the blank generic-application icon on both platforms. The mark is the office crew itself, generated from a single source with `npm run icons`.
+- Paste an image into a Black Window terminal with Cmd+V. The image is staged as a private local file and its path handed to the Claude Code or Codex composer, so it also works over remote access, where the browser and the CLI are on different machines.
+
+### Fixed
+
+- Parsed Claude usage lines that report no reset time instead of discarding the whole reading.
+
 ## [2.3.1] - 2026-09-09
 
 ### Changed
@@ -179,7 +190,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.1...v2.2.2

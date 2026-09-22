@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>版本更新 — Pixel Crew</title>
-<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.3.1 遠端存取、黑窗穩定性與響應式無障礙修正。">
+<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.4.0 的 macOS 與 Windows app 圖示，以及黑窗 Cmd+V 貼圖。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -17,11 +17,11 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="stylesheet" href="/assets/style.css?v=2.3.1">
+<link rel="stylesheet" href="/assets/style.css?v=2.4.0">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/changelog/">
 <meta property="og:title" content="版本更新 — Pixel Crew">
-<meta property="og:description" content="2.3.1 遠端存取與黑窗穩定性修正，以及每一個正式版本的變更紀錄。">
+<meta property="og:description" content="2.4.0 為 macOS 與 Windows 補上正式 app 圖示，黑窗也能直接 Cmd+V 貼圖給 CLI。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
 <meta property="og:locale:alternate" content="en_US">
@@ -58,24 +58,24 @@
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">NEW RELEASE <i>·</i> 2.3.1</span>
-        <h2>遠端連得進來，終端也更穩定。</h2>
-        <p>2.3.1 修正原始碼開發模式的遠端白畫面，讓畫面、API 與 WebSocket 經過同一個已驗證的入口；同時強化黑窗終端生命週期、響應式操作與無障礙體驗。</p>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.4.0</span>
+        <h2>下載終於有臉，黑窗也收得下截圖。</h2>
+        <p>2.4.0 為 macOS app 與 Windows 執行檔補上正式圖示——那組圖就是辦公室裡的隊員本人；同時讓黑窗終端可以直接 Cmd+V，把截圖交給 Claude Code 或 Codex。</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.3.1</span>
-        <time class="launch-date" datetime="2026-09-09">2026.09.09</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.1">查看完整版本內容 ↗</a>
+        <span class="launch-version">v2.4.0</span>
+        <time class="launch-date" datetime="2026-09-22">2026.09.22</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.4.0">查看完整版本內容 ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / REMOTE ACCESS</span><b>開發模式不再只看到白畫面</b><p>轉接站會辨識正式版與 Vite 開發畫面，將 UI 送到正確服務，同時把 API 與應用程式 WebSocket 留在核心 server。</p></article>
-      <article class="upgrade-card"><span class="index">02 / SAME ORIGIN</span><b>手機不再連向自己的 localhost</b><p>遠端瀏覽器沿用 tunnel 網址呼叫 API 與 WebSocket，登入 cookie 與安全閘道能完整套用到每一個請求。</p></article>
-      <article class="upgrade-card"><span class="index">03 / GATEWAY SAFETY</span><b>擋住開發伺服器的檔案系統入口</b><p>遠端閘道拒絕 Vite 的 <code>/@fs/</code> 路徑，避免登入後繞過應用程式路由讀取工作樹檔案。</p></article>
-      <article class="upgrade-card"><span class="index">04 / TERMINAL LIFECYCLE</span><b>黑窗終端更能承受重整與中斷</b><p>強化 daemon-backed 終端的啟動、恢復、關閉與版面同步，降低終端失聯或留下無法操作程序的風險。</p></article>
-      <article class="upgrade-card"><span class="index">05 / RESPONSIVE + A11Y</span><b>窄螢幕、鍵盤與讀屏操作更一致</b><p>補齊工作台、工具視窗與輸入區的響應式行為、焦點語意與鍵盤互動，手機與桌面都更容易操作。</p></article>
-      <article class="upgrade-card"><span class="index">06 / CROSS-PLATFORM</span><b>PTY 測試更貼近 Windows 實際行為</b><p>穩定 ConPTY 尺寸偵測與延遲清理測試，讓 macOS、Linux 與 Windows 的終端生命週期持續受到 CI 驗證。</p></article>
+      <article class="upgrade-card"><span class="index">01 / APP ICON</span><b>下載下來不再是一張白紙</b><p>macOS 的 .app 與 Windows 的 .exe 以前都沒有宣告圖示，Finder 與檔案總管只會顯示系統預設的空白圖示。現在兩邊都有自己的臉。</p></article>
+      <article class="upgrade-card"><span class="index">02 / BRAND</span><b>圖示就是辦公室裡那組隊員</b><p>用的是 PixiJS 場景裡同一份 NPC sprite，不是另外畫一顆對不上的圖；網站 favicon 也換成同一個來源產生的版本。</p></article>
+      <article class="upgrade-card"><span class="index">03 / EVERY SIZE</span><b>16px 到 1024px 都是脆的</b><p>像素圖只有整數倍放大才不會糊，所以每個尺寸都有自己的縮放倍率；64px 以下自動換成單人版本，而不是把三個人擠成一團。</p></article>
+      <article class="upgrade-card"><span class="index">04 / BLACK WINDOW</span><b>Cmd+V 直接把截圖丟給 CLI</b><p>終端機本身收不到剪貼簿裡的圖。現在貼上會先存成本機私有檔案，再把路徑交給 Claude Code 或 Codex 的輸入框，變成一張附件。</p></article>
+      <article class="upgrade-card"><span class="index">05 / REMOTE</span><b>手機連線也能貼圖</b><p>圖片是在伺服器端暫存，不依賴桌機的系統剪貼簿，所以瀏覽器與 CLI 不在同一台機器上時一樣可用。</p></article>
+      <article class="upgrade-card"><span class="index">06 / USAGE</span><b>沒有重置時間的用量也讀得懂</b><p>Claude 回報用量卻沒附上重置時間時，不再整筆丟棄，額度顯示不會無故空白。</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
@@ -98,6 +98,15 @@
     </div>
 
     <div class="release-list">
+      <article class="release-card">
+        <div class="release-meta">
+          <span class="release-version">v2.3.1</span>
+          <time class="release-date" datetime="2026-09-09">2026.09.09</time>
+        </div>
+        <h3>遠端存取與黑窗穩定性修正</h3>
+        <p>修正原始碼開發模式的遠端白畫面，讓畫面、API 與 WebSocket 經過同一個已驗證的入口；並強化黑窗終端生命週期、響應式操作與無障礙體驗。</p>
+        <a class="release-link" href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.3.1">完整 v2.3.1 發布內容 ↗</a>
+      </article>
       <article class="release-card">
         <div class="release-meta">
           <span class="release-version">v2.3.0</span>
