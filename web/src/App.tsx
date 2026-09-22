@@ -19,6 +19,7 @@ import { FocusStudios } from "./components/FocusStudios";
 import { FocusPaneGrid } from "./components/FocusPaneGrid";
 import { ModelSwitchCard } from "./components/ModelSwitchCard";
 import { Modal } from "./components/Modal";
+import { useIsPhone } from "./hooks/useIsPhone";
 import { hasSeenTour } from "./onboardingState";
 import { RichText } from "./components/RichText";
 import { WarroomVerdictBody, type WarRoomResult } from "./components/WarroomVerdictBody";
@@ -35,6 +36,7 @@ import { latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnr
 import { buildFocusStudios, focusStudioWorkers, studioWorkerId } from "./focusStudios";
 import { addPane, createFocusPanes, MAX_FOCUS_PANES, removePane, setPaneWorker, type FocusPane } from "./focusPanes";
 import type { AutoApproveMode, ProviderId } from "./types";
+import { Icon } from "./components/Icon";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
@@ -110,11 +112,11 @@ export function App() {
   // 作戰室歷史面板：列出 .warroom/ 的過往裁決報告，可回看/刪除（null＝面板關閉）。
   const [warroomHistory, setWarroomHistory] = useState<Array<{ file: string; topic: string; difficulty: string }> | null>(null);
   const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
-  // 輸入框輪播小撇步：閒置時輪流提示隱藏功能（點會議桌、⚙ 自訂角色…），幫助發現功能。
+  // 輸入框輪播小撇步：閒置時輪流提示隱藏功能（點會議桌、自訂角色…），幫助發現功能。
   const composerTips = [
     t("點底部會議桌可直接開作戰室"),
-    t("⚙ 可自訂作戰室上桌角色"),
-    t("📜 歷史能回看每場裁決（含圖表）"),
+    t("可自訂作戰室上桌角色"),
+    t("歷史能回看每場裁決（含圖表）"),
     t("作戰室會依難度自動配模型與人數"),
   ];
   const [tipIndex, setTipIndex] = useState(0);
@@ -124,8 +126,8 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ⚙ 自訂作戰室角色：每行「角色名｜立場描述」，存 localStorage；空白＝用預設（依難度自動配）。
-  // （曾有過使用者可按的「🔍研究」按鈕，後拆除：委派是 host NPC（大腦）的工具——使用者直接
+  // 自訂作戰室角色：每行「角色名｜立場描述」，存 localStorage；空白＝用預設（依難度自動配）。
+  // （曾有過使用者可按的「研究」按鈕，後拆除：委派是 host NPC（大腦）的工具——使用者直接
   //   跟 NPC 講就好，由它決定要不要呼叫 /api/delegate 派研究員，按鈕只是繞過大腦的冗餘入口。）
   const [stancesOpen, setStancesOpen] = useState(false);
   const [stancesText, setStancesText] = useState(() => localStorage.getItem("warroom-stances") ?? "");
@@ -189,7 +191,7 @@ export function App() {
   const [kanbanModalOpen, setKanbanModalOpen] = useState(false);
   const [dayReportOpen, setDayReportOpen] = useState(false);
   const [outboxOpen, setOutboxOpen] = useState(false);
-  // 首次進站自動播新手導覽；之後從頂欄 ❓ 重看。開導覽時順手展開任務面板，讓對應步驟有東西可指
+  // 首次進站自動播新手導覽；之後從頂欄的導覽鈕重看。開導覽時順手展開任務面板，讓對應步驟有東西可指
   const [tourOpen, setTourOpen] = useState(() => !hasSeenTour());
   const openTour = () => { updatePreferences({ taskLogOpen: true }); setTourOpen(true); };
   // BOSS 桌從頂欄與看板空狀態兩處進入，開法保持一致。
@@ -217,8 +219,9 @@ export function App() {
   const [taskSearchScope, setTaskSearchScope] = useState<"current" | "all">("current");
   const blackWindowMode = preferences.blackWindowMode;
   const taskFocusMode = preferences.taskFocusMode && !blackWindowMode;
-  const [focusPhoneViewport, setFocusPhoneViewport] = useState(() => typeof window !== "undefined" && window.innerWidth <= 600);
-  const focusPhone = focusPhoneViewport;
+  // 斷點判斷只有一份：hooks/useIsPhone 跟 styles/responsive.css 的 600px
+  // 由 web/test/responsiveTokens.test.ts 綁在一起。
+  const focusPhone = useIsPhone();
   const [focusUsageOpen, setFocusUsageOpen] = useState(false);
   const [focusSeenTurns, setFocusSeenTurns] = useState<Record<string, string | null>>({});
   // Split-pane workbench state: which NPC each pane shows and which pane
@@ -684,13 +687,6 @@ export function App() {
     };
   }, [taskFocusMode]);
 
-  useEffect(() => {
-    const syncFocusViewport = () => setFocusPhoneViewport(window.innerWidth <= 600);
-    syncFocusViewport();
-    window.addEventListener("resize", syncFocusViewport);
-    return () => window.removeEventListener("resize", syncFocusViewport);
-  }, []);
-
   // A phone is a reading-and-reply surface, not a pane manager. If a desktop
   // split layout crosses into phone width, retain the focused NPC and collapse
   // the transient workbench to one pane without overwriting the desktop choice.
@@ -894,7 +890,7 @@ export function App() {
       if (mode === "off") notify(t("自動核准已關閉"));
       else if (mode === "safe") notify(t("安全自動核准已開啟；只有唯讀與驗證安全的指令會跳過詢問"));
       else if (mode === "full") notify(t("完全自動核准已開啟；除了已辨識的高風險 Bash 指令，檔案變更、MCP 動作與其他指令都會直接放行"));
-      else notify(t("⚡ 無限制模式已開啟：完全不設限、永不詢問（連 rm -rf、sudo 都放行），風險自負！"), "info");
+      else notify(t("無限制模式已開啟：完全不設限、永不詢問（連 rm -rf、sudo 都放行），風險自負！"), "info");
     });
   }
 
@@ -949,6 +945,15 @@ export function App() {
     }
   }
 
+  // 專業模式的標題列在手機只留「對象 + 搜尋 + 管理」一排。工作對象切換與
+  // 用量本來各佔一排（加起來 88px，報告只剩四成畫面），改成收進管理面板。
+  const focusKindSwitch = <div className="focus-context-switch__kind" aria-label={t("專業模式工作對象")}>
+    <button type="button" className={!selectedDepartment && !bossAssignmentOpen ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
+    <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
+    <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
+  </div>;
+  const focusEnergyHud = <FocusEnergy usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />;
+
   return (
     <div className={`game-root ${taskFocusMode ? "game-root--focus" : ""} ${blackWindowMode ? "game-root--black-window" : ""} ${taskFocusMode && !bossAssignmentOpen && !selectedDepartment && focusPanes.length > 1 ? "game-root--focus-split" : ""} ${preferences.taskLogOpen ? "game-root--task-log-open" : ""} ${preferences.crewRailCollapsed ? "game-root--crew-collapsed" : ""}`} onKeyDownCapture={trapFocusInReader} style={{
       "--log-panel-width": `${preferences.taskLogWidth}px`,
@@ -967,7 +972,7 @@ export function App() {
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
           setComposerFocusRequest((request) => request + 1);
-          notify(t("🏛️ 作戰室模式已開啟——輸入問題送出即召開多 Agent 辯論"), "info");
+          notify(t("作戰室模式已開啟——輸入問題送出即召開多 Agent 辯論"), "info");
         }}
         onEmptyTap={() => { if (preferences.taskLogOpen) updatePreferences({ taskLogOpen: false }); }}
         onSelect={activateNpc}
@@ -1093,11 +1098,7 @@ export function App() {
         <div className="holo-panel__title">
           <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
           {taskFocusMode ? <div className="focus-context-switch">
-            <div className="focus-context-switch__kind" aria-label={t("專業模式工作對象")}>
-              <button type="button" className={!selectedDepartment && !bossAssignmentOpen ? "active" : ""} onClick={() => activeId && activateNpc(activeId)}>NPC</button>
-              <button type="button" className={selectedDepartment ? "active" : ""} disabled={Object.keys(departments).length === 0} onClick={() => selectedDepartmentId ? selectDepartment(selectedDepartmentId) : Object.keys(departments)[0] && selectDepartment(Object.keys(departments)[0])}>{t("部門")}</button>
-              <button type="button" className={bossAssignmentOpen ? "active" : ""} onClick={() => { setBossAssignmentOpen(true); setSelectedDepartmentId(null); setBossMissionDetailId(null); }}>{t("老闆")}</button>
-            </div>
+            {!focusPhone && focusKindSwitch}
             {!bossAssignmentOpen && (!selectedDepartment ? (focusPanes.length <= 1 && <div className="focus-worker-switch">
               <select aria-label={t("切換專業模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => assignWorkerToPane(focusedPaneId, event.target.value)}>
                 {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
@@ -1112,7 +1113,7 @@ export function App() {
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
           </div> : bossAssignmentOpen ? <span className="holo-panel__worker holo-panel__department"><i />{t("依部門職責與 NPC 職務自動路由")}</span> : selectedDepartment ? <span className="holo-panel__worker holo-panel__department"><i />{t("{count} 位 NPC", { count: String(selectedDepartment.memberWorkerIds.length) })} · {selectedDepartment.purpose}</span> : active && <span className="holo-panel__worker"><i />{active.name}</span>}
-          {taskFocusMode && <FocusEnergy usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} activeProvider={activeProvider} activeSubject={active ? { name: active.name, provider: active.provider, model: focusModelLabel(active) } : undefined} open={focusUsageOpen} onOpenChange={setFocusUsageOpen} anchored={focusPanes.length > 1} />}
+          {taskFocusMode && !focusPhone && focusEnergyHud}
           <div className="task-log-toolbar">
             {!taskFocusMode && !selectedDepartment && !bossAssignmentOpen && <div className="task-log-toolbar__view" role="group" aria-label={t("日誌模式")}>
               <button type="button" aria-pressed={preferences.taskLogView === "summary"} className={preferences.taskLogView === "summary" ? "active" : ""} onClick={() => updatePreferences({ taskLogView: "summary" })}>{t("摘要")}</button>
@@ -1136,6 +1137,7 @@ export function App() {
               onPersona={() => active && setPersonaWorkerId(active.id)}
               onRemove={handleRemoveWorker}
               onCreateDepartment={() => setDepartmentCreatorOpen(true)}
+              extras={focusPhone ? <>{focusKindSwitch}{focusEnergyHud}</> : undefined}
             />}
           </div>
         </div>
@@ -1255,14 +1257,14 @@ export function App() {
             aria-pressed={discussionMode === "roundtable"}
             title={t("快速圓桌：由目前 NPC 單回合模擬 2–4 個觀點並直接給結論；不會啟動其他 Agent")}
             onClick={() => setDiscussionMode((mode) => toggleDiscussionMode(mode, "roundtable"))}
-          >{t("🗣️ 快速圓桌")}{discussionMode === "roundtable" ? t("・開") : ""}</button>
+          >{t("快速圓桌")}{discussionMode === "roundtable" ? t("・開") : ""}</button>
           <button
             type="button"
             className={`composer-roundtable-toggle composer-roundtable-toggle--warroom${discussionMode === "warroom" ? " is-active" : ""}`}
             aria-pressed={discussionMode === "warroom"}
             title={t("作戰室：召集 2–4 位與目前 NPC 相同 LLM 的臨時同儕，進行 1–2 輪辯論再裁決；約需數分鐘並使用該 LLM 用量")}
             onClick={() => setDiscussionMode((mode) => toggleDiscussionMode(mode, "warroom"))}
-          >{t("🏛️ 作戰室")}{discussionMode === "warroom" ? t("・開") : ""}</button>
+          >{t("作戰室")}{discussionMode === "warroom" ? t("・開") : ""}</button>
           <div className="composer-roundtable-more" ref={roundtableMenuRef}>
             <button
               type="button"
@@ -1273,16 +1275,16 @@ export function App() {
               onClick={() => setRoundtableMenuOpen((open) => !open)}
             >⋯</button>
             {roundtableMenuOpen && <div className="composer-roundtable-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); setStancesOpen(true); }}>{t("⚙ 自訂角色")}</button>
-              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("📜 歷史")}</button>
+              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); setStancesOpen(true); }}>{t("自訂角色")}</button>
+              <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("歷史")}</button>
             </div>}
           </div>
           {stancesOpen && <div className="warroom-stances-panel">
-            <header><strong>{t("⚙ 自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
+            <header><strong>{t("自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea
               value={stancesText}
               rows={4}
-              placeholder={t("每行一位：角色名｜立場描述\n例：投資顧問｜從報酬與機會出發給建議\n　　風控｜專挑風險與下檔情境\n留空＝依難度自動配（提案/挑戰/權衡/查證）")}
+              placeholder={t("每行一位：角色名｜立場描述\n例：投資顧問｜從報酬與機會出發給建議\n 風控｜專挑風險與下檔情境\n留空＝依難度自動配（提案/挑戰/權衡/查證）")}
               onChange={(event) => { setStancesText(event.target.value); localStorage.setItem("warroom-stances", event.target.value); }}
             />
             <small>{parseCustomStances(stancesText).length > 0 ? t("將使用自訂 {count} 位角色（上限 4）", { count: String(parseCustomStances(stancesText).length) }) : t("目前使用預設角色")}</small>
@@ -1295,11 +1297,11 @@ export function App() {
             return send(activeId, { ...command, text: roundtablePrompt(command.text) });
           }
           if (submissionMode !== "warroom") return send(activeId, command);
-          // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個 🏛 角色 NPC 走到會議桌，兩輪辯論（表態→反駁）、
+          // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個短命角色 NPC（ephemeralKind: "warroom"）走到會議桌，兩輪辯論（表態→反駁）、
           // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
           if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return null; }
           setWarroomRunning(true);
-          notify(t("🏛️ 作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
+          notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
           try {
             const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
               method: "POST",
@@ -1458,8 +1460,8 @@ export function App() {
         onClose={() => setPendingAutoApproveMode(null)}
       >
         <header>
-          <span>⚠ {t("高風險權限變更")}</span>
-          <h2>{t("啟用 ⚡ 無限制模式？")}</h2>
+          <span><Icon name="warning" /> {t("高風險權限變更")}</span>
+          <h2>{t("啟用 無限制模式？")}</h2>
           <p>{t("這會讓 {name} 略過所有核准，包含刪除檔案、提權 Bash 指令與 MCP 的外部動作。", { name: pendingAutoApproveMode.workerName })}</p>
         </header>
         <dl className="auto-approve-confirm__scope">
@@ -1475,21 +1477,26 @@ export function App() {
 
       {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />
-        {t("🏛️ 作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
+        {t("作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
       </div>}
 
-      {warroomResult && <div className="warroom-result" role="dialog" aria-modal="true" aria-label={t("作戰室裁決")}>
-        <div className="warroom-result__card">
-          <button type="button" className="warroom-result__close" onClick={() => setWarroomResult(null)} aria-label={t("關閉")}>×</button>
-          <header><span>🏛️ WAR ROOM{typeof warroomResult.costUsd === "number" ? ` · ${t("本場花費 ${amount}", { amount: warroomResult.costUsd.toFixed(4) })}` : ""}</span><h2>{t("作戰室裁決")}</h2></header>
-          <WarroomVerdictBody result={warroomResult} />
-        </div>
-      </div>}
+      {warroomResult && <Modal
+        label={t("作戰室裁決")}
+        eyebrow={`WAR ROOM${typeof warroomResult.costUsd === "number" ? ` · ${t("本場花費 ${amount}", { amount: warroomResult.costUsd.toFixed(4) })}` : ""}`}
+        title={t("作戰室裁決")}
+        closeLabel={t("關閉")}
+        onClose={() => setWarroomResult(null)}
+      >
+        <WarroomVerdictBody result={warroomResult} />
+      </Modal>}
 
-      {warroomHistory && <div className="warroom-result" role="dialog" aria-modal="true" aria-label={t("作戰室歷史")}>
-        <div className="warroom-result__card">
-          <button type="button" className="warroom-result__close" onClick={() => { setWarroomHistory(null); setWarroomHistoryContent(null); }} aria-label={t("關閉")}>×</button>
-          <header><span>🏛️ WAR ROOM</span><h2>{t("📜 作戰室歷史")}</h2></header>
+      {warroomHistory && <Modal
+        label={t("作戰室歷史")}
+        eyebrow="WAR ROOM"
+        title={t("作戰室歷史")}
+        closeLabel={t("關閉")}
+        onClose={() => { setWarroomHistory(null); setWarroomHistoryContent(null); }}
+      >
           {warroomHistoryContent
             ? <>
                 <button type="button" className="warroom-history__back" onClick={() => setWarroomHistoryContent(null)}>{t("← 回列表")}</button>
@@ -1520,11 +1527,10 @@ export function App() {
                       void apiRequest(`/api/warroom/history/${encodeURIComponent(r.file)}?workspacePath=${encodeURIComponent(activeWorkspace)}`, { method: "DELETE" })
                         .then(() => setWarroomHistory((list) => list?.filter((x) => x.file !== r.file) ?? null))
                         .catch((error) => notify(error instanceof Error ? error.message : t("刪除失敗"), "error"));
-                    }}>🗑</button>
+                    }}><Icon name="trash" /></button>
                   </li>
                 ))}</ul>}
-        </div>
-      </div>}
+      </Modal>}
 
       <footer className="app-copyright" aria-label={t("版權資訊")} aria-hidden={blackWindowMode || undefined} inert={blackWindowMode ? "" : undefined}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

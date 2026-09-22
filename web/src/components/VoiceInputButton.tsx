@@ -1,6 +1,7 @@
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { t } from "../i18n";
 import { formatElapsed } from "../formatElapsed";
+import { Icon } from "./Icon";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -12,9 +13,11 @@ type Props = {
   disabled?: boolean;
   placement?: "composer" | "toolbar";
   label?: string;
+  /** 收進選單當一整列時把文字也畫出來，否則只有一顆孤零零的圖示撐滿整排。 */
+  showLabel?: boolean;
 };
 
-export function VoiceInputButton({ onTranscript, disabled = false, placement = "composer", label }: Props) {
+export function VoiceInputButton({ onTranscript, disabled = false, placement = "composer", label, showLabel = false }: Props) {
   const voice = useVoiceInput();
   if (!voice.supported) return null;
 
@@ -42,7 +45,8 @@ export function VoiceInputButton({ onTranscript, disabled = false, placement = "
       disabled={busy || voice.phase === "downloading" || voice.phase === "confirm-download" || (disabled && voice.phase !== "recording")}
       onClick={() => void handleMicClick()}
     >
-      {voice.phase === "transcribing" ? "…" : voice.phase === "recording" ? "⏹" : "🎤"}
+      {voice.phase === "transcribing" ? "…" : <Icon name={voice.phase === "recording" ? "stop" : "mic"} size={18} />}
+      {showLabel && <span className="voice-input__label">{voice.phase === "recording" ? t("停止錄音") : idleLabel}</span>}
     </button>
     {voice.phase === "recording" && <>
       <span className="voice-input__timer" aria-live="polite">{formatElapsed(voice.elapsedMs / 1000)}</span>

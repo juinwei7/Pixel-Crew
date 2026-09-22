@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../api";
 import { Modal } from "./Modal";
 import { t } from "../i18n";
+import { Icon, type IconName } from "./Icon";
 
 type ReportWorker = {
   workerId: string; name: string; costUsd: number;
@@ -38,10 +39,10 @@ function shiftDay(day: string, delta: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-const KIND_META: Record<TimelineItem["kind"], { icon: string; label: string }> = {
-  user_message: { icon: "🗣", label: "指示" },
-  turn_end: { icon: "✅", label: "回合完成" },
-  error: { icon: "🔥", label: "錯誤" },
+const KIND_META: Record<TimelineItem["kind"], { icon: IconName; label: string }> = {
+  user_message: { icon: "speech", label: "指示" },
+  turn_end: { icon: "check", label: "回合完成" },
+  error: { icon: "fire", label: "錯誤" },
 };
 
 export function DayReportModal({ notify, onClose }: Props) {
@@ -91,7 +92,7 @@ export function DayReportModal({ notify, onClose }: Props) {
   }, [timeline]);
 
   return (
-    <Modal label={t("下班報告")} eyebrow="🌙 DAY REPORT" title={t("下班報告")} cardClassName="warroom-result__card ops-modal day-report" onClose={onClose}>
+    <Modal label={t("下班報告")} eyebrow="DAY REPORT" title={t("下班報告")} cardClassName="warroom-result__card ops-modal day-report" onClose={onClose}>
 
         <div className="day-report__nav">
           <button type="button" onClick={() => day && setDay(shiftDay(day, -1))} disabled={!day || loading}>{t("◀ 前一天")}</button>
@@ -100,8 +101,8 @@ export function DayReportModal({ notify, onClose }: Props) {
         </div>
 
         <div className="ops-modal__tabs" role="tablist">
-          <button type="button" role="tab" className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}>{t("📋 報告")}</button>
-          <button type="button" role="tab" className={tab === "replay" ? "active" : ""} onClick={() => setTab("replay")}>{t("🎬 一日回放")}</button>
+          <button type="button" role="tab" className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}>{t("報告")}</button>
+          <button type="button" role="tab" className={tab === "replay" ? "active" : ""} onClick={() => setTab("replay")}>{t("一日回放")}</button>
         </div>
 
         {report === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : tab === "report" ? (
@@ -126,7 +127,7 @@ export function DayReportModal({ notify, onClose }: Props) {
                       ${worker.costUsd.toFixed(2)}{worker.dailyBudgetUsd != null ? ` / $${worker.dailyBudgetUsd.toFixed(2)}` : ""}
                     </span>
                     <small className="day-report__worker-meta">
-                      {t("{turns} 回合", { turns: worker.turns })}{worker.errors > 0 ? t(" · {errors} 錯誤", { errors: worker.errors }) : ""}
+                      {t("{turns} 回合", { turns: worker.turns })}{worker.errors > 0 ? t("· {errors} 錯誤", { errors: worker.errors }) : ""}
                     </small>
                   </div>
                 ))}
@@ -136,10 +137,10 @@ export function DayReportModal({ notify, onClose }: Props) {
             <h3>{t("完成的任務（{count}）", { count: completedCount })}</h3>
             {completedCount === 0 ? <p className="ops-modal__empty">{t("這一天沒有完成的任務。")}</p> : (
               <ul className="day-report__tasks">
-                {report.tasks.bossCompleted.map((task) => <li key={`b-${task.id}`}>🏁 <strong>BOSS</strong> {task.title}</li>)}
-                {report.tasks.missionsCompleted.map((mission) => <li key={`m-${mission.id}`}>🎯 <strong>Mission</strong> {mission.title}</li>)}
+                {report.tasks.bossCompleted.map((task) => <li key={`b-${task.id}`}><Icon name="flag" /> <strong>BOSS</strong> {task.title}</li>)}
+                {report.tasks.missionsCompleted.map((mission) => <li key={`m-${mission.id}`}><Icon name="target" /> <strong>Mission</strong> {mission.title}</li>)}
                 {report.tasks.stepsCompleted.map((step, index) => (
-                  <li key={`s-${index}`}>✅ {step.stepTitle} <small>{step.assigneeName} ・ {step.missionObjective}</small></li>
+                  <li key={`s-${index}`}><Icon name="check" /> {step.stepTitle} <small>{step.assigneeName} ・ {step.missionObjective}</small></li>
                 ))}
               </ul>
             )}
@@ -149,7 +150,7 @@ export function DayReportModal({ notify, onClose }: Props) {
                 <h3>{t("需要老闆處理（{count}）", { count: report.tasks.attention.length })}</h3>
                 <ul className="day-report__tasks day-report__tasks--warn">
                   {report.tasks.attention.map((item) => (
-                    <li key={`${item.kind}-${item.id}`}>⚠️ <strong>{item.kind === "boss" ? "BOSS" : "Mission"}</strong> {item.title}</li>
+                    <li key={`${item.kind}-${item.id}`}><Icon name="warning" /> <strong>{item.kind === "boss" ? "BOSS" : "Mission"}</strong> {item.title}</li>
                   ))}
                 </ul>
               </>
@@ -173,7 +174,7 @@ export function DayReportModal({ notify, onClose }: Props) {
                   return (
                     <div key={`${item.ts}-${index}`} className={`day-report__event ${bad ? "day-report__event--bad" : ""} day-report__event--${item.kind}`}>
                       <span className="day-report__event-ts">{item.ts.slice(0, 5)}</span>
-                      <span className="day-report__event-icon">{bad && item.kind === "turn_end" ? "❌" : meta.icon}</span>
+                      <span className="day-report__event-icon"><Icon name={bad && item.kind === "turn_end" ? "warning" : meta.icon} /></span>
                       <span className="day-report__event-body">
                         <strong>{item.workerName}</strong>
                         {item.text && <em>{item.text}</em>}

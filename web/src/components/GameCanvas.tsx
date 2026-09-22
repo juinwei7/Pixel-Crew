@@ -13,6 +13,7 @@ import { stripMarkdown } from "../speechText";
 import { t } from "../i18n";
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
+import { Icon } from "./Icon";
 
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
@@ -103,17 +104,19 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
     );
     const missionStep = mission?.currentStepIndex == null ? null : mission.steps[mission.currentStepIndex];
     // 作戰室 NPC：沿用場景既有的 thinking 姿勢＋speech 對話泡，讓使用者直接看到辯論進行中。
-    // 名字以 🏛️ 開頭的臨時 NPC 會被拉到「meeting」會議桌邊聚集；交接（handingOff）優先。
-    // 站到 meeting 站點後，
-    // scene 的 standSpot 會自動把多個 NPC 錯開排在桌邊，不會重疊。
-    const isWarRoomPeer = worker.name.codePointAt(0) === 0x1f3db; // 🏛 U+1F3DB：用碼位比對，避免 FE0F 變體選擇子不一致
+    // server 標為 ephemeralKind: "warroom" 的臨時 NPC 會被拉到「meeting」會議桌邊
+    // 聚集；交接（handingOff）優先。站到 meeting 站點後，scene 的 standSpot 會自動
+    // 把多個 NPC 錯開排在桌邊，不會重疊。
+    // （舊版是比對名字開頭的 emoji 碼位——使用者改個名字就失效，而且逼得介面
+    //   得把那顆 emoji 顯示出來。現在協定寫在欄位上，名字純粹是名字。）
+    const isWarRoomPeer = worker.ephemeralKind === "warroom";
     const roundtabling = !handingOff && (isWarRoomPeer || (roundtableIds.has(worker.id) && worker.busy));
     const parent: VisualWorker = {
       id: worker.id,
       selectId: worker.id,
       name: worker.name,
       character: handingOff ? { ...worker.character, activity: "thinking", station: "home", speech: t("LLM 交接中…") }
-        : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("🏛️ 作戰室辯論中…") : t("🏛️ 作戰室") }
+        : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("作戰室辯論中…") : t("作戰室") }
         : worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
@@ -737,7 +740,7 @@ export function GameCanvas({
                   </div>
                 ) : (
                   <div className="npc-workwindow__body">
-                    {winTheme.kind === "check" ? "☑ " : winTheme.kind === "board" ? "• " : ""}
+                    {winTheme.kind === "check" ? <Icon name="check" size={11} /> : winTheme.kind === "board" ? "• " : ""}
                     {(stripMarkdown(w.character.speech) || t("執行中…")).slice(0, 90)}
                   </div>
                 )}
@@ -748,7 +751,7 @@ export function GameCanvas({
               const doneTurns = full?.turns.filter((turn) => turn.status !== "running").length ?? 0;
               const totalCost = full?.turns.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0) ?? 0;
               const autoMode = full?.autoApproveMode ?? "off";
-              const autoLabel = autoMode === "invincible" ? t("⚡ 無限制") : autoMode === "full" ? t("完全自動") : autoMode === "safe" ? t("安全自動") : t("手動核准");
+              const autoLabel = autoMode === "invincible" ? t("無限制") : autoMode === "full" ? t("完全自動") : autoMode === "safe" ? t("安全自動") : t("手動核准");
               const dept = full?.departmentId ? departments.find((candidate) => candidate.id === full.departmentId) : undefined;
               // 各回合 contextTokens 序列丟給 ctxGauge：扣掉出生底盤後換算「可用量」，
               // 條滿 100% = server 換腦門檻（snapshot 帶下來；觸發仍在 server 端，這裡純顯示）。
@@ -883,7 +886,7 @@ export function GameCanvas({
                   }
                   return (
                     <button key={w.id} type="button" className="station-tooltip__occupant" onClick={() => onOpenLog?.(w.selectId)} title={t("點擊開啟工作日誌")}>
-                      {w.name}{tool ? <span> ⚙ {tool.name}</span> : null}
+                      {w.name}{tool ? <span> <Icon name="wrench" size={11} /> {tool.name}</span> : null}
                       {detail && <i className="station-tooltip__detail">{detail}</i>}
                     </button>
                   );

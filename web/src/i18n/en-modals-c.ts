@@ -11,8 +11,8 @@ export const enModalsC: Record<string, string> = {
   "其他工具／MCP 呼叫": "Other tools / MCP calls",
   "作戰室會議桌——圓桌辯論在這開": "War room table — debates happen here",
   "LLM 交接中…": "Handing off LLM…",
-  "🏛️ 作戰室辯論中…": "🏛️ War Room debate…",
-  "🏛️ 作戰室": "🏛️ War Room",
+  "作戰室辯論中…": "War Room debate…",
+  "作戰室": "War Room",
   "背景作業中…": "Working in background…",
   "像素辦公室無法啟動": "Pixel office failed to start",
   "這台裝置的瀏覽器拿不到 WebGL（常見原因：Chrome 硬體加速被關閉、遠端桌面連線、或顯示卡驅動被瀏覽器停用）。NPC 對話與任務日誌不受影響，仍可正常下指令。":
@@ -35,7 +35,7 @@ export const enModalsC: Record<string, string> = {
   "協作執行中": "Collaborating",
   "部門工作規劃中": "Planning department work",
   "部門工作": "Department work",
-  "⚡ 無限制": "⚡ Unrestricted",
+  "無限制": "Unrestricted",
   "完全自動": "Full auto",
   "安全自動": "Safe auto",
   "手動核准": "Manual approval",
@@ -57,7 +57,7 @@ export const enModalsC: Record<string, string> = {
   "讀取中…": "Loading…",
   "看板還是空的。點「BOSS 交辦工作」，用一句話描述目標，AI 會拆解成卡片、指派給各部門 NPC，進度都會出現在這裡。":
     "The board is empty. Click \"Boss Assign Work,\" describe your goal in a sentence, and AI will break it into cards and assign them to department NPCs — progress will show up here.",
-  "🧑‍💼 BOSS 交辦工作": "🧑‍💼 Boss Assign Work",
+  "BOSS 交辦工作": "Boss Assign Work",
   "…還有 {count} 張較舊的完成卡": "…{count} more older completed cards",
 
   // McpModal
@@ -193,9 +193,9 @@ export const enModalsC: Record<string, string> = {
   "排程已刪除": "Schedule deleted",
   "刪除排程失敗": "Failed to delete schedule",
   "營運面板": "Operations",
-  "💰 成本日報": "💰 Cost Report",
-  "⏰ 排程任務": "⏰ Scheduled Tasks",
-  "💸 每日預算上限（達標後當天不再接新指示，隔天自動恢復）": "💸 Daily budget cap (once reached, no new instructions are accepted that day; resumes automatically the next day)",
+  "成本日報": "Cost Report",
+  "排程任務": "Scheduled Tasks",
+  "每日預算上限（達標後當天不再接新指示，隔天自動恢復）": "Daily budget cap (once reached, no new instructions are accepted that day; resumes automatically the next day)",
   "無上限": "No limit",
   "儲存": "Save",
   "最近 14 天還沒有成本紀錄。": "No cost records in the last 14 days yet.",
@@ -242,7 +242,7 @@ export const enModalsC: Record<string, string> = {
   "詳細指示": "Detailed instructions",
   "描述這個 NPC 的專長、工作方式、語氣等。例如：\n你專門測試 UI，回報 bug 時附重現步驟，一律用繁體中文，講話簡潔。":
     "Describe this NPC's specialty, working style, tone, etc. For example:\nYou specialize in testing the UI, always include repro steps when reporting bugs, always reply in Traditional Chinese, and keep it concise.",
-  "🧠 長期記憶": "🧠 Long-term Memory",
+  "長期記憶": "Long-term Memory",
   "NPC 得知你的偏好時會自己記；改動在下次啟動生效": "The NPC records your preferences on its own when it learns them; changes take effect on the next start",
   "還沒有記憶。跟 NPC 聊到你的偏好時它會自己記下來，也可以在下面手動新增。":
     "No memories yet. The NPC will note things down on its own when you mention your preferences, or you can add one manually below.",
@@ -254,7 +254,6 @@ export const enModalsC: Record<string, string> = {
   "儲存中…": "Saving…",
   "存為範本": "Save as template",
   "全域記憶": "Global Memory",
-  "🧠 全域記憶": "🧠 Global Memory",
   "跨所有 NPC 共用的長期記憶": "Long-term memory shared across every NPC",
   "關閉全域記憶": "Close Global Memory",
   "跨所有 NPC 共用的長期記憶。任何 NPC 學到值得記住的事都會寫在這裡，換一個 NPC 也不會失憶。":

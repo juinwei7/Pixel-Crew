@@ -1,8 +1,8 @@
 export const FOCUS_READER_BREAKPOINTS = {
   wide: 1500,
   intermediate: 1320,
-  stacked: 1000,
-  phone: 700,
+  stacked: 1023,
+  phone: 600,
 } as const;
 
 export type FocusReaderLayout = "four_column" | "three_column" | "two_column" | "stacked" | "phone";

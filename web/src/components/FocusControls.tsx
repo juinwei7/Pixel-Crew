@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { WorkerState } from "../types";
 import { t } from "../i18n";
+import { Icon } from "./Icon";
 
 type Props = {
   active?: WorkerState;
@@ -9,6 +10,8 @@ type Props = {
   onPersona(): void;
   onRemove(id: string): void;
   onCreateDepartment?(): void;
+  /** 手機把「工作對象切換」與「用量」收進這個面板，換掉標題列的兩排。 */
+  extras?: ReactNode;
 };
 
 export function FocusControls({
@@ -18,6 +21,7 @@ export function FocusControls({
   onPersona,
   onRemove,
   onCreateDepartment,
+  extras,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -73,10 +77,11 @@ export function FocusControls({
         aria-expanded={open}
         aria-label={t("專業模式管理面板")}
       >
-        <span aria-hidden="true">⚙</span> {t("管理")}
+        <Icon name="gear" /> {t("管理")}
       </button>
       {open && (
         <div className="focus-controls__panel" role="group" aria-label={t("專業模式功能")}>
+          {extras && <section className="focus-controls__extras">{extras}</section>}
           <section>
             <h4>{t("目前 NPC")}</h4>
             {active ? (

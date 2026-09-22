@@ -115,16 +115,16 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   }
 
   return (
-    <Modal label={t("營運面板")} eyebrow="📊 OPERATIONS" title={t("營運面板")} cardClassName="warroom-result__card ops-modal" onClose={onClose}>
+    <Modal label={t("營運面板")} eyebrow="OPERATIONS" title={t("營運面板")} cardClassName="warroom-result__card ops-modal" onClose={onClose}>
         <div className="ops-modal__tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === "costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("💰 成本日報")}</button>
-          <button type="button" role="tab" aria-selected={tab === "schedules"} className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("⏰ 排程任務")}</button>
-          <button type="button" role="tab" aria-selected={tab === "diagnostics"} className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("📈 本機診斷")}</button>
+          <button type="button" role="tab" aria-selected={tab === "costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("成本日報")}</button>
+          <button type="button" role="tab" aria-selected={tab === "schedules"} className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("排程任務")}</button>
+          <button type="button" role="tab" aria-selected={tab === "diagnostics"} className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("本機診斷")}</button>
         </div>
 
         {tab === "costs" && (
           <div className="ops-modal__body">
-            <h3>{t("💸 每日預算上限（達標後當天不再接新指示，隔天自動恢復）")}</h3>
+            <h3>{t("每日預算上限（達標後當天不再接新指示，隔天自動恢復）")}</h3>
             <div className="ops-budget__list">
               {workers.map((worker) => (
                 <div key={worker.id} className="ops-budget__row">

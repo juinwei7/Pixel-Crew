@@ -80,7 +80,7 @@ body {
 .handoff-dialog__card {
   position: relative;
   width: min(680px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(var(--vh) - 48px);
   overflow: auto;
   padding: 30px;
   border: 1px solid rgba(96, 202, 255, 0.3);
@@ -172,23 +172,17 @@ body {
 
 @keyframes handoff-pulse { 50% { opacity: .45; transform: scale(.86); } }
 
-@media (max-width: 560px) {
-  .handoff-dialog { padding: 10px; }
-  .handoff-dialog__card { width: calc(100vw - 20px); max-height: calc(100vh - 20px); padding: 24px 18px; }
+/* 手機：抽屜外殼、關閉鈕尺寸、44px 點擊目標由 .ui-modal 處理
+   （styles/responsive.css）。這裡只留交接視窗自己的欄位收合。 */
+@media (max-width: 600px) {
+  .handoff-dialog__header { padding-right: calc(var(--tap) + var(--sp-1)); }
   .handoff-dialog__header h2 { font-size: 20px; }
   .handoff-dialog__route { align-items: stretch; flex-direction: column; }
   .handoff-dialog__route i { transform: rotate(90deg); align-self: center; }
-}
-
-@media (max-width: 600px) {
-  .handoff-dialog { padding: 12px; }
-  .handoff-dialog__card { max-height: calc(100dvh - 24px); }
-  .handoff-dialog__close { width: 44px; height: 44px; top: 7px; right: 6px; }
-  .handoff-dialog__header { padding-right: 42px; }
   .handoff-dialog__meters > div { grid-template-columns: 68px minmax(0, 1fr) 38px; gap: 7px; }
   .handoff-dialog__progress-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .handoff-dialog__actions { align-items: stretch; flex-direction: column-reverse; }
-  .handoff-dialog__actions button { width: 100%; min-height: 44px; }
+  .handoff-dialog__actions button { width: 100%; }
 }
 
 .game-host {
@@ -856,7 +850,7 @@ body {
 .workspace-picker__card {
   position: relative;
   width: min(520px, 100%);
-  max-height: min(680px, calc(100vh - 48px));
+  max-height: min(680px, calc(var(--vh) - 48px));
   overflow-y: auto;
   padding: 28px;
   border: 1px solid rgba(98, 211, 238, 0.22);
@@ -1217,16 +1211,19 @@ body {
 }
 
 @media (max-width: 600px) {
-  .workspace-picker {
-    padding: 14px;
-  }
-
-  .workspace-picker__card {
-    padding: 22px 18px;
-  }
-
+  /* 抽屜外殼由 .ui-modal 處理；這裡只把裝飾性的大圖示拿掉，讓路徑清單
+     拿到全部寬度。 */
   .workspace-picker__glyph {
     display: none;
+  }
+
+  .workspace-picker__actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .workspace-picker__actions button {
+    width: 100%;
   }
 }
 
@@ -1255,7 +1252,7 @@ body {
 
 .auth-gate__card {
   width: min(780px, 100%);
-  max-height: calc(100vh - 48px);
+  max-height: calc(var(--vh) - 48px);
   overflow: auto;
   padding: 28px;
   border: 1px solid var(--panel-border);
@@ -1267,7 +1264,7 @@ body {
 
 .auth-gate--optional .auth-gate__card {
   width: min(580px, calc(100% - var(--log-panel-width) - 52px));
-  max-height: calc(100vh - 184px);
+  max-height: calc(var(--vh) - 184px);
   padding: 22px;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42), 0 0 44px rgba(0, 229, 255, 0.12);
 }
@@ -1742,7 +1739,7 @@ body {
   text-align: right;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .auth-provider-grid {
     grid-template-columns: 1fr;
   }
@@ -1757,19 +1754,10 @@ body {
 }
 
 @media (max-width: 600px) {
-  .auth-gate {
-    padding: 14px;
-  }
-
+  /* 置中卡片的尺寸由 .ui-modal--center 決定（styles/responsive.css）。 */
   .auth-gate__card,
   .auth-gate--optional .auth-gate__card {
-    max-height: calc(100vh - 28px);
     padding: 20px 16px;
-  }
-
-  .auth-gate--optional {
-    place-items: center;
-    padding-top: 14px;
   }
 
   .auth-gate__title {
@@ -1953,7 +1941,7 @@ body {
   right: calc(var(--log-panel-width) + 24px);
 }
 
-@media (max-width: 520px) {
+@media (max-width: 600px) {
   .holo-panel__worker,
   .holo-panel__modes {
     display: none;
@@ -2585,7 +2573,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: calc(100vh - 150px);
+  max-height: calc(var(--vh) - 150px);
   padding: 3px 8px 3px 0;
   overflow-y: auto;
   z-index: 9;
@@ -2643,7 +2631,7 @@ body {
   white-space: nowrap;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .room-banner {
     left: 10px;
     width: min(260px, calc(100% - 20px));

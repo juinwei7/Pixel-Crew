@@ -28,9 +28,10 @@ import { appendRuntimeLog } from "./runtimeLog.js";
 import { ClaudeSession, type RunnerEvent } from "./claudeRunner.js";
 import { claudeChildEnv } from "./claudeEnv.js";
 import {
-  isEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
+  isLegacyEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
 } from "./warroom.js";
+import type { EphemeralWorkerKind } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
 import { executionBudgetFor, normalizeExecutionProfile } from "./executionBudget.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
@@ -475,6 +476,11 @@ type Worker = {
   accountId: string | null;
   claudeHomeMode: "legacy" | "managed";
   resumeCandidate: ResumeCandidate | null;
+  // 編排器建立、跑完就該消失的短命 worker。以前是靠名字的 emoji 字首
+  // （🏛／🔍）判斷，等於把協定藏在顯示字串裡：使用者一改名就失效，前端也
+  // 被迫把 emoji 顯示在介面上。現在是明確欄位，前端用它決定要不要把這些
+  // NPC 拉到會議桌圍坐。
+  ephemeralKind: EphemeralWorkerKind | null;
 };
 
 const workers = new Map<string, Worker>();
@@ -482,8 +488,10 @@ const workers = new Map<string, Worker>();
 // 舊版的共用 turn_end hook 會把 persist:false 的短命 worker 又存回 SQLite。
 // 服務重啟後，這些 worker 不可能再接回原本的編排 promise，會永遠顯示成閒置。
 // 在載入 department / worker 前先清掉，讓部門成員快取也不會含有孤兒資料。
+// 這裡讀的是 SQLite 裡的舊資料列，沒有 ephemeralKind 欄位，只能靠舊版的
+// 名字字首認出來。新版的短命 worker 一律 persist:false，不會走到這裡。
 const staleEphemeralWorkerIds = store.loadWorkers(0)
-  .filter((worker) => isEphemeralWorkerName(worker.name))
+  .filter((worker) => isLegacyEphemeralWorkerName(worker.name))
   .map((worker) => worker.id);
 for (const workerId of staleEphemeralWorkerIds) store.deleteWorker(workerId);
 if (staleEphemeralWorkerIds.length > 0) {
@@ -546,6 +554,7 @@ function workerSummary(w: Worker) {
     autoApproveMode: w.autoApproveMode,
     handoff: w.handoff,
     resumeCandidate: w.resumeCandidate,
+    ephemeralKind: w.ephemeralKind,
     collaborationIds,
     missionIds,
   };
@@ -1495,7 +1504,7 @@ function todayCostUsd(workerId: string): number {
 // ── CTX 高水位自動換腦 ──────────────────────────────────────────────────────
 // turn_end 的 contextTokens（最後一次 API 呼叫的真實 context 佔用）超過門檻時，
 // 先叫 NPC 把工作狀態寫成交接摘要，摘要回來後換一顆全新 session、把摘要餵進去。
-// 這樣不會等到 CLI 強制壓縮把細節壓丟。圓桌(🏛)/研究員(🔍)是短命工，不換。
+// 這樣不會等到 CLI 強制壓縮把細節壓丟。作戰室成員／研究員是短命工，不換。
 // 決策規則（門檻／冷卻／永久停用）抽在 brainSwap.ts 的 decideBrainSwap；
 // 這裡只維護狀態集合並執行 IO。
 const brainSwapPending = new Set<string>();
@@ -1524,6 +1533,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     event,
     provider: worker.runner.provider,
     workerName: worker.runner.name ?? "",
+    ephemeral: Boolean(worker.ephemeralKind),
     pending: brainSwapPending.has(worker.id),
     disabled: brainSwapDisabled.has(worker.id),
     // 原邏輯只在 turn_end 觸發路徑上才查這些進行中狀態；其餘事件不用查。
@@ -1627,8 +1637,7 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
   }
   if (!text) return;
   if (!appSettings.get().limitResumeEnabled) { limitTurnText.delete(worker.id); return; }
-  const name = worker.runner.name ?? "";
-  if (name.startsWith("🏛") || name.startsWith("🔍")) return; // 短命工不排，任務由發起方重試
+  if (worker.ephemeralKind) return; // 短命工不排，任務由發起方重試
   const resetAt = parseLimitReset(text, new Date());
   if (!resetAt) {
     // 非上限的失敗才丟掉開場指示，且只在「回合真的以錯誤收場」時；中途的 error 事件
@@ -1695,7 +1704,7 @@ function createWorker(
   persisted?: PersistedWorker,
   initialPersona: Persona | null = null,
   departmentId: string | null = null,
-  options: { warmup?: boolean; persist?: boolean; broadcast?: boolean } = {},
+  options: { warmup?: boolean; persist?: boolean; broadcast?: boolean; ephemeralKind?: EphemeralWorkerKind } = {},
   accountId: string | null = null,
 ): Worker {
   const workerProvider = persisted?.provider ?? provider;
@@ -1717,6 +1726,7 @@ function createWorker(
     accountId: persisted?.accountId ?? accountId,
     claudeHomeMode: persisted?.claudeHomeMode ?? "managed",
     resumeCandidate: persisted ? store.getResumeCandidate(id) : null,
+    ephemeralKind: options.ephemeralKind ?? null,
   };
   const initialState = persisted
     ? { sessionId: persisted.sessionId, completedTurns: persisted.completedTurns }
@@ -1771,11 +1781,10 @@ function createWorker(
   return worker;
 }
 
-// Persona ＋ 長期記憶合成一份 system prompt。🏛/🔍 開頭的是短命工（圓桌、研究員），
+// Persona ＋ 長期記憶合成一份 system prompt。短命工（作戰室成員、研究員）
 // 不給記憶區塊——它們活不到下一次 spawn，注入只是浪費 token 還可能誤存記憶。
 function composeWorkerPrompt(worker: Worker): string {
-  const name = worker.runner.name ?? "";
-  const ephemeral = isEphemeralWorkerName(name);
+  const ephemeral = Boolean(worker.ephemeralKind);
   return [
     composePersonaPrompt(worker.persona),
     ephemeral ? "" : composeGlobalMemorySection(store, worker.id),
@@ -5775,7 +5784,7 @@ app.delete("/api/workers/:id", async (req, res) => {
 
 // ============ War Room（作戰室）orchestrator ============
 // 一場「真辯論（表態→反駁 2 輪）＋依難度配模型＋主持裁決」的顧問議會。peers 是可見的臨時 worker
-// （名字以 🏛 U+1F3DB 開頭，前端會把它們拉到會議桌圍坐；persist:false），跑完寬限期自動刪除。
+// （ephemeralKind: "warroom"，前端據此把它們拉到會議桌圍坐；persist:false），跑完寬限期自動刪除。
 // 若 server 非正常重啟，啟動時也會清除上次殘留的短命 worker。turn_end 透過 record() 裡的
 // warroomRecordHook 接回，用來 await 各成員發言完成。
 const WARROOM_GRACE_MS = 45_000;
@@ -5883,7 +5892,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   try {
     for (const stance of stances) {
       if (workers.size >= MAX_WORKERS) break;
-      const peer = createWorker(`\u{1F3DB}${stance.name}`, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true }, accountId);
+      const peer = createWorker(stance.name, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
       // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
       peer.autoApproveMode = "safe";
@@ -5921,7 +5930,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     // 主持裁決（可見的臨時 lead，用較強模型）
     let result: WarRoomResult | null = null;
     if (workers.size < MAX_WORKERS) {
-      const lead = createWorker("\u{1F3DB}主持", leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true }, accountId);
+      const lead = createWorker(t("主持"), leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       lead.autoApproveMode = "safe";
       created.push(lead);
       await waitForWarroomWarmup(1_200, deadlineAt);
@@ -6132,7 +6141,7 @@ app.delete("/api/warroom/history/:file", (req, res) => {
 // 跟作戰室同一套精神：工作在委派對象的 context 做，只有結果回到 host，省 host 的 context。
 async function runDelegate(task: string, workspacePath: string): Promise<string> {
   if (workers.size >= MAX_WORKERS) throw new Error(t("已達 NPC 上限，無法派工"));
-  const worker = createWorker("\u{1F50D}研究員", "sonnet", "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true });
+  const worker = createWorker(t("研究員"), "sonnet", "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "research" });
   worker.autoApproveMode = "safe"; // 研究員可自行跑唯讀工具（WebSearch/Read）查證，不彈確認窗
   try {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -6890,7 +6899,7 @@ app.post("/api/workers/:id/budget", (req, res) => {
 // --resume（Claude）／thread/resume（Codex）保留，stop() 不動 session id。
 function refreshGlobalMemoryForAllWorkers(): void {
   for (const worker of workers.values()) {
-    if (isEphemeralWorkerName(worker.runner.name)) continue; // 短命 worker 本來就沒被注入這段
+    if (worker.ephemeralKind) continue; // 短命 worker 本來就沒被注入這段
     worker.runner.requestPromptRefresh();
   }
 }
@@ -7545,7 +7554,8 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
 });
 
 for (const savedWorker of store.loadWorkers(MAX_HISTORY)
-  .filter((worker) => !isEphemeralWorkerName(worker.name))
+  // 同上：資料列只有名字，舊版殘骸靠字首認。
+  .filter((worker) => !isLegacyEphemeralWorkerName(worker.name))
   .slice(0, MAX_WORKERS)) {
   createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker, null, null, { warmup: true });
 }

@@ -1,0 +1,799 @@
+/* ────────────────────────────────────────────────────────────────────────
+   Responsive 基底層：斷點約定、尺度 token、手機共用版型。
+
+   斷點只有三個，全 app 共用。CSS 原生 media query 不吃 var()，數值只能
+   寫死，所以改用測試把關：web/test/responsiveTokens.test.ts 會掃過所有
+   stylesheet，出現第四個手機級斷點就讓測試紅掉。
+
+     phone   @media (max-width: 600px)
+     tablet  @media (min-width: 601px) and (max-width: 1023px)
+     short   @media (max-height: 500px)            ← 手機橫置
+
+   「手機也要套用」的規則寫 (max-width: 1023px)，「只有平板」寫 601–1023。
+   1024px 以上的桌面密度斷點（像素辦公室縮放、focus studio 欄寬）不屬於
+   這一層，維持各檔案原樣。
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── 點擊目標 ───────────────────────────────────────────────────────
+     44px 是 iOS HIG 下限。桌面滑鼠不需要這麼大，所以桌面維持 --tap-sm，
+     只在 phone 斷點把 --tap 放大——元件寫 min-height: var(--tap) 就好，
+     不用自己再開一個 media query。 */
+  --tap: 32px;
+  --tap-sm: 28px;
+
+  /* ── 視窗高度 ───────────────────────────────────────────────────────
+     Safari 網址列會吃高度，100vh 量到的是「網址列收起後」的高度，所以
+     全螢幕面板在捲動前會被切掉一截。100dvh 才是當下可視高度。 */
+  --vh: 100vh;
+
+  /* ── 安全區 ─────────────────────────────────────────────────────────
+     env() 自帶 0px fallback，桌面/Android 上一律是 0，可以無條件加。
+     要有值的前提是 index.html 的 viewport 帶 viewport-fit=cover。 */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* ── 間距尺度 ───────────────────────────────────────────────────────
+     取代散落的 5/6/7/9/10/14/18/22/24px。新樣式一律從這裡挑。 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 28px;
+
+  /* ── Modal / 面板 ───────────────────────────────────────────────────
+     19 個 __card 以前各自複製同一套手機殼。改成這 4 個 token + 下面的
+     .ui-modal 共用規則，元件只要負責自己的配色與內容。 */
+  --modal-pad-x: var(--sp-6);
+  --modal-pad-y: var(--sp-6);
+  --modal-radius: 18px;
+  --modal-max-h: calc(var(--vh) - 56px);
+
+  /* ── 字級 ───────────────────────────────────────────────────────────
+     iOS 對 <16px 的輸入框會自動放大整頁，放大後就再也縮不回去，版面直接
+     歪掉。所有可輸入元素的字級都走這個 token。 */
+  --fs-input: 14px;
+
+  /* ── 手機殼高度 ─────────────────────────────────────────────────────
+     手機版把 .game-root 排成 bar / scene / dock 三列（見下方），這個值
+     是頂欄那一列的保留高度：模式切換那排 + 換行後的能量列。工具列與
+     dock 的 padding 都從這裡推算，不再各自寫死 52 / 150 / 156 / 190。 */
+  --top-bar-h: 56px;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --vh: 100dvh;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   phone — 只在這裡調 token，下游元件不必各自開斷點
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 600px) {
+  :root {
+    --tap: 44px;
+    --tap-sm: 40px;
+    --modal-pad-x: var(--sp-4);
+    --modal-pad-y: var(--sp-5);
+    --modal-radius: 18px 18px 0 0;
+    --modal-max-h: min(92dvh, calc(var(--vh) - var(--safe-t)));
+    --fs-input: 16px;
+    /* 兩列：模式切換那排 + 換到第二列的能量條。取英文（標籤較長、實測
+       110px）當基準——中文略矮，差的幾 px 只是讓下拉選單多留一點空隙。 */
+    --top-bar-h: 110px;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   共用 icon
+
+   components/Icon.tsx 的 <svg> 一律帶 .ui-icon。以前這些位置是 emoji，字形
+   由系統決定、吃不到 currentColor；現在統一成線性圖示，顏色跟著文字走。
+   ════════════════════════════════════════════════════════════════════════ */
+.ui-icon {
+  flex: 0 0 auto;
+  vertical-align: -0.16em;
+}
+
+/* 空心星（未釘選）：同一顆圖示用透明度區分狀態，不另外畫一版。 */
+.ui-icon--hollow {
+  opacity: 0.45;
+}
+
+/* 圖示與文字要真正上下置中，就得讓容器是 flex：button 預設是 inline-block，
+   兩者會各自照 baseline 對齊，視覺上差個一兩 px。
+
+   這裡刻意「逐個指名」而不是寫成 `button:has(> .ui-icon)` 之類的通用規則。
+   通用規則必須設 display，而 display 一旦被通用規則接管，就會贏過各元件
+   自己的 display: none（`:has()` 的權重比單一 class 高），把本來要在手機
+   收進 ••• 選單的控件放出來。指名的代價是新增控件要記得加一行，但不會有
+   「某個東西莫名其妙冒出來」這種難查的問題。 */
+.top-bar__capability,
+.black-workspace .voice-input__mic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 圖示與文字之間固定一個間距。 */
+button > .ui-icon:first-child:not(:only-child),
+summary > .ui-icon:first-child:not(:only-child) {
+  margin-right: var(--sp-1);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   共用 dialog 殼
+
+   Modal.tsx（以及少數沒走 Modal 的 overlay）一律吐出
+   ui-modal / ui-modal__card / ui-modal__close 三層 class。桌面這一層刻意
+   什麼都不定義，各 modal 的尺寸與配色完全照舊；手機則由下面這一段統一
+   接管版型，所以新增 modal 不需要再補任何 @media。
+
+   variant（只影響手機）：
+     預設      貼底抽屜
+     --full    整頁佔滿（指令中心、角色工坊這種本來就接近全螢幕的工作台）
+     --center  維持置中卡片（登入 gate 這種「關卡」而非「視窗」）
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 600px) {
+  /* overlay：一律改成貼底。原本各家寫的 place-items: center / padding: 28px
+     會被這裡蓋掉（responsive.css 最後載入，同權重時後者勝）。 */
+  .ui-modal {
+    display: grid;
+    align-items: end;
+    justify-items: stretch;
+    padding: var(--safe-t) 0 0;
+  }
+
+  .ui-modal--center {
+    align-items: center;
+    justify-items: center;
+    padding: var(--sp-3);
+    padding-top: calc(var(--safe-t) + var(--sp-3));
+    padding-bottom: calc(var(--safe-b) + var(--sp-3));
+  }
+
+  .ui-modal--full {
+    align-items: stretch;
+    /* 整頁版沒有外框可以閃避瀏海與 home indicator，安全區改由 overlay 出。
+       卡片本身維持 padding: 0，內部那些 calc(100% - 68px) 的高度才不會被
+       安全區推歪。 */
+    padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
+  }
+
+  .ui-modal__card {
+    width: 100%;
+    max-width: none;
+    max-height: var(--modal-max-h);
+    margin: 0;
+    padding: var(--modal-pad-y) var(--modal-pad-x) calc(var(--modal-pad-y) + var(--safe-b));
+    overflow-y: auto;
+    /* 抽屜捲到底時別把底下的辦公室一起帶著捲。 */
+    overscroll-behavior: contain;
+    border-width: 1px 0 0;
+    border-radius: var(--modal-radius);
+  }
+
+  .ui-modal--center > .ui-modal__card {
+    max-height: calc(var(--vh) - var(--safe-t) - var(--safe-b) - var(--sp-6));
+    border-width: 1px;
+    border-radius: 16px;
+  }
+
+  .ui-modal--full > .ui-modal__card {
+    height: 100%;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* 關閉鈕：各家原本 34px 甚至 28px，手機一律放大到 --tap 並貼齊右上。 */
+  .ui-modal__close {
+    position: absolute;
+    z-index: 2;
+    top: var(--sp-1);
+    right: var(--sp-1);
+    width: var(--tap);
+    height: var(--tap);
+    display: grid;
+    place-items: center;
+    padding: 0;
+  }
+
+  /* 標題列讓出關閉鈕的位置，長標題才不會被 × 壓到。 */
+  .ui-modal__card > header {
+    padding-right: calc(var(--tap) + var(--sp-1));
+  }
+
+  .ui-modal__card > header h1,
+  .ui-modal__card > header h2 {
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  /* 點擊目標：以前是 100 多條各自寫死的 min-height: 44px。 */
+  .ui-modal button,
+  .ui-modal summary,
+  .ui-modal select,
+  .ui-modal textarea,
+  .ui-modal input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    min-height: var(--tap);
+  }
+
+  .ui-modal summary {
+    display: flex;
+    align-items: center;
+  }
+
+  /* 幾個 modal 的輸入框帶 inline style 的 12–14px 字級（RemoteAccess、
+     WorkspacePicker），inline 一定贏過 stylesheet，只能用 !important 擋下
+     iOS 的整頁放大。這是全 app 唯一需要 !important 的地方。 */
+  .ui-modal input,
+  .ui-modal select,
+  .ui-modal textarea {
+    font-size: var(--fs-input) !important;
+  }
+
+  /* 視窗自己的動作列（卡片的直接子層 footer）：直向堆疊、各自佔滿寬度，
+     column-reverse 讓主要動作在上——手機不該讓 2–3 顆鈕擠成一行。 */
+  .ui-modal__card > footer {
+    display: flex;
+    align-items: stretch;
+    flex-direction: column-reverse;
+    gap: var(--sp-2);
+  }
+
+  .ui-modal__card > footer > * {
+    width: 100%;
+  }
+
+  /* 卡片「裡面」的動作列（包在 form / article / review 區塊裡的那種，例如
+     建立部門、部門任務的核准列）不能直接反轉——那會把狀態文字翻到按鈕
+     上面。改成可換行 + 讓按鈕自己撐開：排得下就一行，排不下才換行。 */
+  .ui-modal__card * > footer {
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+
+  .ui-modal__card * > footer > button {
+    flex: 1 1 auto;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   手機 app 殼
+
+   桌面是「每個面板各自絕對定位、互相閃避」，手機改成一個真正的三列
+   grid：頂欄 / 場景 / 底部 dock。.game-root 本身是 position: fixed，
+   所有 absolute/fixed 的小元件（NPC 名牌、氣泡、modal、toast）都不是
+   grid item，不受影響；只有靜態的 .office-background 與 .task-focus-layer
+   會排進格線，其他要進格線的元件在下面逐一指定。
+
+   這麼做之後就沒有「日誌 bottom: 150px、crew rail bottom: 156px、
+   max-height: calc(100vh - 190px)」這種互相猜高度的寫死偏移了。
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 600px) {
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-columns: 100%;
+    grid-template-areas:
+      "bar"
+      "scene"
+      "dock";
+  }
+
+  /* 像素辦公室維持滿版背景：這個容器本身高度是 0（畫布是它的 absolute
+     子元素、相對 .game-root 貼滿），這裡只是避免它自己佔掉一列。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .office-background {
+    grid-area: scene;
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar {
+    position: relative;
+    /* 頂欄自己就是一個 stacking context，••• 選單與用量明細都長在它裡面，
+       所以整條 bar 必須壓過下面的 dock（45），否則選單會被日誌蓋住。 */
+    z-index: 60;
+    grid-area: bar;
+    /* 能量條換到第二列，不再絕對定位浮在場景上蓋住 ••• 選單與日誌標題。 */
+    flex-wrap: wrap;
+    gap: var(--sp-1) var(--sp-2);
+    min-height: var(--top-bar-h);
+    padding: var(--sp-2) var(--sp-2) var(--sp-1);
+    padding-top: calc(var(--safe-t) + var(--sp-2));
+    padding-right: calc(var(--safe-r) + var(--sp-2));
+    padding-left: calc(var(--safe-l) + var(--sp-2));
+  }
+
+  /* dock：任務日誌抽屜 + 指令列，兩者疊在同一個 flex column 裡，高度由
+     內容決定，彼此不需要知道對方多高。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .task-focus-layer {
+    position: relative;
+    z-index: 45;
+    grid-area: dock;
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 0 var(--sp-2) calc(var(--sp-2) + var(--safe-b));
+    padding-right: calc(var(--safe-r) + var(--sp-2));
+    padding-left: calc(var(--safe-l) + var(--sp-2));
+  }
+
+  /* NPC 條：頂欄底下一條橫向可捲的人員列，取代桌面那個浮在辦公室上的
+     左側面板。永遠看得到目前是誰，日誌展開時也不用收起來。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .crew-strip-wrap {
+    /* 只 relative、不給 z-index：有了 z-index 就會自成 stacking context，
+       裡面那個名冊抽屜（z-index 25010）會被關在 30 裡面，沉到 dock 底下。
+       DOM 順序在畫布之後，光是 positioned 就足以蓋過辦公室。 */
+    position: relative;
+    grid-area: scene;
+    align-self: start;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    width: 100%;
+    padding: var(--sp-2);
+    padding-right: calc(var(--safe-r) + var(--sp-2));
+    padding-left: calc(var(--safe-l) + var(--sp-2));
+  }
+
+  .crew-strip {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: var(--sp-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+
+  .crew-strip::-webkit-scrollbar { display: none; }
+
+  .crew-strip__chip {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--sp-2);
+    min-height: var(--tap);
+    max-width: 150px;
+    padding: 0 var(--sp-3) 0 var(--sp-2);
+    border: 1px solid rgba(100, 172, 205, 0.16);
+    border-radius: 999px;
+    background: rgba(6, 11, 23, 0.86);
+    color: #b9cbe0;
+    cursor: pointer;
+    scroll-snap-align: start;
+    backdrop-filter: blur(10px);
+  }
+
+  .crew-strip__chip--active {
+    border-color: rgba(0, 229, 255, 0.5);
+    background: rgba(0, 229, 255, 0.1);
+    color: #dffbff;
+  }
+
+  .crew-strip__name {
+    overflow: hidden;
+    font: 600 12px/1 inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 狀態點沿用名冊的語意：需要核准/出錯時亮起來。 */
+  .crew-strip__status {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .crew-strip__status--approval { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
+  .crew-strip__status--error { background: var(--err); box-shadow: 0 0 7px var(--err); }
+  .crew-strip__status--busy { background: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
+
+  .crew-strip__roster {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: var(--tap);
+    height: var(--tap);
+    padding: 0;
+    border: 1px solid rgba(100, 172, 205, 0.16);
+    border-radius: 12px;
+    background: rgba(6, 11, 23, 0.86);
+    color: #8fb2cc;
+    cursor: pointer;
+    backdrop-filter: blur(10px);
+  }
+
+  /* 名冊抽屜裡的名冊是一般的清單，不是側欄。 */
+  .crew-rail--sheet {
+    position: static;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  .crew-rail--sheet .crew-rail__list { max-height: 60dvh; }
+  .crew-rail--sheet .crew-rail__head { gap: var(--sp-2); padding: 0 0 var(--sp-3); }
+  /* 收合鈕改的是桌面側欄的偏好，在抽屜裡按了什麼也看不出來。 */
+  .crew-rail--sheet .crew-rail__collapse { display: none; }
+
+  /* 表頭五顆鈕一致：同尺寸、同框線。原本只有「建立部門」與「新增人員」
+     有框，另外三顆沒有，看起來像是兩組不同的東西。 */
+  .crew-rail--sheet .crew-rail__head button {
+    width: var(--tap);
+    height: var(--tap);
+    border-color: rgba(100, 172, 205, 0.18);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  /* ▶ 開關貼在日誌抽屜的正上緣（場景列的最底部），不再是浮在辦公室中間、
+     會被抽屜蓋掉一半的方塊。收合時它就落在指令列上面，仍然按得到。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .panel-toggle {
+    position: relative;
+    grid-area: scene;
+    inset: auto;
+    justify-self: end;
+    align-self: end;
+    width: var(--tap);
+    height: var(--tap);
+    margin: 0 calc(var(--safe-r) + var(--sp-2)) var(--sp-2) 0;
+    transition: none;
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .app-copyright {
+    position: relative;
+    grid-area: scene;
+    inset: auto;
+    justify-self: center;
+    align-self: end;
+    transform: none;
+  }
+
+  /* toast 從頂欄底下開始，不再壓在換行後的能量列上。 */
+  .toast-region {
+    top: calc(var(--safe-t) + var(--top-bar-h) + var(--sp-2));
+  }
+}
+
+/* ── 頂欄：能量條自成一列 ───────────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* 兩個 flex: 1 的 spacer 是桌面用來把能量條頂到正中間的。換行之後它們
+     會把整條第一列吃光，害 ••• 與健康燈被擠到第二列（320px 下特別明顯），
+     所以手機改成「••• 之後靠右」。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__spacer {
+    display: none;
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__more {
+    margin-left: auto;
+  }
+
+  /* 320px 時三個模式鈕 + BOSS + ••• + 健康燈剛好差幾 px 排不下。寬度讓它
+     依內容縮，高度仍然是完整的 --tap。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__mode-switch button {
+    min-width: 0;
+    padding-inline: var(--sp-2);
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud {
+    position: static;
+    order: 9;
+    width: 100%;
+    transform: none;
+    scale: 1;
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__summary {
+    width: 100%;
+    min-height: var(--tap);
+    gap: var(--sp-2);
+    justify-content: space-evenly;
+  }
+
+  /* 兩條用量條要在 320px 下還分得開，欄寬跟著內容縮。 */
+  .energy-meter {
+    min-width: 0;
+    grid-template-columns: auto minmax(24px, 1fr) auto 5px;
+  }
+
+  /* 展開的用量明細改成貼齊視窗兩側的浮層，而不是從縮放過的角落長出來。 */
+  .energy-detail {
+    position: fixed;
+    inset: calc(var(--safe-t) + var(--top-bar-h)) var(--sp-2) auto;
+    width: auto;
+    max-height: min(60dvh, calc(var(--vh) - var(--top-bar-h) - 120px));
+    overflow-y: auto;
+    transform: none;
+  }
+
+  /* ••• 選單：原本從頂欄長下來、被指令列蓋住最後幾項。改成獨立浮層並
+     自己保留 dock 的高度。 */
+  .top-bar__more-menu {
+    position: fixed;
+    top: calc(var(--safe-t) + var(--top-bar-h));
+    right: var(--sp-2);
+    left: var(--sp-2);
+    z-index: 50;
+    width: auto;
+    max-height: calc(var(--vh) - var(--top-bar-h) - 140px);
+  }
+
+  .top-bar__more-menu button,
+  .top-bar__more-menu select,
+  .top-bar__more-menu a,
+  .top-bar__more-menu summary {
+    min-height: var(--tap);
+  }
+}
+
+/* ── 指令列：工具列排進版位，不再浮在場景上 ─────────────────────────── */
+@media (max-width: 600px) {
+  .command-composer {
+    position: relative;
+    /* dock 裡的層次要寫死：指令列自己有 backdrop-filter（＝自成 stacking
+       context），不給 z-index 的話會排在日誌（z-index: 8）底下，圓桌 ⋯
+       選單、指令面板、待送佇列全部點不到。 */
+    z-index: 2;
+    inset: auto;
+    width: auto;
+    /* dock 空間不夠時（橫置 320px 高）只准日誌讓步——指令列一旦被壓縮，
+       輸入框與「執行」就會溢出到視窗外面。 */
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    padding: var(--sp-2);
+    transform: none;
+  }
+
+  /* 圓桌/作戰室/麥克風那排改成指令列的第一行。桌面它是 absolute 浮在
+     輸入框上方，手機浮起來就會蓋到日誌，而且逼得日誌要預留高度。 */
+  .command-composer__toolbar,
+  .command-composer__attachments {
+    position: static;
+    order: -1;
+    width: 100%;
+    max-width: none;
+    padding-block: 0;
+  }
+
+  /* 工具列排不下時用換行，不要用橫向捲動：overflow 會讓它變成捲動容器，
+     把裡面 ⋯ 的彈出選單整個裁掉（選單開得出來卻點不到）。390px 下這幾顆
+     本來就排得下，換行只有在更窄的螢幕才會發生。 */
+  .command-composer__toolbar {
+    flex-wrap: wrap;
+    /* 六顆鈕 324px + 5 個間距。間距收到 4px 才塞得進 390px 的一行；
+       更窄的螢幕就讓它換行。 */
+    gap: var(--sp-1);
+  }
+
+  /* 附件是縮圖條，裡面沒有彈出層，維持橫向捲動。 */
+  .command-composer__attachments {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .command-composer__attachments::-webkit-scrollbar {
+    display: none;
+  }
+
+  .command-composer > textarea {
+    flex: 1 1 120px;
+    font-size: var(--fs-input);
+  }
+
+  /* 工具列是次要動作（指令面板、附件、語音、討論模式）。做成 44px 的方塊
+     會又高又笨重，而且那一整排的高度是從指令列直接扣掉的畫面。改成扁的
+     ——高 30px、寬度照內容走——再用 ::after 把可點範圍上下各撐 7px，
+     實際命中區仍然是 44px。 */
+  .command-composer__toolbar .command-composer__library,
+  .command-composer__toolbar .command-composer__attach,
+  .command-composer__toolbar .voice-input__mic,
+  .command-composer__toolbar .composer-roundtable-toggle {
+    position: relative;
+    min-height: 30px;
+    height: 30px;
+    padding-inline: var(--sp-2);
+    line-height: 1;
+  }
+
+  .command-composer__toolbar .command-composer__library,
+  .command-composer__toolbar .command-composer__attach,
+  .command-composer__toolbar .voice-input__mic,
+  .command-composer__toolbar .composer-roundtable-toggle--more {
+    width: 36px;
+    min-width: 36px;
+    padding-inline: 0;
+  }
+
+  .command-composer__toolbar .command-composer__library::after,
+  .command-composer__toolbar .command-composer__attach::after,
+  .command-composer__toolbar .voice-input__mic::after,
+  .command-composer__toolbar .composer-roundtable-toggle::after {
+    content: "";
+    position: absolute;
+    inset: -7px 0;
+  }
+
+  /* 輸入列本身是主要動作，維持完整的 44px。 */
+  .command-composer__submit,
+  .command-composer__queue {
+    min-height: var(--tap);
+  }
+
+  .command-composer__library span {
+    display: none;
+  }
+
+  .command-composer__submit {
+    min-width: 58px;
+  }
+
+  /* 工具列進了版位之後，原本為了替它讓位而加的保留高度全部可以歸零。 */
+  .command-composer--attachments .command-composer__toolbar,
+  .command-composer--attachments .command-queue,
+  .command-composer--attachments .command-palette,
+  .command-composer--attachments .command-composer__error {
+    bottom: calc(100% + var(--sp-2));
+  }
+
+  .command-composer__error {
+    right: var(--sp-2);
+    left: var(--sp-2);
+    max-width: none;
+  }
+
+  /* 彈出面板一律不超過視窗一半高，長清單自己捲。 */
+  .command-palette__items,
+  .command-queue {
+    max-height: min(46dvh, 360px);
+  }
+}
+
+/* ── 任務日誌：dock 裡的抽屜 ─────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .game-root:not(.game-root--focus) .holo-panel {
+    position: relative;
+    z-index: 1;
+    inset: auto;
+    width: auto;
+    /* 高度由使用者拖曳的偏好決定（--log-panel-height），上限是 dock 分到
+       的整個空間；收合時 flex-basis 歸零，動畫照舊。 */
+    height: auto;
+    flex: 0 1 var(--log-panel-height, 62dvh);
+    min-height: 0;
+    max-height: 100%;
+    margin-bottom: var(--sp-2);
+    padding-top: var(--sp-3);
+    transition:
+      flex-basis 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+      margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.35s ease,
+      visibility 0s;
+  }
+
+  .game-root:not(.game-root--focus) .holo-panel--closed {
+    flex-basis: 0;
+    margin-bottom: 0;
+    transform: none;
+    transition:
+      flex-basis 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+      margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.35s ease,
+      visibility 0s linear 0.35s;
+  }
+
+  /* 左緣的寬度拖桿在手機改成頂端的高度拖桿。 */
+  .game-root:not(.game-root--focus) .holo-panel__resize {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    width: auto;
+    height: 24px;
+    cursor: ns-resize;
+  }
+
+  .game-root:not(.game-root--focus) .holo-panel__resize::after {
+    top: 7px;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    width: 44px;
+    height: 3px;
+    min-height: 0;
+    transform: translateX(-50%);
+  }
+
+  /* 日誌裡的操作鈕：以前每一顆都各自寫一次 44px。 */
+  .holo-panel .task-log-toolbar button,
+  .holo-panel .task-log-toolbar select,
+  .holo-panel .task-log-search button,
+  .holo-panel .task-log-search input,
+  .holo-panel .quest-log__latest,
+  .holo-panel .copy-button,
+  .holo-panel .turn-card__pin,
+  .rich-code > button {
+    min-height: var(--tap);
+  }
+
+  .holo-panel .task-log-toolbar button,
+  .holo-panel .task-log-toolbar select,
+  .holo-panel .task-log-search__scope button,
+  .holo-panel .task-log-search > button:last-child,
+  .holo-panel .copy-button,
+  .holo-panel .turn-card__pin {
+    min-width: var(--tap);
+  }
+
+  .holo-panel .task-log-search > button:last-child {
+    padding: 0;
+  }
+
+  .holo-panel:not(.holo-panel--focus) .holo-panel__heading {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar {
+    flex: 0 0 auto;
+    gap: var(--sp-1);
+  }
+
+  /* 手機的雙指縮放已經夠用（見 scene.ts），角落再放一排 −/+/2x/⟳ 只是
+     擋住畫面。 */
+  .canvas-zoom {
+    display: none;
+  }
+}
+
+/* ── 手機橫置：高度比寬度更稀缺 ─────────────────────────────────────── */
+@media (max-height: 500px) {
+  :root {
+    --modal-max-h: calc(var(--vh) - var(--sp-3));
+    /* 320px 高的視窗裡，44px 的點擊目標會把頂欄與指令列吃掉三分之一。
+       40px 仍然遠大於實際指尖接觸面積，是這個尺寸下正確的取捨。 */
+    --tap: 40px;
+    --tap-sm: 36px;
+    /* 兩列各 40px + padding。 */
+    --top-bar-h: 92px;
+  }
+
+  .ui-modal {
+    padding-top: 0;
+  }
+
+  .ui-modal__card {
+    padding-top: var(--sp-3);
+    padding-bottom: calc(var(--sp-3) + var(--safe-b));
+  }
+}
+
+@media (max-height: 500px) and (max-width: 1023px) {
+  /* 橫置時日誌預設吃掉整個 dock 會讓場景完全看不到，收斂成一半。
+     :not(--closed) 是必要的——這段在收合規則之後，不排除就會在日誌收起來
+     的時候把高度又長回來，場景只剩幾個 px。 */
+  .game-root:not(.game-root--focus) .holo-panel:not(.holo-panel--closed) {
+    flex-basis: min(var(--log-panel-height, 62dvh), 52dvh);
+  }
+
+  /* 橫置只剩 390px 高，縮放列一定會跟指令列的工具列撞在一起。雙指縮放
+     本來就能用，直接收掉。 */
+  .canvas-zoom {
+    display: none;
+  }
+}

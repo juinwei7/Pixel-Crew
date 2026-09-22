@@ -53,7 +53,7 @@ export function ShortcutsHelp({ onClose }: { onClose(): void }) {
         <div className="shortcuts-help__header">
           <span>KEYBOARD</span>
           <h2>{t("快捷鍵")}</h2>
-          <p>{t("隨時按 ")}<kbd>?</kbd>{t(" 叫出這張表。")}</p>
+          <p>{t("隨時按")}<kbd>?</kbd>{t("叫出這張表。")}</p>
         </div>
         <div className="shortcuts-help__groups">
           {GROUPS.map((group) => (

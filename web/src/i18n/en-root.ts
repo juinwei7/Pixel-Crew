@@ -28,10 +28,10 @@ export const enRoot: Record<string, string> = {
   "非唯讀工具，可能改動狀態": "Not a read-only tool, it may change state",
 
   // kanban.ts
-  "📥 待辦": "📥 To Do",
-  "🏃 進行中": "🏃 In Progress",
-  "⚠️ 需要處理": "⚠️ Needs Attention",
-  "✅ 已完成": "✅ Done",
+  "待辦": "To Do",
+  "進行中": "In Progress",
+  "需要處理": "Needs Attention",
+  "已完成": "Done",
   "計畫等你核准": "Plan awaiting your approval",
   "審查沒有結論，等你決定": "Review was inconclusive, awaiting your decision",
   "修正次數用完，等你指示": "Out of correction attempts, awaiting your instructions",

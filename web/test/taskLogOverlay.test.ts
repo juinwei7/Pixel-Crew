@@ -25,7 +25,8 @@ test("side panels remain overlays while map controls avoid the visible task pane
   assert.match(app, /game-root--task-log-open/);
   assert.match(app, /game-root--crew-collapsed/);
   assert.match(css, /\.game-root:not\(\.game-root--task-log-open\) \.crew-rail\s*\{\s*bottom:\s*138px/);
-  assert.match(css, /@media \(max-width:\s*599px\)[\s\S]*?\.canvas-zoom input\[type="range"\]\s*\{\s*display:\s*none/);
+  // 手機（≤600）直接把整條縮放列收掉——雙指縮放已經夠用（見 game/scene.ts）。
+  assert.match(css, /@media \(max-width:\s*600px\)[\s\S]*?\.canvas-zoom\s*\{\s*display:\s*none/);
   assert.match(css, /\.game-root--focus \.canvas-zoom\s*\{[\s\S]*?display:\s*none/);
 });
 
@@ -121,5 +122,24 @@ test("black window canvas height follows its live toolbar instead of a fixed off
 });
 
 test("a minimized black-window pane stays collapsed on narrow screens", () => {
-  assert.match(css, /@media \(max-width: 820px\)[^}]*}[\s\S]*?\.black-window--minimized \{ height: 38px !important; min-height: 38px; }/);
+  assert.match(css, /@media \(max-width: 1023px\)[^}]*}[\s\S]*?\.black-window--minimized \{ height: 38px !important; min-height: 38px; }/);
+});
+
+test("the black window toolbar collapses to a single row on a phone", () => {
+  // 手機只留：模式切換 / 分頁下拉 / 主要動作 / ⋯。其餘走 ⋯ 選單。
+  assert.match(blackWindow, /const isPhone = useIsPhone\(\)/);
+  assert.match(blackWindow, /\{!isPhone && <EnergyHud/);
+  assert.match(blackWindow, /black-workspace__pane-select/);
+  assert.match(blackWindow, /black-workspace__advanced-mobile/);
+  // 模式切換是使用者明確要求一定要留在列上的。
+  assert.match(blackWindow, /className="black-workspace__modes"/);
+  assert.doesNotMatch(blackWindow, /\{isPhone && <EnergyHud/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.black-workspace__brand \{ display: none; \}/);
+  assert.match(css, /\.black-workspace__settings \{[^}]*flex: 1 1 0;/);
+});
+
+test("an overflow menu does not close the menus nested inside it", () => {
+  // 帳號選單現在巢狀在 ⋯ 裡面；少了 contains 這個判斷，外層一展開就會把
+  // 自己裡面那一層關掉（點了沒反應）。
+  assert.match(blackWindow, /if \(other !== menu && !menu\.contains\(other\)\) other\.open = false;/);
 });

@@ -105,7 +105,7 @@
 .black-workspace__advanced input, .black-workspace__advanced select { width: 100%; max-width: none; }
 .black-workspace__advanced button { border-color: #347c61; color: #bfffd4; }
 .black-account-picker__menu, .black-workspace__advanced > div {
-  max-height: calc(100dvh - 90px);
+  max-height: calc(var(--vh) - 90px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -157,46 +157,186 @@
 .black-window__resize--e,.black-window__resize--w { top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }.black-window__resize--e { right: -4px; }.black-window__resize--w { left: -4px; }
 .black-window__resize--ne,.black-window__resize--nw,.black-window__resize--se,.black-window__resize--sw { width: 14px; height: 14px; }.black-window__resize--ne { top:-5px;right:-5px;cursor:nesw-resize; }.black-window__resize--sw { bottom:-5px;left:-5px;cursor:nesw-resize; }.black-window__resize--nw { top:-5px;left:-5px;cursor:nwse-resize; }.black-window__resize--se { bottom:-5px;right:-5px;cursor:nwse-resize; }
 
-@media (max-width: 820px) { .black-workspace__toolbar { max-height: 46vh; overflow-x: hidden; overflow-y: auto; align-items: flex-start; flex-wrap: wrap; }.black-workspace__brand { padding-right: 6px; }.black-workspace__tabs { order: 3; width: 100%; flex-basis: 100%; }.black-workspace__settings { order: 4; width: 100%; overflow-x: auto; border-left: 0; padding-left: 0; padding-bottom: 2px; }.black-workspace__main { grid-template-columns: 1fr; }.black-workspace__rail { display: none; }.black-window { left: 8px !important; top: 8px !important; width: calc(100% - 16px) !important; height: calc(100% - 16px) !important; min-width: 0; }.black-window--minimized { height: 38px !important; min-height: 38px; }.black-window:not(.black-window--active) { display: none; } }
+@media (max-width: 1023px) { .black-workspace__toolbar { max-height: 46vh; overflow-x: hidden; overflow-y: auto; align-items: flex-start; flex-wrap: wrap; }.black-workspace__brand { padding-right: 6px; }.black-workspace__tabs { order: 3; width: 100%; flex-basis: 100%; }.black-workspace__settings { order: 4; width: 100%; overflow-x: auto; border-left: 0; padding-left: 0; padding-bottom: 2px; }.black-workspace__main { grid-template-columns: 1fr; }.black-workspace__rail { display: none; }.black-window { left: 8px !important; top: 8px !important; width: calc(100% - 16px) !important; height: calc(100% - 16px) !important; min-width: 0; }.black-window--minimized { height: 38px !important; min-height: 38px; }.black-window:not(.black-window--active) { display: none; } }
 
 /* Fixed panels escape the compact toolbar's scroll clipping. Keep them in
    the viewport even when desktop zoom activates the narrow breakpoint. */
-@media (max-width: 820px) {
+@media (max-width: 1023px) {
   .black-account-picker__menu, .black-workspace__advanced > div {
     position: fixed;
     top: auto;
-    right: 12px;
-    bottom: max(12px, env(safe-area-inset-bottom));
-    left: 12px;
+    right: var(--sp-3);
+    bottom: calc(var(--sp-3) + var(--safe-b));
+    left: var(--sp-3);
     min-width: 0;
-    max-height: calc(100dvh - 80px);
+    max-height: calc(var(--vh) - 80px);
   }
 }
 
 @media (max-width: 600px) {
+  /* ── 黑窗手機版：工具列壓成一排 ────────────────────────────────────
+     終端機才是這個模式的主體。桌面那排控制原封不動換行會疊成五列、吃掉
+     三分之一個螢幕，所以只留四件事，其餘全部進 ⋯：
+
+       [像素|專業|黑窗]  [分頁 ▾]  [啟動 Agent]  [⋯]
+       模式切換（必留）   選 pane   主要動作      用量/帳號/語音/新 CLI/模型
+
+     分頁列改成 <select>、用量與帳號等搬進 ⋯ 是在 BlackWindowWorkspace.tsx
+     用 useIsPhone() 換位置的——那幾個元件有自己的狀態，不能同時存在兩份。 */
+  .black-workspace__toolbar {
+    min-height: 0;
+    flex-wrap: wrap;
+    gap: var(--sp-1);
+    padding: calc(var(--safe-t) + var(--sp-1)) var(--sp-2) var(--sp-1);
+  }
+
   .black-workspace button,
   .black-workspace select,
   .black-workspace input,
   .black-workspace summary,
-  .black-workspace__toolbar .energy-hud__summary { min-height: 44px; }
-  .black-workspace__advanced > summary { min-width: 44px; }
-  /* The office phone rule absolutely positions its energy HUD. In the black
-     workspace that lands on top of wrapped CLI controls, so keep it as its
-     own toolbar row instead. */
-  .black-workspace__toolbar .energy-hud {
+  .black-workspace__toolbar .energy-hud__summary { min-height: var(--tap); }
+
+  /* 品牌字樣在這個模式沒有功能，收掉把寬度讓給控制項。 */
+  .black-workspace__brand { display: none; }
+
+  .black-workspace__modes { flex: 0 0 auto; padding-right: 0; border-right: 0; }
+  /* 兩個字的標籤，10px 內距讀起來才不會擠成一條；分頁改成下拉之後這一排
+     有空間，不需要再把它們壓到 4px。 */
+  .black-workspace__modes button { padding-inline: 10px; }
+
+  /* 分頁下拉：固定一個上限寬度，pane 再多也不會把這排撐開。 */
+  .black-workspace__pane-select {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 120px;
+  }
+
+  /* 主要動作吃掉剩下的寬度，文字太長就省略——它同時是狀態顯示
+     （啟動 Agent / Agent 運行中 / 正在連線… / 登入帳號）。 */
+  .black-workspace__settings {
+    min-width: 0;
+    /* basis 0（不是 auto）：auto 會拿「啟動鈕的完整文字寬」去判斷要不要
+       換行，於是整組掉到第二排；basis 0 則是先吃掉剩下的空間再讓文字
+       自己省略，這排才真的壓得成一行。 */
+    flex: 1 1 0;
+    gap: var(--sp-1);
+    padding-left: 0;
+    border-left: 0;
+  }
+  .black-workspace__settings .black-workspace__launch {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .black-workspace__advanced { flex: 0 0 auto; }
+  .black-workspace__advanced > summary { min-width: var(--tap); }
+
+  /* ⋯ 選單：貼齊視窗兩側的浮層，每一項都是完整的點擊目標。 */
+  .black-workspace__advanced > div {
+    position: fixed;
+    top: auto;
+    right: var(--sp-2);
+    bottom: calc(var(--safe-b) + var(--sp-2));
+    left: var(--sp-2);
+    min-width: 0;
+    max-height: calc(var(--vh) - 140px);
+  }
+
+  .black-workspace__advanced-mobile {
+    display: grid;
+    gap: var(--sp-2);
+    padding-bottom: var(--sp-2);
+    margin-bottom: var(--sp-1);
+    border-bottom: 1px solid #24312f;
+  }
+  .black-workspace__advanced-mobile > * { width: 100%; }
+  /* 每一列都是「圖示 + 文字、靠左」。以前是一顆孤零零的圖示置中在一條
+     400px 的長條裡，看起來就只是被拉長的空按鈕。 */
+  .black-workspace__advanced-mobile button,
+  .black-workspace__advanced-mobile > .black-account-picker > summary {
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    padding-inline: var(--sp-3);
+    text-align: left;
+  }
+  /* composer-and-operations.css 在 ≤1440 把 .energy-hud 釘成 absolute（那是
+     給像素辦公室頂欄用的、沒限定範圍）。用量條搬進這個選單之後會因此脫離
+     格線、跟帳號列疊在一起，這裡要收回來。 */
+  .black-workspace__advanced-usage,
+  .black-workspace__advanced-mobile .energy-hud {
     position: static;
-    order: 2;
-    width: 100%;
     transform: none;
     scale: 1;
   }
-  .black-workspace__toolbar .energy-hud__summary { width: 100%; justify-content: center; }
-  .black-window { grid-template-rows: 48px minmax(0, 1fr); }
-  .black-window__bar button { min-width: 40px; min-height: 44px; }
+  /* 用量是「摘要 + 展開後的明細」兩塊，要直向堆疊；flex 預設橫排會把明細
+     推到右邊溢出去。 */
+  .black-workspace__advanced-mobile .energy-hud { display: grid; gap: var(--sp-1); }
+  .black-workspace__advanced-mobile .voice-input { display: flex; }
+  /* 選擇器多帶一層 .black-workspace 是為了壓過 composer-and-operations.css
+     裡把麥克風釘成 32×32 的規則——那個檔案在 index.css 排在後面，同權重
+     時會贏。 */
+  .black-workspace .black-workspace__advanced-mobile .energy-hud__summary,
+  .black-workspace .black-workspace__advanced-mobile .black-account-picker > summary,
+  .black-workspace .black-workspace__advanced-mobile .voice-input__mic {
+    width: 100%;
+    height: var(--tap);
+    min-height: var(--tap);
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    padding-inline: var(--sp-3);
+  }
+  .black-workspace .black-workspace__advanced-mobile .voice-input__mic { font-size: 11px; }
+  .black-workspace__advanced-mobile .black-account-picker { width: 100%; }
+
+  /* 用量明細與帳號清單直接在選單裡就地展開，由選單本身捲動。
+     （試過讓它們用 position: fixed 浮出來，但祖先鏈上的 containing block
+     會把座標算歪；就地展開沒有這個問題，也不用跟誰搶 z-index。） */
+  .black-workspace__advanced-mobile .energy-detail,
+  .black-workspace__advanced-mobile .black-account-picker__menu {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    max-height: none;
+    margin-top: var(--sp-1);
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* pane 標題列：路徑在 390px 讀不完也沒用，留給標題與控制鈕。 */
+  .black-window { grid-template-rows: 38px minmax(0, 1fr); }
+  .black-window--minimized { height: 38px !important; min-height: 38px; }
+  .black-window__bar { padding-inline: var(--sp-2); gap: var(--sp-1); }
+  /* 路徑（原本的 flex: 1）在 390px 讀不完也沒用，收掉。但它同時是把控制鈕
+     頂到右邊的那個彈簧，所以改由標題接手，否則按鈕會全擠在左半邊。 */
+  .black-window__bar code { display: none; }
+  .black-window__bar strong { margin-right: auto; }
+  /* pane 標題列是次要 chrome，不該跟主要動作一樣高。視覺縮到 30px 正方形，
+     再用 ::after 把可點範圍往外撐到 42px——手指摸得到，但不吃畫面高度。 */
+  .black-window__bar button,
+  .black-window__bar .black-window__font {
+    position: relative;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
+  }
+
+  .black-window__bar button::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
 }
 
+/* 英文的標籤比中文長（「交辦工作」vs「Assign work」）。這一排是 flex，
+   預設會壓縮子項——BOSS 被壓窄之後文字就換成兩行，整條 bar 跟著變高。
+   固定不縮、不換行，要讓位的是下面那些本來就有彈性的東西。 */
 .top-bar__boss {
   min-height: 34px;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: auto auto;
   align-items: center;
@@ -209,7 +349,7 @@
   cursor: pointer;
 }
 .top-bar__boss span { color: #d69f42; font: 800 7px var(--mono); letter-spacing: .14em; }
-.top-bar__boss strong { font: 700 10px var(--mono); }
+.top-bar__boss strong { font: 700 10px var(--mono); white-space: nowrap; }
 .top-bar__boss:hover { border-color: rgba(255, 194, 92, 0.68); background: rgba(255, 194, 92, 0.14); }
 
 .top-bar__room,
@@ -225,10 +365,12 @@
 }
 
 .top-bar__room {
-  min-width: 0;
+  /* 會讓位、但不會讓到消失：擠到極限時房名以省略號收尾，而不是塌成 0。 */
+  min-width: 78px;
   max-width: 280px;
+  flex: 0 1 auto;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   padding: 5px 9px;
@@ -255,6 +397,9 @@
 .top-bar__health:hover { border-color: rgba(0, 229, 255, 0.38); }
 
 .top-bar__agent {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -266,8 +411,13 @@
 
 .top-bar__agent select,
 .task-log-toolbar select {
+  /* 下限存在的理由：完全不設（min-width: auto）時下拉會把容器撐破、疊到
+     隔壁去；設成 0 則會被壓成「D…」那種讀不出來的寬度。給一個能讀的下限，
+     真的塞不下時交給收合斷點處理。 */
+  min-width: 100px;
   min-height: 32px;
   max-width: 150px;
+  text-overflow: ellipsis;
   border: 0;
   border-radius: 6px;
   outline: 0;
@@ -388,7 +538,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .top-bar__more { position: relative; display: none; }
 .top-bar__more summary { width: 32px; min-height: 32px; display: grid; place-items: center; border: 1px solid rgba(100,172,205,.18); border-radius: 8px; background: rgba(9,16,30,.78); color: #8399b6; cursor: pointer; list-style: none; font: 700 12px var(--mono); }
 .top-bar__more summary::-webkit-details-marker { display: none; }
-.top-bar__more-menu { position: absolute; top: calc(100% + 8px); right: 0; width: 220px; max-height: calc(100dvh - 72px); display: grid; gap: 7px; overflow-y: auto; overscroll-behavior: contain; padding: 9px; border: 1px solid var(--panel-border); border-radius: 10px; background: rgba(7,13,26,.98); box-shadow: 0 18px 45px rgba(0,0,0,.44); }
+.top-bar__more-menu { position: absolute; top: calc(100% + 8px); right: 0; width: 220px; max-height: calc(var(--vh) - 72px); display: grid; gap: 7px; overflow-y: auto; overscroll-behavior: contain; padding: 9px; border: 1px solid var(--panel-border); border-radius: 10px; background: rgba(7,13,26,.98); box-shadow: 0 18px 45px rgba(0,0,0,.44); }
 .top-bar__more-menu label { display: grid; grid-template-columns: 1fr 110px; align-items: center; gap: 8px; color: #8296b1; font: 9px var(--mono); }
 .top-bar__more-menu select, .top-bar__more-menu button, .top-bar__more-menu a { min-height: 34px; border: 1px solid rgba(143,184,232,.13); border-radius: 7px; background: rgba(0, 229, 255,.05); color: #b7c9df; font: 10px var(--mono); }
 .top-bar__more-menu button, .top-bar__more-menu a { display: flex; align-items: center; padding: 0 9px; cursor: pointer; text-align: left; text-decoration: none; }
@@ -505,13 +655,15 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 /* Account-wide provider energy — intentionally independent of room and NPC.
    寬螢幕時排在 top bar 的 flex 流裡（兩側 spacer 撐居中），跟 AGENT 下拉互相讓位——
    以前絕對置中會整個蓋住 ⚡無限制的自動核准下拉（橘色光暈從半透明背景透出來）。 */
-.energy-hud { position: relative; z-index: 42; flex: none; }
+/* 這條 bar 的長度會隨語言變（英文標籤普遍比中文長）。用量與 AGENT 兩塊是
+   唯一有彈性的區域，必須真的縮得下去，否則整條 bar 會往右溢出視窗。 */
+.energy-hud { position: relative; z-index: 42; min-width: 0; flex: 0 1 auto; }
 .energy-hud__summary { min-height: 42px; display: flex; align-items: center; gap: 15px; padding: 5px 13px; border: 1px solid rgba(100,172,205,.16); border-radius: 11px; background: rgba(5,11,23,.78); box-shadow: 0 10px 28px rgba(0,0,0,.18); color: #91a6c0; cursor: pointer; backdrop-filter: blur(12px); }
 .energy-hud__summary:hover, .energy-hud__summary[aria-expanded="true"] { border-color: rgba(0, 229, 255,.3); background: rgba(7,15,29,.94); }
 .energy-hud__title { display: flex; align-items: center; gap: 7px; color: rgba(0, 229, 255,.66); font: 700 9px var(--mono); letter-spacing: .15em; white-space: nowrap; }
 .energy-hud__title i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 7px rgba(0, 229, 255,.55); }
 .energy-hud__cost { padding-left: 8px; border-left: 1px solid rgba(255,255,255,.08); color: #7d91ad; font: 700 10px var(--mono); white-space: nowrap; }
-.energy-meter { min-width: 112px; display: grid; grid-template-columns: 44px 46px 30px 5px; align-items: center; gap: 6px; color: #00ffa3; }
+.energy-meter { min-width: 0; display: grid; grid-template-columns: 44px 46px 30px 5px; align-items: center; gap: 6px; color: #00ffa3; }
 .energy-meter > span { color: #7d91ad; font: 700 9px var(--mono); letter-spacing: .08em; }
 .energy-meter > strong { font: 700 11px var(--mono); text-align: right; }
 .energy-meter > b { color: var(--cyan); font: 16px/1 var(--mono); animation: hudPulse 1.25s ease-in-out infinite; }
@@ -1407,12 +1559,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   width: calc(100% - 48px);
 }
 
-@media (max-width: 640px) {
-  .holo-panel--focus .holo-panel__title {
-    min-height: 62px;
-    padding-inline: 14px;
-  }
-
+@media (max-width: 600px) {
   .holo-panel--focus .holo-panel__worker {
     display: none;
   }
@@ -1460,15 +1607,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 }
 
-@media (max-width: 420px) {
-  .holo-panel--focus .holo-panel__heading {
-    display: none;
-  }
 
-  .focus-worker-switch {
-    width: min(52vw, 180px);
-  }
-}
 
 /* Focus workspace: navigation, document canvas, and account-wide usage. */
 .holo-panel--focus .holo-panel__title {
@@ -1772,7 +1911,9 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   font-size: 13px;
 }
 
-.focus-energy__panel-actions {
+/* 選擇器要跟上面的 `> header > div`（0,2,2）同級，否則動作鈕會被那條
+   display: grid 蓋成上下堆疊，在手機上白白吃掉一百多 px 的高度。 */
+.focus-energy__panel > header > .focus-energy__panel-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1911,7 +2052,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
    workspace rail and report index share the left column while the active
    report keeps the full remaining height. This prevents the old stacked
    layout's conspicuous empty band above the report. */
-@media (max-width: 1320px) and (min-width: 1001px) {
+@media (max-width: 1320px) and (min-width: 1024px) {
   .focus-reader,
   .focus-reader--with-studios {
     display: grid;
@@ -1945,7 +2086,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 
 /* At tablet widths, navigation becomes normal vertical flow and the report
    index becomes an explicit drawer. */
-@media (max-width: 1000px) {
+@media (max-width: 1023px) {
   .focus-reader {
     display: flex;
     flex-direction: column;
@@ -2070,7 +2211,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1023px) {
   .holo-panel--focus .holo-panel__title {
     row-gap: 7px;
     padding-inline: 14px;
@@ -2103,6 +2244,38 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 @media (max-width: 600px) {
   .game-root--focus .task-focus-layer { padding-top: 64px; }
 
+  /* 專業模式的主體是報告。桌面那個三列標題（標題 / 用量 / 工作對象）在手機
+     會吃掉 177px、讓報告只剩四成畫面。改成一排：
+
+       [ 讀哪個對象 ▾ ]  [ 搜尋 ]  [ 管理 ]
+
+     純裝飾的「PROFESSIONAL WORKBENCH · 專業工作台」拿掉（頂欄的「專業」
+     已經是 active 狀態）；工作對象切換與用量改由 App.tsx 在 focusPhone 時
+     放進「管理」面板（FocusControls 的 extras）。
+     這一段必須排在上面的 ≤1100 之後：兩者選擇器同權重，順序決定勝負。 */
+  .holo-panel--focus .holo-panel__title {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "context toolbar";
+    align-items: center;
+    min-height: 0;
+    padding-block: var(--sp-1);
+    padding-inline: var(--sp-3);
+  }
+
+  .holo-panel--focus .holo-panel__heading { display: none; }
+
+  /* 對象下拉吃掉整排剩下的寬度。 */
+  .focus-context-switch { min-width: 0; }
+  .focus-worker-switch { width: auto; min-width: 0; flex: 1 1 auto; }
+  .focus-worker-switch select { width: 100%; min-width: 0; }
+
+  /* 管理面板最上面那一段就是從標題列搬下來的兩塊。 */
+  .focus-controls__extras { display: grid; gap: var(--sp-2); }
+  .focus-controls__extras .focus-context-switch__kind { display: flex; }
+  .focus-controls__extras .focus-context-switch__kind button { flex: 1 1 0; }
+  .focus-controls__extras .focus-energy,
+  .focus-controls__extras .focus-energy__summary { width: 100%; }
+
   /* Split panes are useful on a wide monitor, but at phone width two reports
      side by side become unreadable. Keep every selected report full-width. */
   .focus-workbench { gap: 8px; padding: 8px; flex-direction: column; overflow-y: auto; }
@@ -2110,23 +2283,21 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .focus-pane-grid--2, .focus-pane-grid--3, .focus-pane-grid--4 { grid-template-columns: 1fr; grid-template-rows: auto; }
   .focus-pane-grid--3 .focus-pane:first-child { grid-column: auto; }
   .focus-pane { min-height: 360px; }
-  .focus-pane__header select { height: 40px; font-size: 16px; }
-  .focus-pane__close { width: 40px; height: 40px; }
+  .focus-pane__header select { height: var(--tap-sm); font-size: var(--fs-input); }
+  .focus-pane__close { width: var(--tap-sm); height: var(--tap-sm); }
 
-  /* Professional mode is routinely used through remote access on a phone.
-     Keep its compact controls genuinely tappable instead of only increasing
-     the height of the generic top-bar controls. */
-  .focus-context-switch__kind button { min-width: 44px; min-height: 44px; padding-inline: 10px; }
-  .focus-energy__summary { min-height: 44px; }
+  /* 專業模式常常是從手機遠端連進來用的，控件要真的按得到。 */
+  .focus-context-switch__kind button { min-width: var(--tap); min-height: var(--tap); padding-inline: 10px; }
+  .focus-energy__summary { min-height: var(--tap); }
   .holo-panel--focus .task-log-toolbar__search,
   .holo-panel--focus .focus-controls__trigger,
   .focus-studios--collapsed .focus-studios__collapse,
   .focus-studios--collapsed .focus-studios__create,
   .focus-studios--collapsed .focus-studios__studio,
   .holo-panel--focus .turn-card__pin,
-  .holo-panel--focus .copy-button { min-width: 44px; min-height: 44px; }
+  .holo-panel--focus .copy-button { min-width: var(--tap); min-height: var(--tap); }
   .focus-report-nav__toggle,
-  .holo-panel--focus .quest-log__latest { min-height: 44px; }
+  .holo-panel--focus .quest-log__latest { min-height: var(--tap); }
 
   /* A collapsed studio rail is useful on a phone, but it must not become a
      tall left-side stack above the report. Keep its shortcuts in one
@@ -2160,17 +2331,19 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
     padding: 0 12px 20px;
   }
 
-  /* The usage detail is a true bottom sheet on a phone. It no longer floats
-     across the report and it leaves the persistent command controls clear. */
+  /* 用量明細在手機是貼在「報告區底部」的抽屜。專業模式的指令列是
+     .task-focus-layer 的 flex footer，報告區（.holo-panel--focus，
+     position: relative）的下緣正好就是指令列的上緣——所以定位在報告區裡
+     就好，不必再用寫死的 192/184/258 去猜指令列多高。
+     --anchored 平常是掛在能量條下面的下拉，手機一併收回報告區。 */
+  .focus-energy--anchored { position: static; }
   .focus-energy__panel,
   .focus-energy__panel--anchored {
-    position: fixed;
-    /* Focus mode's composer lives in the layer footer rather than against the
-       viewport edge. Reserve that whole footer (including its mobile margin)
-       so this sheet never covers the input or its action buttons. */
-    inset: auto 8px max(192px, calc(env(safe-area-inset-bottom) + 184px));
+    position: absolute;
+    inset: auto var(--sp-2) var(--sp-2);
+    top: auto;
     width: auto;
-    max-height: min(58dvh, calc(100dvh - 258px));
+    max-height: min(58dvh, calc(var(--vh) - 258px));
     padding: 14px;
     border-radius: 14px;
     z-index: 26000;
@@ -2187,38 +2360,37 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   }
 
   .focus-energy__panel-actions button {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: var(--tap-sm);
+    min-height: var(--tap-sm);
     padding-inline: 10px;
     font-size: 11px;
   }
 
   .focus-energy__close {
-    width: 40px;
+    width: var(--tap-sm);
     font-size: 22px !important;
+  }
+
+  /* 工具列在手機改成指令列的第一行（styles/responsive.css），原本為了替
+     浮起來的工具列預留高度而加的上邊距可以收掉。 */
+  .game-root--focus .command-composer,
+  .game-root--focus .command-composer--attachments {
+    width: calc(100% - 20px);
+    margin: var(--sp-2) auto var(--sp-2);
   }
 }
 
-/* Short landscape phones have enough width for two header columns but very
-   little vertical room. Drop the redundant title and use two purposeful rows
-   so the report remains usable instead of collapsing behind the composer. */
+/* 橫置手機：寬度夠、高度極少。標題（跟正在讀的報告重複）收掉，剩下的
+   三塊併成一列，把垂直空間全留給報告本身。 */
 @media (max-height: 500px) and (min-width: 601px) and (max-width: 1100px) {
   .holo-panel--focus .holo-panel__title {
-    grid-template-areas:
-      "context toolbar"
-      "energy energy";
+    grid-template-columns: minmax(0, 1fr) minmax(140px, 200px) auto;
+    grid-template-areas: "context energy toolbar";
     padding-block: 7px;
   }
 
   .holo-panel--focus .holo-panel__heading { display: none; }
   .focus-reader__studio-rail { display: none; }
   .focus-reader > .quest-log { min-height: 0; }
-  .game-root--focus .command-composer { margin-top: 48px; }
-}
-
-@media (max-height: 500px) and (min-width: 720px) and (max-width: 1100px) {
-  .holo-panel--focus .holo-panel__title {
-    grid-template-columns: minmax(0, 1fr) minmax(160px, 220px) auto;
-    grid-template-areas: "context energy toolbar";
-  }
+  .game-root--focus .command-composer { margin-top: var(--sp-2); }
 }

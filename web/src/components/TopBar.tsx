@@ -4,6 +4,7 @@ import { APP_VERSION } from "../appVersion";
 import { lang, setLang, t, tc } from "../i18n";
 import { apiRequest } from "../api";
 import { roomName } from "../workspace";
+import { Icon } from "./Icon";
 
 type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean; diagnosticsEnabled: boolean };
 
@@ -113,7 +114,7 @@ export function TopBar({
   const [healthOpen, setHealthOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
-  // 全域功能開關：⚙ 選單打開時才抓，改動走樂觀更新、失敗回滾。
+  // 全域功能開關：功能選單打開時才抓，改動走樂觀更新、失敗回滾。
   const [appToggles, setAppToggles] = useState<AppToggles | null>(null);
   const updateRef = useRef<HTMLDivElement>(null);
   const healthRef = useRef<HTMLDivElement>(null);
@@ -240,7 +241,6 @@ export function TopBar({
       <button className="top-bar__room" type="button" onClick={onRoom} title={activeWorkspace}>
         <span>ROOM</span>
         <strong>{roomName(activeWorkspace)}</strong>
-        <b>⌄</b>
       </button>
 
       <div className="top-bar__spacer" />
@@ -264,14 +264,14 @@ export function TopBar({
           <option value="off">{t("自動核准：關閉")}</option>
           <option value="safe">{t("安全自動核准")}</option>
           <option value="full">{t("完全自動核准")}</option>
-          <option value="invincible">{t("⚡ 無限制")}</option>
+          <option value="invincible">{t("無限制")}</option>
         </select>
         {active?.autoApproveMode === "invincible" && <button
           type="button"
           className="top-bar__auto-approve-reset"
           onClick={() => onAutoApprove("safe")}
           title={t("立即回到安全自動核准")}
-        >🛡 {t("回到安全")}</button>}
+        ><Icon name="shield" /> {t("回到安全")}</button>}
       </div>
 
       <div ref={toolsRef} className="top-bar__mcp">
@@ -282,7 +282,7 @@ export function TopBar({
           aria-expanded={toolsOpen}
           title={t("辦公室功能：MCP、看板、營運、下班、重啟、導覽")}
         >
-          {restartPending ? t("⟳ 等空檔重啟中…") : t("⚙ 功能")} <strong>⌄</strong>
+          <Icon name={restartPending ? "refresh" : "gear"} />{restartPending ? t("等空檔重啟中…") : t("功能")}
         </button>
         {toolsOpen && (
           <div className="top-bar__more-menu" role="group" aria-label={t("功能")}>
@@ -291,22 +291,22 @@ export function TopBar({
             </button>
             {onOpenCodexCommands && active?.provider === "codex" && <button type="button" onClick={() => { setToolsOpen(false); onOpenCodexCommands(); }} title={t("管理 Codex CLI 的原生指令與能力")}>{t("Codex 原生指令管理")}</button>}
             <button type="button" onClick={() => { setToolsOpen(false); onOpenGlobalMemory(); }} title={t("跨所有 NPC 共用的長期記憶")}>
-              {t("🧠 全域記憶")}
+              {<><Icon name="brain" />{t("全域記憶")}</>}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenAccounts(); }} title={t("帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個")}>
-              {t("🔑 帳號管理")}
+              {<><Icon name="key" />{t("帳號管理")}</>}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenKanban(); }} title={t("任務看板：BOSS 交辦與部門 Mission 的所有卡片進度")}>
-              {t("📋 任務看板")}
+              {<><Icon name="board" />{t("任務看板")}</>}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenOps(); }} title={t("成本日報與排程任務")}>
-              {t("📊 營運面板")}
+              {<><Icon name="chart" />{t("營運面板")}</>}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenDayReport(); }} title={t("下班報告與一日回放：今天花了多少、完成了什麼、事件時間軸")}>
-              {t("🌙 下班報告")}
+              {<><Icon name="moon" />{t("下班報告")}</>}
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenOutbox(); }} title={t("成品匣：隊員完成的交付物（工作區 outbox 資料夾）集中一覽、一鍵開啟")}>
-              {t("📦 成品匣")}
+              {<><Icon name="box" />{t("成品匣")}</>}
             </button>
             <button
               type="button"
@@ -314,7 +314,7 @@ export function TopBar({
               disabled={restartPending}
               title={t("優雅重啟伺服器：等所有 NPC 空檔後自動重啟，不會打斷任何回合")}
             >
-              {restartPending ? t("⟳ 等空檔重啟中…") : t("⟳ 重啟伺服器")}
+              <><Icon name="refresh" />{restartPending ? t("等空檔重啟中…") : t("重啟伺服器")}</>
             </button>
             {showBackgroundServiceStop && <button
               type="button"
@@ -322,13 +322,13 @@ export function TopBar({
               onClick={() => { setToolsOpen(false); onShutdown?.(); }}
               title={t("停止 Windows 背景服務並關閉 Pixel Crew；進行中的 NPC 工作會中斷")}
             >
-              {t("⏻ 關閉背景服務")}
+              <><Icon name="power" />{t("關閉背景服務")}</>
             </button>}
             <button type="button" onClick={() => { setToolsOpen(false); onOpenTour(); }} title={t("新手導覽：讓導覽貓帶你重新認識辦公室")}>
-              {t("❓ 新手導覽")}
+              <><Icon name="help" />{t("新手導覽")}</>
             </button>
             <button type="button" onClick={() => { setToolsOpen(false); onOpenRemote(); }} title={t("遠端存取／手機控制：啟動轉接站，手機也能連進來操作")}>
-              {t("🔗 遠端存取／手機控制")}
+              {<><Icon name="link" />{t("遠端存取／手機控制")}</>}
             </button>
             <label className="top-bar__menu-toggle" title={t("CTX 快滿時自動把工作交接給全新工作階段（170k 門檻）；關閉後交給 CLI 自行壓縮")}>
               <input
@@ -337,7 +337,7 @@ export function TopBar({
                 disabled={!appToggles}
                 onChange={() => toggleAppSetting("brainSwapEnabled")}
               />
-              <span>{t("🧠 自動換腦")}</span>
+              <span>{<><Icon name="brain" />{t("自動換腦")}</>}</span>
             </label>
             <label className="top-bar__menu-toggle" title={t("回合撞到訂閱用量上限時，重置時間一到自動叫 NPC 繼續被中斷的工作")}>
               <input
@@ -346,11 +346,11 @@ export function TopBar({
                 disabled={!appToggles}
                 onChange={() => toggleAppSetting("limitResumeEnabled")}
               />
-              <span>{t("⏰ 撞限自動續跑")}</span>
+              <span><Icon name="clock" />{t("撞限自動續跑")}</span>
             </label>
             <label className="top-bar__menu-toggle" title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
               <input type="checkbox" checked={appToggles?.diagnosticsEnabled ?? true} disabled={!appToggles} onChange={() => toggleAppSetting("diagnosticsEnabled")} />
-              <span>{t("📈 本機診斷")}</span>
+              <span>{<><Icon name="chart" />{t("本機診斷")}</>}</span>
             </label>
           </div>
         )}
@@ -368,22 +368,22 @@ export function TopBar({
         title={t("切換語言")}
         aria-label={t("切換語言")}
       >
-        🌐 <span className={lang === "zh" ? "top-bar__lang--on" : "top-bar__lang--off"}>中</span>
+        <Icon name="globe" /> <span className={lang === "zh" ? "top-bar__lang--on" : "top-bar__lang--off"}>中</span>
         <span className="top-bar__lang-sep">/</span>
         <span className={lang === "en" ? "top-bar__lang--on" : "top-bar__lang--off"}>EN</span>
       </button>
       <details className="top-bar__more" ref={moreRef}>
         <summary aria-label={t("更多設定與功能")}>•••</summary>
         <div className="top-bar__more-menu">
-          {/* Phone-only: the standalone 🌐/🔔 icons are hidden on small screens
+          {/* Phone-only: the standalone language/notification icons are hidden on small screens
               (too cryptic + crowd the bar), surfaced here with clear labels. */}
           <div className="top-bar__more-mobile">
             <button type="button" onClick={() => {
               const next = lang === "zh" ? "en" : "zh";
               void apiRequest("/api/app-settings", { method: "POST", body: { lang: next } }).catch(() => {}).finally(() => setLang(next));
-            }}>🌐 {lang === "zh" ? t("切換英文 EN") : t("切換中文 中")}</button>
+            }}><Icon name="globe" />{lang === "zh" ? t("切換英文 EN") : t("切換中文 中")}</button>
             <button type="button" onClick={onNotificationsToggle}>
-              🔔 {notificationsEnabled ? t("關閉桌面通知") : t("開啟桌面通知")}
+              <Icon name="bell" />{notificationsEnabled ? t("關閉桌面通知") : t("開啟桌面通知")}
             </button>
           </div>
           <div className="top-bar__more-mobile top-bar__more-mobile--agent">
@@ -402,28 +402,28 @@ export function TopBar({
               <option value="off">{tc("自動核准", "關閉")}</option>
               <option value="safe">{t("安全")}</option>
               <option value="full">{t("完全")}</option>
-              <option value="invincible">{t("⚡ 無限制")}</option>
+              <option value="invincible">{t("無限制")}</option>
             </select>
           </label>
           {active?.autoApproveMode === "invincible" && <button
             type="button"
             className="top-bar__auto-approve-reset"
             onClick={() => onAutoApprove("safe")}
-          >🛡 {t("回到安全")}</button>}
+          ><Icon name="shield" /> {t("回到安全")}</button>}
           <div className="top-bar__more-compact-features" aria-label={t("功能")}>
             <button type="button" onClick={() => { closeCompactMenu(); onOpenMcp(); }}>{t("MCP 能力")} <strong>{connected}/{capabilities.mcpServers.length}</strong></button>
             {onOpenCodexCommands && active?.provider === "codex" && <button type="button" onClick={() => { closeCompactMenu(); onOpenCodexCommands(); }}>{t("Codex 原生指令管理")}</button>}
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenGlobalMemory(); }}>{t("🧠 全域記憶")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenAccounts(); }}>{t("🔑 帳號管理")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenKanban(); }}>{t("📋 任務看板")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenOps(); }}>{t("📊 營運面板")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenDayReport(); }}>{t("🌙 下班報告")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenOutbox(); }}>{t("📦 成品匣")}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenGlobalMemory(); }}>{<><Icon name="brain" />{t("全域記憶")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenAccounts(); }}>{<><Icon name="key" />{t("帳號管理")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenKanban(); }}>{<><Icon name="board" />{t("任務看板")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenOps(); }}>{<><Icon name="chart" />{t("營運面板")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenDayReport(); }}>{<><Icon name="moon" />{t("下班報告")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenOutbox(); }}>{<><Icon name="box" />{t("成品匣")}</>}</button>
             <button type="button" onClick={() => { closeCompactMenu(); onOpenBackup(); }}>{t("備份與還原")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenRemote(); }}>{t("🔗 遠端存取／手機控制")}</button>
-            <button type="button" onClick={() => { closeCompactMenu(); onOpenTour(); }}>{t("❓ 新手導覽")}</button>
-            <button type="button" disabled={restartPending} onClick={() => { closeCompactMenu(); onRestart(); }}>{restartPending ? t("⟳ 等空檔重啟中…") : t("⟳ 重啟伺服器")}</button>
-            {showBackgroundServiceStop && <button type="button" className="top-bar__menu-danger" onClick={() => { closeCompactMenu(); onShutdown?.(); }}>{t("⏻ 關閉背景服務")}</button>}
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenRemote(); }}>{<><Icon name="link" />{t("遠端存取／手機控制")}</>}</button>
+            <button type="button" onClick={() => { closeCompactMenu(); onOpenTour(); }}><><Icon name="help" />{t("新手導覽")}</></button>
+            <button type="button" disabled={restartPending} onClick={() => { closeCompactMenu(); onRestart(); }}><><Icon name="refresh" />{restartPending ? t("等空檔重啟中…") : t("重啟伺服器")}</></button>
+            {showBackgroundServiceStop && <button type="button" className="top-bar__menu-danger" onClick={() => { closeCompactMenu(); onShutdown?.(); }}><><Icon name="power" />{t("關閉背景服務")}</></button>}
           </div>
           {updateInfo?.updateAvailable && <a href={updateInfo.releaseUrl ?? "https://github.com/juinwei7/Pixel-Crew/releases/latest"} target="_blank" rel="noreferrer">{t("更新至 v{version}", { version: updateInfo.latestVersion ?? "" })}</a>}
         </div>
@@ -437,7 +437,7 @@ export function TopBar({
             aria-expanded={updateOpen}
             onClick={() => { setHealthOpen(false); setUpdateOpen((open) => !open); }}
           >
-            {t("⬆ 有新版 v{version}", { version: updateInfo.latestVersion ?? "" })}
+            {t("有新版 v{version}", { version: updateInfo.latestVersion ?? "" })}
           </button>
           {updateOpen && (
             <div className="update-popover">

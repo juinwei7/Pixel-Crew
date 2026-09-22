@@ -4,6 +4,7 @@ import { apiRequest } from "../api";
 import { Modal } from "./Modal";
 import { QrTree } from "./QrTree";
 
+import { Icon } from "./Icon";
 type TsInfo = { installed: boolean; running: boolean; dnsName: string; mode: "public" | "private" | "off" };
 type CfInfo = { installed: boolean; running: boolean; url: string; downloading: boolean };
 type State = {
@@ -99,7 +100,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
     <Modal
       label={t("遠端存取／手機控制")}
       eyebrow="REMOTE ACCESS"
-      title={t("🔗 遠端存取／手機控制")}
+      title={t("遠端存取／手機控制")}
       overlayClassName="warroom-result remote-access-modal"
       cardClassName="warroom-result__card remote-access-modal__card"
       onClose={onClose}
@@ -117,7 +118,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
         <p style={{ margin: "6px 0 12px", fontSize: 12, color: "#7d8cb8" }}>
           {t("完成度")} {pct}%
           <button style={{ ...btnGhost, padding: "3px 8px", fontSize: 11, marginLeft: 10 }} onClick={() => setDemo((v) => !v)}>
-            {demo ? t("← 離開預覽") : t("🎬 預覽新手引導")}
+            {demo ? t("← 離開預覽") : t("預覽新手引導")}
           </button>
         </p>
 
@@ -189,7 +190,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
             </div>
             <div className="remote-access-modal__qr" style={{ textAlign: "center", margin: "0 auto" }}>
               <QrTree text={st.publicUrl} px={200} />
-              <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("📱 掃碼開啟・點一下逛夜城")}</div>
+              <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("掃碼開啟・點一下逛夜城")}</div>
             </div>
           </div>
         </div>
@@ -204,7 +205,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
         <label style={label}>{t("對外通道（二選一）")}</label>
         <div style={{ display: "grid", gap: 10 }}>
           <div style={{ ...chanBox(active === "cloudflared"), cursor: busy ? "default" : "pointer" }} onClick={() => !busy && void chooseCloudflared()}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>☁️ {t("免安裝公開網址（cloudflared）")}</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}><Icon name="cloud" /> {t("免安裝公開網址（cloudflared）")}</div>
             <div style={{ fontSize: 12, color: "#9fb0dd", marginTop: 3 }}>
               {t("推薦分享給別人。對方零安裝、零註冊，打開網址＋通行碼就能用。網址每次重啟會變。")}
             </div>
@@ -214,7 +215,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
 
           <div style={chanBox(active === "tailscale")}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>
-              🔒 {t("Tailscale（固定網址・較私密）")}
+              <Icon name="lock" /> {t("Tailscale（固定網址・較私密）")}
               {!st.tailscale.installed && <span style={{ fontSize: 11, color: "#ff9a9a", fontWeight: 400 }}> {t("未安裝")}</span>}
               {st.tailscale.installed && !st.tailscale.running && <span style={{ fontSize: 11, color: "#ffd479", fontWeight: 400 }}> {t("未登入")}</span>}
             </div>
@@ -267,7 +268,7 @@ function PasscodeSection({ busy, run, notify }: { busy: string; run: Run; notify
   }
   return (
     <details>
-      <summary style={summary}>🔑 {t("變更通行碼")}</summary>
+      <summary style={summary}><Icon name="key" /> {t("變更通行碼")}</summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <label style={label}>{t("新通行碼（至少 6 碼）")}</label>
         <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8 }}>
@@ -291,7 +292,7 @@ function GuardianSection({ st, busy, run, notify }: { st: State; busy: string; r
   return (
     <details>
       <summary style={summary}>
-        🛡️ {t("監護密碼")} {st.guardian.set
+        <Icon name="shield" /> {t("監護密碼")} {st.guardian.set
           ? <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已設定")}</span>
           : <span style={{ color: "#ffd479", fontSize: 12 }}>· {t("未設定")}</span>}
       </summary>
@@ -365,7 +366,7 @@ function ShareSection({ st, busy, run, notify }: { st: State; busy: string; run:
   return (
     <details>
       <summary style={summary}>
-        ⏱️ {t("限時分享")} {active && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("分享中")}</span>}
+        <Icon name="clock" /> {t("限時分享")} {active && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("分享中")}</span>}
       </summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <p style={{ fontSize: 12, color: "#9fb0dd", margin: "0 0 10px" }}>
@@ -437,7 +438,7 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
   if (blocked) {
     return (
       <div style={{ ...summary, cursor: "default", color: "#5f6f9c", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ opacity: 0.6 }}>🟢 {t("Google 登入（進階）")}</span>
+        <span style={{ opacity: 0.6 }}>{t("Google 登入（進階）")}</span>
         <span style={{ fontSize: 11.5, color: "#7d8cb8", fontWeight: 400 }}>
           {t("· 需搭配 Tailscale 固定網址（cloudflared 網址每次會變，無法登入）")}
         </span>
@@ -448,14 +449,14 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
   return (
     <details>
       <summary style={summary}>
-        🟢 {t("Google 登入（進階）")} {st.google.enabled && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已啟用")}</span>}
+        {t("Google 登入（進階）")} {st.google.enabled && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已啟用")}</span>}
       </summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <p style={{ fontSize: 12, color: "#9fb0dd", margin: "0 0 8px" }}>
           {t("讓指定的 Google 帳號免通行碼登入。需先到")} <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style={{ color: "#9fc0ff" }}>Google Cloud Console</a> {t("建立 OAuth 2.0 用戶端，取得 ID／密鑰。")}
         </p>
         <p style={{ fontSize: 12, color: "#ffd479", margin: "0 0 8px" }}>
-          {t("⚠ 重新導向 URI 必須固定，建議搭 Tailscale（cloudflared 每次網址會變，不適合）。")}
+          {t("重新導向 URI 必須固定，建議搭 Tailscale（cloudflared 每次網址會變，不適合）。")}
         </p>
         <label style={label}>{t("把這個「已授權的重新導向 URI」貼到 Google Cloud：")}</label>
         <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8, marginBottom: 10 }}>

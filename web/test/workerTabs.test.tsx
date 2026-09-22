@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -87,4 +88,12 @@ test("groups persisted departments independently and exposes mission progress", 
   assert.match(html, /老闆交辦/);
   assert.equal((html.match(/class="crew-department /g) ?? []).length, 2);
   assert.doesNotMatch(html, /crew-row--active/);
+});
+
+test("the phone roster sheet ignores the desktop collapsed preference", () => {
+  // 收合是桌面側欄的偏好（縮成 52px 只剩頭像）。抽屜套上去只會變成一排
+  // 沒有名字的色塊——手機一律當成展開。
+  const source = readFileSync(new URL("../src/components/WorkerTabs.tsx", import.meta.url), "utf8");
+  assert.match(source, /collapsed: railCollapsed/);
+  assert.match(source, /const collapsed = isPhone \? false : railCollapsed;/);
 });

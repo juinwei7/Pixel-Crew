@@ -84,7 +84,7 @@ export function GlobalMemoryModal({ globalMemoryEvent, onClose }: Props) {
   }
 
   return (
-    <Modal label={t("全域記憶")} title={t("🧠 全域記憶")} overlayClassName="global-memory-modal" cardClassName="global-memory-modal__card" closeClassName="global-memory-modal__close" closeLabel={t("關閉全域記憶")} onClose={onClose}>
+    <Modal label={t("全域記憶")} title={t("全域記憶")} overlayClassName="global-memory-modal" cardClassName="global-memory-modal__card" closeClassName="global-memory-modal__close" closeLabel={t("關閉全域記憶")} onClose={onClose}>
       <p className="global-memory-modal__hint">{t("跨所有 NPC 共用的長期記憶。任何 NPC 學到值得記住的事都會寫在這裡，換一個 NPC 也不會失憶。")}</p>
       {notes === null ? (
         <div className="global-memory-modal__empty">{t("讀取中…")}</div>

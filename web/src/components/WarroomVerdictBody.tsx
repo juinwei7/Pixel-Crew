@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { t } from "../i18n";
+import { Icon } from "./Icon";
 
 type WarRoomAction = { priority: "P1" | "P2" | "P3" | "P4"; title: string; how: string };
 type WarRoomDispute = { point: string; ruling: string };
@@ -61,9 +62,9 @@ export function WarroomVerdictBody({ result }: { result: WarRoomResult }) {
     {metrics.length > 0 && <div className="warroom-metrics">{metrics.map((metric, index) => <div key={index} className="warroom-metric" style={{ "--i": index } as CSSProperties}><small>{metric.label}</small><strong>{metric.value}</strong>{metric.note && <em className={metric.note.trim().startsWith("-") ? "is-down" : metric.note.trim().startsWith("+") ? "is-up" : ""}>{metric.note}</em>}</div>)}</div>}
     {charts.length > 0 && <div className="warroom-charts">{charts.map((chart, index) => <WarroomChartView key={index} chart={chart} />)}</div>}
     <p className="warroom-result__verdict">{result.verdict}</p>
-    {result.consensus.length > 0 && <section><h3>{t("✅ 共識")}</h3><ul>{result.consensus.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
-    {result.disputes.length > 0 && <section><h3>{t("⚖️ 分歧與裁決")}</h3><ul>{result.disputes.map((item, index) => <li key={index}><strong>{item.point}</strong> → {item.ruling}</li>)}</ul></section>}
-    {result.actions.length > 0 && <section><h3>{t("➡️ 可執行下一步")}</h3><ol>{result.actions.map((action, index) => <li key={index}><span className={`warroom-result__prio warroom-result__prio--${action.priority}`}>{action.priority}</span> <strong>{action.title}</strong>{action.how && <small>{action.how}</small>}</li>)}</ol></section>}
+    {result.consensus.length > 0 && <section><h3><Icon name="check" /> {t("共識")}</h3><ul>{result.consensus.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
+    {result.disputes.length > 0 && <section><h3>{t("分歧與裁決")}</h3><ul>{result.disputes.map((item, index) => <li key={index}><strong>{item.point}</strong> → {item.ruling}</li>)}</ul></section>}
+    {result.actions.length > 0 && <section><h3>{t("可執行下一步")}</h3><ol>{result.actions.map((action, index) => <li key={index}><span className={`warroom-result__prio warroom-result__prio--${action.priority}`}>{action.priority}</span> <strong>{action.title}</strong>{action.how && <small>{action.how}</small>}</li>)}</ol></section>}
     {!result.structured && <p className="warroom-result__note">{t("（NPC 未回傳結構化格式，以上為原始裁決文字）")}</p>}
   </>;
 }

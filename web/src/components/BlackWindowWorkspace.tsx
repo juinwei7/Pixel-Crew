@@ -4,6 +4,8 @@ import { BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAcco
 import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWindowTerminal";
 import { EnergyHud } from "./EnergyHud";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { useIsPhone } from "../hooks/useIsPhone";
+import { paneAfterSwipe, swipeStep } from "../blackWindowSwipe";
 import { type ConfirmTone } from "./ConfirmDialog";
 import { type Toast } from "./ToastRegion";
 import { t } from "../i18n";
@@ -56,7 +58,9 @@ function closeOtherSettingsMenu(event: React.SyntheticEvent<HTMLDetailsElement>)
   const menu = event.currentTarget;
   if (!menu.open) return;
   menu.parentElement?.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((other) => {
-    if (other !== menu) other.open = false;
+    // querySelectorAll 找的是所有後代，不只兄弟。手機版把帳號選單收進了 ⋯
+    // 裡面，少了 contains 這個判斷，外層一展開就會把自己裡面那一層關掉。
+    if (other !== menu && !menu.contains(other)) other.open = false;
   });
 }
 
@@ -88,6 +92,10 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
   const [terminalStatuses, setTerminalStatuses] = useState<Record<string, "connecting" | "ready" | "closed" | "error">>({});
   const [terminalEpochs, setTerminalEpochs] = useState<Record<string, number>>({});
   const [advancedDraft, setAdvancedDraft] = useState<AdvancedDraft>({ model: "", autoApproveMode: "off" });
+  // 手機的工具列只放「模式切換 / 分頁 / 主要動作 / ⋯」一排，用量、帳號、
+  // 語音、新 CLI 全部改由 ⋯ 選單展開。這幾個元件有自己的狀態（錄音中、
+  // 展開中），不能同時渲染兩份，所以位置得用 JS 決定而不是 CSS 顯隱。
+  const isPhone = useIsPhone();
   const terminalRefs = useRef(new Map<string, BlackWindowTerminalHandle | null>());
   const launchingIdRef = useRef<string | null>(null);
   const destroyingTerminalPromisesRef = useRef(new Map<string, Promise<boolean>>());
@@ -285,6 +293,27 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     const z = Math.max(0, ...current.windows.map((entry) => entry.z)) + 1;
     return { ...current, selectedId: id, selectedWorkspaceId: target.workspaceId, windows: current.windows.map((entry) => entry.id === id ? { ...entry, z, minimized: false } : entry) };
   });
+  /* 手機：在 pane 上左右滑動換 CLI。手勢只在「單指觸控 + 有第二個 pane」
+     時才成立，門檻與方向判斷在 blackWindowSwipe.ts（純函式、可測）。
+     捲 scrollback（垂直）、在終端機裡選字（慢）都不會誤觸。 */
+  const swipeRef = useRef<{ pointerId: number; x: number; y: number; at: number } | null>(null);
+
+  const beginSwipe = (event: React.PointerEvent) => {
+    if (!isPhone || event.pointerType !== "touch" || visibleWindows.length <= 1) return;
+    swipeRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, at: event.timeStamp };
+  };
+
+  const endSwipe = (event: React.PointerEvent) => {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const step = swipeStep({ dx: event.clientX - start.x, dy: event.clientY - start.y, elapsedMs: event.timeStamp - start.at });
+    if (step === 0) return;
+    const index = visibleWindows.findIndex((entry) => entry.id === selected?.id);
+    const nextIndex = paneAfterSwipe(index, visibleWindows.length, step);
+    if (nextIndex !== index) focus(visibleWindows[nextIndex].id);
+  };
+
   const selectWorkspace = (workspaceId: string) => setLayout((current) => {
     const panes = current.windows.filter((entry) => entry.workspaceId === workspaceId);
     return { ...current, selectedWorkspaceId: workspaceId, selectedId: topmostBlackWindow(panes)?.id ?? null };
@@ -403,6 +432,9 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     return { ...current, windows: [...current.windows.map((entry) => entry.id === source.id ? { ...source, height } : entry), sibling], selectedId: sibling.id };
   });
   const beginPointer = (event: React.PointerEvent, entry: BlackWindow, kind: DragState["kind"], edge?: DragState["edge"]) => {
+    // 手機的 pane 被 CSS 釘成滿版，拖曳與縮放都不會有效果；把觸控讓給上層的
+    // 左右滑動換 pane，不然標題列會變成一條「滑了沒反應」的死區。
+    if (isPhone && event.pointerType === "touch") return;
     event.preventDefault(); event.stopPropagation(); focus(entry.id);
     // A save scheduled just before the gesture must not publish stale geometry
     // halfway through it. Keep the queued snapshot and resume it on pointer-up
@@ -554,17 +586,40 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     if (selected.agentStarted) await restartAgent(config, selectedAccountLabel, "settings");
     else update(selected.id, { model: config.model, autoApproveMode: config.autoApproveMode });
   };
+  // 手機一排的版型會把這顆鈕截字，所以同一份文字也掛成 title。
+  const launchLabel = !selected ? "" : restartingId === selected.id ? t("重新啟動中…") : launchingId === selected.id ? t("啟動中…") : selected.agentStarted ? t("Agent 運行中") : terminalStatuses[selected.id] !== "ready" ? t("正在連線…") : authenticated(selectedAuthStatus) ? t("啟動 Agent") : t("登入帳號");
   return <section className="black-workspace" aria-label={t("黑窗工程工作台")}>
     <header className="black-workspace__toolbar">
       <div className="black-workspace__brand" aria-label="PIXEL CREW"><i />PIXEL CREW</div>
       <div className="black-workspace__modes" role="group" aria-label={t("工作模式")}><button onClick={onPixel}>{t("像素")}</button><button onClick={onProfessional}>{t("專業")}</button><button className="active">{t("黑窗")}</button></div>
-      <EnergyHud usage={usage} accountUsage={accountUsage} accounts={accounts} onRefresh={onRefreshUsage} totalCostUsd={totalCostUsd}/>
-      <div className="black-workspace__tabs" role="group" aria-label={t("CLI 分頁")}>{visibleWindows.map((entry, index) => <button type="button" aria-current={entry.id === selected?.id ? "true" : undefined} className={entry.id === selected?.id ? "active" : ""} key={entry.id} onClick={() => focus(entry.id)}><span>{entry.title}</span><small>{index + 1}</small></button>)}</div>
-      <button type="button" className="black-workspace__new" onClick={addPane}>＋ {t("新 CLI")}</button><button type="button" onClick={() => addWorkspace()}>＋ {t("新分頁")}</button>
-      <button type="button" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
+      {!isPhone && <EnergyHud usage={usage} accountUsage={accountUsage} accounts={accounts} onRefresh={onRefreshUsage} totalCostUsd={totalCostUsd}/>}
+      {/* 手機：分頁改成一個下拉。橫向的分頁列在窄螢幕一定會自己佔掉一整排，
+          而且 pane 數量一多就要橫捲；下拉固定一個寬度，數量再多也不變。 */}
+      {isPhone
+        ? visibleWindows.length > 0 && <select
+            className="black-workspace__pane-select"
+            aria-label={t("CLI 分頁")}
+            value={selected?.id ?? ""}
+            onChange={(event) => focus(event.target.value)}
+          >{visibleWindows.map((entry, index) => <option key={entry.id} value={entry.id}>{index + 1} · {entry.title}</option>)}</select>
+        : <div className="black-workspace__tabs" role="group" aria-label={t("CLI 分頁")}>{visibleWindows.map((entry, index) => <button type="button" aria-current={entry.id === selected?.id ? "true" : undefined} className={entry.id === selected?.id ? "active" : ""} key={entry.id} onClick={() => focus(entry.id)}><span>{entry.title}</span><small>{index + 1}</small></button>)}</div>}
+      {!isPhone && <>
+        <button type="button" className="black-workspace__new" onClick={addPane} title={t("新 CLI")}>＋ <span>{t("新 CLI")}</span></button><button type="button" className="black-workspace__new-tab" onClick={() => addWorkspace()}>＋ {t("新分頁")}</button>
+        <button type="button" className="black-workspace__split" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" className="black-workspace__split" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
+      </>}
       {selected && <div className="black-workspace__settings">
-        <VoiceInputButton placement="toolbar" disabled={terminalStatuses[selected.id] !== "ready"} label={t("語音輸入至目前 CLI")} onTranscript={(text) => terminalRefs.current.get(selected.id)?.insertText(text)} />
-        <details className="black-account-picker" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
+        <button type="button" className="black-workspace__launch" title={launchLabel} onClick={() => void launchAgent()} disabled={restartingId === selected.id || launchingId === selected.id || closingIds.has(selected.id) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}>{launchLabel}</button>
+        <details className="black-workspace__advanced" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
+          <summary aria-label={t("進階設定")}>⋯</summary>
+          <div>{isPhone && <section className="black-workspace__advanced-mobile" aria-label={t("目前 CLI 的設定")}>
+            {/* 用量明細與帳號清單在手機都是貼底的抽屜，同時展開會疊在一起。
+                EnergyHud 自己會在點到外面時收起來，反方向則由這裡補上。 */}
+            <div className="black-workspace__advanced-usage" onPointerDown={(event) => {
+              event.currentTarget.parentElement?.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((menu) => { menu.open = false; });
+            }}>
+              <EnergyHud usage={usage} accountUsage={accountUsage} accounts={accounts} onRefresh={onRefreshUsage} totalCostUsd={totalCostUsd}/>
+            </div>
+            <details className="black-account-picker" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
           <summary aria-label={t("切換 CLI 帳號")}><span className={authenticated(selectedAuthStatus) ? "online" : "offline"}/>{selectedAccountLabel}<b>▾</b></summary>
           <div className="black-account-picker__menu">
             {(["codex", "claude"] as ProviderId[]).map((provider) => <section key={provider}><strong>{providerLabel(provider)}</strong>
@@ -573,11 +628,10 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
             </section>)}
             <button type="button" className="black-account-picker__manage" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onOpenAccounts(selected.provider ?? "codex"); }}>＋ {t("管理／新增帳號")}</button>
           </div>
-        </details>
-        <button type="button" className="black-workspace__launch" onClick={() => void launchAgent()} disabled={restartingId === selected.id || launchingId === selected.id || closingIds.has(selected.id) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}>{restartingId === selected.id ? t("重新啟動中…") : launchingId === selected.id ? t("啟動中…") : selected.agentStarted ? t("Agent 運行中") : terminalStatuses[selected.id] !== "ready" ? t("正在連線…") : authenticated(selectedAuthStatus) ? t("啟動 Agent") : t("登入帳號")}</button>
-        <details className="black-workspace__advanced" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
-          <summary aria-label={t("進階設定")}>⋯</summary>
-          <div><label>{t("模型")}<input value={advancedDraft.model} onChange={(event) => setAdvancedDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("使用預設模型")}/></label><label>{t("核准模式")}<select value={advancedDraft.autoApproveMode} onChange={(event) => setAdvancedDraft((current) => ({ ...current, autoApproveMode: event.target.value as AutoApproveMode }))}><option value="off">{t("手動核准")}</option><option value="safe">{t("安全")}</option><option value="full">{t("完全")}</option><option value="invincible">{t("無限制")}</option></select></label><button type="button" disabled={Boolean(restartingId) || closingIds.has(selected.id) || (advancedDraft.model.trim() === selected.model && advancedDraft.autoApproveMode === selected.autoApproveMode)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void applyAdvanced(); }}>{selected.agentStarted ? t("套用並重新啟動") : t("儲存設定")}</button></div>
+            </details>
+            <VoiceInputButton placement="toolbar" showLabel disabled={terminalStatuses[selected.id] !== "ready"} label={t("語音輸入至目前 CLI")} onTranscript={(text) => terminalRefs.current.get(selected.id)?.insertText(text)} />
+            <button type="button" className="black-workspace__new" onClick={(event) => { event.currentTarget.closest("details.black-workspace__advanced")?.removeAttribute("open"); addPane(); }}>＋ <span>{t("新 CLI")}</span></button>
+          </section>}<label>{t("模型")}<input value={advancedDraft.model} onChange={(event) => setAdvancedDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("使用預設模型")}/></label><label>{t("核准模式")}<select value={advancedDraft.autoApproveMode} onChange={(event) => setAdvancedDraft((current) => ({ ...current, autoApproveMode: event.target.value as AutoApproveMode }))}><option value="off">{t("手動核准")}</option><option value="safe">{t("安全")}</option><option value="full">{t("完全")}</option><option value="invincible">{t("無限制")}</option></select></label><button type="button" disabled={Boolean(restartingId) || closingIds.has(selected.id) || (advancedDraft.model.trim() === selected.model && advancedDraft.autoApproveMode === selected.autoApproveMode)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void applyAdvanced(); }}>{selected.agentStarted ? t("套用並重新啟動") : t("儲存設定")}</button></div>
         </details>
       </div>}
     </header>
@@ -596,7 +650,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
         })}</div><footer>{t("每個分頁獨立保存 panes 與 CLI session")}</footer>
       </aside>
       <div ref={canvasRef} className="black-workspace__canvas">
-        {visibleWindows.map((entry) => <article key={entry.id} className={"black-window " + (entry.id === selected?.id ? "black-window--active " : "") + (entry.minimized ? "black-window--minimized" : "")} style={{ left: entry.x, top: entry.y, width: entry.width, height: entry.height, zIndex: entry.z }} onPointerDown={() => focus(entry.id)}>
+        {visibleWindows.map((entry) => <article key={entry.id} className={"black-window " + (entry.id === selected?.id ? "black-window--active " : "") + (entry.minimized ? "black-window--minimized" : "")} style={{ left: entry.x, top: entry.y, width: entry.width, height: entry.height, zIndex: entry.z }} onPointerDown={(event) => { focus(entry.id); beginSwipe(event); }} onPointerUp={endSwipe} onPointerCancel={() => { swipeRef.current = null; }}>
           <header className="black-window__bar" tabIndex={0} aria-label={`${entry.title}。${t("Alt 加方向鍵移動；Alt 加 Shift 加方向鍵調整大小")}`} title={t("Alt 加方向鍵移動；Alt 加 Shift 加方向鍵調整大小")} onKeyDown={(event) => adjustPaneWithKeyboard(event, entry)} onPointerDown={(event) => beginPointer(event, entry, "move")}><span className={`black-window__dot black-window__dot--${terminalStatuses[entry.id] ?? "connecting"}`} aria-hidden="true"/><strong>{entry.title}</strong><code title={entry.workspacePath}>{entry.workspacePath}</code>
             <button type="button" className="black-window__font" aria-label={t("縮小終端字體")} title={`${t("縮小終端字體")} · ${entry.fontSize}px`} disabled={entry.fontSize <= BLACK_WINDOW_FONT_SIZE_MIN} onPointerDown={(event) => event.stopPropagation()} onClick={() => update(entry.id, { fontSize: clampBlackWindowFontSize(entry.fontSize - 1) })}>A−</button><button type="button" className="black-window__font" aria-label={t("放大終端字體")} title={`${t("放大終端字體")} · ${entry.fontSize}px`} disabled={entry.fontSize >= BLACK_WINDOW_FONT_SIZE_MAX} onPointerDown={(event) => event.stopPropagation()} onClick={() => update(entry.id, { fontSize: clampBlackWindowFontSize(entry.fontSize + 1) })}>A＋</button><button type="button" aria-label={t("中斷 CLI")} disabled={terminalStatuses[entry.id] !== "ready" || closingIds.has(entry.id) || restartingId === entry.id} onPointerDown={(event) => event.stopPropagation()} onClick={() => terminalRefs.current.get(entry.id)?.interrupt()} title={`${t("中斷 CLI")} · Ctrl+C`}>^C</button>{(terminalStatuses[entry.id] === "closed" || terminalStatuses[entry.id] === "error") && <button type="button" className="black-window__reconnect" aria-label={t("重新連線 CLI")} title={t("重新連線 CLI")} onPointerDown={(event) => event.stopPropagation()} onClick={() => reconnect(entry.id)}>{t("重連")}</button>}<button type="button" aria-label={entry.minimized ? t("恢復 CLI") : t("最小化 CLI")} title={entry.minimized ? t("恢復 CLI") : t("最小化 CLI")} onPointerDown={(event) => event.stopPropagation()} onClick={() => update(entry.id, { minimized: !entry.minimized })}>{entry.minimized ? "□" : "−"}</button><button type="button" aria-label={closingIds.has(entry.id) ? t("正在關閉 CLI…") : t("關閉 CLI")} aria-busy={closingIds.has(entry.id) || undefined} title={closingIds.has(entry.id) ? t("正在關閉 CLI…") : t("關閉 CLI")} disabled={closingIds.has(entry.id) || launchingId === entry.id || restartingId === entry.id} onPointerDown={(event) => event.stopPropagation()} onClick={() => void close(entry.id)}>{closingIds.has(entry.id) ? "…" : "×"}</button>
           </header>

@@ -208,10 +208,10 @@ export function AvatarWorkshop({ worker, onSave, onPreset, onActivateCustom, onR
   }
 
   return (
-    <div ref={dialogRef} className={`avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
+    <div ref={dialogRef} className={`ui-modal ui-modal--full avatar-workshop ${dragActive ? "avatar-workshop--drop-active" : ""}`} data-file-drop-owner="avatar" role="dialog" aria-modal="true" aria-labelledby="avatar-workshop-title" onDragEnter={onDragEnter} onDragOver={(event) => { if (dragContainsFiles(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; } }} onDragLeave={onDragLeave} onDrop={onDrop}>
       {dragActive && <div className="avatar-workshop__drop-hint" role="status"><span>＋</span><strong>{t("放開以設定自訂角色")}</strong><small>{t("PNG、JPEG、WebP 或 GIF")}</small></div>}
-      <div className="avatar-workshop__card">
-        <button type="button" className="avatar-workshop__close" onClick={onClose} disabled={saving} aria-label={t("關閉角色工坊")}>×</button>
+      <div className="ui-modal__card avatar-workshop__card">
+        <button type="button" className="ui-modal__close avatar-workshop__close" onClick={onClose} disabled={saving} aria-label={t("關閉角色工坊")}>×</button>
         <header className="avatar-workshop__header">
           <span className="avatar-workshop__eyebrow">AVATAR WORKSHOP · {AVATAR_WIDTH}×{AVATAR_HEIGHT}</span>
           <h2 id="avatar-workshop-title">{t("替 {name} 換一個樣子", { name: worker.name })}</h2>

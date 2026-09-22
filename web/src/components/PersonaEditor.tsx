@@ -201,7 +201,7 @@ export function PersonaEditor({ worker, onSave, onClose }: Props) {
 
         <div className="persona-editor__memory">
           <span className="persona-editor__memory-title">
-            {t("🧠 長期記憶")}
+            {t("長期記憶")}
             <small>{t("NPC 得知你的偏好時會自己記；改動在下次啟動生效")}</small>
           </span>
           {memory === null ? (

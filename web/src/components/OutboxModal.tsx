@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { t } from "../i18n";
 import { apiRequest } from "../api";
 import { Modal } from "./Modal";
+import { Icon, type IconName } from "./Icon";
 
 // OUTBOX 成品匣：隊員完成的交付物（放在各工作區 outbox/ 的真實檔案）一覽＋一鍵開啟。
 // 工作有前門——不用去聊天記錄裡考古找檔案。
@@ -22,16 +23,16 @@ function fmtTime(ms: number): string {
   return sameDay ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function iconFor(name: string): string {
+function iconFor(name: string): IconName {
   const ext = name.toLowerCase().split(".").pop() ?? "";
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "🖼️";
-  if (["pdf"].includes(ext)) return "📕";
-  if (["md", "txt", "doc", "docx", "rtf"].includes(ext)) return "📄";
-  if (["csv", "xls", "xlsx"].includes(ext)) return "📊";
-  if (["zip", "7z", "rar", "tar", "gz"].includes(ext)) return "🗜️";
-  if (["html", "htm"].includes(ext)) return "🌐";
-  if (["js", "ts", "py", "sh", "ps1", "json"].includes(ext)) return "🧩";
-  return "📦";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
+  if (["pdf"].includes(ext)) return "file";
+  if (["md", "txt", "doc", "docx", "rtf"].includes(ext)) return "file";
+  if (["csv", "xls", "xlsx"].includes(ext)) return "table";
+  if (["zip", "7z", "rar", "tar", "gz"].includes(ext)) return "archive";
+  if (["html", "htm"].includes(ext)) return "globe";
+  if (["js", "ts", "py", "sh", "ps1", "json"].includes(ext)) return "code";
+  return "box";
 }
 
 export function OutboxModal({ onClose }: { onClose(): void }) {
@@ -51,7 +52,7 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Modal label={t("成品匣")} eyebrow="OUTBOX" title={`📦 ${t("成品匣")}`} cardClassName="warroom-result__card outbox-modal" onClose={onClose}>
+    <Modal label={t("成品匣")} eyebrow="OUTBOX" title={t("成品匣")} cardClassName="warroom-result__card outbox-modal" onClose={onClose}>
       <p style={{ fontSize: 12.5, color: "#8ea0d0", lineHeight: 1.6, margin: "2px 0 12px" }}>
         {t("隊員完成的交付物會放進各自工作區的 outbox 資料夾，並集中顯示在這裡。想收東西時，直接跟隊員說「完成後把檔案放進 outbox」。")}
       </p>
@@ -77,7 +78,7 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
                 textDecoration: "none", color: "#dbe4ff",
               }}
             >
-              <span style={{ fontSize: 18 }}>{iconFor(it.name)}</span>
+              <span className="outbox-modal__icon"><Icon name={iconFor(it.name)} size={18} /></span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
                 <span style={{ display: "block", fontSize: 11, color: "#7d8cb8", marginTop: 2 }}>{it.owners} · {fmtSize(it.size)}</span>
@@ -93,7 +94,7 @@ export function OutboxModal({ onClose }: { onClose(): void }) {
           onClick={() => { setItems(null); void load(); }}
           style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #2b3a63", background: "#16203a", color: "#cfe0ff", fontSize: 12.5, cursor: "pointer" }}
         >
-          ↻ {t("重新整理")}
+          <Icon name="refresh" /> {t("重新整理")}
         </button>
       </div>
     </Modal>

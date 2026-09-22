@@ -34,8 +34,8 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /更多設定與功能/);
   assert.match(html, /top-bar__more-mobile--agent/);
   assert.match(html, /top-bar__more-compact-features/);
-  assert.match(html, /📋 任務看板/);
-  assert.match(html, /🔗 遠端存取／手機控制/);
+  assert.match(html, /任務看板/);
+  assert.match(html, /遠端存取／手機控制/);
   assert.match(html, />供應商</);
   assert.match(html, />模型</);
   assert.match(html, /health-dot--ok/);
