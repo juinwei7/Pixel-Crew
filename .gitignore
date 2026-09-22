@@ -21,3 +21,5 @@ _tsproxy.secret.json
 # 遠端存取轉接站下載的本機 cloudflared 快取執行檔
 cloudflared
 cloudflared.exe
+# 遠端存取轉接站的啟動 log——每次執行都會重寫
+_tsproxy.startup.log
