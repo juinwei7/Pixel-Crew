@@ -3,11 +3,10 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnCli, terminateProcessTree } from "../platform/processes.js";
 import { t } from "../i18n.js";
 
-// whisper-cli 重新載入模型＋編譯 Metal shader 每次呼叫都要吃掉 2＋ 秒（見
-// LOCAL-VOICE-INPUT-SPEC.md §10），無法穩定達成「停止錄音到草稿可用 3 秒內」的目標。
-// 改成常駐的 whisper-server 子行程，模型只在啟動時載入一次，之後單次請求維持
-// spike 實測的 0.5–1.6 秒。§4「模型載入與推論不得阻塞既有 CLI/聊天送出」也因此
-// 更容易滿足——常駐行程本身跟主行程的事件迴圈完全分離。
+// whisper-cli 重新載入模型＋編譯 Metal shader 每次呼叫都要吃掉 2＋ 秒，無法穩定達成
+// 「停止錄音到草稿可用 3 秒內」的目標。改成常駐的 whisper-server 子行程，模型只在啟動時
+// 載入一次，之後單次請求維持 2026-09-01 實測的 0.5–1.6 秒（15–25 秒音訊）。模型載入與
+// 推論也就不會擋住既有 CLI／聊天送出——常駐行程跟主行程的事件迴圈完全分離。
 export type VoiceEngine = {
   readonly available: boolean;
   readonly baseUrl: string;

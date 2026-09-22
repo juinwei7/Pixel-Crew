@@ -3,9 +3,9 @@ import { resolveExecutable } from "../platform/processes.js";
 import type { VoiceEngine } from "./voiceEngineServer.js";
 import { t } from "../i18n.js";
 
-// 固定領域詞彙提示：見 LOCAL-VOICE-INPUT-SPEC.md §10——沒有提示時 whisper 常把
-// 「Claude」聽成 clock/Cloud、「Codex」聽成 call dex；帶這段提示後兩者穩定聽對，
-// 也附帶讓輸出腳本穩定變成繁體（即便如此，下面仍跑一次 OpenCC 正規化，不依賴這個副作用）。
+// 固定領域詞彙提示：沒有提示時 whisper 常把「Claude」聽成 clock/Cloud、「Codex」聽成
+// call dex；帶這段提示後兩者穩定聽對，且幾乎不增加延遲。附帶效果是輸出腳本穩定變成繁體，
+// 但同一顆模型在沒有提示時簡繁不可預期，所以下面仍跑一次 OpenCC 正規化，不依賴這個副作用。
 export const VOICE_DOMAIN_PROMPT =
   "以下是關於 Pixel Crew、Claude Code、Codex、pull request、review comment、race condition、" +
   "WebSocket、npm run check、commit message 的技術對話。";

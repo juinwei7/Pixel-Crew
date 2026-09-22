@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { ensurePrivateDirectorySync, protectFileSync } from "../platform/fileProtection.js";
 import { t } from "../i18n.js";
 
-// 選擇依據：見 LOCAL-VOICE-INPUT-SPEC.md §10 本機驗證記錄——`small`（465MB，符合原訂
-// 0.5–1GB 目標）會把「Claude」「Codex」聽成別的詞，這兩個詞是本產品的核心操作對象，
-// 錯誤不可接受；`medium` 加上 initial_prompt 才能穩定聽對。因此改用 `medium`，超出原預算，
-// 已在 spec 記錄取捨，不是隨手放大。
+// 選擇依據：2026-09-01 本機實測——`small`（465MB，原訂的 0.5–1GB 目標內）會把「Claude」
+// 聽成 clock/Cloud、「Codex」聽成 call dex，連帶 initial_prompt 也修不回來；這兩個詞是本
+// 產品的核心操作對象，錯誤不可接受。`medium`（1.5GB）配上 initial_prompt 後產品與技術詞
+// 全部聽對，所以超出原訂預算改用它，不是隨手放大。
 export const VOICE_MODEL_FILENAME = "ggml-medium.bin";
 export const VOICE_MODEL_NAME = "Whisper medium";
 export const VOICE_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin";
