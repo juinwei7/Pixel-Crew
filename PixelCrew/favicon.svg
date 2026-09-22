@@ -1,11 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title desc">
   <title id="title">Pixel Crew</title>
-  <desc id="description">A cyan pixel crew member on a dark office grid.</desc>
-  <rect width="512" height="512" fill="#070a14"/>
-  <path d="M0 128h512M0 256h512M0 384h512M128 0v512M256 0v512M384 0v512" stroke="#4de3ff" stroke-opacity=".09" stroke-width="8"/>
-  <path d="M176 112h160v48h48v144h-48v96H176v-96h-48V160h48z" fill="#10243a" stroke="#4de3ff" stroke-width="16"/>
-  <path d="M192 192h48v48h-48zm80 0h48v48h-48z" fill="#dce9f7"/>
-  <path d="M208 288h96v32h-96z" fill="#37d6a3"/>
-  <path d="M176 352h48v48h-48zm112 0h48v48h-48z" fill="#4de3ff"/>
-  <circle cx="400" cy="112" r="28" fill="#37d6a3"/>
+  <desc id="desc">A pixel-art crew member standing in a dark office.</desc>
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#243a6d"/><stop offset="1" stop-color="#131f3a"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#24395f"/><stop offset="1" stop-color="#111d36"/>
+    </linearGradient>
+    <clipPath id="frame"><rect width="32" height="32" rx="8.4"/></clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="32" height="32" fill="url(#wall)"/>
+    <rect y="22.4" width="32" height="9.6" fill="url(#floor)"/>
+    <g shape-rendering="crispEdges"><rect x="10" y="4" width="12" height="2" fill="#4a3a6b"/><rect x="8" y="6" width="16" height="2" fill="#4a3a6b"/><rect x="8" y="8" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="8" width="12" height="2" fill="#f2c9a0"/><rect x="22" y="8" width="2" height="2" fill="#4a3a6b"/><rect x="8" y="10" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="10" width="2" height="2" fill="#f2c9a0"/><rect x="12" y="10" width="2" height="2" fill="#22182e"/><rect x="14" y="10" width="4" height="2" fill="#f2c9a0"/><rect x="18" y="10" width="2" height="2" fill="#22182e"/><rect x="20" y="10" width="2" height="2" fill="#f2c9a0"/><rect x="22" y="10" width="2" height="2" fill="#4a3a6b"/><rect x="8" y="12" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="12" width="12" height="2" fill="#f2c9a0"/><rect x="22" y="12" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="14" width="12" height="2" fill="#f2c9a0"/><rect x="8" y="16" width="16" height="2" fill="#4ad2f0"/><rect x="6" y="18" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="18" width="16" height="2" fill="#4ad2f0"/><rect x="24" y="18" width="2" height="2" fill="#f2c9a0"/><rect x="6" y="20" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="20" width="16" height="2" fill="#4ad2f0"/><rect x="24" y="20" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="22" width="16" height="2" fill="#3f5180"/><rect x="8" y="24" width="4" height="2" fill="#3f5180"/><rect x="20" y="24" width="4" height="2" fill="#3f5180"/><rect x="8" y="26" width="4" height="2" fill="#1b2540"/><rect x="20" y="26" width="4" height="2" fill="#1b2540"/></g>
+  </g>
 </svg>

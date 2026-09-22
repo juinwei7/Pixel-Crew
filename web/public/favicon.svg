@@ -1,7 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" shape-rendering="crispEdges">
-  <rect width="32" height="32" rx="5" fill="#070a14"/>
-  <path fill="#263653" d="M5 7h22v18H5z"/>
-  <path fill="#4de3ff" d="M8 10h16v3H8zm0 6h7v7H8z"/>
-  <path fill="#37d6a3" d="M18 16h6v7h-6z"/>
-  <path fill="#070a14" d="M10 18h3v3h-3zm10 0h2v3h-2z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title desc">
+  <title id="title">Pixel Crew</title>
+  <desc id="desc">A pixel-art crew member standing in a dark office.</desc>
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#243a6d"/><stop offset="1" stop-color="#131f3a"/>
+    </linearGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#24395f"/><stop offset="1" stop-color="#111d36"/>
+    </linearGradient>
+    <clipPath id="frame"><rect width="32" height="32" rx="8.4"/></clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="32" height="32" fill="url(#wall)"/>
+    <rect y="22.4" width="32" height="9.6" fill="url(#floor)"/>
+    <g shape-rendering="crispEdges"><rect x="10" y="4" width="12" height="2" fill="#4a3a6b"/><rect x="8" y="6" width="16" height="2" fill="#4a3a6b"/><rect x="8" y="8" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="8" width="12" height="2" fill="#f2c9a0"/><rect x="22" y="8" width="2" height="2" fill="#4a3a6b"/><rect x="8" y="10" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="10" width="2" height="2" fill="#f2c9a0"/><rect x="12" y="10" width="2" height="2" fill="#22182e"/><rect x="14" y="10" width="4" height="2" fill="#f2c9a0"/><rect x="18" y="10" width="2" height="2" fill="#22182e"/><rect x="20" y="10" width="2" height="2" fill="#f2c9a0"/><rect x="22" y="10" width="2" height="2" fill="#4a3a6b"/><rect x="8" y="12" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="12" width="12" height="2" fill="#f2c9a0"/><rect x="22" y="12" width="2" height="2" fill="#4a3a6b"/><rect x="10" y="14" width="12" height="2" fill="#f2c9a0"/><rect x="8" y="16" width="16" height="2" fill="#4ad2f0"/><rect x="6" y="18" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="18" width="16" height="2" fill="#4ad2f0"/><rect x="24" y="18" width="2" height="2" fill="#f2c9a0"/><rect x="6" y="20" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="20" width="16" height="2" fill="#4ad2f0"/><rect x="24" y="20" width="2" height="2" fill="#f2c9a0"/><rect x="8" y="22" width="16" height="2" fill="#3f5180"/><rect x="8" y="24" width="4" height="2" fill="#3f5180"/><rect x="20" y="24" width="4" height="2" fill="#3f5180"/><rect x="8" y="26" width="4" height="2" fill="#1b2540"/><rect x="20" y="26" width="4" height="2" fill="#1b2540"/></g>
+  </g>
 </svg>

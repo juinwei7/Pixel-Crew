@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Pixel Crew</AssemblyName>
+    <ApplicationIcon>../../assets/icons/pixel-crew.ico</ApplicationIcon>
     <RootNamespace>PixelCrewController</RootNamespace>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
@@ -13,7 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="../../PixelCrew/apple-touch-icon.png" Link="Assets/pixel-crew.png" />
+    <EmbeddedResource Include="../../assets/icons/pixel-crew.ico" Link="Assets/pixel-crew.ico" />
     <EmbeddedResource Include="$(PixelCrewPayload)" LogicalName="PixelCrewController.payload.zip" Condition="'$(PixelCrewPayload)' != '' and Exists('$(PixelCrewPayload)')" />
   </ItemGroup>
 </Project>

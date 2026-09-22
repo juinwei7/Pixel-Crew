@@ -209,7 +209,7 @@ internal sealed class ControllerApplicationContext : ApplicationContext
 
         trayIcon = new NotifyIcon
         {
-            Icon = ProductIcon.Load(),
+            Icon = ProductIcon.Tray(),
             Text = "Pixel Crew",
             ContextMenuStrip = menu,
             Visible = true,
@@ -563,17 +563,20 @@ internal static class AutoStart
 
 internal static class ProductIcon
 {
-    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
-    private static extern bool DestroyIcon(IntPtr handle);
+    // The embedded .ico carries 16/32/48/64/128/256 frames, so the tray and the
+    // window each ask for the size the shell actually draws instead of letting
+    // Windows squash one oversized bitmap down.
+    public static Icon Tray() => Load(SystemInformation.SmallIconSize);
 
-    public static Icon Load()
+    public static Icon Window() => Load(SystemInformation.IconSize);
+
+    private static Icon Load(Size size)
     {
         var assembly = Assembly.GetExecutingAssembly();
-        using var stream = assembly.GetManifestResourceStream("PixelCrewController.Assets.pixel-crew.png");
-        using var bitmap = stream is null ? new Bitmap(SystemIcons.Application.ToBitmap()) : new Bitmap(stream);
-        var handle = bitmap.GetHicon();
-        try { return Icon.FromHandle(handle).Clone() as Icon ?? SystemIcons.Application; }
-        finally { DestroyIcon(handle); }
+        using var stream = assembly.GetManifestResourceStream("PixelCrewController.Assets.pixel-crew.ico");
+        if (stream is null) return SystemIcons.Application;
+        try { return new Icon(stream, size); }
+        catch (ArgumentException) { return SystemIcons.Application; }
     }
 }
 
@@ -587,7 +590,7 @@ internal sealed class ControlCenterForm : Form
     public ControlCenterForm(PixelCrewHost host, Action open)
     {
         Text = "Pixel Crew 控制中心";
-        Icon = ProductIcon.Load();
+        Icon = ProductIcon.Window();
         MinimumSize = new Size(420, 235);
         Size = new Size(480, 280);
         StartPosition = FormStartPosition.CenterScreen;
