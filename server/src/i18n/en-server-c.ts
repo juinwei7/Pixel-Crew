@@ -247,4 +247,8 @@ export const enServerC: Record<string, string> = {
   "錄音資料格式不正確": "The recording data is not in a valid format",
   "沒有偵測到語音，可重試": "No speech was detected, you can try again",
   "語音轉寫失敗，請重試": "Voice transcription failed, please try again",
+
+  // terminalPaste.ts
+  "沒有可貼上的圖片": "No image to paste",
+  "無法暫存貼上的圖片": "Could not stage the pasted image",
 };

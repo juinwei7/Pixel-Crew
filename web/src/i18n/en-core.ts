@@ -157,5 +157,9 @@ export const enCore: Record<string, string> = {
   "正在刪除 Workspace…": "Deleting Workspace…",
   "帳號不可用；請重新選擇": "Account unavailable; choose another account",
   "縮小終端字體": "Decrease terminal font size",
+  "正在貼上圖片…": "Pasting image…",
+  "正在貼上 {count} 張圖片…": "Pasting {count} images…",
+  "無法貼上圖片": "Could not paste the image",
+  "無法讀取貼上的圖片": "Could not read the pasted image",
   "放大終端字體": "Increase terminal font size",
 };

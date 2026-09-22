@@ -5,6 +5,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { t } from "../i18n";
 import { runtimeWsOrigin } from "../runtimeOrigin";
 import { terminalVoiceInput } from "../blackWindowWorkspace";
+import { PASTE_INJECT_GAP_MS, clipboardImages } from "../blackWindowPaste";
 
 type TerminalMessage =
   | { type: "terminal_ready"; workspacePath: string; shell: string; persistent?: boolean; restored?: boolean; writable?: boolean; agentRunning?: boolean }
@@ -22,6 +23,50 @@ const terminalWsUrl = `${runtimeWsOrigin(browserOrigin).replace(/\/$/, "")}/ws`;
 function sendTerminal(socket: WebSocket | null, message: unknown): void {
   if (socket?.readyState !== WebSocket.OPEN) return;
   try { socket.send(JSON.stringify(message)); } catch { /* A close can race the readyState check. */ }
+}
+
+function fileToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(t("無法讀取貼上的圖片")));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const separator = result.indexOf(",");
+      resolve(separator >= 0 ? result.slice(separator + 1) : "");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Stages the pasted images on the server and types the paths it returns. Both
+ * CLIs only recognise one image path per chunk, so the paths are typed one at
+ * a time instead of as a single line.
+ */
+async function stageClipboardImages(files: File[], currentSocket: () => WebSocket | null, report: (message: string | null) => void): Promise<void> {
+  report(files.length > 1 ? t("正在貼上 {count} 張圖片…", { count: files.length }) : t("正在貼上圖片…"));
+  try {
+    const images = await Promise.all(files.map(async (file) => ({
+      name: file.name || "pasted-image",
+      mimeType: file.type,
+      dataBase64: await fileToBase64(file),
+    })));
+    const response = await fetch("/api/terminal/paste-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images }),
+    });
+    const payload = await response.json().catch(() => null) as { tokens?: string[]; error?: string } | null;
+    if (!response.ok || !payload?.tokens?.length) throw new Error(payload?.error || t("無法貼上圖片"));
+    for (const [index, token] of payload.tokens.entries()) {
+      if (index > 0) await new Promise((resolve) => window.setTimeout(resolve, PASTE_INJECT_GAP_MS));
+      sendTerminal(currentSocket(), { type: "terminal_input", data: token });
+    }
+    report(null);
+  } catch (error) {
+    report(error instanceof Error ? error.message : t("無法貼上圖片"));
+    window.setTimeout(() => report(null), 6_000);
+  }
 }
 
 export type BlackWindowTerminalHandle = { inject(command: string): void; insertText(text: string): void; launch(command: string): Promise<boolean>; interrupt(): void; destroy(): Promise<boolean> };
@@ -55,6 +100,10 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
   // Keep this pane-local so the reason remains visible after layout sync has
   // already changed agentStarted back to false.
   const [agentExitCode, setAgentExitCode] = useState<number | null | undefined>(undefined);
+  // Staging a pasted image is a network round trip, so the pane reports it
+  // rather than writing into the terminal — a CLI's full-screen redraw would
+  // wipe anything written there anyway.
+  const [pasteStatus, setPasteStatus] = useState<string | null>(null);
 
   useEffect(() => { onStatus?.(status); }, [onStatus, status]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
@@ -117,6 +166,19 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
     const input = terminal.onData((data) => {
       if (!terminal.options.disableStdin) sendTerminal(socket, { type: "terminal_input", data });
     });
+    const onPaste = (event: ClipboardEvent) => {
+      if (terminal.options.disableStdin) return;
+      const images = clipboardImages(event.clipboardData);
+      if (images.length === 0) return;
+      // xterm would otherwise paste the clipboard's text/plain twin (often a
+      // filename, or nothing at all) alongside the image we are staging.
+      event.preventDefault();
+      event.stopPropagation();
+      // Uploading is a round trip, so resolve the socket when the paths are
+      // actually typed: this pane may have reconnected in the meantime.
+      void stageClipboardImages(images, () => socketRef.current, setPasteStatus);
+    };
+    host.addEventListener("paste", onPaste, true);
     socket.onopen = () => {
       // Layout sync can change the recovery command while this socket is still
       // connecting. Read the current prop here instead of the effect closure,
@@ -162,6 +224,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
       disposed = true;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       observer.disconnect();
+      host.removeEventListener("paste", onPaste, true);
       input.dispose();
       pendingLaunchRef.current?.(false);
       pendingLaunchRef.current = null;
@@ -277,7 +340,7 @@ export const BlackWindowTerminal = forwardRef<BlackWindowTerminalHandle, Props>(
   }}>
     <div ref={hostRef} className="black-window-terminal__screen" />
     <footer>
-      <span role="status" aria-live="polite">{agentResult} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀")}`}` : reconnecting ? t("連線中斷，正在重新連線…") : status === "connecting" ? t("正在建立終端連線…") : status === "closed" ? t("終端已結束") : t("連線失敗")}</span>
+      <span role="status" aria-live="polite">{agentResult} · {status === "ready" ? `${shell || t("已連線")}${writable ? "" : ` · ${t("唯讀")}`}` : reconnecting ? t("連線中斷，正在重新連線…") : status === "connecting" ? t("正在建立終端連線…") : status === "closed" ? t("終端已結束") : t("連線失敗")}{pasteStatus ? ` · ${pasteStatus}` : ""}</span>
       {status === "ready" && !writable && <button type="button" onClick={(event) => {
         event.stopPropagation();
         sendTerminal(socketRef.current, { type: "terminal_claim" });

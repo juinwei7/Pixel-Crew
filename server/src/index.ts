@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { attachTerminalSocket } from "./terminal.js";
 import { snapshotTerminalMuxDatabase, terminalMuxRequest } from "./terminalMuxClient.js";
+import { stageTerminalPasteImages, terminalPathToken } from "./terminalPaste.js";
 import { config } from "./config.js";
 import { configuredDefaultModels } from "./defaultModels.js";
 import { readWorkspaceGitSummary } from "./workspaceGit.js";
@@ -2623,6 +2624,27 @@ app.delete("/api/terminal-mux/tabs/:tabId", async (req, res) => {
     if (result.type === "error") { res.status(400).json({ error: result.message }); return; }
     res.json({ ok: true });
   } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : "Terminal mux unavailable" }); }
+});
+
+// Black Window is a raw PTY, so an image on the clipboard cannot reach the
+// CLI through xterm.js (it only pastes text). The pane posts the image here,
+// gets back the exact text to type, and both CLIs turn that path into an
+// attachment. See server/src/terminalPaste.ts for the verified constraints.
+app.post("/api/terminal/paste-image", (req, res) => {
+  let images: ReturnType<typeof parseMessageImages>;
+  try {
+    images = parseMessageImages(req.body?.images);
+  } catch (error) {
+    if (error instanceof MessageImageValidationError) { res.status(400).json({ error: error.message }); return; }
+    throw error;
+  }
+  if (images.length === 0) { res.status(400).json({ error: t("沒有可貼上的圖片") }); return; }
+  try {
+    const tokens = stageTerminalPasteImages(images).map((path) => terminalPathToken(path));
+    res.json({ tokens });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : t("無法暫存貼上的圖片") });
+  }
 });
 
 app.get("/api/workspaces/git", async (req, res) => {
