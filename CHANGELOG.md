@@ -8,14 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Added
 
 - Remote access now shows a real progress bar while it downloads cloudflared for the first time, with transferred size, speed, remaining time, and a cancel button.
+- On a phone the work-mode switch collapses to a single chip: swipe it left or right to move between Pixel, Professional, and Black Window, or tap it to pick one.
+- The black window's CLI panes can be swiped between on a phone, one pane at a time.
 
 ### Changed
 
+- Rebuilt the phone layout on one shared responsive layer: three breakpoints instead of twenty-four, one dialog shell behind every modal, and a single set of tap-target and spacing values. Phone screens no longer overflow sideways at any width down to 320px.
+- The top bar now carries only the essentials — work mode, Assign work, usage, health — and splits the rest into two menus by what they affect: "This NPC" (workspace, provider, model, account, auto-approve, MCP) and "App settings" (language, notifications, boards, backup, restart). The two menus replace three overlapping ones that had drifted apart.
+- All three work modes share one identical nav bar on a phone, so switching no longer shifts the controls.
+- Professional mode switches NPCs with the same chip strip as Pixel mode instead of a dropdown, and its studio shortcuts and report index now share one row. The report gets 80px more height than before.
+- Replaced every emoji used as an interface icon with one line-icon set that follows the surrounding colour and weight, instead of whatever glyph the operating system happened to supply.
 - Share passwords now need at least 6 characters, the same minimum the owner passcode already had.
 - Signing out of remote access also clears the guardian unlock, so the next person to sign in on that device has to enter the guardian password again.
 
 ### Fixed
 
+- Fixed the microphone button's icon sitting against its left edge, and the round-table "..." menu opening past the right edge of a phone screen.
 - Fixed the first-run cloudflared download never completing. The install request used to block until the whole 19–70 MB file arrived, so it always hit the 40-second proxy timeout on a normal connection, and a dropped connection left the relay permanently stuck reporting "download in progress" until it was restarted.
 - Verified the downloaded cloudflared against its declared size instead of accepting a truncated file, cleaned up the partial file, and aborted stalled downloads instead of waiting forever.
 - Stopped leaving an orphaned cloudflared tunnel running when opening it timed out or when the relay exited, and reported cloudflared's own error output instead of a bare "failed to start".
