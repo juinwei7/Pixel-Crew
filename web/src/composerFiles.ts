@@ -1,7 +1,9 @@
 import type { MessageDocumentPayload, MessageImagePayload } from "./types";
 import { t } from "./i18n";
 
-export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
+// videoName：若這張圖是從某支影片抽出的關鍵影格，記下來源影片檔名，讓輸入框把同一支
+// 影片的多張影格收合成「一個」影片附件晶片顯示（而不是一坨縮圖）。
+export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number; videoName?: string };
 export type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
 
 export const MAX_IMAGES = 10;

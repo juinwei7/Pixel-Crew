@@ -89,6 +89,9 @@ export function TaskComposer({
   const [draftValue, setDraftValue] = useComposerDraft(draftKey);
   const [failedFiles, setFailedFiles] = useState<File[]>([]);
   const [videoProcessing, setVideoProcessing] = useState(false);
+  // 使用者在影片還在解析時按了送出：先記住，等解析完(videoProcessing 轉 false)自動送出，
+  // 這樣文字＋影片(影格＋字幕)會「一起」送，不會漏掉影片。
+  const [awaitingVideoSend, setAwaitingVideoSend] = useState(false);
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
     switchingSession, restoringExtras, extrasSaved, persistenceWarning, ownerRef, updateCachedSession,
@@ -199,9 +202,10 @@ export function TaskComposer({
   // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
   // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
   async function processVideos(videoFiles: File[], owner: string) {
+    setVideoProcessing(true);
+    try {
     for (const file of videoFiles) {
       if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
-      setVideoProcessing(true);
       try {
         const form = new FormData();
         form.append("video", file, file.name);
@@ -218,6 +222,7 @@ export function TaskComposer({
           dataBase64: frame.dataBase64,
           previewUrl: `data:${frame.mimeType};base64,${frame.dataBase64}`,
           size: Math.floor(frame.dataBase64.length * 0.75),
+          videoName: file.name, // 標記來源影片，讓多張影格在輸入框收合成一個影片晶片
         }));
         const transcript = String(data.transcript ?? "").trim();
         // 字幕不再塞進「可編輯草稿」洗版（原本會秀一大坨「【影片音訊字幕】…」）。改成隱形隨附的
@@ -241,9 +246,10 @@ export function TaskComposer({
         }
       } catch (videoError) {
         setError(videoError instanceof Error ? videoError.message : t("影片處理失敗"));
-      } finally {
-        setVideoProcessing(false);
       }
+    }
+    } finally {
+      setVideoProcessing(false);
     }
   }
 
@@ -294,6 +300,8 @@ export function TaskComposer({
   async function submit() {
     if (disabled || switchingSession || submittingRef.current) return;
     if (palette?.open) return;
+    // 影片還在解析：不要現在送（會漏掉影格/字幕）。記下來，解析完由 effect 自動送出。
+    if (videoProcessing) { setAwaitingVideoSend(true); return; }
     const text = draftValue.trim();
     if (queueEnabled && busy) {
       if (!text && images.length === 0 && documents.length === 0) {
@@ -361,6 +369,16 @@ export function TaskComposer({
     }
   }
 
+  // 影片解析完成後，若使用者稍早按過送出（awaitingVideoSend），就用當前(已含影格/字幕)的
+  // 狀態自動送出。放在 effect 裡，才讀得到解析後最新的 images/documents（避免 stale closure）。
+  useEffect(() => {
+    if (videoProcessing || !awaitingVideoSend) return;
+    setAwaitingVideoSend(false);
+    void submit();
+    // submit 是每次 render 重建的函式；此處刻意只依賴這兩個狀態，觸發時會捕捉到最新 submit。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoProcessing, awaitingVideoSend]);
+
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const isComposing = composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;
     if (isComposing) return;
@@ -409,13 +427,35 @@ export function TaskComposer({
   const submitDisabled = disabled || (working && !queueEnabled) || (!hasContent && !canInterrupt);
   const submitLabelToShow = canInterrupt ? t("中止") : queueEnabled && busy && hasContent ? t("排隊") : working ? busyLabel : submitLabel;
 
+  // 收合影片影格：同一支影片的多張關鍵影格併成「一個」影片晶片（cover=第一格、count=張數），
+  // 其餘圖片各自一個。這樣影片解析完不會冒出一坨縮圖，只看到一個「🎬 影片 · N 格」。
+  const imageChipGroups = (() => {
+    const groups: Array<{ key: string; cover: ComposerImage; videoName?: string; count: number }> = [];
+    const seen = new Set<string>();
+    for (const image of images) {
+      if (image.videoName) {
+        if (seen.has(image.videoName)) continue;
+        seen.add(image.videoName);
+        groups.push({ key: `vid:${image.videoName}`, cover: image, videoName: image.videoName, count: images.filter((item) => item.videoName === image.videoName).length });
+      } else {
+        groups.push({ key: image.id, cover: image, count: 1 });
+      }
+    }
+    return groups;
+  })();
   const attachmentsBlock = hasAttachments && (
     dock ? <div className="command-composer__attachments" aria-label={t("待傳送附件")}>
-      {images.map((image, index) => <div className="command-composer__attachment" key={image.id}>
-        <img src={image.previewUrl} alt={t("圖片 {n}：{name}", { n: index + 1, name: image.name })} />
-        <span>IMG {index + 1}</span>
-        <button type="button" aria-label={t("移除圖片 {n}", { n: index + 1 })} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button>
-      </div>)}
+      {imageChipGroups.map((group, index) => group.videoName
+        ? <div className="command-composer__attachment command-composer__attachment--video" key={group.key} title={group.videoName}>
+          <img src={group.cover.previewUrl} alt={group.videoName} />
+          <span>🎬 {t("{n} 格", { n: group.count })}</span>
+          <button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button>
+        </div>
+        : <div className="command-composer__attachment" key={group.key}>
+          <img src={group.cover.previewUrl} alt={t("圖片 {n}：{name}", { n: index + 1, name: group.cover.name })} />
+          <span>IMG {index + 1}</span>
+          <button type="button" aria-label={t("移除圖片 {n}", { n: index + 1 })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button>
+        </div>)}
       {documents.map((document, index) => <div className="command-composer__attachment command-composer__attachment--document" key={document.id} title={document.name}>
         <strong>{documentBadge(document.name)}</strong>
         <em>{document.name}</em>
@@ -423,7 +463,9 @@ export function TaskComposer({
         <button type="button" aria-label={t("移除文件 {n}", { n: index + 1 })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button>
       </div>)}
     </div> : <div className="task-composer__attachments">
-      {images.map((image) => <div key={image.id} className="task-composer__attachment"><img src={image.previewUrl} alt={image.name} /><span>{image.name}</span><button type="button" aria-label={t("移除 {name}", { name: image.name })} onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}>×</button></div>)}
+      {imageChipGroups.map((group) => group.videoName
+        ? <div key={group.key} className="task-composer__attachment task-composer__attachment--video" title={group.videoName}><img src={group.cover.previewUrl} alt={group.videoName} /><span>🎬 {t("影片 · {n} 格", { n: group.count })}</span><button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button></div>
+        : <div key={group.key} className="task-composer__attachment"><img src={group.cover.previewUrl} alt={group.cover.name} /><span>{group.cover.name}</span><button type="button" aria-label={t("移除 {name}", { name: group.cover.name })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button></div>)}
       {documents.map((document) => <div key={document.id} className="task-composer__attachment task-composer__attachment--file"><strong>{documentBadge(document.name)}</strong><span>{document.name}</span><button type="button" aria-label={t("移除 {name}", { name: document.name })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button></div>)}
     </div>
   );
@@ -510,7 +552,7 @@ export function TaskComposer({
         )}
         {leading}
         {textareaField}
-        {videoProcessing && <span className="command-composer__video-processing" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
+        {videoProcessing && <span className="command-composer__video-processing" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
         {queueEnabled && (useServerQueue ? serverQueueItems.length > 0 : queued.length > 0) && <QueuePanel
@@ -577,7 +619,7 @@ export function TaskComposer({
       {textareaField}
       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
     </div>
-    {videoProcessing && <div className="task-composer__error" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
+    {videoProcessing && <div className="task-composer__error" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
     {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
   </form>;
 }
