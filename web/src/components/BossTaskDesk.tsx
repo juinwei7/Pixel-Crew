@@ -66,6 +66,8 @@ const starterTasks = [
 
 const LAST_BOSS_TASK_KEY = "pixel-crew:boss-last-task";
 const terminalStatuses: BossTask["status"][] = ["completed", "failed", "cancelled"];
+// 可刪除的狀態比可封存的多兩個「等你處理」的卡住狀態——那些沒有背景在跑，卡著刪不掉很煩。
+const deletableStatuses: BossTask["status"][] = [...terminalStatuses, "needs_attention", "needs_input"];
 
 // 把一張顧問方向卡組成圓桌辯論的主題：帶上方向、洞見與目標，讓 3 方辯得有料。
 function advisorDebateTopic(proposal: AdvisorProposal, domain: string | null): string {
@@ -109,7 +111,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onCreateDepartment, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -312,13 +314,13 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   }
 
   async function deleteRecord() {
-    if (!selected || working || !terminalStatuses.includes(selected.status)) return;
+    if (!selected || working || !deletableStatuses.includes(selected.status)) return;
     if (!(await confirm(t("確定永久刪除 Boss 任務「{title}」？此動作無法復原。", { title: selected.title }), "danger"))) return;
     // Re-check against the latest tasks — confirm() doesn't block the page,
     // so a WS push could have moved this task out of a terminal status while
     // the dialog was open.
     const current = tasksRef.current.find((task) => task.id === selected.id);
-    if (!current || !terminalStatuses.includes(current.status)) {
+    if (!current || !deletableStatuses.includes(current.status)) {
       setError(t("這筆任務狀態已變更，無法刪除。"));
       return;
     }
@@ -444,7 +446,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         {selected.archivedAt
           ? <button type="button" disabled={working} onClick={() => void updateRecord({ archived: false })}>{t("移回目前任務")}</button>
           : <button type="button" disabled={working || !terminalStatuses.includes(selected.status)} title={terminalStatuses.includes(selected.status) ? t("保留完整歷史並從目前清單移除") : t("進行中或等待處理的任務不能封存")} onClick={() => void updateRecord({ archived: true })}>{t("封存記錄")}</button>}
-        <button type="button" className="boss-task-record-editor__delete" disabled={working || !terminalStatuses.includes(selected.status)} title={terminalStatuses.includes(selected.status) ? t("永久刪除這筆 Boss 任務記錄") : t("進行中或等待處理的任務不能刪除")} onClick={() => void deleteRecord()}>{t("刪除紀錄")}</button>
+        <button type="button" className="boss-task-record-editor__delete" disabled={working || !deletableStatuses.includes(selected.status)} title={deletableStatuses.includes(selected.status) ? t("永久刪除這筆 Boss 任務記錄") : t("執行中的任務不能刪除；請等它完成或先取消")} onClick={() => void deleteRecord()}>{t("刪除紀錄")}</button>
       </div>
       <small>{selected.archivedAt ? t("封存於 {time}", { time: new Date(selected.archivedAt).toLocaleString() }) : terminalStatuses.includes(selected.status) ? t("封存會保留全部對話、部門階段與報告。") : t("這筆任務仍在進行或等待處理，完成／取消後才能封存。")}</small>
     </section>}
@@ -458,16 +460,6 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <div className="boss-task-desk__starters" aria-label={t("任務範例")}>
           {starterTasks.map((starter) => <button key={starter} type="button" onClick={() => useProposalObjective(t(starter))}>{t(starter)}</button>)}
         </div>
-        {onCreateDepartment && <button type="button" className="boss-task-desk__new-department" onClick={onCreateDepartment}>
-          <span className="boss-task-desk__new-department-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5" /><circle cx="16" cy="8" r="2.5" /><path d="M3.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7M11.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7" /></svg>
-          </span>
-          <span className="boss-task-desk__new-department-text">
-            <strong>{t("建立專門處理的部門")}</strong>
-            <small>{t("成立一支常駐團隊長期負責某個領域，之後交辦會自動路由給它。")}</small>
-          </span>
-          <span className="boss-task-desk__new-department-arrow" aria-hidden="true">→</span>
-        </button>}
         <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
           <div className="boss-task-desk__advisor-head">
             <strong>{t("沒方向？讓顧問幫你想")}</strong>

@@ -177,6 +177,7 @@ import {
 } from "./bossTask.js";
 import {
   expertAdvisorPrompt,
+  ADVISOR_VARIETY_LENSES,
   parseAdvisorResult,
   explainAdvisorFailure,
 } from "./expertAdvisor.js";
@@ -3151,7 +3152,9 @@ app.post("/api/advisor/propose", async (req, res) => {
     res.status(409).json({ error: t("{provider} 目前無法進行顧問判斷：{error}", { provider: providerLabel(runtime.provider), error: usageError }), usage });
     return;
   }
-  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals, proactive });
+  // 主動模式每次隨機挑一個探索視角，逼模型每回從不同角度切入，降低重複（使用者反映重複性高）。
+  const varietyHint = proactive ? ADVISOR_VARIETY_LENSES[Math.floor(Math.random() * ADVISOR_VARIETY_LENSES.length)] : undefined;
+  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals, proactive, varietyHint });
   let text: string;
   try {
     text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
@@ -5256,8 +5259,11 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
 app.delete("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
   if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
-  if (!["completed", "failed", "cancelled"].includes(task.status)) {
-    res.status(409).json({ error: t("進行中或等待處理的 Boss Task 不能刪除") });
+  // 可刪除：終態(完成/失敗/取消)＋「等你處理」的卡住狀態(needs_attention/needs_input)——
+  // 那些沒有背景在跑，卡著也刪不掉會很煩。只有真正執行中(discovering/ready/running/
+  // synthesizing)才擋，避免刪掉正在跑的任務。
+  if (!["completed", "failed", "cancelled", "needs_attention", "needs_input"].includes(task.status)) {
+    res.status(409).json({ error: t("進行中的 Boss Task 不能刪除；請等它完成或先取消") });
     return;
   }
   disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉

@@ -41,23 +41,44 @@ function clampProposalCount(max: number | undefined): number {
   return Math.min(ADVISOR_PROPOSAL_HARD_MAX, Math.max(1, n));
 }
 
+// 主動建議的「探索視角」清單：每次隨機挑一個注入 prompt，逼模型每回從不同角度切入，
+// 避免多次生成一直吐同一批明顯方向（使用者反映重複性高）。由 index.ts 隨機挑選傳入。
+export const ADVISOR_VARIETY_LENSES = [
+  "未被滿足的利基需求（小眾但痛的問題）",
+  "把兩個不相干領域結合的跨界機會",
+  "用自動化／AI 省下大量重複人力的環節",
+  "新工具或新平台剛出現的紅利期切入點",
+  "現有做法的反直覺、逆向操作",
+  "資料／資產的二次利用與變現",
+  "降低風險、防呆、抗脆弱的防守型方向",
+  "把一次性工作變成可重複的系統或產品",
+  "服務既有客群的相鄰需求（順帶多做一件事）",
+  "低成本快速驗證、先跑 MVP 的實驗型方向",
+];
+
 export function expertAdvisorPrompt(input: {
   idea: string;
   workspacePath: string;
   maxProposals?: number;
   /** 主動模式：使用者沒給念頭，改用工作區脈絡推領域、一律提案（不反問）。 */
   proactive?: boolean;
+  /** 主動模式的隨機探索視角，注入 prompt 促成每次不同方向、降低重複。 */
+  varietyHint?: string;
 }): string {
   const maxProposals = clampProposalCount(input.maxProposals);
   const idea = bounded(input.idea, 4_000);
   // 沒念頭（或明確要求主動）就走主動模式：從工作區脈絡主動端方向，永不 need_focus。
   const proactive = Boolean(input.proactive) || idea.length === 0;
+  const varietyHint = bounded(input.varietyHint, 200);
 
   const intro = proactive
     ? `You are a senior domain expert and consultant. The owner has NOT given a specific idea — they want you to PROACTIVELY surface professional directions worth pursuing that they most likely do NOT know exist ("you don't know what you don't know"), so they can simply pick one. Infer a plausible domain/theme from their workspace context below; if the workspace is uninformative, choose broadly useful, high-leverage directions a capable owner could act on.`
     : `You are a senior domain expert and consultant. The owner has a rough idea but limited expertise in its field, and does not know how to proceed. Your job is to surface professional directions the owner most likely does NOT know exist — the "you don't know what you don't know" gap — so the owner can simply pick one, not invent it.`;
+  const varietyRule = proactive && varietyHint
+    ? `\n- For THIS run, bias your exploration toward this angle so repeated runs surface genuinely different territory: ${JSON.stringify(varietyHint)}. Deliberately AVOID the most obvious, generic, first-thing-everyone-suggests directions; prefer fresh, specific, non-repetitive ideas.`
+    : "";
   const domainRule = proactive
-    ? `- Infer the domain/theme from the owner's workspace context. In this proactive mode ALWAYS propose — never return need_focus.`
+    ? `- Infer the domain/theme from the owner's workspace context. In this proactive mode ALWAYS propose — never return need_focus.${varietyRule}`
     : `- First infer the domain of the idea. If the idea is so empty or generic that you cannot infer a domain OR cannot produce genuinely useful, non-obvious directions, return exactly one focusing question instead (need_focus). Prefer to propose; only ask when proposing would be guesswork.`;
   const langRule = proactive
     ? `- Write every user-facing field in Traditional Chinese unless the workspace context clearly indicates another language.`
