@@ -14,5 +14,5 @@ test("accepts bounded image attachments and sanitizes display names", () => {
 
 test("rejects spoofed image types and too many attachments", () => {
   assert.throws(() => parseMessageImages([{ name: "fake.jpg", mimeType: "image/jpeg", dataBase64: png }]), MessageImageValidationError);
-  assert.throws(() => parseMessageImages(Array.from({ length: 5 }, (_, index) => ({ name: `${index}.png`, mimeType: "image/png", dataBase64: png }))), /最多 4 張/);
+  assert.throws(() => parseMessageImages(Array.from({ length: 11 }, (_, index) => ({ name: `${index}.png`, mimeType: "image/png", dataBase64: png }))), /最多 10 張/);
 });

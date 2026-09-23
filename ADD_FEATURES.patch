@@ -1,3 +1,17 @@
+diff --git a/server/src/config.ts b/server/src/config.ts
+index 7dca909..359fcea 100644
+--- a/server/src/config.ts
++++ b/server/src/config.ts
+@@ -57,6 +57,9 @@ export const config = {
+   claudeBin: process.env.CLAUDE_BIN ?? "claude",
+   codexBin: process.env.CODEX_BIN ?? "codex",
+   codexSandbox: process.env.CODEX_SANDBOX ?? "workspace-write",
++  // 影片理解用：ffmpeg 抽影格＋音訊，ffprobe 探測時長。預設走 PATH。
++  ffmpegBin: process.env.FFMPEG_BIN?.trim() || "ffmpeg",
++  ffprobeBin: process.env.FFPROBE_BIN?.trim() || "ffprobe",
+   port: Number(process.env.PORT ?? 8787),
+   host: configuredHost,
+   dbPath,
 diff --git a/server/src/expertAdvisor.ts b/server/src/expertAdvisor.ts
 new file mode 100644
 index 0000000..eeabe91
@@ -176,10 +190,19 @@ index 0000000..eeabe91
 +  });
 +}
 diff --git a/server/src/index.ts b/server/src/index.ts
-index 66a6cc1..cfa0951 100644
+index 66a6cc1..5b2675e 100644
 --- a/server/src/index.ts
 +++ b/server/src/index.ts
-@@ -173,6 +173,11 @@ import {
+@@ -69,6 +69,8 @@ import { VoiceEngineServer } from "./voice/voiceEngineServer.js";
+ import { VoiceEngineInstaller } from "./voice/voiceEngineInstaller.js";
+ import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.js";
+ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
++import multer from "multer";
++import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
+ import {
+   readAndClearRestoreMarker,
+ } from "./backupImport.js";
+@@ -173,6 +175,11 @@ import {
    type BossTaskMessage,
    type BossTaskMessageRole,
  } from "./bossTask.js";
@@ -191,7 +214,7 @@ index 66a6cc1..cfa0951 100644
  import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
  import {
    boundedDepartmentContext,
-@@ -1444,6 +1449,8 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
+@@ -1444,6 +1451,8 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
      claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
    }
    if (worker.persistent && (event.type === "turn_end" || event.type === "error")) persistWorker(worker);
@@ -200,7 +223,7 @@ index 66a6cc1..cfa0951 100644
    // `/usage` is handled by Claude inside its already-authenticated session.
    // `claude -p /usage` opens a different empty session, so only the completed
    // turn's own result is authoritative for this worker's assigned account.
-@@ -2108,7 +2115,7 @@ function resolveDecisionRuntime(
+@@ -2108,7 +2117,7 @@ function resolveDecisionRuntime(
      return { error: t("指定的決策模型目前不在任何已登入 provider 的可用清單中") };
    }
    if (preferredWorkspace) {
@@ -209,7 +232,7 @@ index 66a6cc1..cfa0951 100644
        task.stages.length > 0
        && providerReady(task.decisionProvider)
        && runtimeModels(task.decisionProvider).includes(task.decisionModel),
-@@ -2502,6 +2509,20 @@ function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
+@@ -2502,6 +2511,20 @@ function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
    return events.map(trimEventForSnapshot);
  }
  
@@ -230,7 +253,7 @@ index 66a6cc1..cfa0951 100644
  wss.on("connection", (socket) => {
    // A client that drops mid-handshake (page reload, laptop sleep/wake, a
    // network blip) emits 'error' with no listener otherwise — that's an
-@@ -2544,12 +2565,13 @@ wss.on("connection", (socket) => {
+@@ -2544,12 +2567,13 @@ wss.on("connection", (socket) => {
        accountUsage: accountUsageRegistry.getStates(),
        capabilitiesByWorkspace: capabilitiesSnapshot(),
        collaborations: store.listRecentCollaborationTasks(),
@@ -245,7 +268,7 @@ index 66a6cc1..cfa0951 100644
        })),
      });
    const snapshotBytes = Buffer.byteLength(snapshotPayload);
-@@ -3082,6 +3104,44 @@ registerReportingRoutes({
+@@ -3082,6 +3106,44 @@ registerReportingRoutes({
  // ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
  registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
  
@@ -290,7 +313,7 @@ index 66a6cc1..cfa0951 100644
  // ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
  registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
  
-@@ -3090,29 +3150,51 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
+@@ -3090,29 +3152,51 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
  setInterval(() => {
    const now = new Date();
    const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -348,7 +371,48 @@ index 66a6cc1..cfa0951 100644
  app.post("/api/auth/refresh", async (req, res) => {
    const requested = String(req.body?.provider ?? "");
    const provider = requested === "claude" || requested === "codex" ? requested : undefined;
-@@ -3888,7 +3970,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
+@@ -3656,6 +3740,40 @@ const voiceEngineServer = new VoiceEngineServer(
+ const voiceTranscriber = new VoiceTranscriber(voiceEngineServer);
+ registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber, engineInstaller: voiceEngineInstaller });
+ 
++// ── 影片理解：上傳影片 → ffmpeg 抽關鍵影格＋音訊 → whisper 轉文字 → 回傳「影格(當圖片)＋
++//     文字稿」，前端把它們塞進訊息一起送給 Claude（Claude 不吃影片，但吃圖片＋文字）。
++//     影片音訊可能很長，所以另建一個逾時放寬到 5 分鐘的 transcriber（語音輸入那顆維持 15 秒）。
++const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
++const videoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VIDEO_BYTES } });
++const videoAudioTranscriber = new VoiceTranscriber(voiceEngineServer, fetch, 300_000);
++app.post("/api/video/process", videoUpload.single("video"), async (req, res) => {
++  if (!req.file || req.file.buffer.length === 0) { res.status(400).json({ error: t("請提供影片檔") }); return; }
++  let extracted;
++  try {
++    extracted = await extractVideoFramesAndAudio(req.file.buffer, { ffmpegBin: config.ffmpegBin, ffprobeBin: config.ffprobeBin, maxFrames: 8 });
++  } catch (error) {
++    const detail = error instanceof VideoProcessingError ? error.message : t("影片處理失敗");
++    res.status(422).json({ error: detail });
++    return;
++  }
++  // 音訊轉文字（whisper）：引擎沒裝或轉寫失敗都不致命——至少影格還在。
++  let transcript = "";
++  let transcriptError: string | null = null;
++  if (extracted.audioWav && videoAudioTranscriber.engineAvailable) {
++    try { transcript = await videoAudioTranscriber.transcribe(extracted.audioWav); }
++    catch (error) { transcriptError = error instanceof Error ? error.message : t("語音轉寫失敗"); }
++  } else if (extracted.audioWav) {
++    transcriptError = t("找不到本機語音轉寫引擎（音訊未轉文字，僅送出畫面）");
++  }
++  res.json({
++    images: extracted.frames.map((frame) => ({ name: frame.name, mimeType: "image/jpeg", dataBase64: frame.dataBase64 })),
++    transcript,
++    durationSeconds: extracted.durationSeconds,
++    audioAvailable: Boolean(extracted.audioWav),
++    transcriptError,
++  });
++});
++
+ registerBackupImportTransport({
+   app,
+   dataDirectory: config.dataDirectory,
+@@ -3888,7 +4006,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
  
  function departmentMissions(department: Department): DepartmentMission[] {
    const clearedAt = store.getDepartmentThread(department.id)?.historyClearedAt ?? null;
@@ -360,7 +424,7 @@ index 66a6cc1..cfa0951 100644
      .filter((mission) => mission.departmentId === department.id && mission.origin !== "boss")
      .filter((mission) => !clearedAt || mission.createdAt > clearedAt)
      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-@@ -4652,7 +4737,7 @@ app.get("/api/boss-tasks", (req, res) => {
+@@ -4652,7 +4773,7 @@ app.get("/api/boss-tasks", (req, res) => {
      try { workspacePath = normalizeManagedWorkspacePath(requested); }
      catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
    }
@@ -369,7 +433,7 @@ index 66a6cc1..cfa0951 100644
  });
  
  app.get("/api/boss-tasks/:id", (req, res) => {
-@@ -5054,7 +5139,7 @@ app.get("/api/missions", (req, res) => {
+@@ -5054,7 +5175,7 @@ app.get("/api/missions", (req, res) => {
      try { workspacePath = normalizeManagedWorkspacePath(requested); }
      catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
    }
@@ -378,7 +442,7 @@ index 66a6cc1..cfa0951 100644
  });
  
  app.get("/api/missions/:id", (req, res) => {
-@@ -6235,6 +6320,97 @@ app.post("/api/workers/:id/consult", (req, res) => {
+@@ -6235,6 +6356,97 @@ app.post("/api/workers/:id/consult", (req, res) => {
    res.json({ ok: true, note: t("已把問題發給隊員，回覆彙整後會以【隊員商量回報】訊息送回給你。請先結束這回合等回報。") });
  });
  
@@ -720,6 +784,115 @@ index ffd2132..76f18fe 100644
 +    },
 +  },
  ];
+diff --git a/server/src/videoProcess.ts b/server/src/videoProcess.ts
+new file mode 100644
+index 0000000..14d0752
+--- /dev/null
++++ b/server/src/videoProcess.ts
+@@ -0,0 +1,103 @@
++import { spawn } from "node:child_process";
++import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++// 影片處理：Claude 的 API 不吃影片，但吃圖片＋文字。所以用 ffmpeg 把影片切成「均勻分佈
++// 的關鍵影格 (JPEG)」＋抽出「16kHz mono WAV 音訊」，影格當圖片、音訊丟 whisper 轉成文字，
++// 一起送給 Claude——等效於讓它「看＋聽」影片（做法同 GPT 的影片理解：抽幀＋音訊字幕）。
++// 這裡只負責「影片 → 影格 + WAV」；轉文字在 index.ts 用既有的 whisper 引擎做。
++
++export class VideoProcessingError extends Error {}
++
++function run(bin: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
++  return new Promise((resolve, reject) => {
++    let child;
++    try {
++      child = spawn(bin, args, { windowsHide: true });
++    } catch (error) {
++      reject(new VideoProcessingError((error as Error).message));
++      return;
++    }
++    let stdout = "";
++    let stderr = "";
++    let settled = false;
++    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
++    const timer = setTimeout(() => finish(() => { try { child!.kill("SIGKILL"); } catch { /* already gone */ } reject(new VideoProcessingError(`${bin} timed out`)); }), timeoutMs);
++    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
++    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
++    child.on("error", (error) => finish(() => reject(new VideoProcessingError(error.message))));
++    child.on("close", (code) => finish(() => code === 0
++      ? resolve({ stdout, stderr })
++      : reject(new VideoProcessingError(stderr.trim().slice(-400) || `${bin} exited with ${code}`))));
++  });
++}
++
++async function probeDurationSeconds(ffprobeBin: string, input: string): Promise<number | null> {
++  try {
++    const { stdout } = await run(ffprobeBin, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input], 20_000);
++    const duration = Number.parseFloat(stdout.trim());
++    return Number.isFinite(duration) && duration > 0 ? duration : null;
++  } catch {
++    return null; // ffprobe 缺席或探測失敗 → 走固定間隔取樣的後備路徑
++  }
++}
++
++export type ExtractedVideo = {
++  frames: Array<{ name: string; dataBase64: string }>; // JPEG，直接可當 message image
++  audioWav: Buffer | null;                             // 16kHz mono，無音軌時為 null
++  durationSeconds: number | null;
++};
++
++export async function extractVideoFramesAndAudio(video: Buffer, opts: {
++  ffmpegBin?: string;
++  ffprobeBin?: string;
++  maxFrames?: number;
++  frameWidth?: number;
++} = {}): Promise<ExtractedVideo> {
++  const ffmpeg = opts.ffmpegBin?.trim() || "ffmpeg";
++  const ffprobe = opts.ffprobeBin?.trim() || "ffprobe";
++  const maxFrames = Math.max(1, Math.min(16, Math.floor(opts.maxFrames ?? 8)));
++  const width = Math.max(160, Math.min(1280, Math.floor(opts.frameWidth ?? 768)));
++  const dir = await mkdtemp(join(tmpdir(), "pc-video-"));
++  const input = join(dir, "input");
++  try {
++    await writeFile(input, video);
++    const durationSeconds = await probeDurationSeconds(ffprobe, input);
++
++    // 音訊 → 16kHz mono WAV（whisper 要的格式）。沒有音軌就吞掉錯誤，audioWav = null。
++    let audioWav: Buffer | null = null;
++    try {
++      const audioPath = join(dir, "audio.wav");
++      await run(ffmpeg, ["-nostdin", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "-y", audioPath], 180_000);
++      audioWav = await readFile(audioPath);
++      if (audioWav.length <= 44) audioWav = null; // 只有 WAV 表頭 = 實際上沒聲音
++    } catch {
++      audioWav = null;
++    }
++
++    // 影格：知道時長就均勻取 maxFrames 張（fps=張數/時長）；否則每 3 秒一張、截到 maxFrames。
++    const fps = durationSeconds && durationSeconds > 0 ? `${maxFrames}/${durationSeconds}` : "1/3";
++    await run(ffmpeg, [
++      "-nostdin", "-i", input,
++      "-vf", `fps=${fps},scale=${width}:-1:flags=lanczos`,
++      "-frames:v", String(maxFrames),
++      "-q:v", "3",
++      "-y", join(dir, "frame_%03d.jpg"),
++    ], 180_000).catch(() => { /* 無視訊軌/抽格失敗 → frames 會是空，下面再判斷 */ });
++
++    const files = (await readdir(dir)).filter((name) => name.startsWith("frame_") && name.endsWith(".jpg")).sort();
++    const frames: Array<{ name: string; dataBase64: string }> = [];
++    for (const [index, file] of files.slice(0, maxFrames).entries()) {
++      const buffer = await readFile(join(dir, file));
++      if (buffer.length > 0) frames.push({ name: `frame-${index + 1}.jpg`, dataBase64: buffer.toString("base64") });
++    }
++
++    if (frames.length === 0 && !audioWav) {
++      throw new VideoProcessingError("無法從這個影片取得畫面或聲音（格式可能不支援，或 ffmpeg 未安裝）");
++    }
++    return { frames, audioWav, durationSeconds };
++  } finally {
++    await rm(dir, { recursive: true, force: true }).catch(() => { /* 暫存清理為 best-effort */ });
++  }
++}
 diff --git a/web/src/App.tsx b/web/src/App.tsx
 index f18e791..5d664df 100644
 --- a/web/src/App.tsx
@@ -1055,10 +1228,20 @@ index 4b7f769..4575075 100644
                        {schedule.lastRunDay && <small>{t("上次執行 {day}", { day: schedule.lastRunDay })}</small>}
                      </div>
 diff --git a/web/src/components/TaskComposer.tsx b/web/src/components/TaskComposer.tsx
-index 8ba7f38..c3fb7bc 100644
+index 8ba7f38..53d826f 100644
 --- a/web/src/components/TaskComposer.tsx
 +++ b/web/src/components/TaskComposer.tsx
-@@ -21,7 +21,7 @@ import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalett
+@@ -8,6 +8,9 @@ import {
+   FILE_ACCEPT,
+   imagePayload,
+   isImageFile,
++  isVideoFile,
++  MAX_IMAGES,
++  MAX_VIDEO_BYTES,
+   readComposerDocument,
+   readComposerImage,
+   validateComposerAttachment,
+@@ -21,7 +24,7 @@ import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalett
  import { useComposerSessionExtras } from "../hooks/useComposerSessionExtras";
  import { useGlobalFileDrop } from "../hooks/useGlobalFileDrop";
  import { VoiceInputButton } from "./VoiceInputButton";
@@ -1067,7 +1250,7 @@ index 8ba7f38..c3fb7bc 100644
  import { t } from "../i18n";
  
  // 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
-@@ -60,6 +60,12 @@ type Props = {
+@@ -60,6 +63,12 @@ type Props = {
    queueEnabled?: boolean;
    busy?: boolean;
    onInterrupt?(): void;
@@ -1080,7 +1263,7 @@ index 8ba7f38..c3fb7bc 100644
    persistExtras?: boolean;
    globalDrop?: boolean;
    dropTargetLabel?: string;
-@@ -69,9 +75,13 @@ type Props = {
+@@ -69,11 +78,16 @@ type Props = {
  export function TaskComposer({
    draftKey, placeholder, submitLabel, busyLabel = t("處理中…"), disabled = false, working = false, toolbar, leading, onSubmit,
    layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
@@ -1093,8 +1276,11 @@ index 8ba7f38..c3fb7bc 100644
 +  const serverQueueItems = serverQueue ?? [];
    const [draftValue, setDraftValue] = useComposerDraft(draftKey);
    const [failedFiles, setFailedFiles] = useState<File[]>([]);
++  const [videoProcessing, setVideoProcessing] = useState(false);
    const {
-@@ -133,8 +143,9 @@ export function TaskComposer({
+     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
+     switchingSession, restoringExtras, extrasSaved, persistenceWarning, ownerRef, updateCachedSession,
+@@ -133,8 +147,9 @@ export function TaskComposer({
    }, [busy, disabled]);
  
    // Auto-dispatch the next queued command once the worker returns to idle.
@@ -1105,7 +1291,63 @@ index 8ba7f38..c3fb7bc 100644
      const next = queued[0];
      const owner = ownerRef.current;
      dispatchingSessionsRef.current.add(owner);
-@@ -234,11 +245,23 @@ export function TaskComposer({
+@@ -180,10 +195,54 @@ export function TaskComposer({
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [queueEnabled, busy, disabled, queued, draftKey, switchingSession, dispatchTick]);
+ 
++  // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
++  // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
++  async function processVideos(videoFiles: File[], owner: string) {
++    for (const file of videoFiles) {
++      if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
++      setVideoProcessing(true);
++      try {
++        const form = new FormData();
++        form.append("video", file, file.name);
++        const response = await fetch("/api/video/process", { method: "POST", body: form });
++        if (!response.ok) {
++          const detail = await response.json().catch(() => null);
++          throw new Error(detail?.error || t("影片處理失敗（{status}）", { status: response.status }));
++        }
++        const data = await response.json() as { images?: Array<{ name: string; mimeType: string; dataBase64: string }>; transcript?: string; transcriptError?: string | null };
++        const frames: ComposerImage[] = (data.images ?? []).map((frame, index) => ({
++          id: `vid-${Date.now()}-${index}`,
++          name: frame.name,
++          mimeType: frame.mimeType as ComposerImage["mimeType"],
++          dataBase64: frame.dataBase64,
++          previewUrl: `data:${frame.mimeType};base64,${frame.dataBase64}`,
++          size: Math.floor(frame.dataBase64.length * 0.75),
++        }));
++        const transcript = String(data.transcript ?? "").trim();
++        if (persistExtras && ownerRef.current !== owner) {
++          updateCachedSession(owner, (session) => ({ ...session, images: [...session.images, ...frames].slice(0, MAX_IMAGES), error: null }));
++        } else {
++          setImages((current) => [...current, ...frames].slice(0, MAX_IMAGES));
++          if (transcript) setDraftValue((current) => `${current}${current ? "\n\n" : ""}【影片音訊字幕】\n${transcript}`);
++          if (!transcript && data.transcriptError) setError(String(data.transcriptError));
++          else setError(null);
++          requestAnimationFrame(() => textareaRef.current?.focus());
++        }
++      } catch (videoError) {
++        setError(videoError instanceof Error ? videoError.message : t("影片處理失敗"));
++      } finally {
++        setVideoProcessing(false);
++      }
++    }
++  }
++
+   async function attachFiles(files: File[]) {
+     const owner = ownerRef.current;
++    const videoFiles = files.filter(isVideoFile);
+     const imageFiles = files.filter(isImageFile);
+-    const documentFiles = files.filter((file) => !isImageFile(file));
++    const documentFiles = files.filter((file) => !isImageFile(file) && !isVideoFile(file));
++    if (videoFiles.length > 0) void processVideos(videoFiles, owner);
++    if (imageFiles.length === 0 && documentFiles.length === 0) return;
+     const validationError = validateComposerAttachment({ imageFiles, documentFiles, currentImages: images, currentDocuments: documents });
+     if (validationError) {
+       setError(validationError);
+@@ -234,11 +293,23 @@ export function TaskComposer({
          onInterrupt?.();
          return;
        }
@@ -1130,8 +1372,11 @@ index 8ba7f38..c3fb7bc 100644
        const command: QueuedCommand = { id: newQueueId(), text, images, documents, ...newClientMessageIdentity() };
        setDraftValue("");
        setImages([]);
-@@ -430,8 +453,23 @@ export function TaskComposer({
+@@ -428,10 +499,26 @@ export function TaskComposer({
+         )}
+         {leading}
          {textareaField}
++        {videoProcessing && <span className="command-composer__video-processing" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
          {error && <span className="command-composer__error" role="alert">{error}</span>}
          {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
 -        {queueEnabled && queued.length > 0 && <QueuePanel queued={queued} restoringExtras={restoringExtras} extrasSaved={extrasSaved}
@@ -1155,7 +1400,7 @@ index 8ba7f38..c3fb7bc 100644
              const target = queued[index];
              if (!target) return;
              const replacement = hasContent ? { ...target, text: draftValue, images, documents } : null;
-@@ -444,9 +482,18 @@ export function TaskComposer({
+@@ -444,9 +531,18 @@ export function TaskComposer({
              setError(null);
              requestAnimationFrame(() => textareaRef.current?.focus());
            }}
@@ -1177,7 +1422,12 @@ index 8ba7f38..c3fb7bc 100644
          />}
          <button className={`command-composer__submit ${canInterrupt ? "command-composer__submit--stop" : ""}`} type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
        </form>
-@@ -474,8 +521,10 @@ export function TaskComposer({
+@@ -470,12 +566,15 @@ export function TaskComposer({
+       {textareaField}
+       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
+     </div>
++    {videoProcessing && <div className="task-composer__error" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
+     {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
    </form>;
  }
  
@@ -1190,7 +1440,7 @@ index 8ba7f38..c3fb7bc 100644
    restoringExtras: boolean;
    extrasSaved: boolean;
    onEdit(index: number): void;
-@@ -486,10 +535,10 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
+@@ -486,10 +585,10 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
    const [open, setOpen] = useState(false);
    const [dragIndex, setDragIndex] = useState<number | null>(null);
    return <>
@@ -1203,7 +1453,7 @@ index 8ba7f38..c3fb7bc 100644
          if (dragIndex === null) return;
          event.preventDefault();
          onReorder(dragIndex, index);
-@@ -498,11 +547,11 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
+@@ -498,11 +597,11 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
          <span className="command-queue__drag" draggable title={t("拖曳調整順序")} aria-hidden="true" onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDragIndex(index); }} onDragEnd={() => setDragIndex(null)}>⠿</span>
          <button type="button" className="command-queue__edit" onClick={() => { onEdit(index); setOpen(false); }} title={t("載入編輯")}>
            <strong>{command.text || t("只有附件的訊息")}</strong>
@@ -1264,10 +1514,10 @@ index 757ffaf..438c33e 100644
        {children}
        <div className="top-bar__spacer" />
 diff --git a/web/src/composerFiles.ts b/web/src/composerFiles.ts
-index 84f5ef4..75b7a1d 100644
+index 84f5ef4..1bd144f 100644
 --- a/web/src/composerFiles.ts
 +++ b/web/src/composerFiles.ts
-@@ -4,10 +4,10 @@ import { t } from "./i18n";
+@@ -4,15 +4,26 @@ import { t } from "./i18n";
  export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
  export type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
  
@@ -1280,7 +1530,24 @@ index 84f5ef4..75b7a1d 100644
  export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
  export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
  export const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
-@@ -25,7 +25,7 @@ export function validateComposerAttachment(input: {
+ export const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "md", "csv", "json", "html", "htm", "xml", "yaml", "yml", "log", "pdf", "docx", "xlsx", "pptx"]);
+-export const FILE_ACCEPT = "image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
++// 影片：Claude 不吃影片，上傳後由 server 用 ffmpeg 抽關鍵影格＋whisper 轉音訊字幕，再當成
++// 圖片＋文字送出（見 /api/video/process）。這裡只認得副檔名/型別，實際處理在 server。
++export const SUPPORTED_VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/x-msvideo"]);
++export const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "mkv", "avi", "m4v"]);
++export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
++export const FILE_ACCEPT = "image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv,.avi,.m4v,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
++
++export function isVideoFile(file: File): boolean {
++  if (SUPPORTED_VIDEO_TYPES.has(file.type)) return true;
++  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
++  return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
++}
+ 
+ export function validateComposerAttachment(input: {
+   imageFiles: File[];
+@@ -25,7 +36,7 @@ export function validateComposerAttachment(input: {
    if (documentFiles.length > MAX_DOCUMENTS - currentDocuments.length) return t("每則訊息最多 {max} 份文件", { max: MAX_DOCUMENTS });
    if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) return t("只支援 PNG、JPEG 與 WebP 圖片");
    if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) return t("每張圖片不可超過 5 MiB");
@@ -1471,10 +1738,19 @@ index efaddf5..09b949b 100644
    display: flex;
    align-items: center;
 diff --git a/web/src/styles/composer-and-operations.css b/web/src/styles/composer-and-operations.css
-index f6055e9..6919faf 100644
+index f6055e9..f6f603d 100644
 --- a/web/src/styles/composer-and-operations.css
 +++ b/web/src/styles/composer-and-operations.css
-@@ -906,6 +906,25 @@ summary:focus-visible,
+@@ -410,6 +410,8 @@
+ .command-composer__attachment--document span { color: #73a5b8; }
+ .command-composer--attachments .command-palette { bottom: calc(100% + 78px); }
+ .command-composer--attachments .command-composer__error { bottom: calc(100% + 78px); }
++.command-composer__video-processing { color: var(--cyan); font-size: 10px; animation: missionPulse 1.2s ease-in-out infinite; }
++.task-composer__error[role="status"] { color: var(--cyan); }
+ .command-composer__error { position: absolute; right: 88px; bottom: calc(100% + 7px); max-width: 420px; padding: 7px 9px; border: 1px solid rgba(255, 46, 136,.28); border-radius: 7px; background: rgba(30,8,17,.96); color: #ff9aae; font-size: 10px; }
+ .command-palette { position: absolute; right: 0; bottom: calc(100% + 9px); left: 0; overflow: hidden; border: 1px solid rgba(0, 229, 255,.22); border-radius: 14px; background: rgba(7,13,26,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); }
+ .command-palette__head { display: flex; justify-content: space-between; padding: 10px 13px; border-bottom: 1px solid rgba(255,255,255,.06); color: rgba(0, 229, 255,.7); font: 700 8px var(--mono); letter-spacing: .17em; }
+@@ -906,6 +908,25 @@ summary:focus-visible,
  .mission-card__progress { position: relative; overflow: hidden; height: 22px; margin: 12px 0; border-radius: 5px; background: rgba(28,44,69,.7); }
  .mission-card__progress i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(0, 255, 163,.28), rgba(0, 229, 255,.32)); transition: width .25s ease; }
  .mission-card__progress span { position: relative; display: grid; height: 100%; place-items: center; color: #bcd1e5; font: 700 9px var(--mono); }
@@ -1500,7 +1776,7 @@ index f6055e9..6919faf 100644
  .mission-card__final-report { display: grid; gap: 8px; margin: 16px 0 8px; padding: 16px; border: 1px solid rgba(0, 255, 163,.28); border-radius: 10px; background: linear-gradient(145deg, rgba(0, 255, 163,.08), rgba(0, 229, 255,.035)); }
  .mission-card__final-report > span { color: #55d9b3; font: 700 8px var(--mono); letter-spacing: .15em; }
  .mission-card__final-report h4 { margin: 0; color: #d8f5eb; font-size: 14px; }
-@@ -1062,6 +1081,33 @@ summary:focus-visible,
+@@ -1062,6 +1083,33 @@ summary:focus-visible,
  .boss-task-desk__starters button { min-height: 34px; padding: 8px 12px; border: 1px solid rgba(100,172,205,.13); border-radius: 8px; background: rgba(8,18,35,.5); color: #8296af; cursor: pointer; font-size: 10px; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease; }
  .boss-task-desk__starters button::before { content: "↗"; margin-right: 9px; color: #3c8095; font-family: var(--mono); }
  .boss-task-desk__starters button:hover { transform: translateX(2px); border-color: rgba(0, 229, 255,.3); background: rgba(0, 229, 255,.055); color: #c4d7e8; }
