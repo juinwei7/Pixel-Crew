@@ -72,6 +72,7 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import multer from "multer";
 import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
 import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
+import { snapshotHistory, trimEventForSnapshot } from "./snapshotHistory.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -2479,59 +2480,12 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
   }
 }
 
-// 初始 snapshot 瘦身：**保留完整訊息筆數**（日誌照樣看得到），只把單筆超大的工具
-// 輸出/輸入等內容截短。真正把歷史脹到十幾 MB 的是少數幾筆巨大的工具輸出（單筆可達
-// 200KB+ 的檔案內容/截圖等），不是訊息「數量」。截短後手機收得動，完整內容仍保存在
-// 本機 SQLite。另設一個很寬鬆的筆數上限當保險絲，避免極端情況整包無界成長。
-const SNAPSHOT_MAX_EVENTS = 800;        // 每 worker 最多送這麼多筆（對齊 turn 邊界）
-const SNAPSHOT_MAX_FIELD_CHARS = 6_000; // 單一欄位序列化長度上限，超過就截短
 // 預算守門：初始 snapshot 曾肥到 18.7MB 讓手機卡死在「尋找AI隊員」，瘦身到 4.85MB
 // 才勉強打平。之後任何改動把它推回 5MB 以上，就在這裡大聲告警抓回歸。
+// snapshot 瘦身/裁切邏輯（含「至少保留最近 N 個完整 turn，日誌不空白」）已抽到
+// snapshotHistory.ts，方便單元測試。
 const SNAPSHOT_BUDGET_BYTES = 5 * 1024 * 1024;
 let snapshotBudgetWarnedAt = 0;
-
-function clampField(value: unknown): unknown {
-  let s: string;
-  try {
-    s = typeof value === "string" ? value : JSON.stringify(value);
-  } catch {
-    return value;
-  }
-  if (s == null || s.length <= SNAPSHOT_MAX_FIELD_CHARS) return value;
-  return s.slice(0, SNAPSHOT_MAX_FIELD_CHARS) + `…（省略 ${s.length - SNAPSHOT_MAX_FIELD_CHARS} 字；完整內容保存於本機）`;
-}
-
-// 只截「內容型」的大欄位，事件的結構與型別（type/id/name…）保持不變，前端照常渲染。
-function trimEventForSnapshot(ev: RunnerEvent): RunnerEvent {
-  switch (ev.type) {
-    case "tool_call_result":
-      return { ...ev, output: clampField(ev.output) };
-    case "tool_call_start":
-      return { ...ev, input: clampField(ev.input) };
-    case "tool_call_output_delta":
-      return ev.delta.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, delta: String(clampField(ev.delta)) } : ev;
-    case "text_delta":
-    case "thinking_delta":
-      return ev.text.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, text: String(clampField(ev.text)) } : ev;
-    default:
-      return ev;
-  }
-}
-
-function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
-  let events = history;
-  if (events.length > SNAPSHOT_MAX_EVENTS) {
-    const windowStart = events.length - SNAPSHOT_MAX_EVENTS;
-    // 從視窗起點往後找第一個 turn 開頭（user_message），讓前端重建完整的 turn，不會
-    // 拿到半截 turn；找不到（單一超長 turn）就用尾段，前端會安全略過孤兒事件。
-    let start = windowStart;
-    for (let i = windowStart; i < events.length; i++) {
-      if (events[i]?.type === "user_message") { start = i; break; }
-    }
-    events = events.slice(start);
-  }
-  return events.map(trimEventForSnapshot);
-}
 
 // 初始 snapshot 瘦身：已結束（completed/failed/cancelled）的 Mission 去掉 executionEvents。
 // 那是初始 snapshot 肥大的主因（實測 16MB，完成的量化 mission 單筆可達 1~2.5MB）；完成的
