@@ -54,6 +54,27 @@ export const enCore: Record<string, string> = {
   "MCP 能力與連線狀態": "MCP capabilities and connection status",
   "任務看板": "Kanban board",
   "帳號管理": "Accounts",
+  "人員": "Crew",
+  "人員名冊": "Crew roster",
+  "關閉背景服務": "Stop background service",
+  "整個 app 的設定：語言、通知、看板、營運、備份、重啟":
+    "Settings for the whole app: language, notifications, boards, operations, backup, restart",
+  "帳號管理：管理多個 Codex／Claude 登入，個別 NPC 可指定要用哪一個":
+    "Accounts: manage several Codex / Claude logins; each NPC can be pinned to one",
+  "成品匣：隊員完成的交付物（工作區 outbox 資料夾）集中一覽、一鍵開啟":
+    "Outbox: everything the crew has delivered (the workspace outbox folder) in one list, one tap to open",
+  "遠端存取／手機控制：啟動轉接站，手機也能連進來操作":
+    "Remote access / phone control: start the relay so a phone can connect and drive this",
+  "直接連到目前工作資料夾的原始 shell；指令會立刻在本機執行":
+    "A raw shell in the current work folder; commands run on this machine immediately",
+  "管理 Codex CLI 的原生指令與能力": "Manage the Codex CLI's own commands and capabilities",
+  "啟動 Agent": "Start agent",
+  "新 CLI": "New CLI",
+  "新分頁": "New tab",
+  "右切": "Split right",
+  "下切": "Split down",
+  "目前 CLI 的設定": "Settings for this CLI",
+  "核准模式": "Approval mode",
   "像素辦公室：看得到每位 NPC 在做什麼": "Pixel office: watch what every NPC is doing",
   "專業模式：只留對話與任務紀錄": "Professional mode: just the conversation and task log",
   "工作模式：{mode}（左右滑動切換）": "Work mode: {mode} (swipe to change)",
