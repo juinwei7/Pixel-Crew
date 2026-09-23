@@ -94,6 +94,7 @@ internal static class SingleFileInstaller
         try
         {
             Directory.CreateDirectory(dataRoot);
+            ClearStaleInstallDirs(dataRoot);
             staging = Path.Combine(dataRoot, $"app-staging-{Guid.NewGuid():N}");
             Directory.CreateDirectory(staging);
             using (var payload = Assembly.GetExecutingAssembly().GetManifestResourceStream(PayloadName)
@@ -104,14 +105,17 @@ internal static class SingleFileInstaller
             }
             File.Copy(currentExecutable, Path.Combine(staging, ExecutableName), overwrite: true);
 
+            // Release any handle on the old install tree before the atomic swap so a
+            // surviving server/worker can't lock us out (previously required a reboot).
+            TerminateInstallBlockers(installRoot, dataRoot);
             if (Directory.Exists(installRoot))
             {
                 backup = Path.Combine(dataRoot, $"app.previous-{Guid.NewGuid():N}");
-                Directory.Move(installRoot, backup);
+                MoveWithRetry(installRoot, backup);
             }
-            Directory.Move(staging, installRoot);
+            MoveWithRetry(staging, installRoot);
             staging = null;
-            if (backup is not null) Directory.Delete(backup, recursive: true);
+            if (backup is not null) { try { Directory.Delete(backup, recursive: true); } catch { } }
 
             var restart = new ProcessStartInfo { FileName = installedExecutable, UseShellExecute = true };
             foreach (var argument in args) restart.ArgumentList.Add(argument);
@@ -149,13 +153,94 @@ internal static class SingleFileInstaller
         {
             if (!int.TryParse(File.ReadAllText(pidFile).Trim(), out var processId)) return false;
             using var server = Process.GetProcessById(processId);
-            return !server.HasExited;
+            if (server.HasExited) { try { File.Delete(pidFile); } catch { } return false; }
+            // Guard against a recycled PID: only trust server.pid if that process is
+            // actually running from our install tree. A stale pid file whose number was
+            // reused by an unrelated process would otherwise make the installer reattach
+            // forever and never apply the update — the "can't finish installing, must
+            // reboot" symptom. If in doubt (MainModule inaccessible), treat as stale.
+            string? modulePath = null;
+            try { modulePath = server.MainModule?.FileName; } catch { }
+            if (modulePath is null || !modulePath.StartsWith(dataRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.Delete(pidFile); } catch { }
+                return false;
+            }
+            return true;
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
             try { File.Delete(pidFile); } catch { }
             return false;
         }
+    }
+
+    // Forcibly clears anything that would lock the install directory and block the
+    // atomic swap below: the recorded managed server (whole tree) plus any straggler
+    // process still executing from inside the install root (orphan node.exe from
+    // app/runtime, leftover workers). Without this, a surviving handle makes
+    // Directory.Move fail and only a reboot recovers.
+    private static void TerminateInstallBlockers(string installRoot, string dataRoot)
+    {
+        var pidFile = Path.Combine(dataRoot, "logs", "server.pid");
+        try
+        {
+            if (int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+            {
+                using var server = Process.GetProcessById(pid);
+                try { server.Kill(entireProcessTree: true); } catch { }
+                try { server.WaitForExit(4000); } catch { }
+            }
+        }
+        catch { }
+        try { File.Delete(pidFile); } catch { }
+        if (!Directory.Exists(installRoot)) return;
+        foreach (var proc in Process.GetProcesses())
+        {
+            try
+            {
+                if (proc.Id == Environment.ProcessId) continue;
+                string? path = null;
+                try { path = proc.MainModule?.FileName; } catch { }
+                if (path is not null && path.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    try { proc.WaitForExit(3000); } catch { }
+                }
+            }
+            catch { }
+            finally { proc.Dispose(); }
+        }
+    }
+
+    // Directory.Move can transiently fail while the OS finishes releasing handles the
+    // processes above just held. Retry briefly before giving up.
+    private static void MoveWithRetry(string source, string destination)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { Directory.Move(source, destination); return; }
+            catch (Exception exception) when ((exception is IOException or UnauthorizedAccessException) && attempt < 8)
+            {
+                Thread.Sleep(400);
+            }
+        }
+    }
+
+    private static void ClearStaleInstallDirs(string dataRoot)
+    {
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(dataRoot))
+            {
+                var name = Path.GetFileName(dir);
+                if (name.StartsWith("app-staging-", StringComparison.Ordinal) || name.StartsWith("app.previous-", StringComparison.Ordinal))
+                {
+                    try { Directory.Delete(dir, recursive: true); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 
     private static bool PathsEqual(string left, string right) =>
