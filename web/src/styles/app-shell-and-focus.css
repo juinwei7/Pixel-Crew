@@ -113,6 +113,44 @@
 @media (prefers-reduced-motion: reduce) {
   .top-bar__running-item-dot { animation: none; }
 }
+/* 母 NPC 底下、縮排一格的「子代理」列——顯示該 NPC 內部再拆出去、還在跑的子代理。 */
+.top-bar__running-group { display: flex; flex-direction: column; }
+.top-bar__running-subitem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px 6px 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.top-bar__running-subitem:hover { background: rgba(0, 255, 163, 0.08); }
+.top-bar__running-subdot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7cf0b6;
+  box-shadow: 0 0 5px rgba(124, 240, 182, 0.7);
+  animation: runningPulse 1.2s ease-in-out infinite;
+}
+.top-bar__running-subtag {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(124, 240, 182, 0.12);
+  color: rgba(124, 240, 182, 0.9);
+  font: 700 9px/1.4 var(--mono);
+  letter-spacing: 0.04em;
+}
+.top-bar__running-subitem .top-bar__running-item-name { font-weight: 500; font-size: 11px; }
+@media (prefers-reduced-motion: reduce) {
+  .top-bar__running-subdot { animation: none; }
+}
 
 .top-bar__brand {
   display: flex;

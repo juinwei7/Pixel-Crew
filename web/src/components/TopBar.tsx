@@ -33,8 +33,9 @@ type Props = {
   workerCount: number;
   /** 全域「執行中」NPC 數（不分工作區）；頂欄燈號用。 */
   runningCount: number;
-  /** 目前正在背景執行、還沒回報的 NPC（點「在跑」燈號展開清單、可跳過去看）。 */
-  runningWorkers?: Array<{ id: string; name: string; room: string }>;
+  /** 目前正在背景執行、還沒回報的 NPC（點「在跑」燈號展開清單、可跳過去看）；subAgents 是該
+      NPC 內部再拆出去、還在跑的子代理。 */
+  runningWorkers?: Array<{ id: string; name: string; room: string; subAgents?: Array<{ id: string; label: string }> }>;
   onSelectRunning?(id: string): void;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
@@ -340,17 +341,32 @@ export function TopBar({
           <div className="top-bar__running-menu" role="menu">
             <div className="top-bar__running-menu-title">{t("背景執行中（點一位跳過去看）")}</div>
             {runningWorkers.map((worker) => (
-              <button
-                key={worker.id}
-                type="button"
-                role="menuitem"
-                className="top-bar__running-item"
-                onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
-              >
-                <span className="top-bar__running-item-dot" aria-hidden="true" />
-                <span className="top-bar__running-item-name">{worker.name}</span>
-                <span className="top-bar__running-item-room">{worker.room}</span>
-              </button>
+              <div key={worker.id} className="top-bar__running-group">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="top-bar__running-item"
+                  onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
+                >
+                  <span className="top-bar__running-item-dot" aria-hidden="true" />
+                  <span className="top-bar__running-item-name">{worker.name}</span>
+                  <span className="top-bar__running-item-room">{worker.room}</span>
+                </button>
+                {(worker.subAgents ?? []).map((sub) => (
+                  <button
+                    key={sub.id}
+                    type="button"
+                    role="menuitem"
+                    className="top-bar__running-subitem"
+                    title={sub.label}
+                    onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
+                  >
+                    <span className="top-bar__running-subdot" aria-hidden="true" />
+                    <span className="top-bar__running-subtag">{t("子代理")}</span>
+                    <span className="top-bar__running-item-name">{sub.label}</span>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         )}

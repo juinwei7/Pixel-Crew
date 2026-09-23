@@ -257,10 +257,22 @@ export function App() {
   // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
   const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
   // 正在背景執行、還沒回報的 NPC 清單（名字＋所在「子城市」/工作區），供頂欄「在跑」燈號點開查看。
+  // 也一併帶出「NPC 內部再拆出去、還在跑的子代理」：從該 NPC 最新回合的工具呼叫裡，找 name==="Task"
+  // 且 status==="running"（Task 就是 Claude 開子代理的工具，尚無結果＝子代理還在跑）。
   const runningWorkers = useMemo(
     () => workerList
       .filter((worker) => Boolean(worker?.busy))
-      .map((worker) => ({ id: worker.id, name: worker.name, room: roomName(worker.workspacePath) })),
+      .map((worker) => {
+        const lastTurn = worker.turns[worker.turns.length - 1];
+        const subAgents = (lastTurn?.items ?? []).flatMap((item) => {
+          if (item.kind !== "tool_call" || item.name !== "Task" || item.status !== "running") return [];
+          const input = (item.input ?? {}) as { subagent_type?: string; description?: string };
+          const type = input.subagent_type?.trim();
+          const desc = input.description?.trim();
+          return [{ id: item.id, label: type && desc ? `${type}·${desc}` : desc || type || t("子代理") }];
+        });
+        return { id: worker.id, name: worker.name, room: roomName(worker.workspacePath), subAgents };
+      }),
     [workerList],
   );
   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
