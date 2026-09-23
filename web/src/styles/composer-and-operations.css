@@ -1099,6 +1099,24 @@ summary:focus-visible,
 .boss-task-desk__advisor-proactive:disabled { cursor: not-allowed; opacity: .45; }
 .boss-task-desk__advisor-proactive:not(:disabled):hover { background: rgba(255,194,92,.08); border-color: rgba(255,194,92,.5); color: #ffd27c; }
 .boss-task-desk__advisor-error { margin: 0; color: #ff8ca3; font-size: 9px; }
+/* 顧問長時間生成（~100–115s）時的等待動畫：發光小球脈動 + 輪播階段 + 進度條 + 秒數。 */
+.boss-task-desk__advisor-loading { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border: 1px solid rgba(255,194,92,.22); border-radius: 10px; background: linear-gradient(120deg, rgba(255,194,92,.06), rgba(120,196,255,.05)); animation: advisor-loading-in .35s ease both; }
+.boss-task-desk__advisor-orb { position: relative; flex: 0 0 34px; width: 34px; height: 34px; }
+.boss-task-desk__advisor-orb span { position: absolute; inset: 0; margin: auto; width: 10px; height: 10px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #ffe6ad, #ffb347); box-shadow: 0 0 10px rgba(255,190,92,.75); animation: advisor-orb 1.4s ease-in-out infinite; }
+.boss-task-desk__advisor-orb span:nth-child(2) { animation-delay: .18s; background: radial-gradient(circle at 35% 30%, #cfe9ff, #6fb6ff); box-shadow: 0 0 10px rgba(111,182,255,.7); }
+.boss-task-desk__advisor-orb span:nth-child(3) { animation-delay: .36s; background: radial-gradient(circle at 35% 30%, #ffd7ef, #ff86c8); box-shadow: 0 0 10px rgba(255,134,200,.65); }
+.boss-task-desk__advisor-loading-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.boss-task-desk__advisor-loading-body strong { color: #ffd27c; font-size: 10px; }
+.boss-task-desk__advisor-phase { color: #cfe0f2; font-size: 9.5px; animation: advisor-phase-fade .5s ease; }
+.boss-task-desk__advisor-bar { position: relative; height: 4px; border-radius: 3px; background: rgba(120,150,180,.18); overflow: hidden; }
+.boss-task-desk__advisor-bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #ffb347, #6fb6ff); transition: width .4s ease; }
+.boss-task-desk__advisor-bar::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.28), transparent); transform: translateX(-100%); animation: advisor-bar-shine 1.6s linear infinite; }
+.boss-task-desk__advisor-loading-body small { color: #6f849c; font-size: 8px; }
+@keyframes advisor-loading-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes advisor-orb { 0%, 100% { transform: translateY(6px) scale(.7); opacity: .5; } 50% { transform: translateY(-6px) scale(1); opacity: 1; } }
+@keyframes advisor-phase-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes advisor-bar-shine { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .boss-task-desk__advisor-orb span, .boss-task-desk__advisor-bar::after { animation: none; } }
 .boss-task-desk__advisor-question { padding: 9px 11px; border-left: 2px solid rgba(255,194,92,.55); background: rgba(255,194,92,.06); border-radius: 6px; }
 .boss-task-desk__advisor-question strong { color: #ffd27c; font-size: 10px; }
 .boss-task-desk__advisor-question p { margin: 5px 0; color: #d5e2f0; font-size: 10px; line-height: 1.55; }

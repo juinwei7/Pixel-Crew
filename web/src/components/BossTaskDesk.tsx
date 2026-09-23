@@ -115,7 +115,31 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [advisorDomain, setAdvisorDomain] = useState<string | null>(null);
   const [advisorQuestion, setAdvisorQuestion] = useState<string | null>(null);
   const [advisorProposals, setAdvisorProposals] = useState<AdvisorProposal[]>([]);
+  // 顧問生成一次要 ~100–115 秒（冷啟＋思考＋4 段內容）：期間跑一個計時＋輪播訊息的動畫，
+  // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。
+  const [advisorElapsed, setAdvisorElapsed] = useState(0);
   const restoredSelection = useRef(false);
+
+  useEffect(() => {
+    if (!advisorLoading) return;
+    setAdvisorElapsed(0);
+    const started = performance.now();
+    const timer = window.setInterval(() => {
+      setAdvisorElapsed(Math.floor((performance.now() - started) / 1000));
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [advisorLoading]);
+
+  // 依已過秒數輪播「顧問正在做什麼」的擬真階段訊息（純視覺，不代表真實後端步驟）。
+  const advisorPhases = [
+    t("正在讀你的工作區脈絡…"),
+    t("在推敲這屬於哪個領域…"),
+    t("搜尋你可能沒想到的專業方向…"),
+    t("為每個方向補內行洞見與實作路數…"),
+    t("整理成可直接交辦的方向…"),
+  ];
+  const advisorPhase = advisorPhases[Math.min(advisorPhases.length - 1, Math.floor(advisorElapsed / 24))];
+  const advisorProgress = Math.min(96, Math.round((advisorElapsed / 110) * 100));
 
   const runAdvisor = async (proactive = false) => {
     const idea = advisorIdea.trim();
@@ -423,6 +447,15 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           >
             {advisorLoading ? t("顧問思考中…") : t("完全沒想法？讓顧問主動給我建議")}
           </button>
+          {advisorLoading && <div className="boss-task-desk__advisor-loading" role="status" aria-live="polite">
+            <div className="boss-task-desk__advisor-orb"><span></span><span></span><span></span></div>
+            <div className="boss-task-desk__advisor-loading-body">
+              <strong>{t("顧問思考中…")}</strong>
+              <span key={advisorPhase} className="boss-task-desk__advisor-phase">{advisorPhase}</span>
+              <div className="boss-task-desk__advisor-bar"><i style={{ width: `${advisorProgress}%` }}></i></div>
+              <small>{t("已思考 {sec} 秒 · 通常約 100–115 秒，請稍候", { sec: advisorElapsed })}</small>
+            </div>
+          </div>}
           {advisorError && <p className="boss-task-desk__advisor-error" role="alert">{advisorError}</p>}
           {advisorQuestion && <div className="boss-task-desk__advisor-question">
             <strong>{t("顧問想先確認一件事：")}</strong>
