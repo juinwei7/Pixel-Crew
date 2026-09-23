@@ -16,6 +16,11 @@ set "HOST=127.0.0.1"
 set "PIXEL_CREW_DATA_DIR=%LOCALAPPDATA%\Pixel Crew\_test-instance"
 set "WEB_DIST_PATH=%~dp0web\dist"
 
+if not exist "%~dp0node_modules" (
+  echo Installing dependencies for the first time (one-time, a few minutes)...
+  pushd "%~dp0" && call npm install && popd
+)
+
 if not exist "dist\index.js" (
   echo dist not built yet. Building server + web first...
   call npx tsc -p tsconfig.json
