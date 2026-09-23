@@ -130,10 +130,6 @@ function completeHistoricalStoreSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "workers", "codex_account_id TEXT");
   addColumnIfMissing(db, "workers", "account_id TEXT");
   db.exec("UPDATE workers SET account_id = codex_account_id WHERE codex_account_id IS NOT NULL AND account_id IS NULL");
-  // 排程「每 N 分鐘重複」擴充：interval_minutes 為 null＝維持舊的「每日 HH:MM 一次」，
-  // 有值＝每 N 分鐘重複觸發（用 last_run_at 這個 ISO 時間戳判斷是否到點，取代 last_run_day）。
-  addColumnIfMissing(db, "schedules", "interval_minutes INTEGER");
-  addColumnIfMissing(db, "schedules", "last_run_at TEXT");
 }
 
 export const storeMigrations: readonly DatabaseMigration[] = [
@@ -187,6 +183,18 @@ export const storeMigrations: readonly DatabaseMigration[] = [
           AND completed_turns > 0
           AND account_id IS NULL
       `);
+    },
+  },
+  {
+    // 排程「每 N 分鐘重複」擴充。必須是「新的」migration 版本：既有 DB 早已套過 version 3，
+    // 若把欄位塞回 version 3 的 completeHistoricalStoreSchema，既有 DB 不會重跑該版 → 欄位
+    // 永遠不補、開機查排程即崩「no such column: interval_minutes」。interval_minutes 為 null
+    // ＝維持舊的「每日 HH:MM 一次」；有值＝每 N 分鐘重複（用 last_run_at 這個 ISO 時間戳判定）。
+    version: 8,
+    name: "add-schedule-interval-columns",
+    up: (db) => {
+      addColumnIfMissing(db, "schedules", "interval_minutes INTEGER");
+      addColumnIfMissing(db, "schedules", "last_run_at TEXT");
     },
   },
 ];
