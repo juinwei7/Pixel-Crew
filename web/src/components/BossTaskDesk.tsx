@@ -5,6 +5,7 @@ import type { AdvisorProposal, AdvisorResult, BossTask, BossTaskStage, CommandSu
 import { apiRequest } from "../api";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
+import { writeComposerDraft } from "../hooks/useComposerDraft";
 import { type ConfirmTone } from "./ConfirmDialog";
 
 type DecisionModelOption = { provider: ProviderId; model: string; label: string };
@@ -118,6 +119,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   // 顧問生成一次要 ~100–115 秒（冷啟＋思考＋4 段內容）：期間跑一個計時＋輪播訊息的動畫，
   // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。
   const [advisorElapsed, setAdvisorElapsed] = useState(0);
+  // 交辦顧問方向時，用這個 seed 強制 TaskComposer 重掛，讓它重新從 localStorage 讀進 objective
+  // ——因為沒有既有任務時 draftKey 前後相同、composer 不會自己重讀（就是「點了沒反應／再點消失」的根因）。
+  const [composerSeed, setComposerSeed] = useState(0);
   const restoredSelection = useRef(false);
 
   useEffect(() => {
@@ -173,9 +177,13 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
 
   // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
   const useProposalObjective = (objective: string) => {
-    try { localStorage.setItem(`pixel-crew:task-composer:boss:${workspacePath}:new`, objective); } catch { /* unavailable */ }
-    setNewTask(false);
-    requestAnimationFrame(() => setNewTask(true));
+    // 目標一律進「新任務」草稿：切到新任務、清掉選取，再把 objective 寫進該 draftKey，
+    // 然後 bump seed 逼 composer 重掛重讀（換 key 前寫入，避免舊實例的 200ms 自動存檔把它蓋回空）。
+    setShowArchived(false);
+    setSelectedId(null);
+    setNewTask(true);
+    writeComposerDraft(`boss:${workspacePath}:new`, objective);
+    setComposerSeed((seed) => seed + 1);
   };
   // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
   // non-blocking, so a WS-driven status change can land while its dialog is
@@ -332,6 +340,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         : t("目前正在跨部門執行；進度會自動回報");
 
   const composer = <TaskComposer
+    key={`boss-composer-${composerSeed}`}
     draftKey={`boss:${selected && !newTask ? selected.id : `${workspacePath}:new`}`}
     placeholder={placeholder}
     submitLabel={selected && !newTask ? t("送出") : t("交辦")}
