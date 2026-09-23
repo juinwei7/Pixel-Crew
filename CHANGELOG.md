@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-23
+
 ### Added
 
 - Remote access now shows a real progress bar while it downloads cloudflared for the first time, with transferred size, speed, remaining time, and a cancel button.
@@ -217,7 +219,8 @@ First public release. / 首次公開發布。
 - NPC avatar workshop with animated GIF support; provider workflows; global work-energy HUD.
 - Windows portable packaging（GitHub Actions release workflow, zip + tar.gz with SHA-256）.
 
-[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/juinwei7/Pixel-Crew/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/juinwei7/Pixel-Crew/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/juinwei7/Pixel-Crew/compare/v2.2.2...v2.3.0

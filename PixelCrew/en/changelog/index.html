@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Changelog — Pixel Crew</title>
-<meta name="description" content="What changed in every Pixel Crew release, including the 2.4.0 macOS and Windows app icons and Black Window image pasting.">
+<meta name="description" content="What changed in every Pixel Crew release, including the 2.5.0 phone redesign: one shared responsive layer, two scope-based menus, and a swipeable mode switch.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -17,11 +17,11 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="stylesheet" href="/assets/style.css?v=2.4.0">
+<link rel="stylesheet" href="/assets/style.css?v=2.5.0">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/en/changelog/">
 <meta property="og:title" content="Changelog — Pixel Crew">
-<meta property="og:description" content="Pixel Crew 2.4.0 gives macOS and Windows a real app icon, and Black Window accepts a pasted image with Cmd+V.">
+<meta property="og:description" content="Pixel Crew 2.5.0 rebuilds the phone layout on one shared responsive layer, with the nav bar trimmed to essentials and the rest in two menus.">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="zh_TW">
@@ -58,24 +58,24 @@
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">NEW RELEASE <i>·</i> 2.4.0</span>
-        <h2>Downloads get a face, and Black Window takes screenshots.</h2>
-        <p>Version 2.4.0 gives the macOS app and the Windows executable a real icon — the office crew itself — and lets a Black Window terminal take a pasted image with Cmd+V and hand it to Claude Code or Codex.</p>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.5.0</span>
+        <h2>The phone layout is rebuilt, not shrunk.</h2>
+        <p>Version 2.5.0 rebuilds the phone layout on one shared responsive layer: twenty-four breakpoints become three, every dialog shares one shell, and the nav bar keeps only the essentials while the rest moves into two menus split by what they affect. All three work modes now share an identical nav bar, so switching no longer shifts anything.</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.4.0</span>
-        <time class="launch-date" datetime="2026-09-22">2026.09.22</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.4.0">View full release notes ↗</a>
+        <span class="launch-version">v2.5.0</span>
+        <time class="launch-date" datetime="2026-09-23">2026.09.23</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.5.0">View full release notes ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / APP ICON</span><b>Downloads are no longer a blank sheet</b><p>Neither the macOS .app nor the Windows .exe declared an icon, so Finder and Explorer showed the generic application placeholder. Both platforms now have a face of their own.</p></article>
-      <article class="upgrade-card"><span class="index">02 / BRAND</span><b>The icon is the office crew itself</b><p>It uses the same NPC sprite the PixiJS scene draws rather than a separate mark that matches nothing, and the site favicon now comes from that one source too.</p></article>
-      <article class="upgrade-card"><span class="index">03 / EVERY SIZE</span><b>Crisp from 16px to 1024px</b><p>Pixel art only survives whole-number scaling, so every size has its own scale, and anything at or below 64px drops to a single crew member instead of squeezing three into a blur.</p></article>
-      <article class="upgrade-card"><span class="index">04 / BLACK WINDOW</span><b>Cmd+V hands a screenshot straight to the CLI</b><p>A terminal cannot receive an image from the clipboard. A paste is now staged as a private local file and its path handed to the Claude Code or Codex composer, where it becomes an attachment.</p></article>
-      <article class="upgrade-card"><span class="index">05 / REMOTE</span><b>Pasting works from a phone too</b><p>The image is staged on the server rather than read from the desktop clipboard, so it still works when the browser and the CLI are on different machines.</p></article>
-      <article class="upgrade-card"><span class="index">06 / USAGE</span><b>Usage without a reset time still reads</b><p>When Claude reports usage but omits the reset time, the reading is no longer discarded, so the quota display stops going unexpectedly blank.</p></article>
+      <article class="upgrade-card"><span class="index">01 / ONE LAYER</span><b>Twenty-four breakpoints become three</b><p>One for phones, one for tablets, one for short screens, with the numbers in a single shared stylesheet. Tap targets and spacing collapse into one set of tokens, replacing nearly a hundred hand-written 44px values.</p></article>
+      <article class="upgrade-card"><span class="index">02 / TOP BAR</span><b>Two menus, split by what they change</b><p>The bar keeps work mode, Assign work, usage, and health. Everything else splits into "This NPC" (workspace, provider, model, account, auto-approve, MCP) and "App settings" (language, notifications, boards, backup, restart).</p></article>
+      <article class="upgrade-card"><span class="index">03 / NO JUMP</span><b>One nav bar across all three modes</b><p>Pixel, Professional, and Black Window now share the same padding, spacing, control size, and mode-button width, so switching no longer shifts the row above.</p></article>
+      <article class="upgrade-card"><span class="index">04 / SWIPE</span><b>The mode switch collapses to one chip</b><p>Three side-by-side buttons ate six-tenths of a narrow bar. Only the current mode shows now: swipe to move to the next one, or tap to pick from all three — deliberately not a cycle, so you never stop in a mode you did not want.</p></article>
+      <article class="upgrade-card"><span class="index">05 / MORE ROOM</span><b>The conversation and the report each get a block back</b><p>The task log's chrome drops from 100px to 54px, and Professional mode's three rows above the report become two, from 218px to 132px. Every pixel saved goes to content.</p></article>
+      <article class="upgrade-card"><span class="index">06 / NO EMOJI</span><b>Icons stop depending on the operating system</b><p>122 emoji used as icons become one hand-built line-icon set: a single stroke weight that follows the interface colour, instead of a different glyph on macOS, Windows, and Android.</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew existing feature UI">

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>版本更新 — Pixel Crew</title>
-<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.4.0 的 macOS 與 Windows app 圖示，以及黑窗 Cmd+V 貼圖。">
+<meta name="description" content="Pixel Crew 每個正式版本的變更紀錄，包含 2.5.0 的手機版重新設計：共用響應式樣式、兩個依作用範圍分的選單、可左右滑的模式切換。">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="author" content="Pixel Crew">
 <meta name="application-name" content="Pixel Crew">
@@ -17,11 +17,11 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" sizes="512x512" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="stylesheet" href="/assets/style.css?v=2.4.0">
+<link rel="stylesheet" href="/assets/style.css?v=2.5.0">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://pixelcrew.weibuilds.com/changelog/">
 <meta property="og:title" content="版本更新 — Pixel Crew">
-<meta property="og:description" content="2.4.0 為 macOS 與 Windows 補上正式 app 圖示，黑窗也能直接 Cmd+V 貼圖給 CLI。">
+<meta property="og:description" content="2.5.0 把手機版型整個重建在同一層共用樣式上，導覽列只留重點、其餘收進兩個選單。">
 <meta property="og:site_name" content="Pixel Crew">
 <meta property="og:locale" content="zh_TW">
 <meta property="og:locale:alternate" content="en_US">
@@ -58,24 +58,24 @@
   <div class="launch-shell">
     <div class="launch-head">
       <div>
-        <span class="eyebrow">NEW RELEASE <i>·</i> 2.4.0</span>
-        <h2>下載終於有臉，黑窗也收得下截圖。</h2>
-        <p>2.4.0 為 macOS app 與 Windows 執行檔補上正式圖示——那組圖就是辦公室裡的隊員本人；同時讓黑窗終端可以直接 Cmd+V，把截圖交給 Claude Code 或 Codex。</p>
+        <span class="eyebrow">NEW RELEASE <i>·</i> 2.5.0</span>
+        <h2>手機版整個重做，不再是縮小的桌面版。</h2>
+        <p>2.5.0 把手機版型全部重建在同一層共用樣式上：斷點從二十四個收到三個，所有對話框共用一個殼，導覽列只留重點、其餘依「作用範圍」分成兩個選單。三個工作模式的導覽列現在完全一致，切換時不會跳。</p>
       </div>
       <div class="launch-meta">
-        <span class="launch-version">v2.4.0</span>
-        <time class="launch-date" datetime="2026-09-22">2026.09.22</time>
-        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.4.0">查看完整版本內容 ↗</a>
+        <span class="launch-version">v2.5.0</span>
+        <time class="launch-date" datetime="2026-09-23">2026.09.23</time>
+        <a href="https://github.com/juinwei7/Pixel-Crew/releases/tag/v2.5.0">查看完整版本內容 ↗</a>
       </div>
     </div>
 
     <div class="upgrade-grid">
-      <article class="upgrade-card"><span class="index">01 / APP ICON</span><b>下載下來不再是一張白紙</b><p>macOS 的 .app 與 Windows 的 .exe 以前都沒有宣告圖示，Finder 與檔案總管只會顯示系統預設的空白圖示。現在兩邊都有自己的臉。</p></article>
-      <article class="upgrade-card"><span class="index">02 / BRAND</span><b>圖示就是辦公室裡那組隊員</b><p>用的是 PixiJS 場景裡同一份 NPC sprite，不是另外畫一顆對不上的圖；網站 favicon 也換成同一個來源產生的版本。</p></article>
-      <article class="upgrade-card"><span class="index">03 / EVERY SIZE</span><b>16px 到 1024px 都是脆的</b><p>像素圖只有整數倍放大才不會糊，所以每個尺寸都有自己的縮放倍率；64px 以下自動換成單人版本，而不是把三個人擠成一團。</p></article>
-      <article class="upgrade-card"><span class="index">04 / BLACK WINDOW</span><b>Cmd+V 直接把截圖丟給 CLI</b><p>終端機本身收不到剪貼簿裡的圖。現在貼上會先存成本機私有檔案，再把路徑交給 Claude Code 或 Codex 的輸入框，變成一張附件。</p></article>
-      <article class="upgrade-card"><span class="index">05 / REMOTE</span><b>手機連線也能貼圖</b><p>圖片是在伺服器端暫存，不依賴桌機的系統剪貼簿，所以瀏覽器與 CLI 不在同一台機器上時一樣可用。</p></article>
-      <article class="upgrade-card"><span class="index">06 / USAGE</span><b>沒有重置時間的用量也讀得懂</b><p>Claude 回報用量卻沒附上重置時間時，不再整筆丟棄，額度顯示不會無故空白。</p></article>
+      <article class="upgrade-card"><span class="index">01 / ONE LAYER</span><b>斷點從二十四個收到三個</b><p>手機、平板、矮螢幕各一個，數值集中在一份共用樣式裡。點擊目標與間距也只剩一組 token，取代散落各處近百次硬寫的 44px。</p></article>
+      <article class="upgrade-card"><span class="index">02 / TOP BAR</span><b>兩個選單，照「會動到誰」分</b><p>導覽列只留工作模式、交辦、用量與健康燈。其餘分成「這位 NPC」（工作位置、供應商、模型、帳號、自動核准、MCP）與「整個 app」（語言、通知、看板、備份、重啟）。</p></article>
+      <article class="upgrade-card"><span class="index">03 / NO JUMP</span><b>三個模式同一條導覽列</b><p>像素、專業、黑窗的內距、間距、控件尺寸與模式鈕寬度現在是同一組數字，切換時上面那排不會位移。</p></article>
+      <article class="upgrade-card"><span class="index">04 / SWIPE</span><b>模式鈕收成一顆，左右滑就換</b><p>窄螢幕上三顆並排的模式鈕會吃掉六成寬度。改成只顯示目前這一個：左右滑到相鄰模式，點一下展開三個選項——不做循環，免得中途誤停在另一個模式。</p></article>
+      <article class="upgrade-card"><span class="index">05 / MORE ROOM</span><b>對話與報告各拿回一大塊</b><p>任務日誌的面板外框從 100px 收到 54px，專業模式報告上方的三列併成兩列、218px 收到 132px。省下來的高度全部給內容。</p></article>
+      <article class="upgrade-card"><span class="index">06 / NO EMOJI</span><b>圖示不再交給作業系統決定</b><p>122 個當圖示用的 emoji 換成一套自製線性圖示：同一個粗細、跟著介面顏色走，不會在 macOS、Windows、Android 各長一個樣。</p></article>
     </div>
 
     <div class="proof-strip" aria-label="Pixel Crew 現有功能實際介面">
