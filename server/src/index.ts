@@ -255,6 +255,8 @@ const wss = new WebSocketServer({
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
+// 「為此交辦開專屬部門」建立的臨時團隊部門名稱前綴——用完即散；重啟時靠這個前綴清掉殘留。
+const EPHEMERAL_DEPT_PREFIX = "臨時團隊·";
 const MAX_ACTIVE_COLLABORATIONS = 5;
 const AVATAR_PRESET_IDS = new Set(["classic", "cyber", "signal", "spark", "ops"]);
 const store = new LocalStore(config.dbPath);
@@ -520,6 +522,16 @@ function requireWorker(res: Response, id: string): Worker | null {
     return null;
   }
   return worker;
+}
+// 清掉上次中斷（例如崩潰/重啟在任務中途）留下的臨時團隊：短命部門用完即散，重啟不該殘留。
+// 靠名稱前綴認出，連同其成員一起從 SQLite 刪掉，才不會變殭屍部門堆積。
+const staleEphemeralDepartments = store.listDepartments().filter((department) => department.name.startsWith(EPHEMERAL_DEPT_PREFIX));
+for (const department of staleEphemeralDepartments) {
+  for (const member of store.loadWorkers(0).filter((worker) => worker.departmentId === department.id)) store.deleteWorker(member.id);
+  store.deleteDepartment(department.id);
+}
+if (staleEphemeralDepartments.length > 0) {
+  console.warn(`[startup] removed ${staleEphemeralDepartments.length} stale ephemeral department(s) from an interrupted run`);
 }
 const departments = new Map<string, Department>(store.listDepartments().map((department) => [department.id, department]));
 const activeCollaborations = new Map<string, CollaborationTask>();
@@ -4632,7 +4644,7 @@ async function createDepartmentForObjective(input: {
   ));
   const department: Department = {
     id: departmentId,
-    name: t("{name}臨時部門", { name: purpose.slice(0, 16) }),
+    name: `${EPHEMERAL_DEPT_PREFIX}${purpose.slice(0, 14)}`,
     purpose,
     workspacePath,
     leadWorkerId: created[0].id,
@@ -4640,7 +4652,12 @@ async function createDepartmentForObjective(input: {
     createdAt: now,
     updatedAt: now,
   };
-  // 只註冊在記憶體、不寫 SQLite（短命團隊，用完即散）。
+  // 必須持久化：部門 Mission 的 boss_worker_id 外鍵指向 workers 表，lead 要在表裡 mission 才存得下。
+  // 用名稱前綴標記為臨時；任務結束由 disbandEphemeralDepartment 解散，重啟殘留由啟動掃描清掉。
+  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
+    for (const worker of created) { try { worker.runner.stop(); } catch { /* noop */ } workers.delete(worker.id); }
+    return null;
+  }
   departments.set(department.id, department);
   ephemeralDepartments.add(department.id);
   broadcast({ type: "department_created", department });
