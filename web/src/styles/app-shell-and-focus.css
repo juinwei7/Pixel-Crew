@@ -2295,7 +2295,13 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 }
 
 @media (max-width: 600px) {
-  .game-root--focus .task-focus-layer { padding-top: 64px; }
+  /* 頂欄現在是量出來的（TopBar 把高度寫進 --top-bar-h）。寫死 64 是照舊版
+     那條 54px 起跳的 bar 抓的，壓扁之後就變成 19px 的死空白。 */
+  .game-root--focus .task-focus-layer { padding-top: var(--top-bar-h); }
+
+  /* 隊員列在專業模式整片被 .task-focus-layer 蓋住（實測那個位置打到的是
+     focus layer），看不見也點不到，卻還在版面裡佔 80px。 */
+  .game-root--focus .crew-strip-wrap { display: none; }
 
   /* 專業模式的主體是報告。桌面那個三列標題（標題 / 用量 / 工作對象）在手機
      會吃掉 177px、讓報告只剩四成畫面。改成一排：
@@ -2342,14 +2348,32 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   /* 專業模式常常是從手機遠端連進來用的，控件要真的按得到。 */
   .focus-context-switch__kind button { min-width: var(--tap); min-height: var(--tap); padding-inline: 10px; }
   .focus-energy__summary { min-height: var(--tap); }
-  .holo-panel--focus .task-log-toolbar__search,
-  .holo-panel--focus .focus-controls__trigger,
+  /* 專業模式的頂部控件跟其他兩個模式用同一組尺寸：視覺 --tap-flat，點擊區
+     用 ::after 撐回 44。這一排排在一起的東西以前高度各是 40 / 44 / 44，
+     擺在同一列看得出來沒對齊。 */
+  /* 工作室捷徑那排不加撐開點擊區的 ::after：它的容器是橫向捲動的
+     （overflow-x: auto），瀏覽器會把另一軸一併變成非 visible，偽元素超出去
+     的部分整片被裁掉（實測只多了 2px）。這幾顆是 44px 寬的捷徑，36×44 的
+     面積夠按，就不做假動作。 */
   .focus-studios--collapsed .focus-studios__collapse,
   .focus-studios--collapsed .focus-studios__create,
-  .focus-studios--collapsed .focus-studios__studio,
+  .focus-studios--collapsed .focus-studios__studio {
+    min-width: var(--tap);
+    min-height: var(--tap-flat);
+  }
+  .focus-report-nav__toggle {
+    position: relative;
+    min-width: var(--tap);
+    min-height: var(--tap-flat);
+  }
+  .focus-report-nav__toggle::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
+  }
+  /* 這兩個在報告內文裡，上下都緊鄰別的卡片——撐開命中範圍會蓋到隔壁。 */
   .holo-panel--focus .turn-card__pin,
   .holo-panel--focus .copy-button { min-width: var(--tap); min-height: var(--tap); }
-  .focus-report-nav__toggle,
   .holo-panel--focus .quest-log__latest { min-height: var(--tap); }
 
   /* A collapsed studio rail is useful on a phone, but it must not become a
@@ -2362,7 +2386,7 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
     max-height: none;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 0 0 7px;
+    padding: 0 0 4px;
   }
   .focus-reader__studio-rail .focus-studios--collapsed {
     display: flex;

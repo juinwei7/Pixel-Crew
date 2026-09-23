@@ -812,8 +812,6 @@
   }
 
   /* 日誌裡的操作鈕：以前每一顆都各自寫一次 44px。 */
-  .holo-panel .task-log-toolbar button,
-  .holo-panel .task-log-toolbar select,
   .holo-panel .task-log-search button,
   .holo-panel .task-log-search input,
   .holo-panel .quest-log__latest,
@@ -821,6 +819,30 @@
   .holo-panel .turn-card__pin,
   .rich-code > button {
     min-height: var(--tap);
+  }
+
+  /* 頂部工具列那排（像素／專業都有）走扁版：視覺 --tap-flat，點擊區用 ::after
+     撐回 44。專業模式以前吃的是上面那條 44，擺在 40px 的工作對象下拉旁邊，
+     同一列三個東西三種高度。 */
+  .holo-panel .task-log-toolbar button,
+  .holo-panel .task-log-toolbar select {
+    position: relative;
+    min-height: var(--tap-flat);
+  }
+
+  /* 工作對象的下拉用 height（不是 min-height）寫死 34/40，跟同一列的搜尋與
+     管理對不齊。<select> 是取代元素、放不了偽元素，所以只能靠它自己夠寬
+     （這顆佔掉整列剩下的寬度）來維持好按。 */
+  .holo-panel--focus .focus-worker-switch,
+  .holo-panel--focus .focus-worker-switch select {
+    height: var(--tap-flat);
+    min-height: var(--tap-flat);
+  }
+
+  .holo-panel .task-log-toolbar button::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
   }
 
   .holo-panel .task-log-toolbar button,
@@ -855,17 +877,7 @@
      鈕本身高 6px。 */
   .holo-panel:not(.holo-panel--focus) .task-log-toolbar__view { padding: 1px; }
 
-  .holo-panel:not(.holo-panel--focus) .task-log-toolbar button,
-  .holo-panel:not(.holo-panel--focus) .task-log-toolbar select {
-    position: relative;
-    min-height: var(--tap-flat);
-  }
 
-  .holo-panel:not(.holo-panel--focus) .task-log-toolbar button::after {
-    content: "";
-    position: absolute;
-    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
-  }
 
   .holo-panel:not(.holo-panel--focus) .task-log-toolbar {
     flex: 0 0 auto;
