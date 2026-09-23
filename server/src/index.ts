@@ -146,6 +146,7 @@ import {
   missionStepPrompt,
   parseMissionPlan,
   precedingExecuteIndex,
+  previewTerminalMissionSteps,
   type DepartmentMission,
   type DepartmentMissionStep,
   type MissionActivity,
@@ -2493,7 +2494,9 @@ let snapshotBudgetWarnedAt = 0;
 // Mission 保留事件（活著要看），只把單筆超大的工具輸出/輸入裁短。
 function missionForSnapshot(mission: DepartmentMission): DepartmentMission {
   if (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled") {
-    return { ...mission, executionEvents: [] };
+    // 已結束：去掉活動流事件，並把中間步驟的原始輸出截成預覽（最終報告保留完整）。
+    // 兩者都是隨 mission 數量無上限累積、會撐爆手機初始 snapshot 的元兇。
+    return { ...mission, executionEvents: [], steps: previewTerminalMissionSteps(mission.steps ?? []) };
   }
   return {
     ...mission,

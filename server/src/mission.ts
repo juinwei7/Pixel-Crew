@@ -42,6 +42,23 @@ export type DepartmentMissionStep = {
   formatRepairCount?: number;
 };
 
+// 已結束 mission 的「中間步驟」(execute/review/consult) 原始輸出會隨 mission 數量無上限
+// 累積，撐爆初始 snapshot（每個完成的 mission 光 steps 就 20~40KB，幾百個就破手機收得下的
+// 上限）。最終報告（synthesize 步驟的 result，正是卡片上要看的重點）保留完整；其餘中間步驟的
+// result 只送預覽（截斷），完整內容仍保存在本機 SQLite。reviewResult 是結構化物件（卡片會逐
+// 欄渲染），量小且截斷會破壞結構，所以不動。
+export const SNAPSHOT_STEP_RESULT_MAX_CHARS = 2000;
+export function previewTerminalMissionSteps(steps: DepartmentMissionStep[]): DepartmentMissionStep[] {
+  return steps.map((step) => {
+    if (step.kind === "synthesize") return step;
+    if (typeof step.result !== "string" || step.result.length <= SNAPSHOT_STEP_RESULT_MAX_CHARS) return step;
+    return {
+      ...step,
+      result: step.result.slice(0, SNAPSHOT_STEP_RESULT_MAX_CHARS) + `…（省略 ${step.result.length - SNAPSHOT_STEP_RESULT_MAX_CHARS} 字；完整內容保存於本機）`,
+    };
+  });
+}
+
 export type MissionDelegatedSession = {
   workerId: string;
   provider: ProviderId;
