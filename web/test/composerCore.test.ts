@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { composerTextareaHeight, explicitComposerLineCount, insertVoiceTranscript, MAX_COMPOSER_LINES } from "../src/composerCore";
 
 test("explicitComposerLineCount grows with newlines up to the 10-line cap", () => {
@@ -28,4 +29,17 @@ test("insertVoiceTranscript appends to existing text with a separating space", (
 test("insertVoiceTranscript does not double up whitespace already at the end", () => {
   assert.equal(insertVoiceTranscript("幫我看一下 ", "這個檔案"), "幫我看一下 這個檔案");
   assert.equal(insertVoiceTranscript("幫我看一下\n", "這個檔案"), "幫我看一下\n這個檔案");
+});
+
+test("the composer toolbar's icon buttons are centred and its menu opens inwards", () => {
+  // 指令列那排鈕在手機貼在一起，任何一顆沒置中都看得出來；圓桌 ⋯ 是最後一顆，
+  // 選單往右長就會衝出視窗（390px 下超出 1px、320px 下超出 71px）。
+  const css = readFileSync(new URL("../src/styles/composer-and-operations.css", import.meta.url), "utf8");
+  const mic = css.slice(css.indexOf(".voice-input__mic {"));
+  assert.match(mic.slice(0, mic.indexOf("}")), /justify-content: center;/);
+  const menu = css.slice(css.indexOf(".composer-roundtable-menu {"));
+  const block = menu.slice(0, menu.indexOf("}"));
+  assert.match(block, /right: 0;/);
+  assert.doesNotMatch(block, /left: 0;/);
+  assert.match(block, /max-width: calc\(100vw/);
 });

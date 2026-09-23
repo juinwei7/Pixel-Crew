@@ -119,10 +119,7 @@
    收進 ••• 選單的控件放出來。指名的代價是新增控件要記得加一行，但不會有
    「某個東西莫名其妙冒出來」這種難查的問題。 */
 .black-workspace .voice-input__mic {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* 不縮、不換行：這兩顆是固定內容，被壓縮只會把「功能」折成上下兩個字。 */
+  /* 置中已經在 .voice-input__mic 基底做了；這裡只負責「不縮、不換行」。 */
   flex: none;
   white-space: nowrap;
 }
