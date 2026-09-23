@@ -2,6 +2,8 @@
  *  FocusControls 的英文字典（key = 中文原文）。 */
 export const enModalsB: Record<string, string> = {
   // CommandCenter.tsx
+  "目前進行中的 Mission 會先取消。部門畫面上的舊對話與 Mission 會清空，NPC 也會改用全新的模型上下文；Boss 任務、附件與稽核仍會保留。":
+    "Missions in progress are cancelled first. The department's old conversations and missions are cleared and its NPCs start from a fresh model context; boss tasks, attachments, and the audit trail are kept.",
   "指令檔已在外部更新；目前修改尚未被覆蓋": "The command file was updated externally; your current changes haven't been overwritten",
   "目前修改尚未儲存，確定要切換 Provider 嗎？": "You have unsaved changes. Switch provider anyway?",
   "目前修改尚未儲存，確定要切換指令嗎？": "You have unsaved changes. Switch commands anyway?",

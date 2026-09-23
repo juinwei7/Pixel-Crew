@@ -2,6 +2,9 @@
  *  TaskComposer / WorkerTabs / WorkflowDocumentEditor / WorkspacePicker /
  *  OnboardingTour 的英文字典（key = 中文原文）。 */
 export const enModalsD: Record<string, string> = {
+  "跳到第 N 個工作區": "Jump to workspace N",
+  "切到下一個分割視窗": "Next split pane",
+  "切到上一個分割視窗": "Previous split pane",
   "· {failed} 失敗": "· {failed} failed",
   "叫出這張表。": "to open this cheat sheet.",
   "可以看可用的斜線指令。": "to see available slash commands.",

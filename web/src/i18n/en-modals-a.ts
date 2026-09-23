@@ -1,6 +1,50 @@
 /** AuthGate / AvatarWorkshop / BackupModal / BossAssignmentDialog / BossTaskDesk /
  *  CodexSkillCenter / CollaborationDialog 的英文字典（key = 中文原文）。 */
 export const enModalsA: Record<string, string> = {
+  "等待前一階段": "Waiting on the previous stage",
+  "等待啟動": "Waiting to start",
+  "審核交付中": "Reviewing the delivery",
+  "等待你決定": "Waiting on you",
+  "第 {current}/{total} 步：{title}{assignee}": "Step {current}/{total}: {title}{assignee}",
+  "這筆任務狀態已變更，無法刪除。": "This task's status has changed, so it can't be deleted.",
+  "相關 NPC": "NPCs involved",
+  "清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。":
+    "Clear this boss assignment and plan again? {count} missions in progress will be cancelled and these restarted: {members}. Attachments and the audit trail are kept.",
+  "執行邊界與估算": "Limits and estimate",
+  "開始前設定": "Set before starting",
+  "執行級別": "Effort level",
+  "快速 · 最少協作": "Quick · least coordination",
+  "標準 · 平衡範圍": "Standard · balanced scope",
+  "深度 · 複雜任務": "Deep · complex work",
+  "最多 NPC": "Max NPCs",
+  "每 Mission 最多步驟": "Max steps per mission",
+  "上限：2 位 NPC、1 個部門階段、每 Mission 2 步；約 2–10 分鐘。":
+    "Limits: 2 NPCs, 1 department stage, 2 steps per mission; roughly 2–10 minutes.",
+  "上限：6 位 NPC、5 個部門階段、每 Mission 4 步；約 30–90 分鐘。":
+    "Limits: 6 NPCs, 5 department stages, 4 steps per mission; roughly 30–90 minutes.",
+  "上限：4 位 NPC、3 個部門階段、每 Mission 3 步；約 10–35 分鐘。":
+    "Limits: 4 NPCs, 3 department stages, 3 steps per mission; roughly 10–35 minutes.",
+  "預估：Claude 約 US$ 0.02–2.00；Codex 約影響 5 小時 quota 1–30%。實際依工作內容與模型而變，非保證值；超過上限會停止派工，不會靜默擴張。":
+    "Estimate: about US$0.02–2.00 on Claude, or 1–30% of the 5-hour Codex quota. The real figure depends on the work and the model and is not a guarantee; hitting a limit stops the hand-off rather than quietly growing.",
+  "{profile}邊界 · 最多 {agents} 位 NPC / {stages} 階段 / 每 Mission {steps} 步 · 預估 {min}–{max} 分鐘":
+    "{profile} limits · up to {agents} NPCs / {stages} stages / {steps} steps per mission · about {min}–{max} minutes",
+  "已完成 {completed}/{total} 個部門階段": "{completed}/{total} department stages done",
+  "清空並重新交辦": "Clear and assign again",
+  "直接在 app 內登入（不用開終端機）": "Sign in right here — no terminal needed",
+  "等待貼上驗證碼…": "Waiting for you to paste the code…",
+  "進階：手動在終端機安裝／登入": "Advanced: install or sign in from a terminal",
+  "備份密碼至少需要 12 個字元": "A backup password needs at least 12 characters",
+  "無法建立加密備份": "Couldn't create the encrypted backup",
+  "包含工人、對話紀錄、部門任務、設定與角色圖片；不包含 Provider 私有認證 home 或工作區專案檔案。未加密檔可用系統工具檢查。匯出不會中斷正在執行的工人。":
+    "Includes workers, conversations, department missions, settings, and avatars. Excludes the providers' private credential homes and your workspace project files. An unencrypted file can be inspected with ordinary tools. Exporting does not interrupt workers that are running.",
+  "跨裝置傳輸：以密碼加密備份（選填）": "Moving between machines: encrypt the backup with a password (optional)",
+  "使用 AES-256-GCM 加密，密碼不會被保存，遺失後無法還原。":
+    "Encrypted with AES-256-GCM. The password is never stored, and a lost password cannot be recovered.",
+  "至少 12 個字元": "At least 12 characters",
+  "下載加密備份（.pcbak）": "Download encrypted backup (.pcbak)",
+  "選擇先前匯出的備份檔案（.tar.gz 或加密 .pcbak），系統會先在隔離區驗證內容再詢問是否還原。":
+    "Pick a backup you exported earlier (.tar.gz, or an encrypted .pcbak). Its contents are verified in quarantine before you're asked whether to restore.",
+  "若是 .pcbak 加密備份，請輸入密碼": "For an encrypted .pcbak, enter the password",
   "${name} 已儲存，Codex 下次工作即可使用": "${name} saved — Codex can use it next run",
   "120 幀": "120 frames",
   "800 萬像素": "8 megapixels",

@@ -2,6 +2,19 @@
  *  OpsModal / PersonaEditor 的英文字典（key = 中文原文）。 */
 export const enModalsC: Record<string, string> = {
   // GameCanvas
+  "載入實時畫面…": "Loading the live view…",
+  "讀取本機診斷失敗": "Couldn't read local diagnostics",
+  "只儲存在此裝置，不會上傳。診斷包不含 prompt、路徑、模型或工具輸出。":
+    "Kept on this device only, never uploaded. The bundle contains no prompts, paths, models, or tool output.",
+  "Mission 成功率": "Mission success rate",
+  "完成／失敗": "Done / failed",
+  "WebSocket 重連": "WebSocket reconnects",
+  "3D FPS 分級": "3D FPS tiers",
+  "Mission 失敗原因": "Why missions failed",
+  "尚無失敗紀錄。": "No failures recorded yet.",
+  "長 UI 工作：{count}；中位 FPS：{fps}；核准中位等待：{wait} 秒":
+    "Long UI tasks: {count} · median FPS: {fps} · median approval wait: {wait}s",
+  "匯出去識別化診斷包 (.json)": "Export de-identified diagnostics (.json)",
   "任務看板——NPC 檢視與領取待辦": "Task board — NPCs check and pick up to-dos here",
   "NPC 讀取專案檔案時會走到這": "NPCs come here to read project files",
   "寫程式／編輯檔案的工作站": "Coding / file-editing station",

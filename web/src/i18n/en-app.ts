@@ -1,5 +1,27 @@
 /** App.tsx / hooks / api.ts / notifications.ts / types.ts 的英文字典（key = 中文原文）。 */
 export const enApp: Record<string, string> = {
+  "已排程重啟：等所有 NPC 空檔後自動重啟背景服務":
+    "Restart scheduled: the background service restarts once every NPC is idle",
+  "確定要關閉背景服務？所有進行中的 NPC 工作都會中斷，之後可再雙擊 Pixel Crew 重新啟動。":
+    "Stop the background service? Every NPC task in progress is interrupted. Double-click Pixel Crew to start it again.",
+  "背景服務正在關閉，這個頁面即將失去連線。":
+    "The background service is stopping; this page is about to lose its connection.",
+  "關閉服務請求失敗": "Couldn't request the shutdown",
+  "正在載入黑窗工作台…": "Loading the black window workbench…",
+  "分割視窗數量": "Number of split panes",
+  "分割成 {count} 個視窗": "Split into {count} panes",
+  "發現重啟前未完成的工作": "Found work left unfinished before the restart",
+  "系統不會自動重送，避免重複執行。請選擇下一步。":
+    "Nothing is resent automatically, so nothing runs twice. Choose what to do next.",
+  "無法恢復工作": "Couldn't resume the work",
+  "繼續工作": "Resume",
+  "無法停止恢復工作": "Couldn't stop the resume",
+  "停止並保留紀錄": "Stop and keep the record",
+  "{name} 執勤中·可排隊": "{name} is busy · you can queue",
+  "每行一位：角色名｜立場描述\n例：投資顧問｜從報酬與機會出發給建議\n 風控｜專挑風險與下檔情境\n留空＝依難度自動配（提案/挑戰/權衡/查證）":
+    "One per line: role name | the stance it argues from\nExample: Investment adviser | argues from return and opportunity\n Risk control | looks only for risk and downside\nLeave empty to pick automatically by difficulty (propose / challenge / weigh / verify)",
+  "此操作僅限主人，訪客無法執行": "Owner only — guests can't do this",
+  "嘗試過於頻繁，請稍後再試": "Too many attempts. Try again shortly.",
   "Claude 專案指令": "Claude project commands",
   "最近使用 · {provider}": "Recently used · {provider}",
   "上一個 NPC 的附件與待送訊息無法保存": "Could not save the previous NPC's attachments and pending messages",
