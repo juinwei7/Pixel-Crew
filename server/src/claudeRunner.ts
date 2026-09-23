@@ -103,6 +103,11 @@ export class ClaudeSession implements AgentSession {
   }>();
   busy = false;
   name = "";
+  // 後端重啟／session 輪替後，--resume 指向的對話可能已不存在（Claude 回
+  // "No conversation found"），原本會直接把整回合判失敗。記住這回合是否為 resume
+  // 與它的輸入，好在偵測到對話遺失時自動清成全新 session、重跑一次，使用者無感。
+  private resumedThisSpawn = false;
+  private lastUserSend: { text: string; images: MessageImage[]; documents: MessageDocument[]; options: SendOptions } | null = null;
 
   constructor(
     private readonly onEvent: (event: RunnerEvent) => void,
@@ -196,6 +201,8 @@ export class ClaudeSession implements AgentSession {
     if (this.child && (this.spawnedProfile !== nextProfile || queryToolsChanged)) this.stop();
     this.executionProfile = nextProfile;
     this.queryAllowedTools = nextQueryAllowedTools;
+    // 保留原始輸入，供「resume 對話遺失時自動重跑一次」使用（見 ensureChild 的 fail）。
+    this.lastUserSend = { text, images, documents, options };
     const files = this.stageInputDocuments(documents);
     try {
       this.busy = true;
@@ -374,11 +381,13 @@ export class ClaudeSession implements AgentSession {
     args.push("--add-dir", this.documentDirectory);
     if (this.completedTurns > 0) {
       args.push("--resume", this.claudeSessionId);
+      this.resumedThisSpawn = true;
     } else {
       // A killed process may have claimed the old id without completing a
       // turn, so start unused sessions on a fresh id.
       this.claudeSessionId = randomUUID();
       args.push("--session-id", this.claudeSessionId);
+      this.resumedThisSpawn = false;
     }
     if (this.model) args.push("--model", this.model);
     const personaPrompt = this.getPersonaPrompt().trim();
@@ -411,12 +420,17 @@ export class ClaudeSession implements AgentSession {
     // cache，多步回合會累加到數百萬），不能當 context 佔用量。真正的佔用要看
     // 最後一則 assistant 訊息那「單次」呼叫的 usage。
     let lastContextTokens: number | undefined;
+    // Claude CLI 對 --resume 一個不存在的對話，會印一行純文字 "No conversation
+    // found with session ID: ..." 然後非零退出（不是 JSON），可能落在 stdout 或
+    // stderr。任一處看到就記下，讓 fail() 判斷是否要自動改開新對話重跑。
+    let sawMissingConversation = false;
     rl.on("line", (line) => {
       if (gen !== this.generation || !line.trim()) return;
       let parsed: any;
       try {
         parsed = JSON.parse(line);
       } catch {
+        if (line.includes("No conversation found")) sawMissingConversation = true;
         return;
       }
       if (parsed.type === "assistant") {
@@ -451,7 +465,9 @@ export class ClaudeSession implements AgentSession {
 
     let stderrBuf = "";
     child.stderr.on("data", (chunk) => {
-      stderrBuf += chunk.toString();
+      const text = chunk.toString();
+      stderrBuf += text;
+      if (text.includes("No conversation found")) sawMissingConversation = true;
     });
 
     const fail = (message: string) => {
@@ -459,6 +475,25 @@ export class ClaudeSession implements AgentSession {
       this.child = null;
       this.cancelApprovals();
       rmSync(this.approvalConfigPath, { force: true });
+      // 後端重啟／session 輪替後，--resume 的對話可能已不存在。若這回合是 resume 且
+      // Claude 回報「找不到對話」，別把整回合判失敗——清成全新 session、把同一則輸入
+      // 重跑一次，使用者無感。fresh 重試不是 resume（resumedThisSpawn=false），故絕不
+      // 會無限循環。這正是「任何重啟都可能讓機器人集體 error_during_execution」的根治。
+      if (
+        this.busy &&
+        this.resumedThisSpawn &&
+        this.lastUserSend &&
+        (sawMissingConversation || message.includes("No conversation found"))
+      ) {
+        const retry = this.lastUserSend;
+        console.error("[claudeRunner] --resume 對話已不存在，自動改開新對話重跑一次");
+        this.completedTurns = 0;          // 下次 ensureChild 走 --session-id 全新對話
+        this.claudeSessionId = randomUUID();
+        this.busy = false;                // send() 會自行重設 busy 並重新暫存輸入
+        this.cleanupInputDocuments();
+        this.send(retry.text, retry.images, retry.documents, retry.options);
+        return;
+      }
       if (this.busy) {
         this.busy = false;
         this.cleanupInputDocuments();
