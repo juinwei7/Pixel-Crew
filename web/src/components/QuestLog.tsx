@@ -444,7 +444,9 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   useEffect(() => {
     const el = logRef.current;
-    if (el && atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    // 串流時每個 token 都會觸發這個 effect；用 smooth 會讓每次都重啟一段捲動動畫，手機上
+    // 就變成「訊息一直跳」。改用 auto(瞬間貼底)：只是穩穩黏在最新，不再一直彈跳。
+    if (el && atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, [turns, turns.length, itemCount, lastTurn?.status, atBottom, focusMode]);
 
   useEffect(() => {

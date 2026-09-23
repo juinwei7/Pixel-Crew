@@ -334,7 +334,7 @@ export function TopBar({
         >
           <i className="top-bar__running-dot" aria-hidden="true" />
           {runningCount > 0
-            ? <><strong>{runningCount}</strong><span>{t("在跑")}</span></>
+            ? <><strong>{runningCount}</strong><span>{t("執行中")}</span></>
             : <span>{t("待命")}</span>}
         </button>
         {runningOpen && runningWorkers.length > 0 && (
