@@ -8248,18 +8248,9 @@ const missionActivityTimeoutSweep = setInterval(() => {
   }
 }, 60_000);
 
-// 閒置清掃：臨時團隊在交辦完成後會留著讓使用者追問；若久久沒動作（預設 45 分鐘）就自動
-// 解散，避免使用者忘了封存而讓臨時團隊堆積。每 10 分鐘掃一次。
-const EPHEMERAL_TEAM_IDLE_MS = 45 * 60_000;
-setInterval(() => {
-  if (ephemeralDepartments.size === 0) return;
-  const cutoff = Date.now() - EPHEMERAL_TEAM_IDLE_MS;
-  for (const task of store.listBossTasks()) {
-    if (task.status !== "completed" && task.status !== "failed") continue;
-    const idleSince = Date.parse(task.completedAt ?? task.updatedAt ?? "");
-    if (Number.isFinite(idleSince) && idleSince < cutoff) disbandTaskEphemeralDepartments(task);
-  }
-}, 10 * 60_000);
+// 臨時團隊「不」按閒置自動解散：使用者可能放著讓它跑、事後才回來看結果或追問，時間到就
+// 解散會讓人以為沒做、也拿不到追問。改成只在使用者明確收工時解散（取消／封存／刪除交辦，
+// 或巡迴推進下一步）。注意：解散的只是臨時 NPC，交辦與最終報告、產出檔案一律保留。
 missionActivityTimeoutSweep.unref();
 
 if (config.production && existsSync(config.webDistPath)) {

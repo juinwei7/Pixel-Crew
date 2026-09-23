@@ -405,6 +405,12 @@
 /* 影片附件收合晶片：一支影片＝一個晶片（🎬 N 格），跟散圖區隔。 */
 .command-composer__attachment--video, .task-composer__attachment--video { border-color: rgba(255,146,220,.5); }
 .command-composer__attachment--video span, .task-composer__attachment--video span { background: rgba(60,10,45,.86); color: #ffc6ec; }
+/* 影片解析中的佔位晶片：閃爍表示處理中，解析完換成正式影片晶片。 */
+.command-composer__attachment--processing, .task-composer__attachment--processing { display: grid; place-items: center; gap: 2px; background: linear-gradient(135deg, rgba(60,10,45,.9), rgba(30,10,40,.9)); animation: video-proc-pulse 1.3s ease-in-out infinite; }
+.command-composer__attachment-proc, .task-composer__attachment-proc { font-size: 18px; position: static; }
+.command-composer__attachment--processing span:not(.command-composer__attachment-proc), .task-composer__attachment--processing span:not(.task-composer__attachment-proc) { position: static; background: transparent; color: #ffc6ec; font: 700 8px var(--mono); }
+@keyframes video-proc-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .command-composer__attachment--processing, .task-composer__attachment--processing { animation: none; } }
 .command-composer__attachment button { position: absolute; top: 3px; right: 3px; width: 19px; height: 19px; padding: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; background: rgba(5,10,20,.88); color: #d8e7f8; cursor: pointer; line-height: 16px; }
 .command-composer__attachment button:hover { border-color: rgba(255, 46, 136,.5); color: #ff8fa5; }
 .command-composer__attachment--document { width: 112px; flex: 0 0 112px; display: grid; align-content: center; gap: 4px; padding: 8px 7px; background: linear-gradient(145deg, rgba(18,40,57,.98), rgba(5,11,23,.98)); }

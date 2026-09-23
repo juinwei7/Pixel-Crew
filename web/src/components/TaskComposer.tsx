@@ -92,6 +92,8 @@ export function TaskComposer({
   // 使用者在影片還在解析時按了送出：先記住，等解析完(videoProcessing 轉 false)自動送出，
   // 這樣文字＋影片(影格＋字幕)會「一起」送，不會漏掉影片。
   const [awaitingVideoSend, setAwaitingVideoSend] = useState(false);
+  // 解析中的影片檔名：一放進來就先冒一個「🎬 解析中」佔位晶片(閃爍)，解析完換成正式影片晶片。
+  const [processingVideoNames, setProcessingVideoNames] = useState<string[]>([]);
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
     switchingSession, restoringExtras, extrasSaved, persistenceWarning, ownerRef, updateCachedSession,
@@ -203,6 +205,7 @@ export function TaskComposer({
   // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
   async function processVideos(videoFiles: File[], owner: string) {
     setVideoProcessing(true);
+    setProcessingVideoNames(videoFiles.map((file) => file.name));
     try {
     for (const file of videoFiles) {
       if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
@@ -250,6 +253,7 @@ export function TaskComposer({
     }
     } finally {
       setVideoProcessing(false);
+      setProcessingVideoNames([]);
     }
   }
 
@@ -422,7 +426,7 @@ export function TaskComposer({
   }
 
   const hasContent = Boolean(draftValue.trim() || images.length || documents.length);
-  const hasAttachments = images.length > 0 || documents.length > 0;
+  const hasAttachments = images.length > 0 || documents.length > 0 || processingVideoNames.length > 0;
   const canInterrupt = queueEnabled && busy && !hasContent;
   const submitDisabled = disabled || (working && !queueEnabled) || (!hasContent && !canInterrupt);
   const submitLabelToShow = canInterrupt ? t("中止") : queueEnabled && busy && hasContent ? t("排隊") : working ? busyLabel : submitLabel;
@@ -456,6 +460,10 @@ export function TaskComposer({
           <span>IMG {index + 1}</span>
           <button type="button" aria-label={t("移除圖片 {n}", { n: index + 1 })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button>
         </div>)}
+      {processingVideoNames.map((name) => <div className="command-composer__attachment command-composer__attachment--video command-composer__attachment--processing" key={`proc:${name}`} title={name}>
+        <span className="command-composer__attachment-proc" aria-hidden="true">🎬</span>
+        <span>{t("解析中")}</span>
+      </div>)}
       {documents.map((document, index) => <div className="command-composer__attachment command-composer__attachment--document" key={document.id} title={document.name}>
         <strong>{documentBadge(document.name)}</strong>
         <em>{document.name}</em>
@@ -466,6 +474,7 @@ export function TaskComposer({
       {imageChipGroups.map((group) => group.videoName
         ? <div key={group.key} className="task-composer__attachment task-composer__attachment--video" title={group.videoName}><img src={group.cover.previewUrl} alt={group.videoName} /><span>🎬 {t("影片 · {n} 格", { n: group.count })}</span><button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button></div>
         : <div key={group.key} className="task-composer__attachment"><img src={group.cover.previewUrl} alt={group.cover.name} /><span>{group.cover.name}</span><button type="button" aria-label={t("移除 {name}", { name: group.cover.name })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button></div>)}
+      {processingVideoNames.map((name) => <div key={`proc:${name}`} className="task-composer__attachment task-composer__attachment--video task-composer__attachment--processing" title={name}><span className="task-composer__attachment-proc" aria-hidden="true">🎬</span><span>{t("解析中…")}</span></div>)}
       {documents.map((document) => <div key={document.id} className="task-composer__attachment task-composer__attachment--file"><strong>{documentBadge(document.name)}</strong><span>{document.name}</span><button type="button" aria-label={t("移除 {name}", { name: document.name })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button></div>)}
     </div>
   );
