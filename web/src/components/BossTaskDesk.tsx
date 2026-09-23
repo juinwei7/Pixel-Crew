@@ -6,6 +6,7 @@ import { apiRequest } from "../api";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 import { writeComposerDraft } from "../hooks/useComposerDraft";
+import { MissionActivityFeed } from "./MissionActivityFeed";
 import { type ConfirmTone } from "./ConfirmDialog";
 
 type DecisionModelOption = { provider: ProviderId; model: string; label: string };
@@ -550,9 +551,19 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         </div>
         {selected.stages.length > 0 && <div className="boss-task-stages">
           <h3>{selected.executionMode === "research" ? t("部門快速研究") : t("跨部門執行")}</h3>
-          {selected.stages.map((stage, index) => <button key={stage.id} type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
-            <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined, workers)}</small></span>
-          </button>)}
+          {selected.stages.map((stage, index) => {
+            const stageMission = stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined;
+            const stageActive = stageMission?.status === "planning" || stageMission?.status === "executing" || stageMission?.status === "reviewing";
+            return <div key={stage.id} className="boss-task-stage">
+              <button type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
+                <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stageMission, workers)}</small></span>
+              </button>
+              {(stageMission?.executionEvents?.length ?? 0) > 0 && <details className="boss-task-stage__peek" open={stageActive}>
+                <summary>{t("看部門討論")}</summary>
+                <MissionActivityFeed events={stageMission!.executionEvents} workers={workers} limit={40} />
+              </details>}
+            </div>;
+          })}
         </div>}
         {onRestart && !selected.archivedAt && <button type="button" className="boss-task-desk__restart" disabled={working || selected.status === "discovering" || selected.status === "synthesizing"} onClick={() => void restartTask()}>{t("清空並重新交辦")}</button>}
       </>}

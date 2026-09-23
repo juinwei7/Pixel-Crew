@@ -4689,13 +4689,18 @@ function disbandEphemeralDepartment(departmentId: string): void {
   }
 }
 
-// 交辦進入終態（完成/失敗/取消）時，把它的臨時部門解散掉。needs_attention 不解散
-// （使用者可能要接手續跑）。由 advanceBossTask 統一呼叫；idempotent。
-function ephemeralCleanupHook(task: BossTask): void {
-  if (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") return;
+// 解散一個交辦底下所有臨時部門。idempotent。
+function disbandTaskEphemeralDepartments(task: BossTask): void {
   for (const stage of task.stages) {
     if (ephemeralDepartments.has(stage.departmentId)) disbandEphemeralDepartment(stage.departmentId);
   }
+}
+
+// 由 advanceBossTask 統一呼叫：只有「取消」才立即解散臨時團隊。
+// 完成/失敗「不」解散——使用者可能要追問或重試（追問會重用同一支部門）；那些留給
+// 封存/刪除、閒置清掃、或巡迴推進下一步時才解散。
+function ephemeralCleanupHook(task: BossTask): void {
+  if (task.status === "cancelled") disbandTaskEphemeralDepartments(task);
 }
 
 // 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
@@ -5112,6 +5117,8 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
       return;
     }
+    // 巡迴推進到下一步＝上一個交辦收工，把它的臨時團隊解散（不會再手動追問）。
+    disbandTaskEphemeralDepartments(justFinished);
     broadcastAutopilot(workspacePath);
   } finally {
     state.running = false;
@@ -5240,6 +5247,8 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
     res.status(patchError.includes("不能封存") ? 409 : 400).json({ error: patchError });
     return;
   }
+  // 封存＝使用者收工，把這個交辦的臨時團隊解散（不再追問了）。
+  if (task.archivedAt) disbandTaskEphemeralDepartments(task);
   persistBossTask(task);
   res.json({ bossTask: bossTaskForDisplay(task) });
 });
@@ -5251,6 +5260,7 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
     res.status(409).json({ error: t("進行中或等待處理的 Boss Task 不能刪除") });
     return;
   }
+  disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉
   if (!store.deleteBossTask(task.id)) {
     res.status(500).json({ error: t("無法刪除 Boss Task") });
     return;
@@ -8237,6 +8247,19 @@ const missionActivityTimeoutSweep = setInterval(() => {
     timeoutCollaboration(taskId);
   }
 }, 60_000);
+
+// 閒置清掃：臨時團隊在交辦完成後會留著讓使用者追問；若久久沒動作（預設 45 分鐘）就自動
+// 解散，避免使用者忘了封存而讓臨時團隊堆積。每 10 分鐘掃一次。
+const EPHEMERAL_TEAM_IDLE_MS = 45 * 60_000;
+setInterval(() => {
+  if (ephemeralDepartments.size === 0) return;
+  const cutoff = Date.now() - EPHEMERAL_TEAM_IDLE_MS;
+  for (const task of store.listBossTasks()) {
+    if (task.status !== "completed" && task.status !== "failed") continue;
+    const idleSince = Date.parse(task.completedAt ?? task.updatedAt ?? "");
+    if (Number.isFinite(idleSince) && idleSince < cutoff) disbandTaskEphemeralDepartments(task);
+  }
+}, 10 * 60_000);
 missionActivityTimeoutSweep.unref();
 
 if (config.production && existsSync(config.webDistPath)) {

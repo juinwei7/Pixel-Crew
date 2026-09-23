@@ -4,7 +4,7 @@ import type { ApprovalDecision, CollaborationTask, CommandSubmission, Department
 import { roomName } from "../workspace";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
-import { ToolGroup, ToolRow } from "./QuestLog";
+import { MissionActivityFeed, missionActivityGroups } from "./MissionActivityFeed";
 import { Modal } from "./Modal";
 import { t } from "../i18n";
 
@@ -53,80 +53,6 @@ export async function prepareAndStartDepartmentMission(
   const prepared = await onPrepare(input);
   if (prepared.error || !prepared.data) return prepared.error || t("部門目前無法接受這項工作");
   return onStart(input.bossWorkerId, prepared.data.missionToken);
-}
-
-function missionActivityLabel({ event }: MissionExecutionEvent): string {
-  if (event.type === "user_message") return event.text;
-  if (event.type === "tool_call_start") return t("開始使用工具：{name}", { name: event.name });
-  if (event.type === "tool_call_result") return event.isError ? t("工具執行失敗") : t("工具執行完成");
-  if (event.type === "approval_requested") return t("等待核准：{title}", { title: event.request.title });
-  if (event.type === "approval_resolved") return event.decision === "deny" ? t("核准已拒絕") : t("核准已允許");
-  if (event.type === "turn_end") return event.isError ? t("本輪工作失敗") : t("本輪工作完成");
-  if (event.type === "error") return t("錯誤：{message}", { message: event.message });
-  return t("任務狀態已更新");
-}
-
-type MissionActivityTone = "ok" | "error" | "pending" | "neutral";
-
-function missionActivityTone(event: RunnerEvent): MissionActivityTone {
-  if (event.type === "error") return "error";
-  if (event.type === "turn_end") return event.isError ? "error" : "ok";
-  if (event.type === "approval_requested") return "pending";
-  if (event.type === "approval_resolved") return event.decision === "deny" ? "error" : "ok";
-  return "neutral";
-}
-
-const MISSION_ACTIVITY_TONE_ICON: Record<MissionActivityTone, string> = { ok: "✓", error: "✕", pending: "…", neutral: "•" };
-
-type MissionActivityGroup =
-  | { kind: "tools"; key: string; workerId: string; items: ToolCallItem[] }
-  | { kind: "text"; key: string; workerId: string; text: string }
-  | { kind: "event"; key: string; workerId: string; label: string; tone: MissionActivityTone };
-
-// Consecutive tool_call_start/tool_call_result pairs from the same worker collapse
-// into one ToolGroup instead of two flat rows per call — the raw event stream
-// otherwise renders dozens of near-duplicate "開始使用工具" / "工具執行完成" rows.
-// Consecutive text_delta from the same worker coalesce into one speech block so the
-// user can read what each NPC actually says during the department's work (that was
-// previously filtered out, which is why the "discussion" looked invisible).
-function groupMissionActivity(events: MissionExecutionEvent[]): MissionActivityGroup[] {
-  const groups: MissionActivityGroup[] = [];
-  const pending = new Map<string, ToolCallItem>();
-  events.forEach(({ workerId, event }, index) => {
-    if (event.type === "tool_call_start") {
-      const pendingKey = `${workerId}\0${event.id}`;
-      const item: ToolCallItem = { kind: "tool_call", key: pendingKey, id: event.id, name: event.name, input: event.input, isError: false, status: "running" };
-      pending.set(pendingKey, item);
-      const last = groups[groups.length - 1];
-      if (last?.kind === "tools" && last.workerId === workerId) last.items.push(item);
-      else groups.push({ kind: "tools", key: `tools-${index}`, workerId, items: [item] });
-      return;
-    }
-    if (event.type === "tool_call_result") {
-      const item = pending.get(`${workerId}\0${event.id}`);
-      if (item) {
-        item.output = event.output;
-        item.isError = event.isError;
-        item.status = "done";
-        return;
-      }
-    }
-    if (event.type === "text_delta") {
-      if (!event.text) return;
-      const last = groups[groups.length - 1];
-      if (last?.kind === "text" && last.workerId === workerId) last.text += event.text;
-      else groups.push({ kind: "text", key: `text-${index}`, workerId, text: event.text });
-      return;
-    }
-    groups.push({
-      kind: "event",
-      key: `event-${index}`,
-      workerId,
-      label: missionActivityLabel({ workerId, stepId: null, event }),
-      tone: missionActivityTone(event),
-    });
-  });
-  return groups;
 }
 
 export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks = [], departmentRecord, onPrepare, onStart, onLoadThread, onMessageDepartment, onResetSessions, resetRequestKey = 0, onCancel, onRetryReview, onApprovePlan, onResolve, onResolveApproval, onAsk, onClose, embedded = false, focusMode = false, missionDetailId = null, focusSection = null, onSelectWorker, composerHost }: Props) {
@@ -285,10 +211,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
         : [],
     );
     // Keep text_delta (the NPCs' actual words) — only drop noisy raw deltas and meta.
-    // Coalesce FIRST, then cap on groups, so a long turn isn't sliced mid-sentence.
-    const activityGroups = groupMissionActivity(
-      (mission.executionEvents ?? []).filter(({ event }) => !["thinking_delta", "tool_call_output_delta", "meta"].includes(event.type)),
-    ).slice(-60);
+    const activityGroups = missionActivityGroups(mission.executionEvents);
     const missionActive = mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing";
     return <div key={mission.id} className="department-chat__exchange">
       <article className="department-chat__message department-chat__message--owner"><span>{t("老闆")}</span><p>{mission.objective}</p></article>
@@ -336,30 +259,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
       </section>}
       {activityGroups.length > 0 && <details className="mission-card__activity" open={missionActive}>
         <summary>{t("部門討論與執行 · {count}", { count: activityGroups.length })}</summary>
-        <div className="mission-card__activity-list">
-          {activityGroups.map((group) => {
-            const workerName = workers.find((candidate) => candidate.id === group.workerId)?.name ?? t("部門成員");
-            if (group.kind === "tools") {
-              return <div key={group.key} className="mission-activity-row">
-                <span className="mission-activity-row__who">{workerName}</span>
-                <div className="mission-activity-row__body">
-                  {group.items.length > 1 ? <ToolGroup items={group.items} summary /> : <ToolRow item={group.items[0]} />}
-                </div>
-              </div>;
-            }
-            if (group.kind === "text") {
-              return <div key={group.key} className="mission-activity-row mission-activity-row--speech">
-                <span className="mission-activity-row__who">{workerName}</span>
-                <div className="mission-activity-row__body mission-activity-row__speech"><RichText text={group.text} compact /></div>
-              </div>;
-            }
-            return <div key={group.key} className={`mission-activity-row mission-activity-row--${group.tone}`}>
-              <span className="mission-activity-row__who">{workerName}</span>
-              <span className="mission-activity-row__icon">{MISSION_ACTIVITY_TONE_ICON[group.tone]}</span>
-              <span className="mission-activity-row__label">{group.label}</span>
-            </div>;
-          })}
-        </div>
+        <MissionActivityFeed events={mission.executionEvents} workers={workers} />
       </details>}
       {mission.error && <div className="handoff-dialog__error">{mission.error}</div>}
       {mission.status === "completed" && mission.steps.find((step) => step.kind === "synthesize")?.result && <section className="mission-card__final-report" aria-label={t("部門最終報告")}>

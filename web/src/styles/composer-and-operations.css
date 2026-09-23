@@ -1172,6 +1172,14 @@ summary:focus-visible,
 .boss-task-stages button i { display: grid; width: 21px; height: 21px; place-items: center; border: 1px solid rgba(0, 229, 255,.22); border-radius: 50%; color: var(--cyan); font: 8px var(--mono); }
 .boss-task-stages button span { display: flex; min-width: 0; flex: 1; justify-content: space-between; gap: 8px; }
 .boss-task-stages button strong { font-size: 10px; }
+/* 交辦頁每個階段底下就地展開部門討論（不用點進去跳走）。 */
+.boss-task-stage { display: flex; flex-direction: column; gap: 3px; }
+.boss-task-stage > button { width: 100%; }
+.boss-task-stage__peek { padding: 0 4px 4px; }
+.boss-task-stage__peek > summary { color: #c3b3ff; font: 700 9px var(--mono); letter-spacing: .04em; cursor: pointer; padding: 3px 0; list-style: none; }
+.boss-task-stage__peek > summary::-webkit-details-marker { display: none; }
+.boss-task-stage__peek > summary::before { content: "▾ "; }
+.boss-task-stage__peek[open] > summary::before { content: "▴ "; }
 .boss-task-stages button small { color: var(--text-dim); font: 8px var(--mono); }
 .boss-task-desk__restart { margin-top: 10px; border: 1px solid rgba(255,176,0,.38); border-radius: 7px; background: rgba(255,176,0,.08); color: var(--warn); padding: 7px 10px; cursor: pointer; font-size: 11px; }
 .boss-task-desk__restart:disabled { cursor: not-allowed; opacity: .45; }
