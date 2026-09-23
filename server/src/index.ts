@@ -2509,6 +2509,20 @@ function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
   return events.map(trimEventForSnapshot);
 }
 
+// 初始 snapshot 瘦身：已結束（completed/failed/cancelled）的 Mission 去掉 executionEvents。
+// 那是初始 snapshot 肥大的主因（實測 16MB，完成的量化 mission 單筆可達 1~2.5MB）；完成的
+// Mission 的活動流前端會在你點開時用 GET /api/missions/:id 單筆抓，snapshot 不必帶。進行中的
+// Mission 保留事件（活著要看），只把單筆超大的工具輸出/輸入裁短。
+function missionForSnapshot(mission: DepartmentMission): DepartmentMission {
+  if (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled") {
+    return { ...mission, executionEvents: [] };
+  }
+  return {
+    ...mission,
+    executionEvents: (mission.executionEvents ?? []).map((entry) => ({ ...entry, event: trimEventForSnapshot(entry.event) })),
+  };
+}
+
 wss.on("connection", (socket) => {
   // A client that drops mid-handshake (page reload, laptop sleep/wake, a
   // network blip) emits 'error' with no listener otherwise — that's an
@@ -2551,7 +2565,7 @@ wss.on("connection", (socket) => {
       accountUsage: accountUsageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       collaborations: store.listRecentCollaborationTasks(),
-      missions: store.listDepartmentMissions(),
+      missions: store.listDepartmentMissions().map(missionForSnapshot),
       bossTasks: store.listBossTasks().map(bossTaskForDisplay),
       departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
