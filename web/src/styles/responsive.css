@@ -371,7 +371,7 @@
     align-items: center;
     gap: var(--sp-1);
     width: 100%;
-    padding: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
     padding-right: calc(var(--safe-r) + var(--sp-2));
     padding-left: calc(var(--safe-l) + var(--sp-2));
   }
@@ -394,7 +394,7 @@
     flex: 0 0 auto;
     align-items: center;
     gap: var(--sp-2);
-    min-height: var(--tap);
+    min-height: var(--tap-flat);
     max-width: 150px;
     padding: 0 var(--sp-3) 0 var(--sp-2);
     border: 1px solid rgba(100, 172, 205, 0.16);
@@ -468,6 +468,13 @@
     border-color: rgba(100, 172, 205, 0.18);
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.02);
+  }
+
+  /* 日誌開著的時候不需要這顆：面板頂端的抓把手往下拖就收起來了，兩個入口
+     做同一件事只是多佔一塊。收合狀態的它要留著——那時抓把手跟著面板一起
+     不見了，沒有它就再也回不到日誌。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .panel-toggle--open {
+    display: none;
   }
 
   /* ▶ 開關貼在日誌抽屜的正上緣（場景列的最底部），不再是浮在辦公室中間、
@@ -762,19 +769,24 @@
       visibility 0s linear 0.35s;
   }
 
-  /* 左緣的寬度拖桿在手機改成頂端的高度拖桿。 */
+  /* 左緣的寬度拖桿在手機改成頂端的高度拖桿，也是 bottom sheet 的抓把手：
+     往下拖就收起日誌。它是手機上唯一的收合入口（箭頭鈕在下面關掉了），所以
+     不能拿掉——但 24px 純粹是空白，壓到 14 把省下來的高度還給對話。 */
   .game-root:not(.game-root--focus) .holo-panel__resize {
     top: 0;
     right: 0;
     bottom: auto;
     left: 0;
     width: auto;
-    height: 24px;
+    /* 16 而不是 24：24 裡面有 21px 是純空白。再往下壓的話拖曳區就太細了——
+       往上借空間也行不通，.holo-panel 是 overflow: hidden（圓角要靠它），
+       超出面板的偽元素會被整片裁掉，實測面板上緣 5px 處打到的是辦公室畫布。 */
+    height: 16px;
     cursor: ns-resize;
   }
 
   .game-root:not(.game-root--focus) .holo-panel__resize::after {
-    top: 7px;
+    top: 6px;
     right: auto;
     bottom: auto;
     left: 50%;
@@ -809,9 +821,27 @@
     padding: 0;
   }
 
-  .holo-panel:not(.holo-panel--focus) .holo-panel__heading {
-    min-width: 0;
-    flex: 1 1 auto;
+  /* 「WORKSTREAM／任務日誌」在手機收掉：面板就在眼前、下面緊接著就是對話，
+     再寫一次名字只是佔掉 34px。桌面留著，那裡有空間也需要分辨部門。 */
+  .holo-panel:not(.holo-panel--focus) .holo-panel__heading { display: none; }
+
+  /* 標題列剩下工具列一排，內距跟著收，控件比照頂欄壓到 --tap-flat。
+     min-height 是桌面為了容納兩行標題才設的 66px，標題收掉之後那就是純空白。 */
+  .holo-panel:not(.holo-panel--focus) .holo-panel__title {
+    min-height: 0;
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar button,
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar select {
+    position: relative;
+    min-height: var(--tap-flat);
+  }
+
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar button::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
   }
 
   .holo-panel:not(.holo-panel--focus) .task-log-toolbar {

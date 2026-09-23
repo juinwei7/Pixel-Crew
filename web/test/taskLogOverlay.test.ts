@@ -144,3 +144,26 @@ test("an overflow menu does not close the menus nested inside it", () => {
   // 自己裡面那一層關掉（點了沒反應）。
   assert.match(blackWindow, /if \(other !== menu && !menu\.contains\(other\)\) other\.open = false;/);
 });
+
+test("the phone log sheet keeps exactly one way back to the office", () => {
+  // 手機上日誌是 bottom sheet：開著的時候，面板頂端的抓把手往下拖就收起來，
+  // 所以那顆 ▶ 箭頭是多餘的（兩個入口做同一件事，還各佔一塊）。但收合之後
+  // 抓把手跟著面板一起不見了——箭頭是那時唯一的回程，絕對不能一起關掉。
+  const phone = css.slice(css.indexOf("@media (max-width: 600px)"));
+  assert.match(phone, /\.panel-toggle--open\s*\{\s*display:\s*none;/);
+  assert.doesNotMatch(phone, /\.panel-toggle\s*\{\s*display:\s*none;/);
+  // 抓把手在手機是高度拖桿兼收合手勢，不能被關掉。
+  assert.doesNotMatch(phone, /\.holo-panel__resize\s*\{[^}]*display:\s*none/);
+});
+
+test("the phone log sheet drops the desktop title block", () => {
+  // 「WORKSTREAM／任務日誌」在手機只是重複：面板就在眼前，下面緊接著就是對話。
+  // min-height 也要一起解掉，那是桌面為了容納兩行標題才設的 66px。
+  const phone = css.slice(css.indexOf("@media (max-width: 600px)"));
+  assert.match(phone, /\.holo-panel__heading \{ display: none; \}/);
+  // 這個選擇器在桌面那幾支也出現過（只設背景），所以要找的是「有把 min-height
+  // 歸零的那一塊」，不能拿第一個命中就算。
+  const blocks = phone.split(".holo-panel:not(.holo-panel--focus) .holo-panel__title").slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf("}")));
+  assert.ok(blocks.some((block) => /min-height: 0;/.test(block)), "標題列還留著桌面的 66px min-height");
+});
