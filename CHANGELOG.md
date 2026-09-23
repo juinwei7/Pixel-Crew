@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Remote access now shows a real progress bar while it downloads cloudflared for the first time, with transferred size, speed, remaining time, and a cancel button.
+
+### Changed
+
+- Share passwords now need at least 6 characters, the same minimum the owner passcode already had.
+- Signing out of remote access also clears the guardian unlock, so the next person to sign in on that device has to enter the guardian password again.
+
+### Fixed
+
+- Fixed the first-run cloudflared download never completing. The install request used to block until the whole 19–70 MB file arrived, so it always hit the 40-second proxy timeout on a normal connection, and a dropped connection left the relay permanently stuck reporting "download in progress" until it was restarted.
+- Verified the downloaded cloudflared against its declared size instead of accepting a truncated file, cleaned up the partial file, and aborted stalled downloads instead of waiting forever.
+- Stopped leaving an orphaned cloudflared tunnel running when opening it timed out or when the relay exited, and reported cloudflared's own error output instead of a bare "failed to start".
+- Stopped the remote-access login throttle from being bypassed by a spoofed `X-Forwarded-For` entry, and treated any forwarding header as proof a request is not a local owner request.
+- Created the relay's config file, which holds the passcode in plain text, with owner-only permissions from the start instead of leaving it briefly readable by other accounts on the machine.
+- Kept the remote-access window's status fresh while it is open, and capped Tailscale detection so a slow or hung `tailscale` CLI can no longer make the window time out.
+
 ## [2.4.0] - 2026-09-22
 
 ### Added

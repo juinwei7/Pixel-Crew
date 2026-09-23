@@ -3060,6 +3060,16 @@ app.post("/api/remote-access/api/*", async (req, res) => {
   res.status(up.status).type("application/json").send(up.text);
 });
 
+// GET 版本：cloudflared 下載進度條每秒輪詢 cloudflared/progress。那支端點只讀轉接站的
+// 記憶體狀態（不 spawn tailscale/schtasks），所以輪詢成本遠低於整包 /state。
+app.get("/api/remote-access/api/*", async (req, res) => {
+  const name = String((req.params as Record<string, string>)[0] || "").replace(/[^a-z/]/gi, "");
+  if (!name) { res.status(400).json({ error: "bad api path" }); return; }
+  if (!(await tsproxyRunning())) { res.status(503).json({ error: "轉接站未啟動" }); return; }
+  const up = await proxyToTsproxy("GET", name, "");
+  res.status(up.status).type("application/json").send(up.text);
+});
+
 // ── 成本日報與一日回放 ───────────────────────────────────────────────────────
 registerReportingRoutes({
   app,
