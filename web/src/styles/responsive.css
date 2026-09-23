@@ -458,7 +458,15 @@
   }
   .crew-strip__status--approval { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
   .crew-strip__status--error { background: var(--err); box-shadow: 0 0 7px var(--err); }
-  .crew-strip__status--busy { background: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
+  /* 執行中：亮青色脈動點，讓「背景正在跑」一眼可見。注意 workerAttention() 實際輸出
+     的是 --working（不是舊的 --busy），先前 class 名對不上，等於執行中完全沒有指示。 */
+  .crew-strip__status--working {
+    background: var(--cyan);
+    box-shadow: 0 0 7px var(--cyan);
+    animation: runningPulse 1.2s ease-in-out infinite;
+  }
+  /* 剛完成（有新產出可看）：靜態綠點，和閒置的無點區分開。 */
+  .crew-strip__status--done { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 
   .crew-strip__roster {
     display: grid;
