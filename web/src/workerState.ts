@@ -130,6 +130,7 @@ export function emptyWorker(
     persona,
     autoApproveMode,
     handoff,
+    queue: [],
     turns: [],
     character: INITIAL_CHARACTER,
     subagents: [],

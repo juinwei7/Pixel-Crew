@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, QueuedCommandDto, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
@@ -59,6 +59,7 @@ type ServerMessage =
         resumeCandidate?: WorkerState["resumeCandidate"];
         ephemeralKind?: WorkerState["ephemeralKind"];
         events: RunnerEvent[];
+        queue?: QueuedCommandDto[];
       }>;
     }
   | { type: "event"; workerId: string; event: RunnerEvent }
@@ -67,6 +68,7 @@ type ServerMessage =
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
   | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
+  | { type: "queue_updated"; workerId: string; queue: QueuedCommandDto[] }
   | { type: "collaboration_created" | "collaboration_updated"; collaboration: CollaborationTask }
   | { type: "mission_created" | "mission_updated"; mission: DepartmentMission }
   | { type: "boss_task_created" | "boss_task_updated"; bossTask: BossTask }
@@ -264,6 +266,7 @@ export function useWorkers() {
             state.accountId = w.accountId ?? null;
             state.resumeCandidate = w.resumeCandidate ?? null;
             state.ephemeralKind = w.ephemeralKind ?? null;
+            state.queue = w.queue ?? [];
             record[w.id] = state;
             ids.push(w.id);
           }
@@ -370,6 +373,14 @@ export function useWorkers() {
             const w = prev[data.workerId];
             if (!w || w.busy === data.busy) return prev;
             return { ...prev, [data.workerId]: { ...w, busy: data.busy } };
+          });
+          break;
+        }
+        case "queue_updated": {
+          setWorkers((prev) => {
+            const w = prev[data.workerId];
+            if (!w) return prev;
+            return { ...prev, [data.workerId]: { ...w, queue: data.queue } };
           });
           break;
         }
@@ -1154,6 +1165,31 @@ export function useWorkers() {
     }
   }, []);
 
+  // 跨裝置排隊：排隊改 POST 到 server 佇列（不再存瀏覽器）。畫面上的佇列由 server 的
+  // queue_updated 廣播回填，所以這裡不用手動 setWorkers。
+  const enqueueCommand = useCallback(async (id: string, command: CommandSubmission): Promise<string | null> => {
+    try {
+      await apiRequest<{ ok: boolean }>(`/api/workers/${id}/queue`, {
+        method: "POST",
+        body: { message: command.text, images: command.images, documents: command.documents },
+        timeoutMs: 30000,
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const removeQueued = useCallback(async (id: string, queueId: string): Promise<string | null> => {
+    try { await apiRequest(`/api/workers/${id}/queue/${queueId}`, { method: "DELETE" }); return null; }
+    catch (error) { return (error as Error).message; }
+  }, []);
+
+  const reorderQueued = useCallback(async (id: string, order: string[]): Promise<string | null> => {
+    try { await apiRequest(`/api/workers/${id}/queue`, { method: "PATCH", body: { order } }); return null; }
+    catch (error) { return (error as Error).message; }
+  }, []);
+
   const askMission = useCallback(async (missionId: string, question: string): Promise<string | null> => {
     try {
       await apiRequest<{ ok: boolean; workerId: string }>(`/api/missions/${missionId}/follow-up`, {
@@ -1384,6 +1420,9 @@ export function useWorkers() {
     selectAvatarPreset,
     activateCustomAvatar,
     send,
+    enqueueCommand,
+    removeQueued,
+    reorderQueued,
     askMission,
     setModel,
     setModelFresh,

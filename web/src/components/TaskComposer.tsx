@@ -21,7 +21,7 @@ import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalett
 import { useComposerSessionExtras } from "../hooks/useComposerSessionExtras";
 import { useGlobalFileDrop } from "../hooks/useGlobalFileDrop";
 import { VoiceInputButton } from "./VoiceInputButton";
-import type { CapabilityState, CommandSubmission, ProviderId, WorkerState } from "../types";
+import type { CapabilityState, CommandSubmission, ProviderId, QueuedCommandDto, WorkerState } from "../types";
 import { t } from "../i18n";
 
 // 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
@@ -60,6 +60,12 @@ type Props = {
   queueEnabled?: boolean;
   busy?: boolean;
   onInterrupt?(): void;
+  // 跨裝置排隊：提供 serverQueue + onEnqueue 就改走 server 佇列（畫面讀 server、送出交
+  // 給 server drain），不再用瀏覽器本地佇列。只有 dock composer 會接這些。
+  serverQueue?: QueuedCommandDto[];
+  onEnqueue?(submission: CommandSubmission): Promise<string | null>;
+  onRemoveQueued?(id: string): void;
+  onReorderQueued?(orderedIds: string[]): void;
   persistExtras?: boolean;
   globalDrop?: boolean;
   dropTargetLabel?: string;
@@ -69,9 +75,13 @@ type Props = {
 export function TaskComposer({
   draftKey, placeholder, submitLabel, busyLabel = t("處理中…"), disabled = false, working = false, toolbar, leading, onSubmit,
   layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
+  serverQueue, onEnqueue, onRemoveQueued, onReorderQueued,
   persistExtras = false, globalDrop = false, dropTargetLabel, voiceEnabled = false,
 }: Props) {
   const dock = layout === "dock";
+  // 有 onEnqueue＝這個 composer 走 server 佇列（背景 drain＋跨裝置）；否則沿用本地佇列。
+  const useServerQueue = queueEnabled && !!onEnqueue;
+  const serverQueueItems = serverQueue ?? [];
   const [draftValue, setDraftValue] = useComposerDraft(draftKey);
   const [failedFiles, setFailedFiles] = useState<File[]>([]);
   const {
@@ -133,8 +143,9 @@ export function TaskComposer({
   }, [busy, disabled]);
 
   // Auto-dispatch the next queued command once the worker returns to idle.
+  // server 佇列模式下由 server 自己 drain，前端不送（否則會重複送）。
   useEffect(() => {
-    if (!queueEnabled || switchingSession || busy || disabled || queued.length === 0 || dispatchingSessionsRef.current.has(draftKey)) return;
+    if (useServerQueue || !queueEnabled || switchingSession || busy || disabled || queued.length === 0 || dispatchingSessionsRef.current.has(draftKey)) return;
     const next = queued[0];
     const owner = ownerRef.current;
     dispatchingSessionsRef.current.add(owner);
@@ -234,11 +245,23 @@ export function TaskComposer({
         onInterrupt?.();
         return;
       }
-      if (queued.length >= MAX_QUEUED_COMMANDS) {
+      const queueLength = useServerQueue ? serverQueueItems.length : queued.length;
+      if (queueLength >= MAX_QUEUED_COMMANDS) {
         setError(t("等待佇列最多 {max} 項", { max: MAX_QUEUED_COMMANDS }));
         return;
       }
       lastSubmitAtRef.current = Date.now();
+      if (useServerQueue) {
+        // 排到 server 佇列：手機/電腦共用，該 NPC 一空下來 server 自己送。
+        const submission: CommandSubmission = { text, images: images.map(imagePayload), documents: documents.map(documentPayload), ...newClientMessageIdentity() };
+        setDraftValue("");
+        setImages([]);
+        setDocuments([]);
+        setError(null);
+        void onEnqueue!(submission).then((message) => { if (message) setError(message); });
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
       const command: QueuedCommand = { id: newQueueId(), text, images, documents, ...newClientMessageIdentity() };
       setDraftValue("");
       setImages([]);
@@ -430,8 +453,23 @@ export function TaskComposer({
         {textareaField}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
-        {queueEnabled && queued.length > 0 && <QueuePanel queued={queued} restoringExtras={restoringExtras} extrasSaved={extrasSaved}
+        {queueEnabled && (useServerQueue ? serverQueueItems.length > 0 : queued.length > 0) && <QueuePanel
+          items={useServerQueue
+            ? serverQueueItems.map((item) => ({ id: item.id, text: item.message, imageCount: item.images.length, documentCount: item.documents.length }))
+            : queued.map((command) => ({ id: command.id, text: command.text, imageCount: command.images.length, documentCount: command.documents.length }))}
+          restoringExtras={useServerQueue ? false : restoringExtras}
+          extrasSaved={useServerQueue ? true : extrasSaved}
           onEdit={(index) => {
+            if (useServerQueue) {
+              // server 佇列：載入編輯＝把該項從 server 移除、文字放回輸入框（附件不還原）。
+              const target = serverQueueItems[index];
+              if (!target) return;
+              onRemoveQueued?.(target.id);
+              setDraftValue(target.message);
+              setError(null);
+              requestAnimationFrame(() => textareaRef.current?.focus());
+              return;
+            }
             const target = queued[index];
             if (!target) return;
             const replacement = hasContent ? { ...target, text: draftValue, images, documents } : null;
@@ -444,9 +482,18 @@ export function TaskComposer({
             setError(null);
             requestAnimationFrame(() => textareaRef.current?.focus());
           }}
-          onMove={(index, offset) => setQueued((commands) => moveQueuedItem(commands, index, offset))}
-          onReorder={(from, to) => setQueued((commands) => reorderQueuedItem(commands, from, to))}
-          onCancel={(id) => setQueued((commands) => commands.filter((item) => item.id !== id))}
+          onMove={(index, offset) => {
+            if (useServerQueue) { onReorderQueued?.(moveQueuedItem(serverQueueItems.map((item) => item.id), index, offset)); return; }
+            setQueued((commands) => moveQueuedItem(commands, index, offset));
+          }}
+          onReorder={(from, to) => {
+            if (useServerQueue) { onReorderQueued?.(reorderQueuedItem(serverQueueItems.map((item) => item.id), from, to)); return; }
+            setQueued((commands) => reorderQueuedItem(commands, from, to));
+          }}
+          onCancel={(id) => {
+            if (useServerQueue) { onRemoveQueued?.(id); return; }
+            setQueued((commands) => commands.filter((item) => item.id !== id));
+          }}
         />}
         <button className={`command-composer__submit ${canInterrupt ? "command-composer__submit--stop" : ""}`} type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
       </form>
@@ -474,8 +521,10 @@ export function TaskComposer({
   </form>;
 }
 
-function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onReorder, onCancel }: {
-  queued: QueuedCommand[];
+type QueueDisplayItem = { id: string; text: string; imageCount: number; documentCount: number };
+
+function QueuePanel({ items, restoringExtras, extrasSaved, onEdit, onMove, onReorder, onCancel }: {
+  items: QueueDisplayItem[];
   restoringExtras: boolean;
   extrasSaved: boolean;
   onEdit(index: number): void;
@@ -486,10 +535,10 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
   const [open, setOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   return <>
-    <button type="button" className="command-composer__queue" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{t("等待 {count}", { count: queued.length })}</button>
+    <button type="button" className="command-composer__queue" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{t("等待 {count}", { count: items.length })}</button>
     {open && <div className="command-queue" aria-label={t("待送訊息佇列")}>
       <header><div><span>UP NEXT</span><strong>{t("待送訊息")} {restoringExtras ? t("· 復原中…") : extrasSaved ? t("· 已保存") : t("· 保存中…")}</strong></div><button type="button" aria-label={t("關閉待送訊息")} onClick={() => setOpen(false)}>×</button></header>
-      <ol>{queued.map((command, index) => <li key={command.id} className={dragIndex === index ? "command-queue__item--dragging" : ""} onDragOver={(event) => { if (dragIndex !== null) event.preventDefault(); }} onDrop={(event) => {
+      <ol>{items.map((command, index) => <li key={command.id} className={dragIndex === index ? "command-queue__item--dragging" : ""} onDragOver={(event) => { if (dragIndex !== null) event.preventDefault(); }} onDrop={(event) => {
         if (dragIndex === null) return;
         event.preventDefault();
         onReorder(dragIndex, index);
@@ -498,11 +547,11 @@ function QueuePanel({ queued, restoringExtras, extrasSaved, onEdit, onMove, onRe
         <span className="command-queue__drag" draggable title={t("拖曳調整順序")} aria-hidden="true" onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDragIndex(index); }} onDragEnd={() => setDragIndex(null)}>⠿</span>
         <button type="button" className="command-queue__edit" onClick={() => { onEdit(index); setOpen(false); }} title={t("載入編輯")}>
           <strong>{command.text || t("只有附件的訊息")}</strong>
-          <small>{command.images.length > 0 ? t("{n} 張圖片", { n: command.images.length }) : ""}{command.images.length > 0 && command.documents.length > 0 ? " · " : ""}{command.documents.length > 0 ? t("{n} 份文件", { n: command.documents.length }) : ""}</small>
+          <small>{command.imageCount > 0 ? t("{n} 張圖片", { n: command.imageCount }) : ""}{command.imageCount > 0 && command.documentCount > 0 ? " · " : ""}{command.documentCount > 0 ? t("{n} 份文件", { n: command.documentCount }) : ""}</small>
         </button>
         <div className="command-queue__actions">
           <button type="button" disabled={index === 0} aria-label={t("往前移")} onClick={() => onMove(index, -1)}>↑</button>
-          <button type="button" disabled={index === queued.length - 1} aria-label={t("往後移")} onClick={() => onMove(index, 1)}>↓</button>
+          <button type="button" disabled={index === items.length - 1} aria-label={t("往後移")} onClick={() => onMove(index, 1)}>↓</button>
           <button type="button" aria-label={t("取消待送訊息")} onClick={() => onCancel(command.id)}>×</button>
         </div>
       </li>)}</ol>

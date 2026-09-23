@@ -89,7 +89,7 @@ export function App() {
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
-    send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
+    send, enqueueCommand, removeQueued, reorderQueued, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -1259,6 +1259,10 @@ export function App() {
         focusRequest={composerFocusRequest}
         busy={Boolean(active?.busy)}
         queueEnabled
+        serverQueue={active?.queue ?? []}
+        onEnqueue={active ? ((submission) => enqueueCommand(active.id, submission)) : undefined}
+        onRemoveQueued={active ? ((id) => { void removeQueued(active.id, id); }) : undefined}
+        onReorderQueued={active ? ((ids) => { void reorderQueued(active.id, ids); }) : undefined}
         persistExtras
         voiceEnabled
         globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !codexCommandsModalOpen && !accountsModalOpen}

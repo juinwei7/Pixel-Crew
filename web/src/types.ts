@@ -523,11 +523,23 @@ export type PersonaTemplate = Persona & {
   name: string;
 };
 
+// 跨裝置排隊佇列的一筆（server 為單一真相；手機/電腦共用、背景也會被 server drain）。
+export type QueuedCommandDto = {
+  id: string;
+  workerId: string;
+  message: string;
+  images: unknown[];
+  documents: unknown[];
+  createdAt: string;
+};
+
 export type WorkerState = {
   id: string;
   name: string;
   model: string | null;
   busy: boolean;
+  /** server 端排隊佇列（不再存瀏覽器；由 snapshot 與 queue_updated 廣播帶入）。 */
+  queue: QueuedCommandDto[];
   colorIndex: number;
   avatarId: string | null;
   avatarKind: "preset" | "custom";
