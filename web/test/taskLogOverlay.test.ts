@@ -167,3 +167,15 @@ test("the phone log sheet drops the desktop title block", () => {
     .map((chunk) => chunk.slice(0, chunk.indexOf("}")));
   assert.ok(blocks.some((block) => /min-height: 0;/.test(block)), "標題列還留著桌面的 66px min-height");
 });
+
+test("the phone report reader keeps its context on one row", () => {
+  // 工作室捷徑（在哪個工作位置）與報告導覽（跳到某一節）以前各佔一整列，
+  // 兩列加起來 78px——一頁 844px 的手機掉了 9% 給兩個只有一列高的東西。
+  // 這個檔案把所有 @import 攤平成一份，同一個選擇器在好幾個斷點裡都有，
+  // 所以直接找那份唯一的版位宣告，不要靠「第幾個 .focus-reader」去猜。
+  assert.match(css, /grid-template-areas:\s*\n\s*"rail nav"\s*\n\s*"drawer drawer"\s*\n\s*"log log";/);
+  assert.match(css, /\.focus-reader__studio-rail \{ grid-area: rail; \}/);
+  assert.match(css, /\.focus-report-nav__toggle \{ grid-area: nav; \}/);
+  // 收合鈕在手機沒有意義：這排本來就是橫捲的一條，展開會變成一疊高方塊。
+  assert.match(css, /\.focus-reader__studio-rail \.focus-studios__collapse \{ display: none; \}/);
+});

@@ -2376,10 +2376,39 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
   .holo-panel--focus .copy-button { min-width: var(--tap); min-height: var(--tap); }
   .holo-panel--focus .quest-log__latest { min-height: var(--tap); }
 
-  /* A collapsed studio rail is useful on a phone, but it must not become a
-     tall left-side stack above the report. Keep its shortcuts in one
-     horizontally scrollable strip so the reader gets the remaining height. */
-  .focus-reader { padding: 6px 10px 0; overflow: hidden; }
+  /* 報告上方本來有兩排各自獨立的東西：工作室捷徑（在哪個工作位置）與
+     報告導覽（跳到某一節）。兩排都只有一列高，卻各佔 42/36px——合起來就是
+     一頁 844px 的手機掉了 9%。改成同一列：左邊工作室可橫捲，右邊是導覽。
+     展開的導覽抽屜維持在報告上方（drawer 列），關著時那一列是 0。 */
+  .focus-reader {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "rail nav"
+      "drawer drawer"
+      "log log";
+    gap: 0 var(--sp-2);
+    padding: 6px 10px 0;
+    overflow: hidden;
+  }
+  .focus-reader__studio-rail { grid-area: rail; }
+  .focus-report-nav__toggle { grid-area: nav; }
+  .focus-report-nav { grid-area: drawer; }
+  .focus-reader > .quest-log { grid-area: log; }
+
+  /* 沒有工作室捷徑時（單一工作位置）導覽自己撐滿，不要縮在右邊留一塊空白。 */
+  .focus-reader:not(.focus-reader--with-studios) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "nav" "drawer" "log";
+  }
+
+  /* 收合鈕在手機沒有用：這排本來就被壓成橫捲的一條，展開只會變成一疊很高的
+     方塊把報告擠掉。少一顆鈕，也少一個把版面弄壞的入口。 */
+  .focus-reader__studio-rail .focus-studios__collapse { display: none; }
+
+  /* 併排之後它不再是黏在抽屜上緣的一條，給它完整的圓角。 */
+  .focus-report-nav__toggle { border-radius: 8px; }
   .focus-reader__studio-rail {
     flex: 0 0 auto;
     width: 100%;
