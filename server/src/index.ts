@@ -3171,6 +3171,16 @@ setInterval(() => {
   }
 }, 30_000);
 
+// 排隊佇列的安全掃描：正常情況下 turn_end/error 一發生就會 drain，但少數「worker 變回空閒
+// 卻沒有 turn_end 來觸發」的路徑（例如 mission/協作結束的當下）會漏。每 15 秒補掃一次，
+// 讓任何 idle 又有排隊的 NPC 一定會被 drain。drainWorkerQueue 自帶 idle/預算守衛，busy 的
+// worker 只做一次極輕量的記憶體檢查就跳過；不可能無限循環（每次每 worker 最多送 1 則）。
+setInterval(() => {
+  for (const worker of workers.values()) {
+    try { drainWorkerQueue(worker); } catch { /* 安全掃描 best-effort，不可影響主流程 */ }
+  }
+}, 15_000);
+
 app.post("/api/auth/refresh", async (req, res) => {
   const requested = String(req.body?.provider ?? "");
   const provider = requested === "claude" || requested === "codex" ? requested : undefined;
