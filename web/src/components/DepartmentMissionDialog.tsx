@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ApprovalDecision, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, MissionExecutionEvent, PreparedMission, ProviderId, RunnerEvent, ToolCallItem, WorkerState } from "../types";
 import { roomName } from "../workspace";
@@ -130,6 +130,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
   const [resetResults, setResetResults] = useState<Array<{ workerId: string; name: string; ok: boolean; error: string | null }> | null>(null);
   const [restartingActiveMission, setRestartingActiveMission] = useState(false);
   const handledResetRequest = useRef(resetRequestKey);
+  const threadBottomRef = useRef<HTMLDivElement>(null);
   const department = workers.filter((worker) => boss.departmentId
     ? worker.departmentId === boss.departmentId
     : worker.workspacePath === boss.workspacePath);
@@ -161,6 +162,12 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
     setCriteria("");
     setError(null);
   }, [latestTerminal?.id]);
+
+  // 新訊息/新 Mission 進來、或進行中 Mission 往前跑一步時，自動捲到最新（底部）。修掉
+  // 「訊息不會自動跳到最新」。用底部哨兵 scrollIntoView，不必知道實際捲動容器是哪一層。
+  useEffect(() => {
+    threadBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [threadPayload?.messages.length, related.length, activeMission?.status, activeMission?.currentStepIndex]);
 
   useEffect(() => {
     if (!departmentRecord || !onLoadThread) return;
@@ -370,6 +377,33 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
     onSubmit={continueWithDepartment}
   />;
 
+  // 把「部門訊息」與「Mission 卡片」合成一條依時間排序的時間軸（舊在上、新在下）。以前是
+  // 先渲染整塊訊息、再把所有 Mission 放到下面（非時間序），導致「部門問你的問題」永遠跑到
+  // 舊會議上面、也讓自動捲到底沒意義。合併後就是正常的聊天流。
+  const threadTimeline: Array<{ key: string; at: string; node: ReactNode }> = [];
+  for (const message of threadPayload?.messages ?? []) {
+    const messageAttachments = message.attachmentIds.flatMap((id) => {
+      const attachment = threadPayload?.attachments.find((candidate) => candidate.id === id);
+      return attachment ? [attachment] : [];
+    });
+    threadTimeline.push({
+      key: `m:${message.id}`,
+      at: message.createdAt,
+      node: (
+        <article key={`m:${message.id}`} className={`department-thread__message department-thread__message--${message.role}`}>
+          <header><strong>{message.role === "owner" ? t("老闆") : message.role === "report" ? t("部門最終報告") : departmentRecord?.name ?? boss.name}</strong><time>{new Date(message.createdAt).toLocaleString()}</time></header>
+          <RichText text={message.text} compact={message.role !== "report"} />
+          {messageAttachments.length > 0 && <ul className="department-thread__attachments">{messageAttachments.map((attachment) => <li key={attachment.id}>{attachment.kind === "image" ? t("圖片") : t("文件")} · {attachment.name}</li>)}</ul>}
+          {message.role === "owner" && message.deliveryStatus === "pending" && <small>{t("已保存，等待部門處理")}</small>}
+        </article>
+      ),
+    });
+  }
+  for (const mission of related) {
+    threadTimeline.push({ key: `x:${mission.id}`, at: mission.createdAt, node: <div key={`x:${mission.id}`} className="mission-dialog__history">{renderMissionCard(mission)}</div> });
+  }
+  threadTimeline.sort((left, right) => left.at.localeCompare(right.at) || left.key.localeCompare(right.key));
+
   const inner = <>
       <header className="department-chat__header">
         <div><span>DEPARTMENT CHAT · DIRECT EXECUTION</span><h2>{departmentRecord?.name ?? roomName(boss.workspacePath)}</h2><p>{t("已鎖定此部門；送出即授權部門依成員職務開始，由 {name} 彙整回報。", { name: boss.name })}</p></div>
@@ -415,26 +449,10 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
 
       <section className="department-thread" aria-label={t("部門對話紀錄")}>
         {threadLoading && <p className="department-thread__loading">{t("正在讀取部門對話…")}</p>}
-        {!threadLoading && threadPayload && threadPayload.messages.length === 0 && <p className="department-thread__loading">{t("這個部門還沒有對話紀錄。")}</p>}
-        {threadPayload?.messages.map((message) => {
-          const messageAttachments = message.attachmentIds.flatMap((id) => {
-            const attachment = threadPayload.attachments.find((candidate) => candidate.id === id);
-            return attachment ? [attachment] : [];
-          });
-          return <article key={message.id} className={`department-thread__message department-thread__message--${message.role}`}>
-            <header><strong>{message.role === "owner" ? t("老闆") : message.role === "report" ? t("部門最終報告") : departmentRecord?.name ?? boss.name}</strong><time>{new Date(message.createdAt).toLocaleString()}</time></header>
-            <RichText text={message.text} compact={message.role !== "report"} />
-            {messageAttachments.length > 0 && <ul className="department-thread__attachments">{messageAttachments.map((attachment) => <li key={attachment.id}>{attachment.kind === "image" ? t("圖片") : t("文件")} · {attachment.name}</li>)}</ul>}
-            {message.role === "owner" && message.deliveryStatus === "pending" && <small>{t("已保存，等待部門處理")}</small>}
-          </article>;
-        })}
+        {!threadLoading && threadTimeline.length === 0 && <p className="department-thread__loading">{t("這個部門還沒有對話紀錄。")}</p>}
+        {threadTimeline.map((item) => item.node)}
+        <div ref={threadBottomRef} aria-hidden="true" />
       </section>
-
-      {currentMission && <section className="mission-dialog__history">{renderMissionCard(currentMission)}</section>}
-      {historicalMissions.length > 0 && <details className="mission-dialog__past-missions" open={focusSection === "history"}>
-        <summary>{t("此部門過往 Mission · {count}", { count: historicalMissions.length })}</summary>
-        {historicalMissions.map((mission) => renderMissionCard(mission))}
-      </details>}
       {!activeMission && latestTerminal && <section className="department-continuation" aria-label={t("部門報告後續")}>
         <header>
           <div><span>CONTINUE WITH DEPARTMENT</span><strong>{t("接著追問或交辦")}</strong></div>

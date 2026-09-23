@@ -252,7 +252,7 @@ test("shows the actual generated plan for explicit owner approval before executi
   assert.doesNotMatch(html, /重新 Review/);
 });
 
-test("shows only the current Mission prominently and tucks other department Missions into a collapsed history", () => {
+test("renders department missions and messages in one chronological timeline (oldest first)", () => {
   const boss = emptyWorker("boss", "主管", null, false, 0, "claude", "/repo");
   const analyst = emptyWorker("analyst", "分析師", null, false, 1, "claude", "/repo");
   const oldMission: DepartmentMission = {
@@ -276,14 +276,11 @@ test("shows only the current Mission prominently and tucks other department Miss
     onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction} onClose={() => undefined}
   />);
   assert.match(html, /需要你決定/);
-  assert.match(html, /此部門過往 Mission · 1/);
-  const historyIndex = html.indexOf('class="mission-dialog__history"');
-  const pastMissionsIndex = html.indexOf('class="mission-dialog__past-missions"');
-  assert.ok(historyIndex > -1 && pastMissionsIndex > historyIndex);
-  const prominentSection = html.slice(historyIndex, pastMissionsIndex);
-  const collapsedSection = html.slice(pastMissionsIndex);
-  assert.match(prominentSection, /TSLA 投資研究與財報分析/);
-  assert.match(prominentSection, /風險與假設獨立審視/);
-  assert.doesNotMatch(prominentSection, /評估是否該排除槓桿方案/);
-  assert.match(collapsedSection, /評估是否該排除槓桿方案/);
+  // 新設計：訊息與 Mission 合成一條依時間排序的時間軸（舊在上、新在下），不再把舊 Mission 收合。
+  const olderIndex = html.indexOf("評估是否該排除槓桿方案");   // 2026-07-20
+  const newerIndex = html.indexOf("整理 TSLA 投資報告");        // 2026-07-25
+  assert.ok(olderIndex > -1 && newerIndex > -1, "both missions render inline");
+  assert.ok(olderIndex < newerIndex, "older mission renders above the newer one (chronological, oldest first)");
+  assert.match(html, /TSLA 投資研究與財報分析/);
+  assert.match(html, /風險與假設獨立審視/);
 });

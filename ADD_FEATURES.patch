@@ -448,6 +448,22 @@ index 66a6cc1..3bcde6c 100644
  app.post("/api/workers/:id/message", (req, res) => {
    const worker = requireWorker(res, req.params.id);
    if (!worker) return;
+diff --git a/server/src/messageImages.ts b/server/src/messageImages.ts
+index d0cb118..79eb801 100644
+--- a/server/src/messageImages.ts
++++ b/server/src/messageImages.ts
+@@ -1,9 +1,9 @@
+ import type { MessageImage } from "./providers/session.js";
+ import { t } from "./i18n.js";
+ 
+-export const MAX_MESSAGE_IMAGES = 4;
++export const MAX_MESSAGE_IMAGES = 10;
+ export const MAX_MESSAGE_IMAGE_BYTES = 5 * 1024 * 1024;
+-export const MAX_MESSAGE_IMAGES_TOTAL_BYTES = 10 * 1024 * 1024;
++export const MAX_MESSAGE_IMAGES_TOTAL_BYTES = 30 * 1024 * 1024;
+ 
+ const MIME_TYPES = new Set<MessageImage["mimeType"]>(["image/png", "image/jpeg", "image/webp"]);
+ 
 diff --git a/server/src/scheduleRoutes.ts b/server/src/scheduleRoutes.ts
 index f67201a..9a9a519 100644
 --- a/server/src/scheduleRoutes.ts
@@ -1108,6 +1124,32 @@ index 757ffaf..438c33e 100644
        <div className="top-bar__spacer" />
        {children}
        <div className="top-bar__spacer" />
+diff --git a/web/src/composerFiles.ts b/web/src/composerFiles.ts
+index 84f5ef4..75b7a1d 100644
+--- a/web/src/composerFiles.ts
++++ b/web/src/composerFiles.ts
+@@ -4,10 +4,10 @@ import { t } from "./i18n";
+ export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
+ export type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
+ 
+-export const MAX_IMAGES = 4;
++export const MAX_IMAGES = 10;
+ export const MAX_DOCUMENTS = 4;
+ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+-export const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
++export const MAX_TOTAL_IMAGE_BYTES = 30 * 1024 * 1024;
+ export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+ export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+ export const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
+@@ -25,7 +25,7 @@ export function validateComposerAttachment(input: {
+   if (documentFiles.length > MAX_DOCUMENTS - currentDocuments.length) return t("每則訊息最多 {max} 份文件", { max: MAX_DOCUMENTS });
+   if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) return t("只支援 PNG、JPEG 與 WebP 圖片");
+   if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) return t("每張圖片不可超過 5 MiB");
+-  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return t("圖片總大小不可超過 10 MiB");
++  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return t("圖片總大小不可超過 {mib} MiB", { mib: MAX_TOTAL_IMAGE_BYTES / 1024 / 1024 });
+   if (documentFiles.some((file) => !SUPPORTED_DOCUMENT_EXTENSIONS.has(fileExtension(file.name)))) return t("只支援文字、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件");
+   if (documentFiles.some((file) => file.size > MAX_DOCUMENT_BYTES)) return t("每份文件不可超過 10 MiB");
+   if (currentDocuments.reduce((sum, document) => sum + document.size, 0) + documentFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_DOCUMENT_BYTES) return t("文件總大小不可超過 20 MiB");
 diff --git a/web/src/hooks/useWorkers.ts b/web/src/hooks/useWorkers.ts
 index 30887f7..2dd216d 100644
 --- a/web/src/hooks/useWorkers.ts
