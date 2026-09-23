@@ -2798,6 +2798,10 @@ function failServerRestart(message: string): void {
 }
 
 function finishServerRestart(): void {
+  // 告訴原生控制器「這是計畫中的重啟，不是崩潰」——它看到這個 marker 就會安靜地重啟，不跳
+  // 「內附服務意外結束（exit code 0）」的假警報（比照 update.pending 的自我更新機制）。
+  try { writeFileSync(join(config.dataDirectory, "logs", "restart.pending"), new Date().toISOString()); }
+  catch { /* 寫不進去也無妨，頂多還是跳那個舊警報 */ }
   // The restart response has already reached the browser. Use the same orderly
   // path as normal shutdown so provider children, Mission runners, sockets,
   // and the SQLite handle are all released before the replacement starts.
@@ -2865,13 +2869,16 @@ async function launchWindowsSelfUpdate(version: string): Promise<void> {
 }
 
 function performServerRestart(): void {
+  // 有原生控制器監督時（Windows Pixel Crew.exe / macOS menu bar 都會設這個旗標）：直接優雅退出，
+  // 由監督者偵測結束後重生。這樣就不必 spawn 外部 restart helper——Windows 那個 helper 會用
+  // taskkill 殺掉 8787 樹，反而把控制器剛重啟的 server 也殺掉，製造第二次「意外結束」假警報。
+  if (process.env.PIXEL_CREW_SUPERVISED === "1") {
+    console.log("[restart] 所有 NPC 空檔，交由原生控制器重啟…");
+    finishServerRestart();
+    return;
+  }
   if (process.platform !== "win32") {
     console.log("[restart] 所有 NPC 空檔，重啟中…");
-    if (process.env.PIXEL_CREW_SUPERVISED === "1") {
-      // macOS 的 menu bar launcher 監督中：直接退出，由它偵測結束後重生。
-      finishServerRestart();
-      return;
-    }
     // 無監督（手動 node 啟動）：detached shell 等 3 秒（讓觸發者的回合落地、
     // 連接埠釋放）後用同一組 argv/cwd 重啟自己。
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;

@@ -319,6 +319,7 @@ internal sealed class PixelCrewHost : IDisposable
     private readonly string logsDirectory;
     private readonly string pidFile;
     private readonly string updateMarker;
+    private readonly string restartMarker;
     private readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(1) };
     private Process? process;
     private bool stopping;
@@ -330,6 +331,7 @@ internal sealed class PixelCrewHost : IDisposable
         logsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pixel Crew", "logs");
         pidFile = Path.Combine(logsDirectory, "server.pid");
         updateMarker = Path.Combine(logsDirectory, "update.pending");
+        restartMarker = Path.Combine(logsDirectory, "restart.pending");
     }
 
     public ServiceState State { get; private set; } = ServiceState.Stopped;
@@ -386,6 +388,10 @@ internal sealed class PixelCrewHost : IDisposable
             startInfo.ArgumentList.Add("server/dist/index.js");
             startInfo.ArgumentList.Add("--serve-web");
             startInfo.Environment["PORT"] = port.ToString();
+            // 告訴伺服器「有原生控制器在監督」：計畫重啟時它只要優雅退出，由這裡偵測後重生，
+            // 不必再 spawn 外部 restart helper（那個 helper 的 taskkill 會殺掉這裡剛重啟的 server，
+            // 製造第二次「意外結束」）。與 macOS menu bar launcher 用同一個旗標。
+            startInfo.Environment["PIXEL_CREW_SUPERVISED"] = "1";
             process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, line) => AppendLog("server.stdout.log", line.Data);
             process.ErrorDataReceived += (_, line) => AppendLog("server.stderr.log", line.Data);
@@ -472,6 +478,21 @@ internal sealed class PixelCrewHost : IDisposable
         {
             SetState(ServiceState.Stopped);
             return;
+        }
+        if (File.Exists(restartMarker))
+        {
+            // 伺服器自己發起的計畫重啟（例如網頁上的「重啟伺服器」或排程更新）。這是正常的、
+            // 預期中的退出，不是崩潰——安靜地把服務接回來，別再跳「內附服務意外結束」的假警報。
+            // 新鮮度檢查：只有剛寫下的 marker 才算數，避免上次殘留的陳舊檔把真正的崩潰誤判成計畫重啟。
+            var planned = false;
+            try { planned = (DateTime.UtcNow - File.GetLastWriteTimeUtc(restartMarker)).TotalSeconds < 60; } catch { }
+            try { File.Delete(restartMarker); } catch { }
+            if (planned)
+            {
+                SetState(ServiceState.Starting);
+                _ = RestartAfterUnexpectedExitAsync();
+                return;
+            }
         }
         var exitCode = process?.ExitCode;
         SetState(ServiceState.Error);
