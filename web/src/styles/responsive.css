@@ -82,8 +82,8 @@
     --modal-radius: 18px 18px 0 0;
     --modal-max-h: min(92dvh, calc(var(--vh) - var(--safe-t)));
     --fs-input: 16px;
-    /* 兩列：模式切換那排 + 換到第二列的能量條。取英文（標籤較長、實測
-       110px）當基準——中文略矮，差的幾 px 只是讓下拉選單多留一點空隙。 */
+    /* 首次繪製用的估值；掛載後 TopBar.tsx 會量實際高度覆寫這個變數
+       （語言、視窗寬度都會改變頂欄排成幾列，猜不準）。 */
     --top-bar-h: 110px;
   }
 }
@@ -108,21 +108,41 @@
    兩者會各自照 baseline 對齊，視覺上差個一兩 px。
 
    這裡刻意「逐個指名」而不是寫成 `button:has(> .ui-icon)` 之類的通用規則。
+   （頂欄那幾顆含 icon 的按鈕已經一律收進 ••• 選單，不在這裡。）
    通用規則必須設 display，而 display 一旦被通用規則接管，就會贏過各元件
    自己的 display: none（`:has()` 的權重比單一 class 高），把本來要在手機
    收進 ••• 選單的控件放出來。指名的代價是新增控件要記得加一行，但不會有
    「某個東西莫名其妙冒出來」這種難查的問題。 */
-.top-bar__capability,
 .black-workspace .voice-input__mic {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 不縮、不換行：這兩顆是固定內容，被壓縮只會把「功能」折成上下兩個字。 */
+  flex: none;
+  white-space: nowrap;
 }
 
-/* 圖示與文字之間固定一個間距。 */
-button > .ui-icon:first-child:not(:only-child),
-summary > .ui-icon:first-child:not(:only-child) {
-  margin-right: var(--sp-1);
+/* 圖示與文字之間固定一個間距。
+
+   用 gap 而不是 margin：按鈕裡的文字是 text node，CSS 選不到它，所以沒辦法
+   靠選擇器分辨「圖示＋文字」與「只有圖示」——:only-child 只數元素，兩種情況
+   都成立（這正是前一版 :not(:only-child) 從頭到尾沒生效的原因）。gap 只作用
+   在兩個以上的子項之間，文字會變成匿名 flex item 吃到間距，純圖示按鈕則自然
+   沒有多出來的邊界。
+
+   整條包在 :where() 裡把權重歸零。display 在這裡只是「沒人管時的預設」，任何
+   元件自己的 display 都要贏過它——包括 display: none。沒包 :where() 的版本
+   權重是 (0,1,1)，壓過 .top-bar__capability { display: none } (0,1,0)，把該收
+   起來的按鈕又放了出來。 */
+:where(
+  button:has(> .ui-icon),
+  summary:has(> .ui-icon),
+  label:has(> .ui-icon),
+  span:has(> .ui-icon)
+) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -307,7 +327,9 @@ summary > .ui-icon:first-child:not(:only-child) {
     /* 能量條換到第二列，不再絕對定位浮在場景上蓋住 ••• 選單與日誌標題。 */
     flex-wrap: wrap;
     gap: var(--sp-1) var(--sp-2);
-    min-height: var(--top-bar-h);
+    /* 這裡千萬不要寫 min-height: var(--top-bar-h)。那個變數是 TopBar 量完自己
+       之後寫回來的，拿它當自己的下限就變成只增不減的棘輪：一旦某個寬度排成
+       三排，之後再怎麼變寬都縮不回兩排。bar 這一列本來就是 auto，照內容長。 */
     padding: var(--sp-2) var(--sp-2) var(--sp-1);
     padding-top: calc(var(--safe-t) + var(--sp-2));
     padding-right: calc(var(--safe-r) + var(--sp-2));
@@ -490,10 +512,13 @@ summary > .ui-icon:first-child:not(:only-child) {
     padding-inline: var(--sp-2);
   }
 
+  /* 頂欄在手機是兩排：第一排切換工作模式＋交辦，第二排能量＋兩個選單＋健康燈。
+     能量條能一起擠進第二排，是因為下面把「WORK ENERGY」「US$」和兩顆選單的
+     文字標籤都收掉了——三排要 158px，等於小螢幕的五分之一，太多。 */
   .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud {
     position: static;
-    order: 9;
-    width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
     transform: none;
     scale: 1;
   }
@@ -501,15 +526,39 @@ summary > .ui-icon:first-child:not(:only-child) {
   .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__summary {
     width: 100%;
     min-height: var(--tap);
-    gap: var(--sp-2);
-    justify-content: space-evenly;
+    gap: var(--sp-1);
+    padding-inline: var(--sp-2);
+    justify-content: space-between;
   }
+
+  /* 標題與金額是「看一眼就好」的補充資訊，兩條百分比條才是重點。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__title,
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__cost { display: none; }
+
+  /* 兩顆選單把手在手機只留圖示：44px 的點擊區不變，但省下約 130px，
+     第二排才塞得下能量條。名字還在 aria-label／title 裡。 */
+  .top-bar__npc > summary,
+  .top-bar__more > summary {
+    width: var(--tap);
+    justify-content: center;
+    padding-inline: 0;
+    font-size: 0;
+  }
+  .top-bar__npc > summary .ui-icon,
+  .top-bar__more > summary .ui-icon { font-size: initial; }
 
   /* 兩條用量條要在 320px 下還分得開，欄寬跟著內容縮。 */
   .energy-meter {
     min-width: 0;
-    grid-template-columns: auto minmax(24px, 1fr) auto 5px;
+    flex: 1 1 0;
+    grid-template-columns: auto minmax(18px, 1fr) auto 5px;
+    gap: var(--sp-1);
   }
+
+  /* 供應商名稱換成 data-short 的縮寫：360px 的 Android 上，完整的
+     CLAUDE／CODEX 會把健康燈擠到第三排。完整名稱在展開的用量明細裡。 */
+  .top-bar .energy-meter > span { font-size: 0; }
+  .top-bar .energy-meter > span::after { content: attr(data-short); font: inherit; font-size: 7px; }
 
   /* 展開的用量明細改成貼齊視窗兩側的浮層，而不是從縮放過的角落長出來。 */
   .energy-detail {
@@ -529,7 +578,11 @@ summary > .ui-icon:first-child:not(:only-child) {
     right: var(--sp-2);
     left: var(--sp-2);
     z-index: 50;
+    /* 手機是貼齊左右的整片：寬度由 left/right 決定，桌面那邊的
+       min-width/max-width 都要讓開。 */
     width: auto;
+    min-width: 0;
+    max-width: none;
     max-height: calc(var(--vh) - var(--top-bar-h) - 140px);
   }
 

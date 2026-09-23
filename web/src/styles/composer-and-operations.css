@@ -522,43 +522,47 @@
 }
 
 @media (max-width: 1279px) {
-  .top-bar__group-label, .top-bar__health span { display: none; }
-  .top-bar__room { max-width: 190px; }
+  .top-bar__health span { display: none; }
   /* Keep the compact rail wide enough for the CREW label and its five
      controls, while preserving the 52px collapsed rail. */
   .crew-rail:not(.crew-rail--collapsed):not(.crew-rail--sheet) { width: min(230px, calc(100% - 20px)); }
 }
 
-/* 1560 而不是 1440：英文的標籤普遍比中文長（Assign work / Auto-approve:
-   off / Default model），到了 1512 這種常見筆電寬度就塞不下，AGENT 那組會
-   被壓到下拉互相重疊。提早一階收進 ••• 選單，兩種語言都有餘裕。 */
-@media (max-width: 1560px) {
-  .top-bar { gap: 7px; padding-right: 10px; padding-left: 10px; }
-  /* 這裡以前把能量條改成絕對置中懸浮，理由是「bar 太擠塞不下，而且被蓋住
-     的元素已不存在」。但 ROOM 在這個寬度並沒有被收起來，於是能量條就直接
-     蓋在它上面。現在能量條本身會縮（見 .energy-hud 的 flex: 0 1 auto），
-     留在版面流裡就排得下，也不會壓到任何東西。 */
-  .top-bar__brand { font-size: 11px; letter-spacing: .13em; }
-  .top-bar__room { max-width: 180px; }
-  .top-bar__group-label, .top-bar__mcp, .top-bar__update-wrap, .top-bar__agent > .top-bar__auto-approve, .top-bar__agent > .top-bar__auto-approve-reset { display: none; }
-  .top-bar__agent { min-width: 0; padding-left: 4px; }
-  .top-bar__provider-select { width: 110px; max-width: 110px !important; flex-basis: 110px; }
-  .top-bar__model-select { width: 112px; max-width: 112px !important; flex-basis: 112px; text-overflow: ellipsis; }
-  .top-bar__more { display: block; }
-}
+/* ── 頂欄：只放重點 ───────────────────────────────────────────────────
+   以前是「桌面全部攤開，塞不下才一階一階收」。那個做法有兩個問題：需要
+   多寬取決於文字長度（中英文標籤、房間名、模型名都是變數），任何寫死的
+   px 斷點都會在某個組合下猜錯；而且最寬的螢幕上那排東西也沒人真的一直
+   在看。
 
-/* 同一組收合，英文要更早發生。英文標籤普遍比中文長，整條 bar 在 1900px
-   以下就塞不進去——不收合的話 flex 會去壓縮 AGENT 那組，把下拉裁成
-   「D…」。門檻取決於文字長度而不是視窗寬度，所以跟著 <html lang> 走
-   （由 i18n.ts 設定）。上面那個 ≤1560 的區塊對所有語言都適用。 */
-@media (min-width: 1561px) and (max-width: 1900px) {
-  html[lang^="en"] .top-bar__group-label,
-  html[lang^="en"] .top-bar__mcp,
-  html[lang^="en"] .top-bar__update-wrap,
-  html[lang^="en"] .top-bar__agent > .top-bar__auto-approve,
-  html[lang^="en"] .top-bar__agent > .top-bar__auto-approve-reset { display: none; }
-  html[lang^="en"] .top-bar__more { display: block; }
-}
+   改成明確的設計——bar 固定只有這幾件：
+
+     ●  [ 像素 | 專業 | 黑窗 ]  [ BOSS ]  ⟨用量⟩  [ NPC 設定 ] [ ••• ]  ●●
+     識別  切換工作模式          主要動作   隨時要瞄   這一位的      整個平台  健康狀態
+
+   其餘控件全部收進那兩個選單，在任何寬度都一樣；兩個選單是照「作用範圍」
+   分的，不是照「常不常用」——要改的是眼前這位 NPC 還是整個 app，點之前就
+   看得出來。下面的 --compact-N 只是「真的還是放不下」時的最後手段。 */
+.top-bar__more { display: block; }
+
+/* 選單內用分隔線分組，同一組是同一類設定。 */
+.top-bar__menu-group { display: grid; gap: 7px; }
+.top-bar__menu-group + .top-bar__menu-group { padding-top: 7px; border-top: 1px solid rgba(143,184,232,.13); }
+.top-bar__menu-group button { width: 100%; }
+.top-bar__menu-group label { margin: 0; }
+.top-bar__menu-room strong { margin-left: auto; overflow: hidden; color: var(--cyan); text-overflow: ellipsis; white-space: nowrap; }
+/* 開頭那一行「套用於 ⟨名字⟩」：NPC 選單的內容是跟著選到誰而變的，講清楚。 */
+.top-bar__menu-scope { margin: 0 0 1px; overflow: hidden; color: #6f8098; font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+
+/* 最後手段：連上面那幾件都排不下（很窄的手機、或更長的語言）。由
+   TopBar.tsx 量出來套用，不是寬度斷點。 */
+.top-bar--compact { gap: 5px; padding-right: 8px; padding-left: 8px; }
+.top-bar--compact .top-bar__brand { gap: 0; font-size: 0; letter-spacing: 0; }
+
+/* 真的一行放不下就換兩行，能量條自己一排——寧可多一行，也不要把任何一顆
+   鈕擠出視窗或裁掉。 */
+.top-bar--compact-2 { flex-wrap: wrap; }
+.top-bar--compact-2 .energy-hud { order: 9; width: 100%; }
+.top-bar--compact-2 .energy-hud__summary { width: 100%; justify-content: center; }
 
 /* ── 平板以下（≤1023）：頂欄收合 + 加大點擊目標 ─────────────────────────
    --tap 由 responsive.css 依斷點給值（平板 40px、手機 44px），所以同一份
@@ -568,9 +572,6 @@
   .top-bar__brand { font-size: 11px; }
   .top-bar__boss strong { display: none; }
   .top-bar__boss { grid-template-columns: auto; padding: 5px 9px; }
-  .top-bar__room { max-width: 135px; }
-  .top-bar__agent select { max-width: 105px; }
-  .top-bar__agent .top-bar__model-select, .top-bar__mcp { display: none; }
   .holo-panel__worker { display: none; }
   .energy-meter { min-width: 82px; grid-template-columns: 31px 30px 25px 5px; }
   .energy-detail { width: min(390px, calc(100vw - 20px)); }
@@ -610,20 +611,13 @@
   .top-bar__mode-switch button,
   .top-bar > .top-bar__boss,
   .top-bar .top-bar__more > summary,
+  .top-bar .top-bar__npc > summary,
   .top-bar .top-bar__health { min-width: var(--tap); min-height: var(--tap); }
   .top-bar__boss { min-width: var(--tap); padding: 5px; }
-  .top-bar__room { display: none; }
-  /* 多帶一層 .top-bar 是為了壓過 responsive.css 那條「含 icon 的按鈕一律
-     inline-flex」——它的權重是 (0,1,1)，會贏過單一 class 的 display: none，
-     把本該收進 ••• 的語言鈕放出來，頂欄就多撐出一整排。 */
-  .top-bar .top-bar__capability { display: none; }   /* 語言 / 主題 → ••• 選單 */
-  .top-bar .top-bar__bell { display: none; }          /* 通知 → ••• 選單 */
-  .top-bar__agent { display: none; }
+  /* 工作位置、供應商、語言、通知在任何寬度都已經收進那兩個選單了
+     （見上面的「頂欄：只放重點」），這裡不必再各自關一次。 */
   .top-bar__provider-select { width: 96px !important; max-width: 96px !important; flex-basis: 96px !important; }
-  .top-bar__more-mobile { display: grid; gap: 7px; }
-  .top-bar__more-mobile--agent { padding-top: 7px; border-top: 1px solid rgba(143,184,232,.13); }
-  .top-bar__more-mobile--agent label { margin: 0; }
-  .top-bar__more-mobile--agent .top-bar__menu-model-select { display: inline-flex; width: 110px; max-width: 110px !important; flex-basis: 110px; }
+  .top-bar__more-menu .top-bar__menu-model-select { display: inline-flex; width: 110px; max-width: 110px !important; flex-basis: 110px; }
 
   /* ▶ 開關浮在辦公室上，給它完整的點擊面積。 */
   .panel-toggle { width: var(--tap); height: var(--tap); font-size: 15px; border-radius: 12px; }

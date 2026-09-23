@@ -790,10 +790,11 @@
 
 /* ---------- MCP chip + management modal ---------- */
 
-.top-bar__mcp {
+.top-bar__npc {
   position: relative;
   pointer-events: auto;
 }
+
 
 .mcp-modal {
   position: fixed;

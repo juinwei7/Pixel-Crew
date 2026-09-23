@@ -352,9 +352,7 @@
 .top-bar__boss strong { font: 700 10px var(--mono); white-space: nowrap; }
 .top-bar__boss:hover { border-color: rgba(255, 194, 92, 0.68); background: rgba(255, 194, 92, 0.14); }
 
-.top-bar__room,
 .top-bar__capability,
-.top-bar__bell,
 .top-bar__health {
   min-height: 32px;
   border: 1px solid rgba(100, 172, 205, 0.18);
@@ -364,60 +362,12 @@
   cursor: pointer;
 }
 
-.top-bar__room {
-  /* 會讓位、但不會讓到消失：擠到極限時房名以省略號收尾，而不是塌成 0。 */
-  min-width: 78px;
-  max-width: 280px;
-  flex: 0 1 auto;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  padding: 5px 9px;
-  text-align: left;
-}
-
-.top-bar__room span,
-.top-bar__group-label {
-  color: rgba(0, 229, 255, 0.58);
-  font: 700 7px/1 var(--mono);
-  letter-spacing: 0.16em;
-}
-
-.top-bar__room strong {
-  overflow: hidden;
-  color: #b9cbe2;
-  font: 600 11px/1.2 var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.top-bar__room:hover,
 .top-bar__capability:hover,
 .top-bar__health:hover { border-color: rgba(0, 229, 255, 0.38); }
 
-.top-bar__agent {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 4px 3px 8px;
-  border: 1px solid rgba(100, 172, 205, 0.14);
-  border-radius: 9px;
-  background: rgba(5, 11, 23, 0.6);
-}
-
-.top-bar__agent select,
 .task-log-toolbar select {
-  /* 下限存在的理由：完全不設（min-width: auto）時下拉會把容器撐破、疊到
-     隔壁去；設成 0 則會被壓成「D…」那種讀不出來的寬度。給一個能讀的下限，
-     真的塞不下時交給收合斷點處理。 */
-  min-width: 100px;
   min-height: 32px;
   max-width: 150px;
-  text-overflow: ellipsis;
   border: 0;
   border-radius: 6px;
   outline: 0;
@@ -433,13 +383,13 @@
   white-space: nowrap;
 }
 
-.top-bar__agent select:disabled { cursor: default; opacity: 0.4; }
+.top-bar__more-menu select:disabled, .task-log-toolbar select:disabled { cursor: default; opacity: 0.4; }
 /* provider 只會是「Claude Code」或「Codex」兩個固定短字：不縮、取內容自然寬、不截斷。 */
 .top-bar__provider-select { flex: 0 0 auto; }
 /* model 名稱長度不定（Opus／Sonnet／Codex 型號…），太窄時才以「…」截斷。 */
 .top-bar__model-select { flex: 0 1 132px; overflow: hidden; text-overflow: ellipsis; }
-.top-bar__agent-loading { width: 28px; height: 32px; display: grid; place-items: center; flex: 0 0 28px; align-self: center; color: rgba(0, 229, 255,.78); }
-.top-bar__agent-loading svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.top-bar__agent-loading { width: 14px; height: 14px; display: inline-grid; place-items: center; margin-left: 5px; vertical-align: -2px; color: rgba(0, 229, 255,.78); }
+.top-bar__agent-loading svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 .top-bar__agent-loading circle { stroke: rgba(0, 229, 255,.18); }
 .top-bar__agent-loading path { transform-origin: 12px 12px; animation: modelRefreshSpin 1s linear infinite; }
 
@@ -536,17 +486,21 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .top-bar__capability--warn { border-color: rgba(255, 176, 0, 0.4); }
 
 .top-bar__more { position: relative; display: none; }
-.top-bar__more summary { width: 32px; min-height: 32px; display: grid; place-items: center; border: 1px solid rgba(100,172,205,.18); border-radius: 8px; background: rgba(9,16,30,.78); color: #8399b6; cursor: pointer; list-style: none; font: 700 12px var(--mono); }
-.top-bar__more summary::-webkit-details-marker { display: none; }
-.top-bar__more-menu { position: absolute; top: calc(100% + 8px); right: 0; width: 220px; max-height: calc(var(--vh) - 72px); display: grid; gap: 7px; overflow-y: auto; overscroll-behavior: contain; padding: 9px; border: 1px solid var(--panel-border); border-radius: 10px; background: rgba(7,13,26,.98); box-shadow: 0 18px 45px rgba(0,0,0,.44); }
+/* 兩個選單的把手都是 <summary>，外觀一律沿用 .top-bar__capability——這裡
+   只負責把 <summary> 預設的三角形拿掉。 */
+.top-bar__more > summary,
+.top-bar__npc > summary { list-style: none; }
+.top-bar__more > summary::-webkit-details-marker,
+.top-bar__npc > summary::-webkit-details-marker { display: none; }
+/* 寬度依內容長，不是寫死 220：固定寬度下「Auto-approve」這種長標籤加上
+   110px 的下拉就超出內容區 3px，整個面板會多出一條水平捲軸。 */
+.top-bar__more-menu { position: absolute; top: calc(100% + 8px); right: 0; width: max-content; min-width: 220px; max-width: min(300px, calc(100vw - 24px)); max-height: calc(var(--vh) - 72px); display: grid; gap: 7px; overflow-y: auto; overscroll-behavior: contain; padding: 9px; border: 1px solid var(--panel-border); border-radius: 10px; background: rgba(7,13,26,.98); box-shadow: 0 18px 45px rgba(0,0,0,.44); }
 .top-bar__more-menu label { display: grid; grid-template-columns: 1fr 110px; align-items: center; gap: 8px; color: #8296b1; font: 9px var(--mono); }
 .top-bar__more-menu select, .top-bar__more-menu button, .top-bar__more-menu a { min-height: 34px; border: 1px solid rgba(143,184,232,.13); border-radius: 7px; background: rgba(0, 229, 255,.05); color: #b7c9df; font: 10px var(--mono); }
 .top-bar__more-menu button, .top-bar__more-menu a { display: flex; align-items: center; padding: 0 9px; cursor: pointer; text-align: left; text-decoration: none; }
 .top-bar__more-menu button strong { float: right; color: var(--cyan); }
 /* Phone-only group inside the ••• menu (language/theme/notifications). Hidden on
    desktop where those controls live in the bar as standalone icons. */
-.top-bar__more-mobile { display: none; }
-.top-bar__more-mobile button { width: 100%; margin-bottom: 0; }
 .top-bar__more-compact-features { display: grid; gap: 7px; padding-top: 7px; border-top: 1px solid rgba(143,184,232,.13); }
 .top-bar__more-compact-features button { width: 100%; }
 
@@ -601,9 +555,6 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 }
 .health-popover__version { padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); color: #62748f; font: 9px var(--mono); }
 
-.top-bar__bell { display: grid; place-items: center; width: 32px; padding: 0; color: #62748f; }
-.top-bar__bell svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.top-bar__bell--on { border-color: rgba(255, 176, 0, 0.4) !important; color: #ffb000; }
 
 .top-bar__health-wrap { position: relative; }
 .top-bar__health { display: flex; align-items: center; gap: 7px; padding: 0 9px; }
@@ -655,15 +606,16 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 /* Account-wide provider energy — intentionally independent of room and NPC.
    寬螢幕時排在 top bar 的 flex 流裡（兩側 spacer 撐居中），跟 AGENT 下拉互相讓位——
    以前絕對置中會整個蓋住 ⚡無限制的自動核准下拉（橘色光暈從半透明背景透出來）。 */
-/* 這條 bar 的長度會隨語言變（英文標籤普遍比中文長）。用量與 AGENT 兩塊是
-   唯一有彈性的區域，必須真的縮得下去，否則整條 bar 會往右溢出視窗。 */
-.energy-hud { position: relative; z-index: 42; min-width: 0; flex: 0 1 auto; }
+/* bar 裡的東西一律不縮：它們必須誠實撐出自己的寬度，TopBar.tsx 量到的
+   溢出才有意義（縮了就永遠量不到溢出，只會看到被壓爛的下拉）。真正該讓位
+   的是選單裡的房名，以及整組收進兩個選單的那些。 */
+.energy-hud { position: relative; z-index: 42; flex: none; }
 .energy-hud__summary { min-height: 42px; display: flex; align-items: center; gap: 15px; padding: 5px 13px; border: 1px solid rgba(100,172,205,.16); border-radius: 11px; background: rgba(5,11,23,.78); box-shadow: 0 10px 28px rgba(0,0,0,.18); color: #91a6c0; cursor: pointer; backdrop-filter: blur(12px); }
 .energy-hud__summary:hover, .energy-hud__summary[aria-expanded="true"] { border-color: rgba(0, 229, 255,.3); background: rgba(7,15,29,.94); }
 .energy-hud__title { display: flex; align-items: center; gap: 7px; color: rgba(0, 229, 255,.66); font: 700 9px var(--mono); letter-spacing: .15em; white-space: nowrap; }
 .energy-hud__title i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 7px rgba(0, 229, 255,.55); }
 .energy-hud__cost { padding-left: 8px; border-left: 1px solid rgba(255,255,255,.08); color: #7d91ad; font: 700 10px var(--mono); white-space: nowrap; }
-.energy-meter { min-width: 0; display: grid; grid-template-columns: 44px 46px 30px 5px; align-items: center; gap: 6px; color: #00ffa3; }
+.energy-meter { min-width: 112px; display: grid; grid-template-columns: 44px 46px 30px 5px; align-items: center; gap: 6px; color: #00ffa3; }
 .energy-meter > span { color: #7d91ad; font: 700 9px var(--mono); letter-spacing: .08em; }
 .energy-meter > strong { font: 700 11px var(--mono); text-align: right; }
 .energy-meter > b { color: var(--cyan); font: 16px/1 var(--mono); animation: hudPulse 1.25s ease-in-out infinite; }

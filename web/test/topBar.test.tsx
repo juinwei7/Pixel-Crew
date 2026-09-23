@@ -30,9 +30,12 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /MCP/);
   assert.match(html, /top-bar__provider-select/);
   assert.match(html, /top-bar__model-select/);
+  // 頂欄只留重點，其餘收進兩個選單：NPC 設定（只動選到的那一位）與
+  // 平台設定（跟選到誰無關）。兩個都是原生 <details>，內容永遠在 DOM 裡。
+  assert.match(html, /top-bar__npc/);
+  assert.match(html, /NPC 設定/);
   assert.match(html, /top-bar__more/);
-  assert.match(html, /更多設定與功能/);
-  assert.match(html, /top-bar__more-mobile--agent/);
+  assert.match(html, /平台設定/);
   assert.match(html, /top-bar__more-compact-features/);
   assert.match(html, /任務看板/);
   assert.match(html, /遠端存取／手機控制/);
@@ -149,7 +152,7 @@ test("shows the auto-approve toggle for Claude and reflects the worker's current
 
   const off = emptyWorker("worker", "Ada", "sonnet", false, 0, "claude", "/repo/my-room");
   const offHtml = renderToStaticMarkup(<TopBar {...commonProps} active={off} />);
-  assert.match(offHtml, /安全自動核准/);
+  assert.match(offHtml, /<option value="safe">安全<\/option>/);
   assert.match(offHtml, /top-bar__auto-approve--off/);
   assert.match(offHtml, /<option value="off" selected="">/);
 
@@ -189,7 +192,7 @@ test("also shows the auto-approve control for Codex", () => {
     onRefreshAuth={() => {}}
     onResetUi={() => {}}
   />);
-  assert.match(html, /安全自動核准/);
+  assert.match(html, /<option value="safe">安全<\/option>/);
   assert.match(html, /top-bar__auto-approve--off/);
 });
 

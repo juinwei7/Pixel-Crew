@@ -142,12 +142,17 @@ test("the viewport meta opts into the safe area", () => {
   assert.match(html, /viewport-fit=cover/);
 });
 
-test("the shared icon rules never take over display", () => {
-  // 一旦共用層用通用選擇器設 display，就會贏過各元件自己的 display: none
-  // （例如手機要把語言鈕收進 ••• 選單），控件會莫名其妙冒出來。圖示置中
-  // 改成逐個指名，代價是新增控件要記得加一行。
+test("the shared layer's :has() rules can never beat a component's own", () => {
+  // :has() 會把參數的權重一起算進去：button:has(> .ui-icon) 是 (0,1,1)，壓過
+  // .top-bar__capability { display: none } 的 (0,1,0)，該收起來的按鈕就會莫名
+  // 其妙冒出來。共用層要用 :has()，整條就得包進 :where() 把權重歸零——它只是
+  // 「沒人管時的預設值」，任何元件自己的規則都要贏過它。
   const shell = sheets.find((sheet) => sheet.name === "responsive.css");
   assert.ok(shell);
   const rules = shell.source.replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.doesNotMatch(rules, /:has\(/);
+  const selectors = (rules.match(/[^{};]*:has\([^{]*\{/g) ?? []).map((text) => text.replace(/\{$/, "").trim());
+  assert.ok(selectors.length > 0, "找不到 :has() 規則，這個測試的前提變了");
+  for (const selector of selectors) {
+    assert.ok(selector.startsWith(":where("), `:has() 沒包在 :where() 裡：${selector}`);
+  }
 });
