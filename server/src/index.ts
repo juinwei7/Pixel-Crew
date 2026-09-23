@@ -2115,7 +2115,7 @@ function resolveDecisionRuntime(
     return { error: t("指定的決策模型目前不在任何已登入 provider 的可用清單中") };
   }
   if (preferredWorkspace) {
-    const recent = store.listBossTasks(preferredWorkspace).find((task) =>
+    const recent = store.listBossTasks(registryKey(preferredWorkspace)).find((task) =>
       task.stages.length > 0
       && providerReady(task.decisionProvider)
       && runtimeModels(task.decisionProvider).includes(task.decisionModel),
@@ -3946,7 +3946,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
 
 function departmentMissions(department: Department): DepartmentMission[] {
   const clearedAt = store.getDepartmentThread(department.id)?.historyClearedAt ?? null;
-  return store.listDepartmentMissions(department.workspacePath, 200)
+  // Mission 的 workspace_path 存的是正規化（win32 小寫）路徑，但部門保留使用者原始大小寫。
+  // 直接拿 department.workspacePath 做 exact-match 會在大小寫不同的工作區撈到 0 筆 → 任務日誌
+  // 重整後整片空白。用 registryKey 正規化再查。
+  return store.listDepartmentMissions(registryKey(department.workspacePath), 200)
     .filter((mission) => mission.departmentId === department.id && mission.origin !== "boss")
     .filter((mission) => !clearedAt || mission.createdAt > clearedAt)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -4710,7 +4713,7 @@ app.get("/api/boss-tasks", (req, res) => {
     try { workspacePath = normalizeManagedWorkspacePath(requested); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
   }
-  res.json({ bossTasks: store.listBossTasks(workspacePath).map(bossTaskForDisplay) });
+  res.json({ bossTasks: store.listBossTasks(workspacePath ? registryKey(workspacePath) : undefined).map(bossTaskForDisplay) });
 });
 
 app.get("/api/boss-tasks/:id", (req, res) => {
@@ -5112,7 +5115,7 @@ app.get("/api/missions", (req, res) => {
     try { workspacePath = normalizeManagedWorkspacePath(requested); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
   }
-  res.json({ missions: store.listDepartmentMissions(workspacePath) });
+  res.json({ missions: store.listDepartmentMissions(workspacePath ? registryKey(workspacePath) : undefined) });
 });
 
 app.get("/api/missions/:id", (req, res) => {

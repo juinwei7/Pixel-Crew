@@ -1501,6 +1501,9 @@ export class LocalStore {
 
   listDepartmentMissions(workspacePath?: string, limit = 100): DepartmentMission[] {
     const bounded = Math.max(1, Math.min(200, limit));
+    // 注意：workspace_path 存的是 workspaceIdentity 正規化後（win32 小寫）的路徑，所以呼叫端
+    // 必須傳「已正規化」的路徑進來（用 registryKey），否則大小寫不同的工作區會 exact-match
+    // 撈到 0 筆 → 任務日誌重整後整片空白。
     const rows = workspacePath
       ? this.db.prepare("SELECT * FROM department_missions WHERE workspace_path = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(workspacePath, bounded)
       : this.db.prepare("SELECT * FROM department_missions ORDER BY created_at DESC, rowid DESC LIMIT ?").all(bounded);
@@ -1545,6 +1548,8 @@ export class LocalStore {
 
   listBossTasks(workspacePath?: string, limit = 200): BossTask[] {
     const bounded = Math.max(1, Math.min(200, limit));
+    // 同 listDepartmentMissions：workspace_path 存正規化路徑，呼叫端須傳已正規化（registryKey）
+    // 的路徑，否則大小寫不同的工作區會漏撈。
     const rows = workspacePath
       ? this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks WHERE workspace_path = ? ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(workspacePath, bounded)
       : this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(bounded);
