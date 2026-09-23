@@ -6,6 +6,7 @@ import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
+import { roomName } from "./workspace";
 import { TaskComposer } from "./components/TaskComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { ConfirmDialog, type ConfirmTone } from "./components/ConfirmDialog";
@@ -255,6 +256,13 @@ export function App() {
   // 全域「執行中」計數：不分工作區（workerList 是所有 NPC），頂欄燈號用——讓你在聊天／
   // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
   const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
+  // 正在背景執行、還沒回報的 NPC 清單（名字＋所在「子城市」/工作區），供頂欄「在跑」燈號點開查看。
+  const runningWorkers = useMemo(
+    () => workerList
+      .filter((worker) => Boolean(worker?.busy))
+      .map((worker) => ({ id: worker.id, name: worker.name, room: roomName(worker.workspacePath) })),
+    [workerList],
+  );
   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
   const missionList = useMemo(() => Object.values(missions), [missions]);
   const departmentList = useMemo(() => Object.values(departments), [departments]);
@@ -1010,6 +1018,8 @@ export function App() {
         modelOptions={modelOptions}
         workerCount={workerList.length}
         runningCount={runningCount}
+        runningWorkers={runningWorkers}
+        onSelectRunning={activateNpc}
         providerChanging={providerChanging}
         accounts={Object.values(accounts)}
         onSetWorkerAccount={handleSetWorkerAccount}

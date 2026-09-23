@@ -60,6 +60,60 @@
   .top-bar__running--on .top-bar__running-dot { animation: none; }
 }
 
+/* 「在跑」燈號現在可點開，展開目前背景執行中的 NPC 清單；點一位即跳過去看。 */
+.top-bar__running { cursor: pointer; font: inherit; }
+.top-bar__running:disabled { cursor: default; }
+.top-bar__running--on:hover { border-color: rgba(0, 255, 163, 0.6); background: rgba(0, 255, 163, 0.14); }
+.top-bar__running-wrap { position: relative; display: inline-flex; }
+.top-bar__running-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 230px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(0, 255, 163, 0.28);
+  border-radius: 10px;
+  background: rgba(9, 16, 30, 0.98);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.top-bar__running-menu-title {
+  padding: 4px 8px 8px;
+  color: var(--text-dim);
+  font: 700 10px/1.2 var(--mono);
+  letter-spacing: 0.06em;
+}
+.top-bar__running-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.top-bar__running-item:hover { background: rgba(0, 255, 163, 0.1); }
+.top-bar__running-item-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #00ffa3;
+  box-shadow: 0 0 6px rgba(0, 255, 163, 0.75);
+  animation: runningPulse 1.2s ease-in-out infinite;
+}
+.top-bar__running-item-name { flex: 1 1 auto; font: 600 12px/1.2 inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-bar__running-item-room { flex: 0 0 auto; color: var(--text-dim); font: 500 10px/1.2 var(--mono); }
+@media (prefers-reduced-motion: reduce) {
+  .top-bar__running-item-dot { animation: none; }
+}
+
 .top-bar__brand {
   display: flex;
   align-items: center;

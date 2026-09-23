@@ -33,6 +33,9 @@ type Props = {
   workerCount: number;
   /** 全域「執行中」NPC 數（不分工作區）；頂欄燈號用。 */
   runningCount: number;
+  /** 目前正在背景執行、還沒回報的 NPC（點「在跑」燈號展開清單、可跳過去看）。 */
+  runningWorkers?: Array<{ id: string; name: string; room: string }>;
+  onSelectRunning?(id: string): void;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
@@ -82,6 +85,8 @@ export function TopBar({
   modelOptions,
   workerCount,
   runningCount,
+  runningWorkers = [],
+  onSelectRunning,
   providerChanging = false,
   accounts,
   onSetWorkerAccount,
@@ -120,6 +125,8 @@ export function TopBar({
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
+  const [runningOpen, setRunningOpen] = useState(false);
+  const runningRef = useRef<HTMLDivElement>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   // 全域功能開關：平台選單打開時才抓，改動走樂觀更新、失敗回滾。
   const [moreOpen, setMoreOpen] = useState(false);
@@ -215,6 +222,7 @@ export function TopBar({
       if (event.key === "Escape") {
         setHealthOpen(false);
         setUpdateOpen(false);
+        setRunningOpen(false);
         for (const menu of menuRefs) if (menu.current) menu.current.open = false; // 原生 <details>：手動收合
       }
     };
@@ -222,6 +230,7 @@ export function TopBar({
       const target = event.target as Node;
       if (!healthRef.current?.contains(target)) setHealthOpen(false);
       if (!updateRef.current?.contains(target)) setUpdateOpen(false);
+      if (!runningRef.current?.contains(target)) setRunningOpen(false);
       // 原生 <details> 點外面不會自動關；開著且點到外面才手動收合。
       for (const menu of menuRefs) {
         if (menu.current?.open && !menu.current.contains(target)) menu.current.open = false;
@@ -308,21 +317,43 @@ export function TopBar({
       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
       {/* 全域「在跑」燈號：不分工作區顯示目前有幾個 NPC 正在執行，讓你在聊天／別的
           工作區時也能一眼看到背景是否還有 NPC 在跑；0 時暗掉並顯示「待命」。 */}
-      <div
-        className={`top-bar__running ${runningCount > 0 ? "top-bar__running--on" : ""}`}
-        role="status"
-        aria-live="polite"
-        title={runningCount > 0
-          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
-          : t("目前沒有 NPC 在執行，全部待命中")}
-        aria-label={runningCount > 0
-          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
-          : t("目前沒有 NPC 在執行，全部待命中")}
-      >
-        <i className="top-bar__running-dot" aria-hidden="true" />
-        {runningCount > 0
-          ? <><strong>{runningCount}</strong><span>{t("在跑")}</span></>
-          : <span>{t("待命")}</span>}
+      <div className="top-bar__running-wrap" ref={runningRef}>
+        <button
+          type="button"
+          className={`top-bar__running ${runningCount > 0 ? "top-bar__running--on" : ""}`}
+          disabled={runningCount === 0}
+          aria-expanded={runningOpen}
+          onClick={() => setRunningOpen((open) => !open)}
+          title={runningCount > 0
+            ? t("目前有 {count} 位 NPC 正在背景執行——點開看是誰", { count: runningCount })
+            : t("目前沒有 NPC 在執行，全部待命中")}
+          aria-label={runningCount > 0
+            ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
+            : t("目前沒有 NPC 在執行，全部待命中")}
+        >
+          <i className="top-bar__running-dot" aria-hidden="true" />
+          {runningCount > 0
+            ? <><strong>{runningCount}</strong><span>{t("在跑")}</span></>
+            : <span>{t("待命")}</span>}
+        </button>
+        {runningOpen && runningWorkers.length > 0 && (
+          <div className="top-bar__running-menu" role="menu">
+            <div className="top-bar__running-menu-title">{t("背景執行中（點一位跳過去看）")}</div>
+            {runningWorkers.map((worker) => (
+              <button
+                key={worker.id}
+                type="button"
+                role="menuitem"
+                className="top-bar__running-item"
+                onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
+              >
+                <span className="top-bar__running-item-dot" aria-hidden="true" />
+                <span className="top-bar__running-item-name">{worker.name}</span>
+                <span className="top-bar__running-item-room">{worker.room}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="top-bar__spacer" />
       {children}
