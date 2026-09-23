@@ -65,26 +65,27 @@ export async function extractVideoFramesAndAudio(video: Buffer, opts: {
     await writeFile(input, video);
     const durationSeconds = await probeDurationSeconds(ffprobe, input);
 
-    // 音訊 → 16kHz mono WAV（whisper 要的格式）。沒有音軌就吞掉錯誤，audioWav = null。
-    let audioWav: Buffer | null = null;
-    try {
-      const audioPath = join(dir, "audio.wav");
-      await run(ffmpeg, ["-nostdin", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "-y", audioPath], 180_000);
-      audioWav = await readFile(audioPath);
-      if (audioWav.length <= 44) audioWav = null; // 只有 WAV 表頭 = 實際上沒聲音
-    } catch {
-      audioWav = null;
-    }
-
+    // 音訊(→16kHz mono WAV, whisper 要的格式) 與影格「同時」抽——兩個 ffmpeg 並行跑，
+    // 省下原本「先音訊、再影格」的循序等待（影片處理更快，體感更接近直接看）。
+    const audioPath = join(dir, "audio.wav");
     // 影格：知道時長就均勻取 maxFrames 張（fps=張數/時長）；否則每 3 秒一張、截到 maxFrames。
     const fps = durationSeconds && durationSeconds > 0 ? `${maxFrames}/${durationSeconds}` : "1/3";
-    await run(ffmpeg, [
-      "-nostdin", "-i", input,
-      "-vf", `fps=${fps},scale=${width}:-1:flags=lanczos`,
-      "-frames:v", String(maxFrames),
-      "-q:v", "3",
-      "-y", join(dir, "frame_%03d.jpg"),
-    ], 180_000).catch(() => { /* 無視訊軌/抽格失敗 → frames 會是空，下面再判斷 */ });
+    const [audioOk] = await Promise.all([
+      run(ffmpeg, ["-nostdin", "-i", input, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "-y", audioPath], 180_000)
+        .then(() => true).catch(() => false), // 沒音軌/抽取失敗 → audioWav 保持 null
+      run(ffmpeg, [
+        "-nostdin", "-i", input,
+        "-vf", `fps=${fps},scale=${width}:-1:flags=lanczos`,
+        "-frames:v", String(maxFrames),
+        "-q:v", "3",
+        "-y", join(dir, "frame_%03d.jpg"),
+      ], 180_000).catch(() => { /* 無視訊軌/抽格失敗 → frames 會是空，下面再判斷 */ }),
+    ]);
+    let audioWav: Buffer | null = null;
+    if (audioOk) {
+      audioWav = await readFile(audioPath).catch(() => null);
+      if (audioWav && audioWav.length <= 44) audioWav = null; // 只有 WAV 表頭 = 實際上沒聲音
+    }
 
     const files = (await readdir(dir)).filter((name) => name.startsWith("frame_") && name.endsWith(".jpg")).sort();
     const frames: Array<{ name: string; dataBase64: string }> = [];

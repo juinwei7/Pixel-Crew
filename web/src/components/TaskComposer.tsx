@@ -9,6 +9,7 @@ import {
   imagePayload,
   isImageFile,
   isVideoFile,
+  MAX_DOCUMENTS,
   MAX_IMAGES,
   MAX_VIDEO_BYTES,
   readComposerDocument,
@@ -219,11 +220,21 @@ export function TaskComposer({
           size: Math.floor(frame.dataBase64.length * 0.75),
         }));
         const transcript = String(data.transcript ?? "").trim();
+        // 字幕不再塞進「可編輯草稿」洗版（原本會秀一大坨「【影片音訊字幕】…」）。改成隱形隨附的
+        // 字幕檔：你只看到影格縮圖，送出時 Claude 一樣讀得到音訊內容——體感更接近「直接看影片」。
+        const transcriptDoc = transcript
+          ? await readComposerDocument(new File([transcript], t("影片字幕.txt"), { type: "text/plain" }))
+          : null;
         if (persistExtras && ownerRef.current !== owner) {
-          updateCachedSession(owner, (session) => ({ ...session, images: [...session.images, ...frames].slice(0, MAX_IMAGES), error: null }));
+          updateCachedSession(owner, (session) => ({
+            ...session,
+            images: [...session.images, ...frames].slice(0, MAX_IMAGES),
+            documents: transcriptDoc ? [...session.documents, transcriptDoc].slice(0, MAX_DOCUMENTS) : session.documents,
+            error: null,
+          }));
         } else {
           setImages((current) => [...current, ...frames].slice(0, MAX_IMAGES));
-          if (transcript) setDraftValue((current) => `${current}${current ? "\n\n" : ""}【影片音訊字幕】\n${transcript}`);
+          if (transcriptDoc) setDocuments((current) => [...current, transcriptDoc].slice(0, MAX_DOCUMENTS));
           if (!transcript && data.transcriptError) setError(String(data.transcriptError));
           else setError(null);
           requestAnimationFrame(() => textareaRef.current?.focus());
