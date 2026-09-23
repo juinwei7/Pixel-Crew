@@ -323,24 +323,35 @@
     grid-area: scene;
   }
 
-  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar {
-    position: relative;
-    /* 頂欄自己就是一個 stacking context，••• 選單與用量明細都長在它裡面，
-       所以整條 bar 必須壓過下面的 dock（45），否則選單會被日誌蓋住。 */
-    z-index: 60;
-    grid-area: bar;
-    /* 能量條換到第二列，不再絕對定位浮在場景上蓋住 ••• 選單與日誌標題。 */
-    flex-wrap: wrap;
+  /* 頂欄的外框尺寸三個模式共用：像素與專業是同一個 .top-bar，黑窗是另一支
+     工具列但沿用同一組數字。切模式時這排的高度、內距、控件大小都不該變——
+     以前專業模式吃不到這裡（規則被 :not(--focus) 擋掉），內距 8/10、間距 6，
+     切過去整條 bar 會矮 10px、所有東西往左右各挪 2px。
+     模式專屬的（像素的 grid-area、專業的 position: fixed）留在各自的規則。 */
+  .top-bar {
+    /* 桌面的 54px 下限是為了 44px 的控件留的；手機控件是 36，留著就是在每個
+       模式上各補一段不一樣的空白（專業模式整排因此被往下推 5px）。 */
+    min-height: 0;
     /* 橫向 4px 不是美學選擇：六個控件之間省下的 20px，正好是 320px 螢幕
        能不能把它們排成一列的差距。每顆自己的點擊區仍然是完整的 --tap。 */
     gap: var(--sp-1);
-    /* 這裡千萬不要寫 min-height: var(--top-bar-h)。那個變數是 TopBar 量完自己
-       之後寫回來的，拿它當自己的下限就變成只增不減的棘輪：一旦某個寬度排成
-       三排，之後再怎麼變寬都縮不回兩排。bar 這一列本來就是 auto，照內容長。 */
     padding: var(--sp-1) var(--sp-2);
     padding-top: calc(var(--safe-t) + var(--sp-1));
     padding-right: calc(var(--safe-r) + var(--sp-2));
     padding-left: calc(var(--safe-l) + var(--sp-2));
+  }
+
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar {
+    position: relative;
+    /* 頂欄自己就是一個 stacking context，選單與用量明細都長在它裡面，
+       所以整條 bar 必須壓過下面的 dock（45），否則選單會被日誌蓋住。 */
+    z-index: 60;
+    grid-area: bar;
+    /* 能量條換到第二列，不再絕對定位浮在場景上蓋住選單與日誌標題。 */
+    flex-wrap: wrap;
+    /* 這裡千萬不要寫 min-height: var(--top-bar-h)。那個變數是 TopBar 量完自己
+       之後寫回來的，拿它當自己的下限就變成只增不減的棘輪：一旦某個寬度排成
+       三排，之後再怎麼變寬都縮不回兩排。bar 這一列本來就是 auto，照內容長。 */
   }
 
   /* dock：任務日誌抽屜 + 指令列，兩者疊在同一個 flex column 裡，高度由
@@ -750,6 +761,9 @@
     min-height: 0;
     max-height: 100%;
     margin-bottom: var(--sp-2);
+    /* 上緣只留抓把手的位置，而且要「剛好」：把手是 z-index 3 的絕對定位，
+       比面板的留白高就會壓在下面那排鈕的上緣，點到那幾 px 會變成拖曳面板。
+       這個值與下面的把手高度是同一個數字，改一個就要改另一個。 */
     padding-top: var(--sp-3);
     transition:
       flex-basis 0.35s cubic-bezier(0.4, 0, 0.2, 1),
@@ -778,15 +792,16 @@
     bottom: auto;
     left: 0;
     width: auto;
-    /* 16 而不是 24：24 裡面有 21px 是純空白。再往下壓的話拖曳區就太細了——
-       往上借空間也行不通，.holo-panel 是 overflow: hidden（圓角要靠它），
-       超出面板的偽元素會被整片裁掉，實測面板上緣 5px 處打到的是辦公室畫布。 */
-    height: 16px;
+    /* 12 而不是原本的 24：24 裡面有 21px 是純空白。往上借空間行不通——
+       .holo-panel 是 overflow: hidden（圓角要靠它），超出面板的偽元素會被整片
+       裁掉，實測面板上緣 5px 處打到的是辦公室畫布。這個值等於面板的
+       padding-top，多一分就壓到下面那排鈕。 */
+    height: var(--sp-3);
     cursor: ns-resize;
   }
 
   .game-root:not(.game-root--focus) .holo-panel__resize::after {
-    top: 6px;
+    top: 4px;
     right: auto;
     bottom: auto;
     left: 50%;
@@ -828,9 +843,17 @@
   /* 標題列剩下工具列一排，內距跟著收，控件比照頂欄壓到 --tap-flat。
      min-height 是桌面為了容納兩行標題才設的 66px，標題收掉之後那就是純空白。 */
   .holo-panel:not(.holo-panel--focus) .holo-panel__title {
+    /* 這排比頂欄再扁一級：頂欄那排上下都貼著別的東西，這排上面是抓把手、
+       下面是對話，本來就有留白撐開。只覆寫 token，下面的 min-height 與
+       ::after 的公式自己跟著走，點擊區一樣是 44。 */
+    --tap-flat: 30px;
     min-height: 0;
-    padding: var(--sp-1) var(--sp-2);
+    padding: 3px var(--sp-2);
   }
+
+  /* 摘要／活動那組的內距與外框：30px 的鈕再加 2px 內距與 1px 外框，整排會比
+     鈕本身高 6px。 */
+  .holo-panel:not(.holo-panel--focus) .task-log-toolbar__view { padding: 1px; }
 
   .holo-panel:not(.holo-panel--focus) .task-log-toolbar button,
   .holo-panel:not(.holo-panel--focus) .task-log-toolbar select {

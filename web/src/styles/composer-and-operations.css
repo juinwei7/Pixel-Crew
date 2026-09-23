@@ -616,10 +616,12 @@
   .top-bar > .top-bar__boss,
   .top-bar .top-bar__more > summary,
   .top-bar .top-bar__npc > summary,
-  .top-bar .ui-mode-picker > summary,
   /* 健康燈也要置中：內容（兩顆點）比 --tap 窄，預設的 flex-start 會把它們
      靠左貼著，右邊多出一塊空白，跟旁邊兩顆圖示鈕擺在一起就看得出來歪。 */
   .top-bar .top-bar__health { position: relative; min-width: var(--tap); min-height: var(--tap-flat); justify-content: center; }
+  /* 模式鈕不套 min-width: var(--tap)：它要保住自己的 96px 下限，否則寬度會跟著
+     目前選到哪個模式變（像素 2 個字、Professional 12 個字），切一次跳一次。 */
+  .top-bar .ui-mode-picker > summary { position: relative; min-height: var(--tap-flat); }
   .top-bar > .top-bar__boss::after,
   .top-bar .top-bar__more > summary::after,
   .top-bar .top-bar__npc > summary::after,

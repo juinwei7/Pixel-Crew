@@ -142,6 +142,32 @@ test("the viewport meta opts into the safe area", () => {
   assert.match(html, /viewport-fit=cover/);
 });
 
+test("the phone top bar's chrome is not scoped to one work mode", () => {
+  // 像素與專業是同一條 .top-bar。內距／間距／下限如果只寫在
+  // :not(.game-root--focus) 底下，專業模式就會吃到桌面那組（內距 8/10、
+  // 間距 6、min-height 54），切模式時整排控件會往下挪 5px、左右各挪 2px。
+  const shell = sheets.find((sheet) => sheet.name === "responsive.css");
+  assert.ok(shell);
+  const phone = shell.source.slice(shell.source.indexOf("@media (max-width: 600px)"));
+  const at = phone.search(/\n  \.top-bar \{/);
+  assert.ok(at > 0, "手機斷點裡找不到不分模式的 .top-bar 規則");
+  const block = phone.slice(at, phone.indexOf("}", at));
+  for (const prop of ["min-height: 0;", "gap: var(--sp-1);", "padding: var(--sp-1) var(--sp-2);"]) {
+    assert.ok(block.includes(prop), `.top-bar 少了 ${prop}`);
+  }
+});
+
+test("the collapsed mode chip keeps one width whichever mode is on", () => {
+  // 它的寬度若跟著目前的標籤走（像素 2 個字、Professional 12 個字），
+  // 每切一次模式整排就重排一次。
+  const bar = sheets.find((sheet) => sheet.name === "composer-and-operations.css");
+  assert.ok(bar);
+  const phone = bar.source.slice(bar.source.indexOf("@media (max-width: 600px)"));
+  const at = phone.indexOf(".top-bar .ui-mode-picker > summary {");
+  assert.ok(at > 0, "找不到手機的模式鈕規則");
+  assert.doesNotMatch(phone.slice(at, phone.indexOf("}", at)), /min-width/);
+});
+
 test("icon-only toolbar buttons zero out the shared icon gap", () => {
   // font-size: 0 只讓文字沒有寬度，它仍然是一個 flex 項目，共用的
   // gap: var(--sp-2) 照算——justify-content: center 對齊的是「圖示＋間距＋空文字」
