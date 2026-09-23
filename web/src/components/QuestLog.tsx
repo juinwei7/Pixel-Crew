@@ -434,6 +434,10 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const logRef = useRef<HTMLDivElement>(null);
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
+  // atBottom 的「即時」鏡像：state 是非同步的，串流/重繪時自動貼底會讀到過期的 atBottom
+  // 而把使用者硬拉回底部。用 ref 在 onScroll 同步更新，自動貼底只看這個 ref，就不會誤拉。
+  const atBottomRef = useRef(true);
+  const setAtBottomBoth = (value: boolean) => { atBottomRef.current = value; setAtBottom(value); };
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
@@ -444,10 +448,10 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   useEffect(() => {
     const el = logRef.current;
-    // 串流時每個 token 都會觸發這個 effect；用 smooth 會讓每次都重啟一段捲動動畫，手機上
-    // 就變成「訊息一直跳」。改用 auto(瞬間貼底)：只是穩穩黏在最新，不再一直彈跳。
-    if (el && atBottom) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-  }, [turns, turns.length, itemCount, lastTurn?.status, atBottom, focusMode]);
+    // 只在「使用者當下真的貼在底部」時才自動跟到最新（讀 ref，避免 state 過期把人硬拉回底）。
+    // 用 auto(瞬間)而非 smooth，串流時穩穩黏底、不重啟動畫、不彈跳。
+    if (el && atBottomRef.current) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+  }, [turns, turns.length, itemCount, lastTurn?.status, focusMode]);
 
   useEffect(() => {
     const enteredFocusMode = focusMode && !previousFocusMode.current;
@@ -458,7 +462,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
     const savedTop = readerKey ? focusScrollPositions.get(readerKey) : undefined;
     const top = savedTop ?? el.scrollHeight;
     el.scrollTo({ top, behavior: "auto" });
-    setAtBottom(el.scrollHeight - top - el.clientHeight < 40);
+    setAtBottomBoth(el.scrollHeight - top - el.clientHeight < 40);
   }, [focusMode, readerKey]);
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
@@ -516,7 +520,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       const el = logRef.current;
       if (!el) return;
       if (focusMode && readerKey) focusScrollPositions.set(readerKey, el.scrollTop);
-      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      setAtBottomBoth(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
       if (focusMode && navigationEntries.length > 0) {
         const threshold = el.getBoundingClientRect().top + 110;
         const current = navigationEntries.reduce<string | null>((found, entry) => {
@@ -552,7 +556,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;
         el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-        setAtBottom(true);
+        setAtBottomBoth(true);
       }}>{t("↓ 最新內容")}</button>}
     </div>
   );
