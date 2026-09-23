@@ -11,7 +11,7 @@ import type { ProviderId } from "./providers/types.js";
 export type WarRoomDifficulty = "simple" | "medium" | "hard";
 
 // 編排器建立、完成後就該消失的短命 worker（作戰室成員、研究員）。
-export type EphemeralWorkerKind = "warroom" | "research";
+export type EphemeralWorkerKind = "warroom" | "research" | "dedicated";
 
 // 舊版是用名字的 emoji 字首（🏛／🔍）判斷這件事：server 這樣命名，server 與
 // 前端再各自比對字首。那等於把協定藏在顯示字串裡——使用者一改名就失效，

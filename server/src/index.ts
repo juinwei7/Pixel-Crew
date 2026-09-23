@@ -4588,6 +4588,11 @@ function persistBossTask(task: BossTask, created = false): void {
 
 // 為一個交辦目標即時建立一支專屬部門（AI 規劃成員→建立→上線），讓決策模型在沒有
 // 合適既有部門時能「自己開部門」再討論、執行。成功回傳部門，失敗回 null（呼叫端回退）。
+// 專屬部門用「短命工」組成臨時團隊：像作戰室一樣繞過 20 人上限（createWorker 本身不擋，
+// 上限只在端點擋），2–4 人、persist:false，只註冊在記憶體不寫 SQLite——所以重啟後短命工
+// 被清、部門也不會變殭屍。任務一結束由 disbandEphemeralDepartment 整支解散。
+const ephemeralDepartments = new Set<string>();
+
 async function createDepartmentForObjective(input: {
   purpose: string;
   workspacePath: string;
@@ -4598,9 +4603,9 @@ async function createDepartmentForObjective(input: {
   const purpose = normalizeDepartmentPurpose(input.purpose);
   if (!purpose) return null;
   if (workspaceMission(workspacePath)) return null; // 此工作區正在跑 mission，先不建
-  const available = MAX_WORKERS - workers.size;
-  if (available < 1 || !providerReady(provider)) return null;
-  const count = Math.min(Math.max(2, Math.floor(input.count) || 3), available);
+  if (!providerReady(provider)) return null;
+  // 至少 2 人（Execute 與 Review 需不同 NPC），最多 4 人；不受滿編影響（短命工）。
+  const count = Math.min(Math.max(2, Math.floor(input.count) || 3), 4);
   const existingMembers = [...workers.values()]
     .filter((member) => sameWorkspacePath(member.runner.workspacePath, workspacePath))
     .map((member) => ({ name: member.runner.name, role: member.persona?.role || null }));
@@ -4611,7 +4616,8 @@ async function createDepartmentForObjective(input: {
     plan = parseDepartmentPlan(result.text, count);
   } catch { return null; }
   const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
-  if (!plan || plan.members.length === 0 || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) return null;
+  // 需要至少 2 人，否則部門 Mission 的 Execute/Review 無法交給不同 NPC。
+  if (!plan || plan.members.length < 2 || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) return null;
   const departmentId = randomUUID();
   const now = new Date().toISOString();
   const created = plan.members.map((member) => createWorker(
@@ -4622,11 +4628,11 @@ async function createDepartmentForObjective(input: {
     undefined,
     normalizePersona({ role: member.role, instructions: member.instructions }),
     departmentId,
-    { warmup: false, persist: false, broadcast: false },
+    { warmup: false, persist: false, broadcast: false, ephemeralKind: "dedicated" },
   ));
   const department: Department = {
     id: departmentId,
-    name: t("{name}部門", { name: purpose.slice(0, 20) }),
+    name: t("{name}臨時部門", { name: purpose.slice(0, 16) }),
     purpose,
     workspacePath,
     leadWorkerId: created[0].id,
@@ -4634,16 +4640,45 @@ async function createDepartmentForObjective(input: {
     createdAt: now,
     updatedAt: now,
   };
-  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
-    for (const worker of created) { worker.runner.stop(); workers.delete(worker.id); }
-    return null;
-  }
+  // 只註冊在記憶體、不寫 SQLite（短命團隊，用完即散）。
   departments.set(department.id, department);
+  ephemeralDepartments.add(department.id);
   broadcast({ type: "department_created", department });
   for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
   if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
   else void codexCapabilitiesFor(workspacePath).refresh();
   return department;
+}
+
+// 解散一支臨時部門：停掉並移除全部短命成員，再移除部門本身。冪等（重複呼叫安全）。
+function disbandEphemeralDepartment(departmentId: string): void {
+  if (!ephemeralDepartments.has(departmentId)) return;
+  ephemeralDepartments.delete(departmentId);
+  const memberIds = [...workers.values()].filter((worker) => worker.departmentId === departmentId).map((worker) => worker.id);
+  for (const workerId of memberIds) {
+    const worker = workers.get(workerId);
+    if (!worker) continue;
+    try { worker.runner.stop(); } catch { /* already stopped */ }
+    workers.delete(workerId);
+    store.deleteWorker(workerId);
+    deleteExtras(workerId);
+    clearWorkerHookState(workerId);
+    broadcast({ type: "worker_removed", workerId });
+  }
+  if (departments.has(departmentId)) {
+    departments.delete(departmentId);
+    store.deleteDepartment(departmentId);
+    broadcast({ type: "department_removed", departmentId });
+  }
+}
+
+// 交辦進入終態（完成/失敗/取消）時，把它的臨時部門解散掉。needs_attention 不解散
+// （使用者可能要接手續跑）。由 advanceBossTask 統一呼叫；idempotent。
+function ephemeralCleanupHook(task: BossTask): void {
+  if (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") return;
+  for (const stage of task.stages) {
+    if (ephemeralDepartments.has(stage.departmentId)) disbandEphemeralDepartment(stage.departmentId);
+  }
 }
 
 // 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
@@ -4669,7 +4704,7 @@ async function runDedicatedDepartmentTask(task: BossTask): Promise<void> {
   });
   if (!department) {
     task.status = "needs_attention";
-    task.error = t("無法自動建立專屬部門（可能此工作區正在執行、NPC 人數已滿或規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。");
+    task.error = t("無法自動建立專屬臨時部門（可能此工作區正在執行其他 Mission，或團隊規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -4806,6 +4841,7 @@ function missionReport(mission: DepartmentMission): string {
 function advanceBossTask(task: BossTask): void {
   advanceBossTaskStages(task);
   autopilotHook(task);
+  ephemeralCleanupHook(task);
 }
 
 function advanceBossTaskStages(task: BossTask): void {
