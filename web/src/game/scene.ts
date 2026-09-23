@@ -578,7 +578,7 @@ export async function createScene(
     }
 
     // 閒置生命感：每 9~18 秒隨機挑一位「沒在忙」的常駐 NPC，冒個小表情——
-    // 喝咖啡☕、跟旁邊的人聊兩句💬、偶爾靈光一閃✨。讓辦公室像有人味的地方，
+    // 喝咖啡、跟旁邊的人聊兩句、偶爾靈光一閃。讓辦公室像有人味的地方，
     // 而不是一排等待指令的雕像。忙碌中/等核准/正在冒表情的人不打擾。
     idleEmoteAccum += dt;
     if (idleEmoteAccum >= idleEmoteNext) {

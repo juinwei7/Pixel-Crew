@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { apiRequest } from "../api";
+import { type CfInfo, describeDownload } from "../cloudflaredProgress";
 import { Modal } from "./Modal";
 import { QrTree } from "./QrTree";
+import { Icon } from "./Icon";
 
 type TsInfo = { installed: boolean; running: boolean; dnsName: string; mode: "public" | "private" | "off" };
-type CfInfo = { installed: boolean; running: boolean; url: string; downloading: boolean };
 type State = {
   port: number;
   passcodeSet: boolean;
@@ -43,23 +44,97 @@ const input = {
 };
 const summary = { cursor: "pointer", fontSize: 13.5, fontWeight: 600, color: "#c7d3f5", padding: "6px 0" } as const;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const CF_POLL_MS = 700;
+const CF_POLL_MAX_FAILS = 15; // 連續失敗到這個數才判定轉接站真的不見了（單次網路抖動不算）
+
 export function RemoteAccessModal({ notify, onClose }: Props) {
   const [st, setSt] = useState<State | null>(null);
   const [running, setRunning] = useState<boolean | null>(null);
   const [busy, setBusy] = useState("");
   const [pass, setPass] = useState("");
   const [demo, setDemo] = useState(false);
+  const [cf, setCf] = useState<CfInfo | null>(null); // 下載中的即時進度（輪詢來的，比 st 新）
 
   const load = useCallback(async () => {
     try {
       const s = await apiRequest<{ running: boolean }>("/api/remote-access/status");
       setRunning(s.running);
-      if (s.running) setSt(await apiRequest<State>("/api/remote-access/state"));
+      if (!s.running) return null;
+      const full = await apiRequest<State>("/api/remote-access/state");
+      setSt(full);
+      return full;
     } catch {
       setRunning(false);
+      return null;
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+
+  // cloudflared 首次下載：install 端點送出就回（檔案 19–70MB，慢線路會超過任何合理的
+  // 請求逾時；本體的同源代理只等 40 秒）。真正的等待改成輪詢 progress 端點，順便畫進度條。
+  const installCf = useCallback(async (): Promise<boolean> => {
+    setBusy("cfinstall");
+    try {
+      const started = await apiRequest<State>("/api/remote-access/api/cloudflared/install", {
+        method: "POST", body: {}, timeoutMs: 20000,
+      });
+      setSt(started);
+      setCf(started.cloudflared);
+      if (started.cloudflared.installed) return true;
+      let fails = 0;
+      for (;;) {
+        await sleep(CF_POLL_MS);
+        let info: CfInfo;
+        try {
+          const r = await apiRequest<{ cloudflared: CfInfo }>("/api/remote-access/api/cloudflared/progress", { timeoutMs: 8000 });
+          info = r.cloudflared;
+          fails = 0;
+        } catch (e) {
+          if (++fails < CF_POLL_MAX_FAILS) continue;
+          notify((e as Error).message, "error");
+          return false;
+        }
+        setCf(info);
+        if (info.downloading) continue;
+        setSt((prev) => (prev ? { ...prev, cloudflared: info } : prev));
+        if (info.installed) { notify(t("cloudflared 已下載完成"), "ok"); return true; }
+        notify(info.error || t("cloudflared 下載失敗"), "error");
+        return false;
+      }
+    } catch (e) {
+      notify((e as Error).message, "error");
+      return false;
+    } finally {
+      setBusy("");
+      setCf(null);
+    }
+  }, [notify]);
+
+  const cancelCf = useCallback(async () => {
+    // 取消失敗也無妨：轉接站的停滯偵測會在 30 秒內自己收尾。
+    try { await apiRequest("/api/remote-access/api/cloudflared/cancel", { method: "POST", body: {} }); } catch { /* noop */ }
+  }, []);
+
+  // 掛載只跑一次（notify 由上層傳入，不保證穩定，用 ref 擋住重複觸發）。
+  const booted = useRef(false);
+  useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
+    void (async () => {
+      const s = await load();
+      // 上次關掉視窗時下載還在背景跑 → 接回去顯示進度，而不是當作什麼都沒發生。
+      if (s?.cloudflared.downloading) void installCf();
+    })();
+  }, [load, installCf]);
+
+  // 視窗開著時定期回查：限時分享會自己到期、cloudflared 隧道也可能中途掛掉，
+  // 不刷新的話畫面會一直停在早就不成立的狀態（網址照顯示，其實已經連不進來）。
+  // busy 時跳過，免得蓋掉某個操作剛回傳的最新狀態。
+  useEffect(() => {
+    if (running !== true || busy || demo) return;
+    const id = setInterval(() => { void load(); }, 20000);
+    return () => clearInterval(id);
+  }, [running, busy, demo, load]);
 
   async function startProxy() {
     setBusy("start");
@@ -99,7 +174,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
     <Modal
       label={t("遠端存取／手機控制")}
       eyebrow="REMOTE ACCESS"
-      title={t("🔗 遠端存取／手機控制")}
+      title={t("遠端存取／手機控制")}
       overlayClassName="warroom-result remote-access-modal"
       cardClassName="warroom-result__card remote-access-modal__card"
       onClose={onClose}
@@ -117,7 +192,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
         <p style={{ margin: "6px 0 12px", fontSize: 12, color: "#7d8cb8" }}>
           {t("完成度")} {pct}%
           <button style={{ ...btnGhost, padding: "3px 8px", fontSize: 11, marginLeft: 10 }} onClick={() => setDemo((v) => !v)}>
-            {demo ? t("← 離開預覽") : t("🎬 預覽新手引導")}
+            {demo ? t("← 離開預覽") : t("預覽新手引導")}
           </button>
         </p>
 
@@ -142,7 +217,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
             </button>
           </div>
         ) : (
-          <Dashboard st={st} busy={busy} run={run} notify={notify} onReload={() => void load()} />
+          <Dashboard st={st} cf={cf} busy={busy} run={run} notify={notify} installCf={installCf} cancelCf={cancelCf} onReload={() => void load()} />
         )}
       </div>
     </Modal>
@@ -150,9 +225,9 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
 }
 
 // === 已設好：儀表板（狀態卡＋通道二選一＋進階設定）===
-function Dashboard({ st, busy, run, notify, onReload }: {
-  st: State; busy: string; run: Run;
-  notify: Props["notify"]; onReload(): void;
+function Dashboard({ st, cf, busy, run, notify, installCf, cancelCf, onReload }: {
+  st: State; cf: CfInfo | null; busy: string; run: Run;
+  notify: Props["notify"]; installCf(): Promise<boolean>; cancelCf(): Promise<void>; onReload(): void;
 }) {
   const active = st.channel;
   const chanBox = (on: boolean) => ({
@@ -162,7 +237,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
   } as const);
 
   async function chooseCloudflared() {
-    if (!st.cloudflared.installed) { if (!(await run("cloudflared/install", {}, "cfinstall", 120000))) return; }
+    if (!st.cloudflared.installed) { if (!(await installCf())) return; }
     if (await run("channel", { type: "cloudflared" }, "chan", 40000)) notify(t("已開通公開網址"), "ok");
   }
   async function chooseTailscale(mode: "public" | "private") {
@@ -189,7 +264,7 @@ function Dashboard({ st, busy, run, notify, onReload }: {
             </div>
             <div className="remote-access-modal__qr" style={{ textAlign: "center", margin: "0 auto" }}>
               <QrTree text={st.publicUrl} px={200} />
-              <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("📱 掃碼開啟・點一下逛夜城")}</div>
+              <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("掃碼開啟・點一下逛夜城")}</div>
             </div>
           </div>
         </div>
@@ -204,17 +279,20 @@ function Dashboard({ st, busy, run, notify, onReload }: {
         <label style={label}>{t("對外通道（二選一）")}</label>
         <div style={{ display: "grid", gap: 10 }}>
           <div style={{ ...chanBox(active === "cloudflared"), cursor: busy ? "default" : "pointer" }} onClick={() => !busy && void chooseCloudflared()}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>☁️ {t("免安裝公開網址（cloudflared）")}</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}><Icon name="cloud" /> {t("免安裝公開網址（cloudflared）")}</div>
             <div style={{ fontSize: 12, color: "#9fb0dd", marginTop: 3 }}>
               {t("推薦分享給別人。對方零安裝、零註冊，打開網址＋通行碼就能用。網址每次重啟會變。")}
             </div>
-            {busy === "cfinstall" && <div style={{ fontSize: 11, color: "#ffd479", marginTop: 4 }}>{t("首次使用，正在下載 cloudflared…")}</div>}
+            {busy === "cfinstall" && <CloudflaredDownload info={cf} onCancel={cancelCf} />}
+            {busy !== "cfinstall" && !!st.cloudflared.error && !st.cloudflared.running && (
+              <div style={{ fontSize: 11, color: "#ff9a9a", marginTop: 6 }}>{st.cloudflared.error}</div>
+            )}
             {busy === "chan" && active !== "cloudflared" && <div style={{ fontSize: 11, color: "#ffd479", marginTop: 4 }}>{t("開通中…")}</div>}
           </div>
 
           <div style={chanBox(active === "tailscale")}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>
-              🔒 {t("Tailscale（固定網址・較私密）")}
+              <Icon name="lock" /> {t("Tailscale（固定網址・較私密）")}
               {!st.tailscale.installed && <span style={{ fontSize: 11, color: "#ff9a9a", fontWeight: 400 }}> {t("未安裝")}</span>}
               {st.tailscale.installed && !st.tailscale.running && <span style={{ fontSize: 11, color: "#ffd479", fontWeight: 400 }}> {t("未登入")}</span>}
             </div>
@@ -259,6 +337,47 @@ function Dashboard({ st, busy, run, notify, onReload }: {
   );
 }
 
+// cloudflared 首次下載的進度條。沒有 content-length 時退回「不確定進度」的滿版淡色條，
+// 而不是停在 0% 讓人以為當掉了。
+export function CloudflaredDownload({ info, onCancel }: { info: CfInfo | null; onCancel?(): void }) {
+  const d = describeDownload(info);
+  const detail = [d.size, d.speed, d.eta].filter(Boolean).join(" · ");
+  return (
+    <div className="remote-access-modal__cf-download" style={{ marginTop: 8 }} aria-live="polite">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#ffd479" }}>
+        <span style={{ flex: 1 }}>{t("首次使用，正在下載 cloudflared…")}</span>
+        <span style={{ fontVariantNumeric: "tabular-nums", color: "#cfe0ff" }}>{d.headline}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={t("cloudflared 下載進度")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        {...(d.pct === null ? {} : { "aria-valuenow": d.pct })}
+        style={{ height: 8, borderRadius: 5, background: "#232c46", overflow: "hidden", marginTop: 5 }}
+      >
+        <div style={{
+          height: "100%", borderRadius: 5, background: "#5b8cff",
+          width: d.pct === null ? "100%" : `${d.pct}%`,
+          opacity: d.pct === null ? 0.4 : 1,
+          transition: "width .35s ease",
+        }} />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+        <span style={{ flex: 1, fontSize: 11, color: "#9fb0dd", fontVariantNumeric: "tabular-nums" }}>{detail}</span>
+        {onCancel && (
+          <button
+            style={{ ...btnGhost, padding: "3px 9px", fontSize: 11 }}
+            onClick={(e) => { e.stopPropagation(); void onCancel(); }}
+          >
+            {t("取消下載")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PasscodeSection({ busy, run, notify }: { busy: string; run: Run; notify: Props["notify"] }) {
   const [v, setV] = useState("");
   async function submit() {
@@ -267,7 +386,7 @@ function PasscodeSection({ busy, run, notify }: { busy: string; run: Run; notify
   }
   return (
     <details>
-      <summary style={summary}>🔑 {t("變更通行碼")}</summary>
+      <summary style={summary}><Icon name="key" /> {t("變更通行碼")}</summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <label style={label}>{t("新通行碼（至少 6 碼）")}</label>
         <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8 }}>
@@ -291,7 +410,7 @@ function GuardianSection({ st, busy, run, notify }: { st: State; busy: string; r
   return (
     <details>
       <summary style={summary}>
-        🛡️ {t("監護密碼")} {st.guardian.set
+        <Icon name="shield" /> {t("監護密碼")} {st.guardian.set
           ? <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已設定")}</span>
           : <span style={{ color: "#ffd479", fontSize: 12 }}>· {t("未設定")}</span>}
       </summary>
@@ -365,7 +484,7 @@ function ShareSection({ st, busy, run, notify }: { st: State; busy: string; run:
   return (
     <details>
       <summary style={summary}>
-        ⏱️ {t("限時分享")} {active && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("分享中")}</span>}
+        <Icon name="clock" /> {t("限時分享")} {active && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("分享中")}</span>}
       </summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <p style={{ fontSize: 12, color: "#9fb0dd", margin: "0 0 10px" }}>
@@ -437,7 +556,7 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
   if (blocked) {
     return (
       <div style={{ ...summary, cursor: "default", color: "#5f6f9c", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ opacity: 0.6 }}>🟢 {t("Google 登入（進階）")}</span>
+        <span style={{ opacity: 0.6 }}>{t("Google 登入（進階）")}</span>
         <span style={{ fontSize: 11.5, color: "#7d8cb8", fontWeight: 400 }}>
           {t("· 需搭配 Tailscale 固定網址（cloudflared 網址每次會變，無法登入）")}
         </span>
@@ -448,14 +567,14 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
   return (
     <details>
       <summary style={summary}>
-        🟢 {t("Google 登入（進階）")} {st.google.enabled && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已啟用")}</span>}
+        {t("Google 登入（進階）")} {st.google.enabled && <span style={{ color: "#7ee0a2", fontSize: 12 }}>· {t("已啟用")}</span>}
       </summary>
       <div style={{ padding: "8px 2px 14px" }}>
         <p style={{ fontSize: 12, color: "#9fb0dd", margin: "0 0 8px" }}>
           {t("讓指定的 Google 帳號免通行碼登入。需先到")} <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style={{ color: "#9fc0ff" }}>Google Cloud Console</a> {t("建立 OAuth 2.0 用戶端，取得 ID／密鑰。")}
         </p>
         <p style={{ fontSize: 12, color: "#ffd479", margin: "0 0 8px" }}>
-          {t("⚠ 重新導向 URI 必須固定，建議搭 Tailscale（cloudflared 每次網址會變，不適合）。")}
+          {t("重新導向 URI 必須固定，建議搭 Tailscale（cloudflared 每次網址會變，不適合）。")}
         </p>
         <label style={label}>{t("把這個「已授權的重新導向 URI」貼到 Google Cloud：")}</label>
         <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8, marginBottom: 10 }}>

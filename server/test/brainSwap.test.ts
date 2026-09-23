@@ -30,6 +30,7 @@ function observation(overrides: Partial<BrainSwapObservation> = {}): BrainSwapOb
     event: turnEnd(),
     provider: "claude",
     workerName: "一號機",
+    ephemeral: false,
     pending: false,
     disabled: false,
     engaged: false,
@@ -53,7 +54,7 @@ test("error events clear the pending flag regardless of provider or name", () =>
   const decision = decideBrainSwap(observation({
     event: { type: "error", message: "boom" },
     provider: "codex",
-    workerName: "🔍研究員",
+    workerName: "研究員",
     pending: true,
   }));
   assert.deepEqual(decision, { action: "clear_pending" });
@@ -67,9 +68,9 @@ test("codex workers never swap", () => {
   assert.deepEqual(decideBrainSwap(observation({ provider: "codex" })), { action: "ignore" });
 });
 
-test("ephemeral 🏛/🔍 workers never swap, even when pending", () => {
-  assert.deepEqual(decideBrainSwap(observation({ workerName: "🏛圓桌" })), { action: "ignore" });
-  assert.deepEqual(decideBrainSwap(observation({ workerName: "🔍研究員", pending: true })), { action: "ignore" });
+test("ephemeral orchestrator workers never swap, even when pending", () => {
+  assert.deepEqual(decideBrainSwap(observation({ ephemeral: true })), { action: "ignore" });
+  assert.deepEqual(decideBrainSwap(observation({ ephemeral: true, pending: true })), { action: "ignore" });
 });
 
 test("pending + successful summary turn completes the swap with the trimmed summary", () => {

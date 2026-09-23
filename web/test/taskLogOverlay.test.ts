@@ -25,7 +25,8 @@ test("side panels remain overlays while map controls avoid the visible task pane
   assert.match(app, /game-root--task-log-open/);
   assert.match(app, /game-root--crew-collapsed/);
   assert.match(css, /\.game-root:not\(\.game-root--task-log-open\) \.crew-rail\s*\{\s*bottom:\s*138px/);
-  assert.match(css, /@media \(max-width:\s*599px\)[\s\S]*?\.canvas-zoom input\[type="range"\]\s*\{\s*display:\s*none/);
+  // 手機（≤600）直接把整條縮放列收掉——雙指縮放已經夠用（見 game/scene.ts）。
+  assert.match(css, /@media \(max-width:\s*600px\)[\s\S]*?\.canvas-zoom\s*\{\s*display:\s*none/);
   assert.match(css, /\.game-root--focus \.canvas-zoom\s*\{[\s\S]*?display:\s*none/);
 });
 
@@ -121,5 +122,60 @@ test("black window canvas height follows its live toolbar instead of a fixed off
 });
 
 test("a minimized black-window pane stays collapsed on narrow screens", () => {
-  assert.match(css, /@media \(max-width: 820px\)[^}]*}[\s\S]*?\.black-window--minimized \{ height: 38px !important; min-height: 38px; }/);
+  assert.match(css, /@media \(max-width: 1023px\)[^}]*}[\s\S]*?\.black-window--minimized \{ height: 38px !important; min-height: 38px; }/);
+});
+
+test("the black window toolbar collapses to a single row on a phone", () => {
+  // 手機只留：模式切換 / 分頁下拉 / 主要動作 / ⋯。其餘走 ⋯ 選單。
+  assert.match(blackWindow, /const isPhone = useIsPhone\(\)/);
+  assert.match(blackWindow, /\{!isPhone && <EnergyHud/);
+  assert.match(blackWindow, /black-workspace__pane-select/);
+  assert.match(blackWindow, /black-workspace__advanced-mobile/);
+  // 模式切換是使用者明確要求一定要留在列上的；跟頂欄共用同一顆 ModeSwitch
+  // （手機收合成一顆、可以左右滑），不要再各自手刻一排按鈕。
+  assert.match(blackWindow, /<ModeSwitch current=\{2\}/);
+  assert.doesNotMatch(blackWindow, /\{isPhone && <EnergyHud/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.black-workspace__brand \{ display: none; \}/);
+  assert.match(css, /\.black-workspace__settings \{[^}]*flex: 1 1 0;/);
+});
+
+test("an overflow menu does not close the menus nested inside it", () => {
+  // 帳號選單現在巢狀在 ⋯ 裡面；少了 contains 這個判斷，外層一展開就會把
+  // 自己裡面那一層關掉（點了沒反應）。
+  assert.match(blackWindow, /if \(other !== menu && !menu\.contains\(other\)\) other\.open = false;/);
+});
+
+test("the phone log sheet keeps exactly one way back to the office", () => {
+  // 手機上日誌是 bottom sheet：開著的時候，面板頂端的抓把手往下拖就收起來，
+  // 所以那顆 ▶ 箭頭是多餘的（兩個入口做同一件事，還各佔一塊）。但收合之後
+  // 抓把手跟著面板一起不見了——箭頭是那時唯一的回程，絕對不能一起關掉。
+  const phone = css.slice(css.indexOf("@media (max-width: 600px)"));
+  assert.match(phone, /\.panel-toggle--open\s*\{\s*display:\s*none;/);
+  assert.doesNotMatch(phone, /\.panel-toggle\s*\{\s*display:\s*none;/);
+  // 抓把手在手機是高度拖桿兼收合手勢，不能被關掉。
+  assert.doesNotMatch(phone, /\.holo-panel__resize\s*\{[^}]*display:\s*none/);
+});
+
+test("the phone log sheet drops the desktop title block", () => {
+  // 「WORKSTREAM／任務日誌」在手機只是重複：面板就在眼前，下面緊接著就是對話。
+  // min-height 也要一起解掉，那是桌面為了容納兩行標題才設的 66px。
+  const phone = css.slice(css.indexOf("@media (max-width: 600px)"));
+  assert.match(phone, /\.holo-panel__heading \{ display: none; \}/);
+  // 這個選擇器在桌面那幾支也出現過（只設背景），所以要找的是「有把 min-height
+  // 歸零的那一塊」，不能拿第一個命中就算。
+  const blocks = phone.split(".holo-panel:not(.holo-panel--focus) .holo-panel__title").slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf("}")));
+  assert.ok(blocks.some((block) => /min-height: 0;/.test(block)), "標題列還留著桌面的 66px min-height");
+});
+
+test("the phone report reader keeps its context on one row", () => {
+  // 工作室捷徑（在哪個工作位置）與報告導覽（跳到某一節）以前各佔一整列，
+  // 兩列加起來 78px——一頁 844px 的手機掉了 9% 給兩個只有一列高的東西。
+  // 這個檔案把所有 @import 攤平成一份，同一個選擇器在好幾個斷點裡都有，
+  // 所以直接找那份唯一的版位宣告，不要靠「第幾個 .focus-reader」去猜。
+  assert.match(css, /grid-template-areas:\s*\n\s*"rail nav"\s*\n\s*"drawer drawer"\s*\n\s*"log log";/);
+  assert.match(css, /\.focus-reader__studio-rail \{ grid-area: rail; \}/);
+  assert.match(css, /\.focus-report-nav__toggle \{ grid-area: nav; \}/);
+  // 收合鈕在手機沒有意義：這排本來就是橫捲的一條，展開會變成一疊高方塊。
+  assert.match(css, /\.focus-reader__studio-rail \.focus-studios__collapse \{ display: none; \}/);
 });

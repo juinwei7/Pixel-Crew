@@ -25,6 +25,13 @@ function detect(): Lang {
 
 export const lang: Lang = detect();
 
+/* 把語言同步到 <html lang>。兩個用途：
+   1. 無障礙——螢幕報讀器要靠它決定用哪種語音唸，頁面不能永遠宣稱自己是
+      zh-Hant。
+   2. 版面——英文標籤普遍比中文長（Assign work / Auto-approve: off），頂欄
+      的收合門檻本來就該跟著語言走，CSS 用 html[lang^="en"] 判斷。 */
+if (typeof document !== "undefined") document.documentElement.lang = lang === "en" ? "en" : "zh-Hant";
+
 const dict: Record<string, string> = lang === "en"
   ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess, ...enVoiceInput }
   : {};

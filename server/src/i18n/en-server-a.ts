@@ -1,5 +1,9 @@
 /** server 端英文字典 A（index.ts 專用）。key=中文原文（或 "語境::原文"）。 */
 export const enServerA: Record<string, string> = {
+  // 短命 NPC 的顯示名稱（作戰室主持、研究員）。以前名字帶 emoji 字首當協定
+  // 標記，所以從來沒有被翻譯過；改成 ephemeralKind 欄位後名字純粹是名字。
+  "主持": "Moderator",
+  "研究員": "Researcher",
   // self-update
   "此安裝方式不支援一鍵更新，請下載最新版 Pixel Crew.exe": "This installation does not support one-click update; download the latest Pixel Crew.exe instead",
   "新版已在下載及安裝中": "The new version is already downloading and installing",

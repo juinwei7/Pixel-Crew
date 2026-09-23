@@ -113,9 +113,9 @@ test("step cards carry kind icon, assignee name, and fall back for departed work
       step({ id: "b", kind: "consult", assigneeWorkerId: "ghost" }),
     ],
   })], [], workers, NOW);
-  assert.equal(columns.todo[0].icon, "🔎");
+  assert.equal(columns.todo[0].icon, "search");
   assert.equal(columns.todo[0].assignee, "二號機");
-  assert.equal(columns.todo[1].icon, "💬");
+  assert.equal(columns.todo[1].icon, "speech");
   assert.equal(columns.todo[1].assignee, "（已離職）");
 });
 
@@ -181,7 +181,7 @@ test("boss task stages map to columns; stages already opened as missions are ski
   assert.deepEqual(columns.done.map((card) => card.key), ["stage-t1-c"]);
   assert.deepEqual(columns.attention.map((card) => card.key), ["stage-t1-d", "stage-t1-e"]);
   assert.equal(columns.doing[0].assignee, "工程部");
-  assert.equal(columns.doing[0].icon, "🏢");
+  assert.equal(columns.doing[0].icon, "building");
 });
 
 test("archived and cancelled boss tasks are hidden entirely", () => {

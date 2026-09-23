@@ -65,7 +65,8 @@ function loadConfig() {
 }
 function saveConfig(cfg) {
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    // 先以 0600 建檔再 chmod：只 chmod 的話，新檔會有一瞬間是 0644 且已經寫入明文通行碼。
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
     fs.chmodSync(CONFIG_PATH, 0o600); // 內含明文通行碼／簽章金鑰，不給同機其他使用者讀
   } catch {}
 }
@@ -85,22 +86,43 @@ const TS_CANDIDATES = [
   // macOS 官方 App（App Store / standalone）不會把 CLI 放進 PATH，藏在 .app 裡
   '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
 ].filter(Boolean);
+// 探測成本要有上限：整包狀態（/__gate/api/state）是前端開視窗時唯一的一次呼叫，
+// 前端只給 15 秒預算。原本每次都把 6 個候選路徑重跑一遍、每個 15 秒逾時，
+// 光 tsInfo 的兩次 exec 就能把預算吃光讓視窗直接顯示「伺服器回應逾時」。
+const TS_EXEC_TIMEOUT_MS = 6000;
+const TS_RESCAN_MS = 30000;   // 記得「沒裝」也要會過期：使用者裝完 Tailscale 不必重啟轉接站
+let tsBin = null;             // 上次跑得動的執行檔；'' = 找過但沒有；null = 還沒找過
+let tsBinAt = 0;
 function tsExec(args) {
   return new Promise((resolve) => {
+    if (tsBin === '' && Date.now() - tsBinAt > TS_RESCAN_MS) tsBin = null; // 重新掃一次
+    if (tsBin === '') { resolve({ ok: false, notFound: true, stdout: '', stderr: '' }); return; }
+    const candidates = tsBin ? [tsBin] : TS_CANDIDATES;
     let i = 0;
     const tryNext = () => {
-      if (i >= TS_CANDIDATES.length) { resolve({ ok: false, notFound: true, stdout: '', stderr: '' }); return; }
-      const bin = TS_CANDIDATES[i++];
-      execFile(bin, args, { timeout: 15000, windowsHide: true }, (err, stdout, stderr) => {
+      if (i >= candidates.length) {
+        if (tsBin) { tsBin = null; tryAgainFromScratch(); return; }  // 記住的路徑消失了→重掃
+        tsBin = ''; tsBinAt = Date.now();
+        resolve({ ok: false, notFound: true, stdout: '', stderr: '' });
+        return;
+      }
+      const bin = candidates[i++];
+      execFile(bin, args, { timeout: TS_EXEC_TIMEOUT_MS, windowsHide: true }, (err, stdout, stderr) => {
         if (err && err.code === 'ENOENT') { tryNext(); return; }
+        tsBin = bin; tsBinAt = Date.now();
         resolve({ ok: !err, notFound: false, stdout: stdout || '', stderr: stderr || '', bin });
       });
     };
+    const tryAgainFromScratch = () => { tsExec(args).then(resolve); };
     tryNext();
   });
 }
 // 回傳 { installed, running, dnsName, mode: 'public'|'private'|'off' }
-async function tsInfo() {
+// 短快取：一次狀態查詢要跑兩個 CLI 子行程，而 buildState 在每個設定動作後都會被呼叫。
+let tsInfoCache = null, tsInfoAt = 0, tsInfoInflight = null;
+const TS_INFO_TTL_MS = 3000;
+function tsInvalidate() { tsInfoCache = null; tsInfoAt = 0; }
+async function tsProbe() {
   const st = await tsExec(['status', '--json']);
   if (st.notFound) return { installed: false, running: false, dnsName: '', mode: 'off' };
   let running = false, dnsName = '';
@@ -117,15 +139,29 @@ async function tsInfo() {
   if (proxied) mode = funnelOn ? 'public' : 'private';
   return { installed: true, running, dnsName, mode };
 }
+function tsInfo() {
+  if (tsInfoCache && Date.now() - tsInfoAt < TS_INFO_TTL_MS) return Promise.resolve(tsInfoCache);
+  if (tsInfoInflight) return tsInfoInflight;                 // 併發的查詢共用同一次探測
+  tsInfoInflight = tsProbe().then(
+    (v) => { tsInfoCache = v; tsInfoAt = Date.now(); tsInfoInflight = null; return v; },
+    () => { tsInfoInflight = null; return { installed: false, running: false, dnsName: '', mode: 'off' }; },
+  );
+  return tsInfoInflight;
+}
 async function tsSetMode(mode) {
-  if (mode === 'public') {
-    return tsExec(['funnel', '--bg', String(LISTEN_PORT)]);
-  } else if (mode === 'private') {
+  tsInvalidate(); // 切完模式的下一次查詢一定要拿到真實狀態，不能吃到切換前的快取
+  try {
+    if (mode === 'public') {
+      return await tsExec(['funnel', '--bg', String(LISTEN_PORT)]);
+    } else if (mode === 'private') {
+      await tsExec(['funnel', '--https=443', 'off']);
+      return await tsExec(['serve', '--bg', String(LISTEN_PORT)]);
+    }
     await tsExec(['funnel', '--https=443', 'off']);
-    return tsExec(['serve', '--bg', String(LISTEN_PORT)]);
+    return await tsExec(['serve', '--https=443', 'off']);
+  } finally {
+    tsInvalidate();
   }
-  await tsExec(['funnel', '--https=443', 'off']);
-  return tsExec(['serve', '--https=443', 'off']);
 }
 
 // --- 開機自啟（登入時自動把轉接站跑起來，預設關，由精靈開關）---
@@ -195,97 +231,224 @@ async function autostartSet(on) {
 // 單一 exe，可打包或首次自動下載；quick tunnel 給 https://xxx.trycloudflare.com，
 // 網址每次重啟會變，安全靠登入關卡。狀態存記憶體（proc/url），偏好存 config.channel。
 // 執行檔尋找順序：環境變數 → 本目錄（自動下載目的地）→ 系統常見安裝位置（brew 等）。
-const CF_LOCAL = path.join(__dirname, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+// PC_CLOUDFLARED_EXE 指定執行檔位置（也是下載目的地）、PC_CLOUDFLARED_URL 指定下載來源
+// （公司內部鏡像或測試用的本機伺服器）。
+const CF_EXPLICIT = !!process.env.PC_CLOUDFLARED_EXE;
+const CF_LOCAL = process.env.PC_CLOUDFLARED_EXE
+  || path.join(__dirname, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+const CF_DIR = path.dirname(CF_LOCAL);
 const CF_SYSTEM = process.platform === 'win32' ? [] : ['/opt/homebrew/bin/cloudflared', '/usr/local/bin/cloudflared', '/usr/bin/cloudflared'];
 function cfBin() {
-  if (process.env.PC_CLOUDFLARED_EXE) return process.env.PC_CLOUDFLARED_EXE;
+  if (CF_EXPLICIT) return CF_LOCAL;   // 明確指定就只認它，不要偷偷退回系統版本
   for (const candidate of [CF_LOCAL, ...CF_SYSTEM]) {
     try { if (fs.existsSync(candidate)) return candidate; } catch {}
   }
   return CF_LOCAL;   // 都沒有＝之後下載到這
 }
 const CF_ARCH = process.arch === 'arm64' ? 'arm64' : 'amd64';
-const CF_DOWNLOAD = process.platform === 'win32'
+const CF_DOWNLOAD = process.env.PC_CLOUDFLARED_URL || (process.platform === 'win32'
   ? 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
   : (process.platform === 'darwin'
     ? `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${CF_ARCH}.tgz`
-    : `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}`);
+    : `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}`));
+const CF_STALL_MS = 30000;      // 連續 30 秒沒有新位元組＝這條連線已經死了，中止並回報
+const CF_MAX_REDIRECTS = 6;
+const CF_URL_TIMEOUT_MS = 25000;
 let cfProc = null;      // 執行中的 cloudflared 子行程
 let cfUrl = '';         // 目前分配到的 trycloudflare 公開網址
-let cfDownloading = false;
+let cfStartError = '';  // 上一次啟動隧道失敗的原因（給 UI 顯示，不是只丟一個 502）
+// 下載狀態：null＝沒有在下載；有物件＝進行中，UI 靠它畫進度條。
+// 舊版只有一個 boolean：連線被中途切斷時 file 的 'finish' 永遠不會來（實測 res 只發
+// 'aborted' + 'error'），promise 不會 settle，旗標就永遠卡在 true——之後每次點「免安裝
+// 公開網址」都只會拿到「下載進行中」，只有重啟轉接站才解得開。
+let cfDl = null;        // { received, total, startedAt, updatedAt, cancel() }
+let cfDlError = '';
 
 function cfInstalled() { return fs.existsSync(cfBin()); }
-function cfInfo() { return { installed: cfInstalled(), running: !!cfProc, url: cfUrl, downloading: cfDownloading }; }
-
-// 下載 cloudflared（跟隨 GitHub redirect）。Windows/Linux 是裸執行檔直接存檔；
-// macOS 官方只出 tgz（內含單一 cloudflared 執行檔），下載後用系統 tar 解到本目錄。
-function cfDownload() {
-  if (cfDownloading) return Promise.resolve({ ok: false, error: '下載進行中' });
-  cfDownloading = true;
-  const isTgz = CF_DOWNLOAD.endsWith('.tgz');
-  return new Promise((resolve) => {
-    const tmp = CF_LOCAL + '.download';
-    const file = fs.createWriteStream(tmp);
-    const get = (u, depth) => {
-      if (depth > 6) { cleanup('太多重導向'); return; }
-      https.get(u, { headers: { 'User-Agent': 'pixel-crew' } }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume(); get(res.headers.location, depth + 1); return;
-        }
-        if (res.statusCode !== 200) { res.resume(); cleanup('HTTP ' + res.statusCode); return; }
-        res.pipe(file);
-        file.on('finish', () => file.close(() => {
-          try {
-            if (isTgz) {
-              execFile('tar', ['-xzf', tmp, '-C', __dirname, 'cloudflared'], (err) => {
-                try { fs.unlinkSync(tmp); } catch {}
-                if (err) { cfDownloading = false; resolve({ ok: false, error: 'tar 解壓失敗：' + String((err && err.message) || err) }); return; }
-                try { fs.chmodSync(CF_LOCAL, 0o755); } catch {}
-                cfDownloading = false; resolve({ ok: true });
-              });
-              return;
-            }
-            fs.renameSync(tmp, CF_LOCAL);
-            if (process.platform !== 'win32') fs.chmodSync(CF_LOCAL, 0o755);
-            cfDownloading = false; resolve({ ok: true });
-          } catch (e) { cleanup(String(e && e.message || e)); }
-        }));
-      }).on('error', (e) => cleanup(String(e && e.message || e)));
-    };
-    const cleanup = (msg) => {
-      cfDownloading = false;
-      try { file.close(); } catch {}
-      try { fs.unlinkSync(tmp); } catch {}
-      resolve({ ok: false, error: msg });
-    };
-    get(CF_DOWNLOAD, 0);
-  });
+function cfProgress() {
+  if (!cfDl) return null;
+  const elapsed = Math.max(1, Date.now() - cfDl.startedAt);
+  const bytesPerSec = Math.round((cfDl.received * 1000) / elapsed);
+  const pct = cfDl.total > 0 ? Math.min(100, Math.floor((cfDl.received * 100) / cfDl.total)) : null;
+  const etaSec = (cfDl.total > 0 && bytesPerSec > 0)
+    ? Math.max(0, Math.round((cfDl.total - cfDl.received) / bytesPerSec))
+    : null;
+  return { received: cfDl.received, total: cfDl.total, pct, bytesPerSec, etaSec };
+}
+function cfInfo() {
+  return {
+    installed: cfInstalled(), running: !!cfProc, url: cfUrl,
+    downloading: !!cfDl, progress: cfProgress(),
+    error: cfDlError || cfStartError || '',
+  };
 }
 
+// 下載 cloudflared（跟隨 GitHub redirect）。Windows/Linux 是裸執行檔直接存檔；
+// macOS 官方只出 tgz（內含單一 cloudflared 執行檔），下載後用系統 tar 解到目的目錄。
+// 這支「送出就回」：檔案 19–70MB，慢線路會超過任何合理的 HTTP 逾時（本體的同源代理
+// 只等 40 秒），所以進度改用 /__gate/api/cloudflared/progress 輪詢。
+function cfBeginDownload() {
+  if (cfDl) return { started: false, already: true };
+  if (cfInstalled()) return { started: false, installed: true };
+  cfDlError = '';
+  const tmp = CF_LOCAL + '.download';
+  const isTgz = /\.tgz$/i.test(CF_DOWNLOAD);
+  const state = { received: 0, total: 0, startedAt: Date.now(), updatedAt: Date.now(), cancel: null };
+  cfDl = state;
+
+  let file = null, req = null, stall = null, done = false;
+  // 每條失敗路徑都要收乾淨：計時器、socket、半成品檔案、以及那個會卡死一切的旗標。
+  const finish = (error) => {
+    if (done) return;
+    done = true;
+    if (stall) { clearInterval(stall); stall = null; }
+    try { if (req) req.destroy(); } catch {}
+    try { if (file) file.destroy(); } catch {}
+    try { fs.unlinkSync(tmp); } catch {}
+    cfDl = null;
+    cfDlError = error || '';
+    if (error) startupLog(`cloudflared download failed: ${error}`);
+  };
+  state.cancel = () => finish('已取消下載');
+
+  const install = () => {
+    if (isTgz) {
+      // 官方 tgz 內就一個 cloudflared；目的檔名可能被 PC_CLOUDFLARED_EXE 改過，解完再搬。
+      execFile('tar', ['-xzf', tmp, '-C', CF_DIR, 'cloudflared'], (err) => {
+        if (err) { finish('tar 解壓失敗：' + String((err && err.message) || err)); return; }
+        try {
+          const extracted = path.join(CF_DIR, 'cloudflared');
+          if (extracted !== CF_LOCAL) fs.renameSync(extracted, CF_LOCAL);
+          fs.chmodSync(CF_LOCAL, 0o755);
+        } catch (e) { finish(String((e && e.message) || e)); return; }
+        finish(cfInstalled() ? '' : '解壓後找不到 cloudflared');
+      });
+      return;
+    }
+    try {
+      fs.renameSync(tmp, CF_LOCAL);
+      if (process.platform !== 'win32') fs.chmodSync(CF_LOCAL, 0o755);
+    } catch (e) { finish('存檔失敗：' + String((e && e.message) || e)); return; }
+    finish(cfInstalled() ? '' : '存檔後找不到 cloudflared');
+  };
+
+  const get = (rawUrl, depth) => {
+    if (done) return;
+    if (depth > CF_MAX_REDIRECTS) { finish('太多重導向'); return; }
+    let target;
+    try { target = new URL(rawUrl); } catch { finish('下載網址無效'); return; }
+    // 只允許 HTTPS；本機鏡像／測試伺服器（loopback）例外。
+    const loopback = /^(127\.|\[?::1\]?$|localhost$)/i.test(target.hostname);
+    if (target.protocol !== 'https:' && !(target.protocol === 'http:' && loopback)) {
+      finish('拒絕非 HTTPS 的下載來源'); return;
+    }
+    const agent = target.protocol === 'https:' ? https : http;
+    req = agent.get(target, { headers: { 'User-Agent': 'pixel-crew' } }, (res) => {
+      const code = res.statusCode || 0;
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        // GitHub 目前回絕對網址，但 HTTP 規格允許相對——一律對目前網址解析，免得相對跳轉直接炸掉。
+        get(new URL(res.headers.location, target).toString(), depth + 1);
+        return;
+      }
+      if (code !== 200) { res.resume(); finish('HTTP ' + code); return; }
+      state.total = Number(res.headers['content-length']) || 0;
+      state.startedAt = Date.now();      // 從真正開始收位元組起算，速度/ETA 才不會被重導向稀釋
+      state.updatedAt = Date.now();
+      file = fs.createWriteStream(tmp, { mode: 0o600 });
+      file.on('error', (e) => finish('寫入失敗：' + String((e && e.message) || e)));
+      res.on('data', (chunk) => { state.received += chunk.length; state.updatedAt = Date.now(); });
+      // 連線中途被切：res 會發 'error'（實測 ECONNRESET），而 file 的 'finish' 永遠不會來。
+      res.on('error', (e) => finish('連線中斷：' + String((e && e.code) || (e && e.message) || e)));
+      res.pipe(file);
+      file.on('finish', () => {
+        if (done) return;
+        // 位元組收完了，停滯偵測的任務就結束。留著的話，解壓／搬檔萬一慢一點，
+        // 會被誤判成「下載停滯」，把正要裝好的暫存檔刪掉。
+        if (stall) { clearInterval(stall); stall = null; }
+        file.close(() => {
+          if (done) return;
+          // 收到的位元組數要對得上，否則截斷的半個檔案會被當成安裝成功，
+          // 等到開隧道時才以看不懂的錯誤爆掉。
+          if (state.total && state.received !== state.total) {
+            finish(`下載不完整（${state.received}/${state.total} bytes）`); return;
+          }
+          if (!state.received) { finish('下載到空檔案'); return; }
+          install();
+        });
+      });
+    });
+    req.on('error', (e) => finish('連線失敗：' + String((e && e.message) || e)));
+  };
+
+  stall = setInterval(() => {
+    if (Date.now() - state.updatedAt > CF_STALL_MS) finish('下載停滯已中止，請檢查網路後重試');
+  }, 2000);
+  stall.unref();
+
+  get(CF_DOWNLOAD, 0);
+  return { started: true };
+}
+
+// 失敗時把 cloudflared 自己最後一行訊息帶回 UI；只回「啟動失敗」使用者無從查起。
+function cfHint(tail) {
+  const line = String(tail || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
+  return line ? `：${line.slice(0, 160)}` : '';
+}
 // 啟動 quick tunnel，解析 stdout/stderr 抓 trycloudflare 網址（最多等 25 秒）。
 function cfStart() {
-  if (cfProc) return Promise.resolve({ ok: true, url: cfUrl });
+  if (cfProc && cfUrl) return Promise.resolve({ ok: true, url: cfUrl });
+  // 有行程卻沒網址＝上一輪逾時留下的殘骸。直接回 ok 會讓 UI 報「已開通」卻拿不到網址，
+  // 所以先收掉再重來。
+  if (cfProc) cfStop();
   if (!cfInstalled()) return Promise.resolve({ ok: false, error: '尚未安裝 cloudflared' });
   return new Promise((resolve) => {
-    let settled = false;
-    const finish = (r) => { if (!settled) { settled = true; resolve(r); } };
-    const proc = spawn(cfBin(), ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${LISTEN_PORT}`], { windowsHide: true });
+    let settled = false, timer = null, tail = '';
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      cfStartError = r.ok ? '' : (r.error || '');
+      resolve(r);
+    };
+    let proc;
+    try {
+      proc = spawn(cfBin(), ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${LISTEN_PORT}`], { windowsHide: true });
+    } catch (e) { finish({ ok: false, error: String((e && e.message) || e) }); return; }
     cfProc = proc;
     const onData = (buf) => {
-      const m = String(buf).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      const text = String(buf);
+      tail = (tail + text).slice(-2000);
+      const m = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
       if (m && !cfUrl) { cfUrl = m[0]; finish({ ok: true, url: cfUrl }); }
     };
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData); // cloudflared 把網址印在 stderr
-    proc.on('exit', () => { if (cfProc === proc) { cfProc = null; cfUrl = ''; } finish({ ok: false, error: 'cloudflared 已結束' }); });
-    proc.on('error', (e) => { if (cfProc === proc) { cfProc = null; cfUrl = ''; } finish({ ok: false, error: String(e && e.message || e) }); });
-    setTimeout(() => finish({ ok: false, error: '啟動逾時，未取得網址' }), 25000);
+    proc.on('exit', (code) => {
+      if (cfProc === proc) { cfProc = null; cfUrl = ''; }
+      finish({ ok: false, error: `cloudflared 已結束（code ${code}）${cfHint(tail)}` });
+    });
+    proc.on('error', (e) => {
+      if (cfProc === proc) { cfProc = null; cfUrl = ''; }
+      finish({ ok: false, error: String((e && e.message) || e) });
+    });
+    // 逾時要把子行程收掉：留著就是一條沒人知道網址、沒人管的公開隧道。
+    timer = setTimeout(() => {
+      if (cfProc === proc) cfStop();
+      finish({ ok: false, error: '啟動逾時，未取得網址' + cfHint(tail) });
+    }, CF_URL_TIMEOUT_MS);
   });
 }
 function cfStop() {
   if (cfProc) { try { cfProc.kill(); } catch {} cfProc = null; }
   cfUrl = '';
+  cfStartError = '';
   return { ok: true };
+}
+// 轉接站收掉時一起收隧道。不然 cloudflared 會變孤兒，繼續把一個沒有門房的網址掛在公網上。
+process.on('exit', () => { if (cfProc) { try { cfProc.kill(); } catch {} } });
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { try { cfStop(); } catch {} process.exit(0); });
 }
 
 // --- 簽章 / token ---
@@ -354,9 +517,11 @@ const AUTH_WINDOW_MS = 10 * 60 * 1000;        // 計次視窗
 const AUTH_LOCK_MS = 15 * 60 * 1000;          // 觸頂後鎖定時長
 const AUTH_MAX_ENTRIES = 5000;                // 防記憶體膨脹上限
 function clientIp(req) {
-  // 經 cloudflared／funnel：真實來源在 x-forwarded-for 第一段；本機直連退回 socket。
-  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return xff || (req.socket && req.socket.remoteAddress) || 'unknown';
+  // 取 x-forwarded-for 的「最後」一段，不是第一段。cloudflared 與 tailscale serve 都是
+  // 「把自己看到的對端接在既有值後面」，所以前面幾段全是用戶端自己塞的——照第一段計數的話，
+  // 攻擊者每次換一個假 IP 就能把爆破防護整個繞開。
+  const chain = String(req.headers['x-forwarded-for'] || '').split(',').map((v) => v.trim()).filter(Boolean);
+  return chain[chain.length - 1] || (req.socket && req.socket.remoteAddress) || 'unknown';
 }
 // 回傳 { blocked, retryAfter秒 }；blocked=true 代表現在應直接擋。
 function authThrottled(ip) {
@@ -500,8 +665,14 @@ function timingEq(a, b) {
 }
 // 「主機本機直連」：沒有 x-forwarded-for（funnel/serve 一定會加）且 host 指向本機。
 // 用來把「首次設定通行碼」限制在主機上操作，避免公網搶先佔用。
+const FORWARD_MARKERS = [
+  'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'forwarded',
+  'x-real-ip', 'cf-connecting-ip', 'cf-ray', 'tailscale-user-login',
+];
 function isLocalDirect(req) {
-  if (req.headers['x-forwarded-for']) return false;
+  // 這個判定等同「owner 權限」（本體 8787 就是靠它代打 /__gate/api/*），所以寧可嚴格：
+  // 任何一種轉送痕跡都直接判定不是本機直連，而不是只看 x-forwarded-for 一個。
+  for (const h of FORWARD_MARKERS) if (req.headers[h]) return false;
   const host = String(req.headers.host || '').toLowerCase();
   return host.startsWith('127.0.0.1') || host.startsWith('localhost') || host.startsWith('[::1]');
 }
@@ -643,8 +814,8 @@ ${as.supported ? `<div class="sec"><h2>開機自啟 ${as.enabled ? '<span class=
 <div class="row">${hourBtn(1)}${hourBtn(4)}${hourBtn(12)}${hourBtn(24)}</div>
 <form method="POST" action="/__gate/share"><input type="hidden" name="action" value="disable"><button style="background:#c0392b">立即關閉分享</button></form>
 <form method="POST" action="/__gate/share">
-<label>分享密碼（給臨時訪客，可與你的通行碼不同）</label>
-<input name="passcode" placeholder="留空＝清除" autocomplete="off">
+<label>分享密碼（至少 6 碼，給臨時訪客，可與你的通行碼不同）</label>
+<input name="passcode" placeholder="留空＝清除" autocomplete="off" minlength="6">
 <label>分享登入 session 時效（小時）</label>
 <input name="sessionTtlHours" type="number" min="1" max="168" value="${s.sessionTtlHours}">
 <input type="hidden" name="action" value="config"><button>儲存分享設定</button></form></div>
@@ -753,8 +924,15 @@ function proxyHttp(clientReq, clientRes) {
     }, (proxyRes) => {
       clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
       proxyRes.pipe(clientRes);
+      proxyRes.on('error', () => { try { clientRes.destroy(); } catch {} });
     });
     proxyReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
+    // 手機切換 App／隧道抖動時，用戶端常在回應中途斷線。沒有把上游一起收掉的話，
+    // 每一次都會留下一條對本體 8787 的連線（SSE/長輪詢尤其明顯）。
+    // writableFinished 用來分辨「正常送完」與「用戶端中途跑掉」：正常結束時不要去 destroy，
+    // 否則會連帶砍掉 keep-alive 連線池裡那條還能重用的 socket。
+    clientRes.on('close', () => { if (!clientRes.writableFinished && !proxyReq.destroyed) proxyReq.destroy(); });
+    clientReq.on('error', () => { try { proxyReq.destroy(); } catch {} });
     clientReq.pipe(proxyReq);
   }).catch(() => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
 }
@@ -776,13 +954,23 @@ function proxyCapture(clientReq, clientRes, onBody) {
     });
   });
   proxyReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
+  clientRes.on('close', () => { if (!clientRes.writableFinished && !proxyReq.destroyed) proxyReq.destroy(); });
+  clientReq.on('error', () => { try { proxyReq.destroy(); } catch {} });
   clientReq.pipe(proxyReq);
 }
 
-function readBody(req, cb) {
-  let body = '';
-  req.on('data', (c) => { body += c; if (body.length > 8192) req.destroy(); });
-  req.on('end', () => cb(new URLSearchParams(body)));
+function readBody(req, res, cb) {
+  let body = '', over = false;
+  req.on('data', (c) => {
+    body += c;
+    // 只 destroy 不回話的話，'end' 永遠不會來，瀏覽器就這樣一直轉——給它一個 413。
+    if (body.length > 8192 && !over) {
+      over = true;
+      try { res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('too large'); } catch {}
+      req.destroy();
+    }
+  });
+  req.on('end', () => { if (!over) cb(new URLSearchParams(body)); });
 }
 function redirect(res, location, setCookie) {
   const h = { Location: location };
@@ -879,11 +1067,21 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
+    // 送出就回：下載 19–70MB，慢線路會撞上本體同源代理的 40 秒逾時，
+    // 但下載還在背景跑，舊版的旗標就永遠卡住。進度改由下面的 progress 端點輪詢。
     if (url === '/__gate/api/cloudflared/install' && req.method === 'POST') {
-      cfDownload().then((r) => {
-        if (!r.ok) { sendJson(502, { error: r.error || '下載失敗' }); return; }
-        buildState().then((s) => sendJson(200, s));
-      });
+      cfBeginDownload();
+      buildState().then((s) => sendJson(200, s)).catch(() => sendJson(500, { error: 'state failed' }));
+      return;
+    }
+    // 進度條每秒輪詢的就是這支：只讀記憶體，不 spawn tailscale/schtasks。
+    if (url === '/__gate/api/cloudflared/progress' && (req.method === 'GET' || req.method === 'POST')) {
+      sendJson(200, { cloudflared: cfInfo() });
+      return;
+    }
+    if (url === '/__gate/api/cloudflared/cancel' && req.method === 'POST') {
+      if (cfDl && cfDl.cancel) cfDl.cancel();
+      sendJson(200, { cloudflared: cfInfo() });
       return;
     }
     if (url === '/__gate/api/channel' && req.method === 'POST') {
@@ -892,6 +1090,7 @@ const server = http.createServer((req, res) => {
         if (!['off', 'tailscale', 'cloudflared'].includes(type)) { sendJson(400, { error: 'bad type' }); return; }
         try {
           if (type === 'cloudflared') {
+            if (!cfInstalled()) { sendJson(409, { error: '尚未安裝 cloudflared', needsInstall: true }); return; }
             await tsSetMode('off');
             const r = await cfStart();
             if (!r.ok) { sendJson(502, { error: r.error || 'cloudflared 啟動失敗' }); return; }
@@ -930,8 +1129,8 @@ const server = http.createServer((req, res) => {
             const hours = Math.max(1, Math.min(720, Number(body.hours) || 4));
             expiresAt = now + hours * 3600 * 1000;
           }
-          if (typeof body.passcode === 'string' && body.passcode && body.passcode.length < 4) {
-            sendJson(400, { error: '分享密碼至少 4 碼' }); return;
+          if (typeof body.passcode === 'string' && body.passcode && body.passcode.length < 6) {
+            sendJson(400, { error: '分享密碼至少 6 碼' }); return;
           }
           CONFIG.share.enabled = true;
           CONFIG.share.expiresAt = expiresAt;
@@ -966,7 +1165,7 @@ const server = http.createServer((req, res) => {
   if (url === '/__gate/setup' && req.method === 'POST') {
     if (!needsSetup()) { redirect(res, '/__gate/admin'); return; }
     if (!isLocalDirect(req)) { sendHtml(res, 403, setupRemotePage()); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const p1 = form.get('passcode') || '', p2 = form.get('passcode2') || '';
       if (p1.length < 6) { sendHtml(res, 400, setupPage('通行碼至少 6 碼')); return; }
       if (p1 !== p2) { sendHtml(res, 400, setupPage('兩次輸入不一致')); return; }
@@ -987,7 +1186,7 @@ const server = http.createServer((req, res) => {
     const ip = clientIp(req);
     const thr = authThrottled(ip);
     if (thr.blocked) { sendHtml(res, 429, loginPage(`嘗試過於頻繁，請約 ${Math.ceil(thr.retryAfter / 60)} 分鐘後再試`)); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const pass = form.get('passcode') || '';
       if (timingEq(pass, CONFIG.passcode)) {
         authOk(ip);
@@ -1004,7 +1203,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.startsWith('/__gate/logout')) {
-    redirect(res, '/', `${COOKIE}=; Path=/; HttpOnly; Max-Age=0`);
+    // 監護解鎖也要一起清掉：只清登入 cookie 的話，同一台裝置換人登入會繼承上一位的 step-up。
+    res.writeHead(303, { Location: '/', 'Set-Cookie': [
+      `${COOKIE}=; Path=/; HttpOnly; Max-Age=0`,
+      `${GUARDIAN_COOKIE}=; Path=/; HttpOnly; Max-Age=0`,
+    ] });
+    res.end();
     return;
   }
 
@@ -1087,7 +1291,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/passcode' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const p = form.get('passcode') || '';
       if (p.length < 6) { adminPage('通行碼至少 6 碼').then((h) => sendHtml(res, 400, h)); return; }
       CONFIG.passcode = p; saveConfig(CONFIG);
@@ -1097,7 +1301,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/guardian-config' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const p = form.get('passcode') || '';
       if (p && p.length < 4) { adminPage('監護密碼至少 4 碼（或留空清除）').then((h) => sendHtml(res, 400, h)); return; }
       CONFIG.guardian = CONFIG.guardian || { passcode: '' };
@@ -1109,7 +1313,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/expose' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const mode = form.get('mode');
       if (!['public', 'private', 'off'].includes(mode)) { redirect(res, '/__gate/admin'); return; }
       tsSetMode(mode).then((r) => {
@@ -1121,7 +1325,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/autostart' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const on = form.get('on') === '1';
       autostartSet(on).then((r) => {
         const msg = r && !r.ok ? '設定失敗：' + htmlEsc((r.stderr || '').slice(0, 120)) : '';
@@ -1132,7 +1336,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/google-config' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       CONFIG.google.clientId = (form.get('clientId') || '').trim();
       const sec = (form.get('clientSecret') || '').trim();
       if (sec) CONFIG.google.clientSecret = sec; // 留空＝不變
@@ -1145,7 +1349,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === '/__gate/share' && req.method === 'POST') {
     if (level !== 'own') { sendHtml(res, 403, loginPage('需 owner 權限')); return; }
-    readBody(req, (form) => {
+    readBody(req, res, (form) => {
       const action = form.get('action');
       if (action === 'enable') {
         const hours = Math.max(0, Math.min(720, Number(form.get('hours')) || 0));
@@ -1155,8 +1359,8 @@ const server = http.createServer((req, res) => {
         CONFIG.share.enabled = false; CONFIG.share.expiresAt = 0;
       } else if (action === 'config') {
         const p = form.get('passcode');
-        if (form.has('passcode') && p && p.length < 4) {
-          adminPage('分享密碼至少 4 碼（或留空清除）').then((h) => sendHtml(res, 400, h));
+        if (form.has('passcode') && p && p.length < 6) {
+          adminPage('分享密碼至少 6 碼（或留空清除）').then((h) => sendHtml(res, 400, h));
           return;
         }
         if (form.has('passcode')) CONFIG.share.passcode = p || '';

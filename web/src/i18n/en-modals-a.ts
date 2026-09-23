@@ -244,7 +244,7 @@ export const enModalsA: Record<string, string> = {
   "需要老闆處理": "Needs the boss's attention",
   "預設會自動選擇可用的 Claude 或 Codex；這裡只用來覆寫": "Defaults to auto-selecting an available Claude or Codex; use this only to override",
   "驗收條件": "Acceptance criteria",
-  "（忙碌）": " (busy)",
+  "（忙碌）": "(busy)",
   "＋ 新任務": "+ New task",
   "＋ 新增": "＋ Add",
 };

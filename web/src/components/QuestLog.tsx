@@ -6,6 +6,7 @@ import { parseMcpToolName as toolMeta } from "../mcpToolName";
 import { describeApproval } from "../approvalPlain";
 import { t } from "../i18n";
 import { formatElapsed } from "../formatElapsed";
+import { Icon } from "./Icon";
 
 const focusScrollPositions = new Map<string, number>();
 const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
@@ -200,7 +201,7 @@ function ApprovalCard({ item, onApprove }: {
           <div className={`approval-plain approval-plain--${plain.level}`}>
             <div className="approval-plain__action">{t("它想：{action}", { action: plain.action })}</div>
             {plain.target && <div className="approval-plain__target">{plain.target}</div>}
-            <div className="approval-plain__risk">{plain.level === "safe" ? "✓" : "⚠"} {plain.risk}</div>
+            <div className="approval-plain__risk"><Icon name={plain.level === "safe" ? "check" : "warning"} /> {plain.risk}</div>
           </div>
         );
       })()}
@@ -243,7 +244,7 @@ export function ToolGroup({ items, summary }: { items: ToolCallItem[]; summary: 
         <span className="tool-group__mark">{running ? <span className="spinner" /> : "⌘"}</span>
         <span className="tool-group__title">{t("工具活動")}</span>
         <span className="tool-group__summary">
-          {t("{count} 項", { count: items.length })}{failed ? t(" · {failed} 失敗", { failed }) : ""}
+          {t("{count} 項", { count: items.length })}{failed ? t("· {failed} 失敗", { failed }) : ""}
         </span>
         <span className="tool-group__chevron">{open ? "▾" : "▸"}</span>
       </button>
@@ -261,7 +262,7 @@ function ThinkingRow({ text }: { text: string }) {
   return (
     <div className="thinking-row">
       <button className="thinking-row__head" onClick={() => setOpen((v) => !v)}>
-        💭 {t("思考")}{open ? "" : "…"}
+        <Icon name="thought" /> {t("思考")}{open ? "" : "…"}
       </button>
       {open && (
         <div className="thinking-row__body">
@@ -405,7 +406,7 @@ function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, o
           <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
           {statusChip(turn.status, waitingForApproval)}
         </button>}
-        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("取消釘選這份報告") : t("釘選這份報告")} title={pinned ? t("取消釘選") : t("釘選報告")} onClick={onPin}>{pinned ? "★" : "☆"}</button>}
+        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("取消釘選這份報告") : t("釘選這份報告")} title={pinned ? t("取消釘選") : t("釘選報告")} onClick={onPin}><Icon name="star" className={pinned ? "" : "ui-icon--hollow"} /></button>}
         <CopyButton value={turn.command} label={t("複製指令")} />
       </div>
       {open && (
@@ -532,7 +533,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         <div className="quest-log__empty">
           {t("在下面下指令,例如「幫我完成工作」——小人會去任務板查還沒做完的事。")}
           <br />
-          {t("輸入 ")}<code>/</code>{t(" 可以看可用的斜線指令。")}
+          {t("輸入")}<code>/</code>{t("可以看可用的斜線指令。")}
         </div>
       )}
       {turns.length > 0 && visibleTurns.length === 0 && (
@@ -571,7 +572,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
             document.getElementById(entry.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
             setActiveSection(entry.id);
             setNavigationOpen(false);
-          }}><i>{entry.level === 0 && pinnedTurns.has(entry.turnKey) ? "★" : entry.number || "·"}</i><span><strong>{entry.label}</strong>{entry.status && <small>{entry.status}</small>}</span></button>)}
+          }}><i>{entry.level === 0 && pinnedTurns.has(entry.turnKey) ? <Icon name="star" size={11} /> : entry.number || "·"}</i><span><strong>{entry.label}</strong>{entry.status && <small>{entry.status}</small>}</span></button>)}
           {visibleTurns.length === 0 && <p>{t("目前沒有可導覽的報告")}</p>}
         </div>
       </nav>

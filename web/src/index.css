@@ -3,3 +3,6 @@
 @import "./styles/workflow-management.css";
 @import "./styles/app-shell-and-focus.css";
 @import "./styles/composer-and-operations.css";
+/* 最後載入：手機共用版型要贏過各元件自己的桌面規則（media query 不加權重，
+   同權重時由順序決定），token 則不受順序影響。 */
+@import "./styles/responsive.css";

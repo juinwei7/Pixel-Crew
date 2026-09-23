@@ -10,10 +10,17 @@ import type { ProviderId } from "./providers/types.js";
 
 export type WarRoomDifficulty = "simple" | "medium" | "hard";
 
-// 🏛／🔍 是編排器建立、完成後就該消失的短命 worker。集中判定，避免不同
-// lifecycle hook 各自硬編字首而漏掉清理或誤寫入永久資料。
-export function isEphemeralWorkerName(name: string): boolean {
-  return name.startsWith("🏛") || name.startsWith("🔍");
+// 編排器建立、完成後就該消失的短命 worker（作戰室成員、研究員）。
+export type EphemeralWorkerKind = "warroom" | "research";
+
+// 舊版是用名字的 emoji 字首（🏛／🔍）判斷這件事：server 這樣命名，server 與
+// 前端再各自比對字首。那等於把協定藏在顯示字串裡——使用者一改名就失效，
+// 前端也被迫在介面上顯示 emoji。現在改成 worker 上的明確欄位，這個函式只
+// 留給「舊版寫進 SQLite 的殘骸」用：那些列沒有新欄位，只能靠名字認。
+const LEGACY_EPHEMERAL_PREFIXES = ["\u{1F3DB}", "\u{1F50D}"];
+
+export function isLegacyEphemeralWorkerName(name: string): boolean {
+  return LEGACY_EPHEMERAL_PREFIXES.some((prefix) => name.startsWith(prefix));
 }
 
 // 依難度配模型：簡單用便宜、難的用強。作戰室必須沿用召集 NPC 的 provider，

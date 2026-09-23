@@ -229,7 +229,7 @@ export function CommandCenter({
     : targets.find((target) => target.id === activeWorkerId)?.id ?? targets[0]?.id ?? "";
 
   return (
-    <Modal label={t("指令中心")} overlayClassName="command-center" cardClassName="command-center__shell" hideClose onClose={close}>
+    <Modal label={t("指令中心")} overlayClassName="command-center" cardClassName="command-center__shell" variant="full" hideClose onClose={close}>
         <header className="command-center__header">
           <div>
             <span className="command-center__eyebrow">PROVIDER WORKFLOWS</span>

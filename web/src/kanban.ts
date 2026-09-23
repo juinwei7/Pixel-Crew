@@ -1,5 +1,6 @@
 import type { BossTask, DepartmentMission, WorkerState } from "./types";
 import { t } from "./i18n";
+import type { IconName } from "./components/Icon";
 
 // 任務看板的純攤平邏輯：把既有的 BOSS 任務（AI 拆解的部門 stages）與部門
 // Mission（每步驟有指派 NPC 的執行計畫）攤平成卡片、依狀態分四欄。自
@@ -10,7 +11,7 @@ export type ColumnId = "todo" | "doing" | "attention" | "done";
 
 export type Card = {
   key: string;
-  icon: string;
+  icon: IconName;
   title: string;
   assignee: string;
   group: string;
@@ -20,13 +21,13 @@ export type Card = {
 };
 
 export const COLUMNS: Array<{ id: ColumnId; label: string }> = [
-  { id: "todo", label: t("📥 待辦") },
-  { id: "doing", label: t("🏃 進行中") },
-  { id: "attention", label: t("⚠️ 需要處理") },
-  { id: "done", label: t("✅ 已完成") },
+  { id: "todo", label: t("待辦") },
+  { id: "doing", label: t("進行中") },
+  { id: "attention", label: t("需要處理") },
+  { id: "done", label: t("已完成") },
 ];
 
-const STEP_ICON = { execute: "🔧", review: "🔎", consult: "💬", synthesize: "📎" } as const;
+const STEP_ICON = { execute: "wrench", review: "search", consult: "speech", synthesize: "paperclip" } as const satisfies Record<string, IconName>;
 const ATTENTION_REASON: Record<string, string> = {
   plan_approval: t("計畫等你核准"),
   review_inconclusive: t("審查沒有結論，等你決定"),
@@ -57,7 +58,7 @@ export function buildKanbanColumns(
     if (mission.status === "needs_attention") {
       push("attention", {
         key: `mission-${mission.id}`,
-        icon: "🧑‍💼",
+        icon: "user",
         title: ATTENTION_REASON[mission.attentionReason ?? ""] ?? t("等你處理"),
         assignee: t("老闆（你）"),
         group,
@@ -68,7 +69,7 @@ export function buildKanbanColumns(
     if (mission.status === "planning" && mission.steps.length === 0) {
       push("doing", {
         key: `mission-${mission.id}`,
-        icon: "🧠",
+        icon: "brain",
         title: t("AI 正在拆解任務…"),
         assignee: workerName(mission.bossWorkerId),
         group,
@@ -83,7 +84,7 @@ export function buildKanbanColumns(
         : "todo";
       push(column, {
         key: `step-${mission.id}-${step.id}`,
-        icon: STEP_ICON[step.kind] ?? "🔧",
+        icon: STEP_ICON[step.kind] ?? "wrench",
         title: step.title,
         assignee: workerName(step.assigneeWorkerId),
         group,
@@ -98,7 +99,7 @@ export function buildKanbanColumns(
     if (task.status === "needs_input") {
       push("attention", {
         key: `boss-${task.id}`,
-        icon: "🧑‍💼",
+        icon: "user",
         title: t("AI 有問題想先問你"),
         assignee: t("老闆（你）"),
         group: task.title.slice(0, 60),
@@ -114,7 +115,7 @@ export function buildKanbanColumns(
         : "todo";
       push(column, {
         key: `stage-${task.id}-${stage.id}`,
-        icon: "🏢",
+        icon: "building",
         title: stage.title,
         assignee: stage.departmentName,
         group: task.title.slice(0, 60),

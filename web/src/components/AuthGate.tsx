@@ -84,12 +84,12 @@ export function AuthGate({
 
   return (
     <div
-      className={`auth-gate ${blocking ? "auth-gate--blocking" : "auth-gate--optional"}`}
+      className={`ui-modal ui-modal--center auth-gate ${blocking ? "auth-gate--blocking" : "auth-gate--optional"}`}
       role={blocking ? "dialog" : "region"}
       aria-modal={blocking ? "true" : undefined}
       aria-labelledby="auth-title"
     >
-      <div className="auth-gate__card">
+      <div className="ui-modal__card auth-gate__card">
         <div className="auth-gate__eyebrow">AGENT CONNECTION</div>
         <h1 id="auth-title" className="auth-gate__title">
           {blocking
@@ -279,8 +279,8 @@ export function AuthGate({
         {blocking && <div className="auth-gate__hint">{t("完成安裝或登入後按「重新檢查」；系統也會每 3 秒自動確認。")}</div>}
 
         {confirmProvider && (
-          <div className="auth-install-confirm" role="alertdialog" aria-modal="true" aria-labelledby="install-confirm-title">
-            <div className="auth-install-confirm__card">
+          <div className="ui-modal auth-install-confirm" role="alertdialog" aria-modal="true" aria-labelledby="install-confirm-title">
+            <div className="ui-modal__card auth-install-confirm__card">
               <div className="auth-gate__eyebrow">OFFICIAL INSTALLER</div>
               <h2 id="install-confirm-title">{t("安裝 {name}？", { name: providers[confirmProvider].displayName })}</h2>
               <p>{t("Pixel Crew 將執行下列固定的官方安裝器。它會修改你的使用者程式目錄，但不會安裝 npm，也不會取得帳號密碼或 token。")}</p>

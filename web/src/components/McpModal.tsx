@@ -3,6 +3,7 @@ import type { CapabilityState, McpLoginResult, McpScope, McpServerState, Provide
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
+import { Icon } from "./Icon";
 
 function isEditable(name: string): boolean {
   return /^[\w.-]+$/.test(name);
@@ -299,7 +300,7 @@ export function McpModal({ capabilities, provider, workspacePath, mcpLoginResult
             </button>
           )}
           <button type="button" className="mcp-modal__refresh" disabled={pending || capabilities.loading} onClick={() => void refresh()}>
-            ↻ {t("重新讀取")}
+            <Icon name="refresh" /> {t("重新讀取")}
           </button>
         </header>
 

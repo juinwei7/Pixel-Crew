@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { t } from "../i18n";
 import { TOUR_DONE_KEY } from "../onboardingState";
+import { Icon } from "./Icon";
 
 // 首次進站自動播放一次；跳過或走完都算看過
 
@@ -31,9 +32,14 @@ const STEPS: Step[] = [
     text: t("有大案子就按這顆金色按鈕。你用一句話描述目標，AI 會自動拆解步驟、指派給合適的員工，全程幫你盯進度。"),
   },
   {
-    anchor: ".top-bar__mcp",
-    title: t("功能選單"),
-    text: t("日常營運都收在這顆 ⚙ 功能：📋看板看任務卡片、📊營運看每日成本、🌙下班看今日報告與回放、⟳ 優雅重啟伺服器、MCP 連線狀態。"),
+    anchor: ".top-bar__npc",
+    title: t("NPC 設定"),
+    text: t("這顆只動「目前選到的那一位」：換供應商或模型、指定要用哪個帳號、調自動核准，還有它能用哪些 MCP 工具。"),
+  },
+  {
+    anchor: ".top-bar__more",
+    title: t("平台設定"),
+    text: t("••• 是整個辦公室的設定：任務看板看卡片進度、營運面板看每日成本、下班報告看今日回放，還有工作位置、語言、備份與重啟伺服器。"),
   },
   {
     anchor: ".holo-panel",
@@ -47,7 +53,7 @@ const STEPS: Step[] = [
   },
   {
     title: t("導覽結束！"),
-    text: t("辦公室交給你了，老闆！忘記的話隨時按頂欄的 ❓導覽 再找我。現在去下第一道指令吧！"),
+    text: t("辦公室交給你了，老闆！忘記的話隨時按頂欄的 導覽 再找我。現在去下第一道指令吧！"),
   },
 ];
 
@@ -111,7 +117,7 @@ export function OnboardingTour({ onClose }: { onClose(): void }) {
     <div className={`tour-overlay ${rect ? "" : "tour-overlay--plain"}`} role="dialog" aria-label={t("新手導覽")}>
       {rect && <div className="tour-hole" style={holeStyle} />}
       <div className="tour-dialog" style={dialogStyle}>
-        <div className="tour-dialog__speaker">🐈 {t("導覽貓")}</div>
+        <div className="tour-dialog__speaker"><Icon name="cat" /> {t("導覽貓")}</div>
         <h3>{step.title}</h3>
         <p>{step.text}</p>
         <div className="tour-dialog__actions">

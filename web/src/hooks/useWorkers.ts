@@ -57,6 +57,7 @@ type ServerMessage =
         autoApproveMode: AutoApproveMode;
         handoff: HandoffProgress | null;
         resumeCandidate?: WorkerState["resumeCandidate"];
+        ephemeralKind?: WorkerState["ephemeralKind"];
         events: RunnerEvent[];
       }>;
     }
@@ -107,6 +108,7 @@ type WorkerSummary = {
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
   resumeCandidate?: WorkerState["resumeCandidate"];
+  ephemeralKind?: WorkerState["ephemeralKind"];
 };
 
 function defaultAuth(
@@ -261,6 +263,7 @@ export function useWorkers() {
             state.departmentId = w.departmentId ?? null;
             state.accountId = w.accountId ?? null;
             state.resumeCandidate = w.resumeCandidate ?? null;
+            state.ephemeralKind = w.ephemeralKind ?? null;
             record[w.id] = state;
             ids.push(w.id);
           }

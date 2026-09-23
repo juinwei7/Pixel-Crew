@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Department, DepartmentMission, WorkerState } from "../types";
 import type { CrewFilter } from "../uiPreferences";
-import { SHIRT_COLORS } from "../game/person";
 import { roomName } from "../workspace";
 import { filterCrew, workerAttention, type WorkerAttention } from "../crew";
+import { CrewChips, shirtColor } from "./CrewChips";
 import { computeDropIndex, moveId, reorderShift } from "../crewReorder";
 import { t } from "../i18n";
+import { Modal } from "./Modal";
+import { useIsPhone } from "../hooks/useIsPhone";
+import { Icon } from "./Icon";
 
 type Props = {
   workers: WorkerState[];
@@ -36,11 +39,6 @@ const MAX_WORKERS = 20;
 // open it downward or flip it up when a row sits near the bottom of the rail.
 const MENU_ESTIMATED_HEIGHT = 210;
 
-function shirtColor(index: number): string {
-  const [color] = SHIRT_COLORS[index % SHIRT_COLORS.length];
-  return `#${color.toString(16).padStart(6, "0")}`;
-}
-
 const FILTERS: Array<{ id: CrewFilter; label: string }> = [
   { id: "all", label: t("全部") },
   { id: "working", label: t("執行中") },
@@ -58,7 +56,7 @@ function statusCopy(status: WorkerAttention): string {
 const DRAG_THRESHOLD_PX = 6;
 const TOUCH_DRAG_DELAY_MS = 350;
 
-export function WorkerTabs({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom, inert = false }: Props) {
+export function WorkerTabs({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed: railCollapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom, inert = false }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -73,6 +71,12 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
   const suppressClickRef = useRef(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const [drag, setDrag] = useState<{ id: string; overIndex: number; rowH: number } | null>(null);
+  const isPhone = useIsPhone();
+  // 手機的完整名冊（部門分組 / 篩選 / 搜尋 / 新增）改成抽屜，橫向 NPC 條只負責換人。
+  const [rosterOpen, setRosterOpen] = useState(false);
+  // 「收合」是桌面側欄的偏好（縮成 52px 只剩頭像）。抽屜本來就是打開才看得到，
+  // 套上去只會變成一排沒有名字的色塊，所以手機一律當成展開。
+  const collapsed = isPhone ? false : railCollapsed;
   const matched = useMemo(() => filterCrew(workers, filter, query, currentRoom), [workers, filter, query, currentRoom]);
   const active = workers.find((worker) => worker.id === activeId);
   const pinned = active && !matched.some((worker) => worker.id === active.id) ? active : null;
@@ -281,7 +285,7 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
               if (event.key === "Escape") { setEditingId(null); setRenameError(null); }
             }} />
           ) : <strong>{worker.name}</strong>}
-          <small>{worker.persona?.role ? <span className="crew-row__role" title={t("職務：{role}", { role: worker.persona.role })}>{worker.persona.role}</span> : null}{isPinned ? t("目前選取 · ") : ""}{roomName(worker.workspacePath)}</small>
+          <small>{worker.persona?.role ? <span className="crew-row__role" title={t("職務：{role}", { role: worker.persona.role })}>{worker.persona.role}</span> : null}{isPinned ? t("目前選取 ·") : ""}{roomName(worker.workspacePath)}</small>
         </div>
         <span className={`crew-row__provider crew-row__provider--${worker.provider}`}>{worker.provider === "claude" ? "CL" : "CX"}</span>
       </>}
@@ -306,11 +310,10 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
     );
   }
 
-  return (
-    <aside ref={railRef} className={`crew-rail ${collapsed ? "crew-rail--collapsed" : ""}`} aria-hidden={inert || undefined} inert={inert ? "" : undefined}>
+  const railBody = <>
       <div className="crew-rail__head">
         {!collapsed && <strong>CREW <span>{workers.length}/{MAX_WORKERS}</span></strong>}
-        <button type="button" onClick={() => onCollapsed(!collapsed)} aria-label={collapsed ? t("展開人員列") : t("收合人員列")} title={collapsed ? t("展開人員列") : t("收合人員列")}><svg viewBox="0 0 24 24" aria-hidden="true">{collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="M15 6 9 12l6 6" />}</svg></button>
+        <button type="button" className="crew-rail__collapse" onClick={() => onCollapsed(!collapsed)} aria-label={collapsed ? t("展開人員列") : t("收合人員列")} title={collapsed ? t("展開人員列") : t("收合人員列")}><svg viewBox="0 0 24 24" aria-hidden="true">{collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="M15 6 9 12l6 6" />}</svg></button>
         {!collapsed && <button type="button" className={searchOpen ? "crew-rail__filter-active" : ""} onClick={() => setSearchOpen((open) => !open)} aria-label={t("搜尋人員")} title={t("搜尋人員")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></button>}
         {!collapsed && <button type="button" onClick={() => setFiltersOpen((open) => !open)} aria-label={t("篩選人員")} title={t("篩選人員")} className={filter !== "all" ? "crew-rail__filter-active" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg></button>}
         {!collapsed && onCreateDepartment && <button type="button" className="crew-rail__department-add" onClick={onCreateDepartment} disabled={workers.length > MAX_WORKERS - 2} aria-label={t("建立部門")} title={t("AI 建立部門")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="2.5" /><circle cx="16" cy="8" r="2.5" /><path d="M3.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7M11.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7" /></svg></button>}
@@ -338,6 +341,34 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
         })}
         {matched.length === 0 && !pinned && !collapsed && <div className="crew-rail__empty">{t("沒有符合的人員")}</div>}
       </div>
+  </>;
+
+  /* 手機不用「浮在辦公室上的左側面板」——那是桌面版型，在 390px 會蓋掉半個
+     場景，而且日誌一展開就得整個收起來（等於選不了人）。改成頂部一條橫向
+     可捲的 NPC 條：永遠看得到目前是誰、一下就能換人；部門分組、篩選、搜尋、
+     新增這些低頻操作收進「名冊」抽屜。 */
+  if (isPhone) {
+    return <div className="crew-strip-wrap" aria-hidden={inert || undefined} inert={inert ? "" : undefined}>
+      <CrewChips workers={renderOrder} activeId={activeId} onSelect={onSelect} />
+      <button type="button" className="crew-strip__roster" onClick={() => setRosterOpen(true)} aria-label={t("人員名冊")} title={t("人員名冊")}>
+        <Icon name="user" size={18} />
+      </button>
+      {rosterOpen && <Modal
+        label={t("人員名冊")}
+        eyebrow="CREW"
+        title={t("人員名冊")}
+        overlayClassName="warroom-result crew-roster"
+        cardClassName="warroom-result__card crew-roster__card"
+        onClose={() => setRosterOpen(false)}
+      >
+        <div className="crew-rail crew-rail--sheet">{railBody}</div>
+      </Modal>}
+    </div>;
+  }
+
+  return (
+    <aside ref={railRef} className={`crew-rail ${collapsed ? "crew-rail--collapsed" : ""}`} aria-hidden={inert || undefined} inert={inert ? "" : undefined}>
+      {railBody}
     </aside>
   );
 }

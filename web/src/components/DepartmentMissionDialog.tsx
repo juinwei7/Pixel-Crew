@@ -76,7 +76,7 @@ function missionActivityTone(event: RunnerEvent): MissionActivityTone {
   return "neutral";
 }
 
-const MISSION_ACTIVITY_TONE_ICON: Record<MissionActivityTone, string> = { ok: "✓", error: "✕", pending: "⏳", neutral: "•" };
+const MISSION_ACTIVITY_TONE_ICON: Record<MissionActivityTone, string> = { ok: "✓", error: "✕", pending: "…", neutral: "•" };
 
 type MissionActivityGroup =
   | { kind: "tools"; key: string; workerId: string; items: ToolCallItem[] }
@@ -278,7 +278,7 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
       {mission.steps.length > 0 && <ol>{mission.steps.map((step, index) => {
         const assignee = workers.find((worker) => worker.id === step.assigneeWorkerId);
         return <li key={step.id} className={`mission-step mission-step--${step.status}`}>
-          <div><b>{index + 1}. {step.title}</b><span>{step.kind === "review" ? "REVIEW" : step.kind === "consult" ? "CONSULT" : step.kind === "synthesize" ? t("主管彙整") : "EXECUTE"} · {assignee?.name ?? t("未知 NPC")}{step.attempt > 1 ? t(" · 第 {n} 輪", { n: step.attempt }) : ""}</span></div>
+          <div><b>{index + 1}. {step.title}</b><span>{step.kind === "review" ? "REVIEW" : step.kind === "consult" ? "CONSULT" : step.kind === "synthesize" ? t("主管彙整") : "EXECUTE"} · {assignee?.name ?? t("未知 NPC")}{step.attempt > 1 ? t("· 第 {n} 輪", { n: step.attempt }) : ""}</span></div>
           {step.status !== "pending" && <small>{step.status === "running" ? t("執行中") : step.status === "failed" ? t("失敗") : t("完成")}</small>}
           {step.reviewResult && <div className="mission-step__review">
             <p><strong>{step.reviewResult.verdict}</strong> · {step.reviewResult.summary}</p>

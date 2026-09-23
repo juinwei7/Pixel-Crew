@@ -8,7 +8,7 @@
  * - 換腦後仍在前 3 回合、且這幾回合「連續」都超標 → 固定底盤太肥，永久停用
  *   （重啟伺服器才重新評估；只放行過一次熱身工作的短暫尖峰，避免 host 一接手就
  *   被交辦超重工作時被誤判成底盤肥）
- * - 🏛/🔍 開頭的短命工、非 claude provider、交接/協作/Mission 進行中 → 不換
+ * - 短命工（作戰室成員、研究員）、非 claude provider、交接/協作/Mission 進行中 → 不換
  */
 import type { RunnerEvent } from "./protocol.js";
 import { t } from "./i18n.js";
@@ -22,6 +22,8 @@ export type BrainSwapObservation = {
   event: RunnerEvent;
   provider: string;
   workerName: string;
+  /** 編排器建立、跑完就消失的短命 worker（作戰室成員、研究員）。 */
+  ephemeral: boolean;
   /** 這顆 worker 是否已送出「寫交接摘要」請求、正在等摘要回合。 */
   pending: boolean;
   /** 這顆 worker 的自動換腦是否已被永久停用。 */
@@ -59,7 +61,7 @@ export function decideBrainSwap(input: BrainSwapObservation): BrainSwapDecision 
   if (event.type === "error") return { action: "clear_pending" };
   if (event.type !== "turn_end") return { action: "ignore" };
   if (input.provider !== "claude") return { action: "ignore" };
-  if (input.workerName.startsWith("🏛") || input.workerName.startsWith("🔍")) return { action: "ignore" };
+  if (input.ephemeral) return { action: "ignore" };
 
   if (input.pending) {
     // 摘要回合結束 → 執行換腦
