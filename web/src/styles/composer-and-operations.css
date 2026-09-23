@@ -1084,6 +1084,16 @@ summary:focus-visible,
 .boss-task-desk__starters button::before { content: "↗"; margin-right: 9px; color: #3c8095; font-family: var(--mono); }
 .boss-task-desk__starters button:hover { transform: translateX(2px); border-color: rgba(0, 229, 255,.3); background: rgba(0, 229, 255,.055); color: #c4d7e8; }
 
+/* 在老闆交辦頁直接成立一支常駐部門（開既有的 DepartmentCreator）。 */
+.boss-task-desk__new-department { display: flex; align-items: center; gap: 11px; width: 100%; margin-top: 10px; padding: 11px 13px; border: 1px solid rgba(140,110,255,.28); border-radius: 10px; background: linear-gradient(120deg, rgba(140,110,255,.09), rgba(90,150,255,.05)); color: #d5d0f2; cursor: pointer; text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+.boss-task-desk__new-department:hover { transform: translateY(-1px); border-color: rgba(160,130,255,.55); background: linear-gradient(120deg, rgba(150,120,255,.16), rgba(100,160,255,.08)); }
+.boss-task-desk__new-department-icon { flex: 0 0 30px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: rgba(150,120,255,.16); }
+.boss-task-desk__new-department-icon svg { width: 18px; height: 18px; fill: none; stroke: #b9a6ff; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.boss-task-desk__new-department-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.boss-task-desk__new-department-text strong { color: #e6e1ff; font-size: 11px; }
+.boss-task-desk__new-department-text small { color: #8c88b8; font-size: 8.5px; line-height: 1.5; }
+.boss-task-desk__new-department-arrow { flex: 0 0 auto; color: #b9a6ff; font-size: 14px; }
+
 /* 專家顧問（沒方向時的前段）：輸入一個念頭 → 幾個「你可能沒想到」的方向卡片。 */
 .boss-task-desk__advisor { display: flex; width: 100%; margin-top: 16px; flex-direction: column; gap: 9px; padding-top: 14px; border-top: 1px dashed rgba(100,172,205,.16); text-align: left; }
 .boss-task-desk__advisor-head { display: flex; flex-direction: column; gap: 3px; }

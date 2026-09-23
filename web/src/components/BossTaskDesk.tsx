@@ -35,6 +35,7 @@ type Props = {
   onDelete(id: string): Promise<{ error?: string }>;
   onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
   onOpenMission?(missionId: string): void;
+  onCreateDepartment?(): void;
   onClose(): void;
   composerHost?: Element | null;
   focusMode?: boolean;
@@ -91,7 +92,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onCreateDepartment, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -423,12 +424,18 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <strong>{t("今天想完成什麼？")}</strong>
         <p>{t("將以目前工作區「{workspace}」開始；需求太概略時會先詢問，明確後才安排部門。", { workspace: workspaceLabel(workspacePath) })}</p>
         <div className="boss-task-desk__starters" aria-label={t("任務範例")}>
-          {starterTasks.map((starter) => <button key={starter} type="button" onClick={() => {
-            try { localStorage.setItem(`pixel-crew:task-composer:boss:${workspacePath}:new`, starter); } catch { /* unavailable */ }
-            setNewTask(false);
-            requestAnimationFrame(() => setNewTask(true));
-          }}>{t(starter)}</button>)}
+          {starterTasks.map((starter) => <button key={starter} type="button" onClick={() => useProposalObjective(t(starter))}>{t(starter)}</button>)}
         </div>
+        {onCreateDepartment && <button type="button" className="boss-task-desk__new-department" onClick={onCreateDepartment}>
+          <span className="boss-task-desk__new-department-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5" /><circle cx="16" cy="8" r="2.5" /><path d="M3.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7M11.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7" /></svg>
+          </span>
+          <span className="boss-task-desk__new-department-text">
+            <strong>{t("建立專門處理的部門")}</strong>
+            <small>{t("成立一支常駐團隊長期負責某個領域，之後交辦會自動路由給它。")}</small>
+          </span>
+          <span className="boss-task-desk__new-department-arrow" aria-hidden="true">→</span>
+        </button>}
         <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
           <div className="boss-task-desk__advisor-head">
             <strong>{t("沒方向？讓顧問幫你想")}</strong>

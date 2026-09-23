@@ -1196,6 +1196,7 @@ export function App() {
           onUpdate={updateBossTask}
           onDelete={deleteBossTask}
           onRestart={restartBossTask}
+          onCreateDepartment={() => setDepartmentCreatorOpen(true)}
           onOpenMission={(missionId) => {
             const mission = missions[missionId];
             if (!mission?.departmentId) return;
