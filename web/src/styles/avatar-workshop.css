@@ -739,6 +739,10 @@
 .mission-activity-row__body { flex: 1; min-width: 0; }
 .mission-activity-row--ok .mission-activity-row__icon { color: #6bd9a0; }
 .mission-activity-row--error .mission-activity-row__icon { color: var(--err); }
+/* NPC 在部門任務裡的實際發言（可視化「部門討論」的核心）——像聊天泡泡，讀得到內容。 */
+.mission-activity-row--speech { align-items: flex-start; }
+.mission-activity-row--speech .mission-activity-row__who { margin-top: 2px; color: #ffd27c; }
+.mission-activity-row__speech { padding: 6px 9px; border-left: 2px solid rgba(255,196,77,.35); border-radius: 6px; background: rgba(255,196,77,.05); color: #d6e2f0; font-size: 10px; line-height: 1.6; }
 .mission-activity-row--error .mission-activity-row__label { color: var(--err); }
 .mission-activity-row--pending .mission-activity-row__icon { color: #ffb75e; }
 

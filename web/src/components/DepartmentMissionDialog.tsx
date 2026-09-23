@@ -80,11 +80,15 @@ const MISSION_ACTIVITY_TONE_ICON: Record<MissionActivityTone, string> = { ok: "�
 
 type MissionActivityGroup =
   | { kind: "tools"; key: string; workerId: string; items: ToolCallItem[] }
+  | { kind: "text"; key: string; workerId: string; text: string }
   | { kind: "event"; key: string; workerId: string; label: string; tone: MissionActivityTone };
 
 // Consecutive tool_call_start/tool_call_result pairs from the same worker collapse
 // into one ToolGroup instead of two flat rows per call — the raw event stream
 // otherwise renders dozens of near-duplicate "開始使用工具" / "工具執行完成" rows.
+// Consecutive text_delta from the same worker coalesce into one speech block so the
+// user can read what each NPC actually says during the department's work (that was
+// previously filtered out, which is why the "discussion" looked invisible).
 function groupMissionActivity(events: MissionExecutionEvent[]): MissionActivityGroup[] {
   const groups: MissionActivityGroup[] = [];
   const pending = new Map<string, ToolCallItem>();
@@ -106,6 +110,13 @@ function groupMissionActivity(events: MissionExecutionEvent[]): MissionActivityG
         item.status = "done";
         return;
       }
+    }
+    if (event.type === "text_delta") {
+      if (!event.text) return;
+      const last = groups[groups.length - 1];
+      if (last?.kind === "text" && last.workerId === workerId) last.text += event.text;
+      else groups.push({ kind: "text", key: `text-${index}`, workerId, text: event.text });
+      return;
     }
     groups.push({
       kind: "event",
@@ -273,9 +284,12 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
         ? [{ workerId, request: event.request }]
         : [],
     );
-    const visibleActivity = (mission.executionEvents ?? [])
-      .filter(({ event }) => !["text_delta", "thinking_delta", "tool_call_output_delta", "meta"].includes(event.type))
-      .slice(-50);
+    // Keep text_delta (the NPCs' actual words) — only drop noisy raw deltas and meta.
+    // Coalesce FIRST, then cap on groups, so a long turn isn't sliced mid-sentence.
+    const activityGroups = groupMissionActivity(
+      (mission.executionEvents ?? []).filter(({ event }) => !["thinking_delta", "tool_call_output_delta", "meta"].includes(event.type)),
+    ).slice(-60);
+    const missionActive = mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing";
     return <div key={mission.id} className="department-chat__exchange">
       <article className="department-chat__message department-chat__message--owner"><span>{t("老闆")}</span><p>{mission.objective}</p></article>
       <article className={`mission-card mission-card--${mission.status}`}>
@@ -320,10 +334,10 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
           </article>;
         })}
       </section>}
-      {visibleActivity.length > 0 && <details className="mission-card__activity">
-        <summary>{t("任務執行紀錄 · {count}", { count: visibleActivity.length })}</summary>
+      {activityGroups.length > 0 && <details className="mission-card__activity" open={missionActive}>
+        <summary>{t("部門討論與執行 · {count}", { count: activityGroups.length })}</summary>
         <div className="mission-card__activity-list">
-          {groupMissionActivity(visibleActivity).map((group) => {
+          {activityGroups.map((group) => {
             const workerName = workers.find((candidate) => candidate.id === group.workerId)?.name ?? t("部門成員");
             if (group.kind === "tools") {
               return <div key={group.key} className="mission-activity-row">
@@ -331,6 +345,12 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
                 <div className="mission-activity-row__body">
                   {group.items.length > 1 ? <ToolGroup items={group.items} summary /> : <ToolRow item={group.items[0]} />}
                 </div>
+              </div>;
+            }
+            if (group.kind === "text") {
+              return <div key={group.key} className="mission-activity-row mission-activity-row--speech">
+                <span className="mission-activity-row__who">{workerName}</span>
+                <div className="mission-activity-row__body mission-activity-row__speech"><RichText text={group.text} compact /></div>
               </div>;
             }
             return <div key={group.key} className={`mission-activity-row mission-activity-row--${group.tone}`}>
