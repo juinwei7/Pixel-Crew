@@ -180,6 +180,12 @@ import {
   parseAdvisorResult,
   explainAdvisorFailure,
 } from "./expertAdvisor.js";
+import {
+  autopilotNextPrompt,
+  clampAutopilotSteps,
+  parseAutopilotDecision,
+  type AutopilotHistoryEntry,
+} from "./autopilot.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
 import {
   boundedDepartmentContext,
@@ -4662,6 +4668,11 @@ function missionReport(mission: DepartmentMission): string {
 }
 
 function advanceBossTask(task: BossTask): void {
+  advanceBossTaskStages(task);
+  autopilotHook(task);
+}
+
+function advanceBossTaskStages(task: BossTask): void {
   for (const stage of task.stages) {
     if (!stage.missionId || stage.status === "completed" || stage.status === "failed" || stage.status === "cancelled") continue;
     const mission = store.getDepartmentMission(stage.missionId);
@@ -4773,6 +4784,174 @@ function advanceBossTasksForMission(missionId: string): void {
     if (task.stages.some((stage) => stage.missionId === missionId)) advanceBossTask(task);
   }
 }
+
+// ===== Autopilot（老闆交辦自動循環）==========================================
+// 開關按 workspace 記在記憶體：有值＝開，重啟後全清空（護欄：重啟預設關，無人時不偷跑）。
+type AutopilotState = { stepsRemaining: number; running: boolean };
+const autopilotByWorkspace = new Map<string, AutopilotState>();
+// 同一張交辦的終態只觸發一次循環（advanceBossTask 可能被多次呼叫）。
+const autopilotFired = new Set<string>();
+// 全域鎖：一次只推進一步，杜絕並發生出多張交辦。
+let autopilotAdvancing = false;
+
+function autopilotKey(workspacePath: string): string {
+  return registryKey(workspacePath);
+}
+
+function autopilotWorkspaceLabel(workspacePath: string): string {
+  return workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath;
+}
+
+function autopilotSnapshot(workspacePath: string): { enabled: boolean; stepsRemaining: number } {
+  const state = autopilotByWorkspace.get(autopilotKey(workspacePath));
+  return { enabled: Boolean(state), stepsRemaining: state?.stepsRemaining ?? 0 };
+}
+
+function broadcastAutopilot(workspacePath: string): void {
+  const snap = autopilotSnapshot(workspacePath);
+  broadcast({ type: "autopilot", workspacePath: autopilotKey(workspacePath), enabled: snap.enabled, stepsRemaining: snap.stepsRemaining });
+}
+
+function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number): void {
+  const key = autopilotKey(workspacePath);
+  if (enabled) autopilotByWorkspace.set(key, { stepsRemaining: clampAutopilotSteps(maxSteps), running: false });
+  else autopilotByWorkspace.delete(key);
+  broadcastAutopilot(workspacePath);
+}
+
+function disableAutopilotWithNote(task: BossTask, note: string): void {
+  const had = autopilotByWorkspace.delete(autopilotKey(task.workspacePath));
+  if (!had) return;
+  task.messages.push(bossTaskMessage("system", note));
+  persistBossTask(task);
+  broadcastAutopilot(task.workspacePath);
+}
+
+// 從交辦目標直接開一張新的 Boss Task（給自動循環程式化建立用；行為對齊 POST /api/boss-tasks）。
+async function spawnBossTask(workspacePath: string, objective: string, note?: string): Promise<BossTask | null> {
+  const runtime = resolveDecisionRuntime(undefined, undefined, workspacePath);
+  if ("error" in runtime) return null;
+  const now = new Date().toISOString();
+  const executionProfile = normalizeExecutionProfile(undefined);
+  const executionBudget = executionBudgetFor(executionProfile, {});
+  const messages = [bossTaskMessage("boss", objective)];
+  if (note) messages.push(bossTaskMessage("system", note));
+  const task: BossTask = {
+    id: randomUUID(),
+    title: objective.slice(0, 120),
+    archivedAt: null,
+    workspacePath,
+    decisionProvider: runtime.provider,
+    decisionModel: runtime.model,
+    objective,
+    acceptanceCriteria: [],
+    attachmentIds: [],
+    clientMessageId: null,
+    idempotencyKey: null,
+    status: "discovering",
+    executionProfile,
+    executionBudget,
+    messages,
+    stages: [],
+    finalReport: null,
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+  };
+  if (!store.saveBossTask(task)) return null;
+  broadcastBossTask(task, true);
+  await decideBossTask(task);
+  return task;
+}
+
+// 交辦任務進入終態時的自動循環 hook（由 advanceBossTask 統一呼叫）：
+// 完成 → 讓決策模型自己決定下一步 → 再開一張；卡住／失敗 → 停下等人（護欄）。
+function autopilotHook(task: BossTask): void {
+  const state = autopilotByWorkspace.get(autopilotKey(task.workspacePath));
+  if (!state) return;
+  const terminal = task.status === "completed" || task.status === "needs_attention" || task.status === "failed" || task.status === "cancelled";
+  if (!terminal || autopilotFired.has(task.id)) return;
+  autopilotFired.add(task.id);
+  if (task.status !== "completed") {
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
+    return;
+  }
+  if (state.running || autopilotAdvancing) return;
+  void advanceAutopilot(task, state);
+}
+
+async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): Promise<void> {
+  const workspacePath = justFinished.workspacePath;
+  if (state.stepsRemaining <= 0) {
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達步數上限，已自動停止。要繼續就再打開開關。"));
+    return;
+  }
+  state.running = true;
+  autopilotAdvancing = true;
+  try {
+    const runtime = resolveDecisionRuntime(undefined, undefined, workspacePath);
+    if ("error" in runtime) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    // 提示池：拿近期已完成交辦當脈絡，讓決策模型自己決定下一步。
+    const history: AutopilotHistoryEntry[] = store.listBossTasks()
+      .filter((item) => sameWorkspacePath(item.workspacePath, workspacePath) && item.status === "completed")
+      .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""))
+      .slice(-8)
+      .map((item) => ({ objective: item.objective, report: item.finalReport ? collaborationText(item.finalReport, 600) : undefined }));
+    const prompt = autopilotNextPrompt({ workspaceLabel: autopilotWorkspaceLabel(workspacePath), history, stepsRemaining: state.stepsRemaining - 1 });
+    let decision;
+    try {
+      const text = (await runDetachedTurn(runtime.provider, workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+      decision = parseAutopilotDecision(text);
+    } catch (error) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    if (!decision || decision.action === "stop") {
+      const reason = decision?.action === "stop" ? decision.reason : "";
+      disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要再交辦就打開開關或直接下指令。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      return;
+    }
+    // 使用者可能在生成期間關掉了開關——關了就不再推進。
+    if (!autopilotByWorkspace.has(autopilotKey(workspacePath))) return;
+    state.stepsRemaining -= 1;
+    const spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+    if (!spawned) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
+      return;
+    }
+    broadcastAutopilot(workspacePath);
+  } finally {
+    state.running = false;
+    autopilotAdvancing = false;
+  }
+}
+
+app.get("/api/autopilot", (req, res) => {
+  const requested = collaborationText(req.query.workspacePath, 1_000);
+  let workspacePath: string;
+  try { workspacePath = normalizeManagedWorkspacePath(requested || config.targetRepoPath); }
+  catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+  res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
+});
+
+app.post("/api/autopilot", (req, res) => {
+  let workspacePath: string;
+  try { workspacePath = normalizeManagedWorkspacePath(collaborationText(req.body?.workspacePath, 1_000) || config.targetRepoPath); }
+  catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+  const enabled = Boolean(req.body?.enabled);
+  if (enabled) {
+    // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火。
+    const runtime = resolveDecisionRuntime(req.body?.decisionProvider, req.body?.decisionModel, workspacePath);
+    if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  }
+  const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
+  setAutopilot(workspacePath, enabled, maxSteps);
+  res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
+});
 
 app.get("/api/boss-tasks", (req, res) => {
   const requested = collaborationText(req.query.workspacePath, 1_000);

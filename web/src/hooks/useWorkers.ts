@@ -91,6 +91,7 @@ type ServerMessage =
   | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
   | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] }
   | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] }
+  | { type: "autopilot"; workspacePath: string; enabled: boolean; stepsRemaining: number }
   | { type: "terminal_mux_layout"; layout: string; version: number };
 
 type WorkerSummary = {
@@ -147,6 +148,8 @@ export function useWorkers() {
     totalCostUsd: 0,
   });
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  // 老闆交辦自動循環：伺服器每次開關/步數變動都廣播最新狀態（含正規化後的 workspace key）。
+  const [lastAutopilot, setLastAutopilot] = useState<{ workspacePath: string; enabled: boolean; stepsRemaining: number } | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -482,6 +485,10 @@ export function useWorkers() {
         }
         case "update_info": {
           setUpdateInfo(data.updateInfo);
+          break;
+        }
+        case "autopilot": {
+          setLastAutopilot({ workspacePath: String(data.workspacePath ?? ""), enabled: Boolean(data.enabled), stepsRemaining: Number(data.stepsRemaining ?? 0) });
           break;
         }
         case "account_login_result": {
@@ -1361,6 +1368,7 @@ export function useWorkers() {
     system,
     stats,
     updateInfo,
+    lastAutopilot,
     workspacePaths,
     wsReady,
     capabilitiesByWorkspace,

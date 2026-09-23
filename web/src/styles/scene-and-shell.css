@@ -1860,6 +1860,59 @@ body {
   letter-spacing: 0.08em;
 }
 
+/* 老闆交辦頁的「自動循環」開關（在標題列，交辦執行中也看得到、可隨時關）。 */
+.autopilot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid rgba(120, 150, 180, 0.28);
+  border-radius: 999px;
+  background: rgba(10, 20, 36, 0.5);
+  color: #8aa0b8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+}
+.autopilot-toggle:disabled { opacity: 0.55; cursor: progress; }
+.autopilot-toggle__track {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(120, 150, 180, 0.3);
+  transition: background 0.18s ease;
+  flex: 0 0 auto;
+}
+.autopilot-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #cdd8e6;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.autopilot-toggle.is-on {
+  border-color: rgba(70, 220, 160, 0.55);
+  color: #7fe9c0;
+  background: rgba(40, 200, 140, 0.1);
+}
+.autopilot-toggle.is-on .autopilot-toggle__track {
+  background: linear-gradient(90deg, #35d59b, #46b0ff);
+}
+.autopilot-toggle.is-on .autopilot-toggle__thumb {
+  transform: translateX(14px);
+  background: #ffffff;
+}
+.autopilot-toggle.is-on .autopilot-toggle__label { animation: autopilot-live 1.8s ease-in-out infinite; }
+@keyframes autopilot-live { 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .autopilot-toggle.is-on .autopilot-toggle__label { animation: none; } }
+
 .holo-panel__eyebrow {
   color: rgba(0, 229, 255, 0.68);
   font-family: var(--mono);

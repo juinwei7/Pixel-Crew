@@ -86,7 +86,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
@@ -421,6 +421,46 @@ export function App() {
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
     setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
   }, []);
+
+  // 老闆交辦自動循環開關（狀態屬於目前工作區；重啟後伺服器預設關）。
+  const [autopilotEnabled, setAutopilotEnabled] = useState(false);
+  const [autopilotSteps, setAutopilotSteps] = useState(0);
+  const [autopilotBusy, setAutopilotBusy] = useState(false);
+  // 開 Boss Desk 或切工作區時，向伺服器要一次權威狀態。
+  useEffect(() => {
+    if (!bossAssignmentOpen || !activeWorkspace) return;
+    let cancelled = false;
+    void apiRequest<{ enabled: boolean; stepsRemaining: number }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
+      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); } })
+      .catch(() => { /* 拿不到就維持現狀 */ });
+    return () => { cancelled = true; };
+  }, [bossAssignmentOpen, activeWorkspace]);
+  // 伺服器每次開關/步數變動（含自動熄火）都廣播，套用到目前工作區。
+  useEffect(() => {
+    if (!lastAutopilot) return;
+    const norm = (value: string) => value.toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (norm(lastAutopilot.workspacePath) !== norm(activeWorkspace)) return;
+    setAutopilotEnabled(lastAutopilot.enabled);
+    setAutopilotSteps(lastAutopilot.stepsRemaining);
+  }, [lastAutopilot, activeWorkspace]);
+  const toggleAutopilot = useCallback(async (enabled: boolean) => {
+    setAutopilotBusy(true);
+    try {
+      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number }>("/api/autopilot", {
+        method: "POST",
+        body: { workspacePath: activeWorkspace, enabled },
+      });
+      setAutopilotEnabled(state.enabled);
+      setAutopilotSteps(state.stepsRemaining);
+      notify(enabled
+        ? t("已開啟自動循環：交辦完成後會自己接著往下走（最多 {n} 步），隨時可關。", { n: state.stepsRemaining })
+        : t("已關閉自動循環。"), "ok");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("切換自動循環失敗"), "error");
+    } finally {
+      setAutopilotBusy(false);
+    }
+  }, [activeWorkspace, notify]);
   // In-app stand-in for window.confirm: renders a ConfirmDialog and resolves
   // once the user picks confirm/cancel (or presses Esc, which counts as cancel).
   const confirm = useCallback((message: string, tone: ConfirmTone = "default") => {
@@ -1154,6 +1194,18 @@ export function App() {
         }} />}
         <div className="holo-panel__title">
           <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
+          {bossAssignmentOpen && <button
+            type="button"
+            className={`autopilot-toggle${autopilotEnabled ? " is-on" : ""}`}
+            role="switch"
+            aria-checked={autopilotEnabled}
+            disabled={autopilotBusy}
+            onClick={() => void toggleAutopilot(!autopilotEnabled)}
+            title={t("自動循環：交辦完成後，讓決策模型自己決定下一步並繼續，直到你關掉或撞護欄")}
+          >
+            <span className="autopilot-toggle__track"><span className="autopilot-toggle__thumb" /></span>
+            <span className="autopilot-toggle__label">{autopilotEnabled ? t("自動循環中 · 剩 {n} 步", { n: autopilotSteps }) : t("自動循環")}</span>
+          </button>}
           {taskFocusMode ? <div className="focus-context-switch">
             {!focusPhone && focusKindSwitch}
             {/* 手機換成跟像素模式同一排 chip：<select> 看不出「現在有誰、誰在等你」，
