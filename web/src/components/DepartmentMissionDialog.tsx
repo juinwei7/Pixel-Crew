@@ -281,7 +281,14 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
       <article className={`mission-card mission-card--${mission.status}`}>
       <header><div><strong>{mission.objective}</strong><span>{mission.steps.length > 0 ? `${strategy} · ` : ""}{statusLabel[mission.status]}</span></div><time>{new Date(mission.createdAt).toLocaleString()}</time></header>
       {mission.planSummary && <p>{mission.planSummary}</p>}
-      {mission.steps.length > 0 && <div className="mission-card__progress"><i style={{ width: `${Math.round((completed / mission.steps.length) * 100)}%` }} /><span>{completed}/{mission.steps.length}{current ? ` · ${current.title}` : ""}</span></div>}
+      {(mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing") && <div className="mission-card__working" role="status" aria-live="polite">
+        <span className="mission-card__working-dots" aria-hidden="true"><i /><i /><i /></span>
+        <em>{mission.status === "planning" ? t("主管規劃中")
+          : mission.status === "reviewing" ? t("審核交付中")
+          : current ? t("執行中：{title}", { title: current.title })
+          : t("執行中")}</em>
+      </div>}
+      {mission.steps.length > 0 && <div className={`mission-card__progress ${mission.status === "executing" || mission.status === "reviewing" ? "mission-card__progress--active" : ""}`}><i style={{ width: `${Math.round((completed / mission.steps.length) * 100)}%` }} /><span>{completed}/{mission.steps.length}{current ? ` · ${current.title}` : ""}</span></div>}
       {mission.steps.length > 0 && <ol>{mission.steps.map((step, index) => {
         const assignee = workers.find((worker) => worker.id === step.assigneeWorkerId);
         return <li key={step.id} className={`mission-step mission-step--${step.status}`}>

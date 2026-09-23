@@ -176,7 +176,7 @@ index 0000000..eeabe91
 +  });
 +}
 diff --git a/server/src/index.ts b/server/src/index.ts
-index 66a6cc1..3bcde6c 100644
+index 66a6cc1..cfa0951 100644
 --- a/server/src/index.ts
 +++ b/server/src/index.ts
 @@ -173,6 +173,11 @@ import {
@@ -209,7 +209,35 @@ index 66a6cc1..3bcde6c 100644
        task.stages.length > 0
        && providerReady(task.decisionProvider)
        && runtimeModels(task.decisionProvider).includes(task.decisionModel),
-@@ -2550,6 +2557,7 @@ wss.on("connection", (socket) => {
+@@ -2502,6 +2509,20 @@ function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
+   return events.map(trimEventForSnapshot);
+ }
+ 
++// 初始 snapshot 瘦身：已結束（completed/failed/cancelled）的 Mission 去掉 executionEvents。
++// 那是初始 snapshot 肥大的主因（實測 16MB，完成的量化 mission 單筆可達 1~2.5MB）；完成的
++// Mission 的活動流前端會在你點開時用 GET /api/missions/:id 單筆抓，snapshot 不必帶。進行中的
++// Mission 保留事件（活著要看），只把單筆超大的工具輸出/輸入裁短。
++function missionForSnapshot(mission: DepartmentMission): DepartmentMission {
++  if (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled") {
++    return { ...mission, executionEvents: [] };
++  }
++  return {
++    ...mission,
++    executionEvents: (mission.executionEvents ?? []).map((entry) => ({ ...entry, event: trimEventForSnapshot(entry.event) })),
++  };
++}
++
+ wss.on("connection", (socket) => {
+   // A client that drops mid-handshake (page reload, laptop sleep/wake, a
+   // network blip) emits 'error' with no listener otherwise — that's an
+@@ -2544,12 +2565,13 @@ wss.on("connection", (socket) => {
+       accountUsage: accountUsageRegistry.getStates(),
+       capabilitiesByWorkspace: capabilitiesSnapshot(),
+       collaborations: store.listRecentCollaborationTasks(),
+-      missions: store.listDepartmentMissions(),
++      missions: store.listDepartmentMissions().map(missionForSnapshot),
+       bossTasks: store.listBossTasks().map(bossTaskForDisplay),
+       departments: store.listDepartments(),
        workers: [...workers.values()].map((w) => ({
          ...workerSummary(w),
          events: snapshotHistory(w.history),
@@ -217,7 +245,7 @@ index 66a6cc1..3bcde6c 100644
        })),
      });
    const snapshotBytes = Buffer.byteLength(snapshotPayload);
-@@ -3082,6 +3090,44 @@ registerReportingRoutes({
+@@ -3082,6 +3104,44 @@ registerReportingRoutes({
  // ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
  registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
  
@@ -262,7 +290,7 @@ index 66a6cc1..3bcde6c 100644
  // ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
  registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
  
-@@ -3090,29 +3136,51 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
+@@ -3090,29 +3150,51 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
  setInterval(() => {
    const now = new Date();
    const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -320,7 +348,7 @@ index 66a6cc1..3bcde6c 100644
  app.post("/api/auth/refresh", async (req, res) => {
    const requested = String(req.body?.provider ?? "");
    const provider = requested === "claude" || requested === "codex" ? requested : undefined;
-@@ -3888,7 +3956,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
+@@ -3888,7 +3970,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
  
  function departmentMissions(department: Department): DepartmentMission[] {
    const clearedAt = store.getDepartmentThread(department.id)?.historyClearedAt ?? null;
@@ -332,7 +360,7 @@ index 66a6cc1..3bcde6c 100644
      .filter((mission) => mission.departmentId === department.id && mission.origin !== "boss")
      .filter((mission) => !clearedAt || mission.createdAt > clearedAt)
      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-@@ -4652,7 +4723,7 @@ app.get("/api/boss-tasks", (req, res) => {
+@@ -4652,7 +4737,7 @@ app.get("/api/boss-tasks", (req, res) => {
      try { workspacePath = normalizeManagedWorkspacePath(requested); }
      catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
    }
@@ -341,7 +369,7 @@ index 66a6cc1..3bcde6c 100644
  });
  
  app.get("/api/boss-tasks/:id", (req, res) => {
-@@ -5054,7 +5125,7 @@ app.get("/api/missions", (req, res) => {
+@@ -5054,7 +5139,7 @@ app.get("/api/missions", (req, res) => {
      try { workspacePath = normalizeManagedWorkspacePath(requested); }
      catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
    }
@@ -350,7 +378,7 @@ index 66a6cc1..3bcde6c 100644
  });
  
  app.get("/api/missions/:id", (req, res) => {
-@@ -6235,6 +6306,97 @@ app.post("/api/workers/:id/consult", (req, res) => {
+@@ -6235,6 +6320,97 @@ app.post("/api/workers/:id/consult", (req, res) => {
    res.json({ ok: true, note: t("已把問題發給隊員，回覆彙整後會以【隊員商量回報】訊息送回給你。請先結束這回合等回報。") });
  });
  
