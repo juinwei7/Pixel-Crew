@@ -1449,6 +1449,8 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
   if (worker.persistent && (event.type === "turn_end" || event.type === "error")) persistWorker(worker);
+  // 這回合結束、worker 空下來了 → 若它還有排隊，server 自己送出下一則（背景也照跑）。
+  if (event.type === "turn_end" || event.type === "error") scheduleQueueDrain(worker);
   // `/usage` is handled by Claude inside its already-authenticated session.
   // `claude -p /usage` opens a different empty session, so only the completed
   // turn's own result is authoritative for this worker's assigned account.
@@ -2555,6 +2557,7 @@ wss.on("connection", (socket) => {
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
         events: snapshotHistory(w.history),
+        queue: store.listQueue(w.id),
       })),
     });
   const snapshotBytes = Buffer.byteLength(snapshotPayload);
@@ -6288,6 +6291,97 @@ app.post("/api/workers/:id/consult", (req, res) => {
     .catch(() => { /* 個別失敗已反映在 digest；這裡只保底不讓 unhandled rejection 炸掉 */ })
     .finally(() => consultPending.delete(dept.id));
   res.json({ ok: true, note: t("已把問題發給隊員，回覆彙整後會以【隊員商量回報】訊息送回給你。請先結束這回合等回報。") });
+});
+
+// ── 跨裝置排隊佇列：drain＋端點 ───────────────────────────────────────────────
+// 佇列存 server（不再只在瀏覽器 IndexedDB）。任何 NPC 一空下來 server 自己 drain 下一
+// 則，所以「切走的 NPC 也會自動跑」＋「手機排的隊電腦照跑」一次解決。
+function broadcastQueue(workerId: string): void {
+  broadcast({ type: "queue_updated", workerId, queue: store.listQueue(workerId) });
+}
+
+function workerAcceptsUserSend(worker: Worker): boolean {
+  return workerProviderReady(worker)
+    && !worker.runner.busy
+    && !handoffInProgress(worker)
+    && !collaborationInProgress(worker.id)
+    && !missionInProgress(worker.id);
+}
+
+// worker 空閒時把佇列最前面一則送出。預算超標就留著（下次再試），不丟。
+function drainWorkerQueue(worker: Worker): void {
+  if (!workerAcceptsUserSend(worker)) return;
+  const budget = getExtras(worker.id).dailyBudgetUsd;
+  if (budget != null && todayCostUsd(worker.id) >= budget) return;
+  const next = store.dequeueFirstQueued(worker.id);
+  if (!next) return;
+  let images: ReturnType<typeof parseMessageImages> = [];
+  let documents: ReturnType<typeof parseMessageDocuments> = [];
+  try { images = parseMessageImages(next.images); documents = parseMessageDocuments(next.documents); }
+  catch { images = []; documents = []; }
+  const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
+  const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
+  const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  record(worker, { type: "user_message", text });
+  try {
+    worker.runner.send(next.message, images, documents);
+    limitTurnText.set(worker.id, text);
+    broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+  } catch (error) {
+    record(worker, { type: "error", message: error instanceof Error ? error.message : t("無法送出排隊訊息") });
+  }
+  broadcastQueue(worker.id);
+}
+
+// 延到下一個 tick 再 drain：turn_end 當下 busy 可能還沒翻回 false，等它落定再送。
+function scheduleQueueDrain(worker: Worker): void {
+  setTimeout(() => { try { drainWorkerQueue(worker); } catch { /* drain 為 best-effort，不可影響主流程 */ } }, 0);
+}
+
+app.get("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  res.json({ queue: store.listQueue(worker.id) });
+});
+
+app.post("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  const message = String(req.body?.message ?? "").trim();
+  try {
+    const images = parseMessageImages(req.body?.images);
+    const documents = parseMessageDocuments(req.body?.documents);
+    if (!message && images.length === 0 && documents.length === 0) {
+      res.status(400).json({ error: "message or attachment required" });
+      return;
+    }
+  } catch (error) {
+    const detail = error instanceof MessageImageValidationError || error instanceof MessageDocumentValidationError ? error.message : t("附件無效");
+    res.status(400).json({ error: detail });
+    return;
+  }
+  // 存原始 images/documents（drain 時再用 parseMessage* 驗一次，與 /message 一致）。
+  store.enqueueCommand(randomUUID(), worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
+  broadcastQueue(worker.id);
+  scheduleQueueDrain(worker); // 若其實現在就空閒，立刻開跑
+  res.json({ ok: true, queue: store.listQueue(worker.id) });
+});
+
+app.patch("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  const order = Array.isArray(req.body?.order) ? req.body.order.map((value: unknown) => String(value)) : [];
+  store.reorderQueue(worker.id, order);
+  broadcastQueue(worker.id);
+  res.json({ ok: true, queue: store.listQueue(worker.id) });
+});
+
+app.delete("/api/workers/:id/queue/:queueId", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  store.removeQueueItem(worker.id, req.params.queueId);
+  broadcastQueue(worker.id);
+  res.json({ ok: true, queue: store.listQueue(worker.id) });
 });
 
 app.post("/api/workers/:id/message", (req, res) => {

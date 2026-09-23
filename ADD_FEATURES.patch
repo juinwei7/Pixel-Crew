@@ -1,0 +1,805 @@
+diff --git a/server/src/expertAdvisor.ts b/server/src/expertAdvisor.ts
+new file mode 100644
+index 0000000..eeabe91
+--- /dev/null
++++ b/server/src/expertAdvisor.ts
+@@ -0,0 +1,171 @@
++// Expert Advisor（專家顧問）—— Boss Task 之前的「補你知識缺口」前段。
++//
++// 使用者常常「有個頭、沒方向、不知怎麼往下走」。這個模組讓一個扮演資深領域顧問的
++// 決策模型，把使用者一個粗略念頭，展開成幾個「以他自身專業不一定知道」的專業方向：
++// 每個方向附上內行人才會提的洞見、實作路數、關鍵考量，以及一段可直接餵進既有 Boss
++// Task 執行的 objective。使用者只需要「挑一個方向」，剩下交給 Boss Task 那條龍。
++//
++// 這裡只放「純函式」：組 prompt、解析模型輸出。實際的模型呼叫（runDetachedTurn）與
++// 路由留在 index.ts——沿用 bossTask.ts 同樣的 determinism split，方便單元測試釘死。
++import { t } from "./i18n.js";
++
++export type AdvisorProposal = {
++  id: string;
++  /** 方向的短名。 */
++  title: string;
++  /** 白話說明這個方向是什麼——給非專業的使用者看得懂。 */
++  summary: string;
++  /** 內行人才知道、使用者八成沒想到的洞見（本模組的核心價值）。 */
++  insight: string;
++  /** 專業上實際會怎麼做——路數、主流工具/方法。 */
++  approach: string;
++  /** 使用者自己想不到的關鍵考量或風險。 */
++  considerations: string[];
++  /** 若使用者選這個方向，可直接餵進 Boss Task 的 objective（祈使句、可執行）。 */
++  objective: string;
++};
++
++export type AdvisorResult =
++  | { status: "proposals"; domain: string; proposals: AdvisorProposal[] }
++  | { status: "need_focus"; question: string };
++
++export const ADVISOR_MAX_PROPOSALS = 4;
++const ADVISOR_PROPOSAL_HARD_MAX = 6;
++
++function bounded(value: unknown, max: number): string {
++  return typeof value === "string" ? value.trim().slice(0, max) : "";
++}
++
++function clampProposalCount(max: number | undefined): number {
++  const n = Number.isFinite(max) ? Math.floor(max as number) : ADVISOR_MAX_PROPOSALS;
++  return Math.min(ADVISOR_PROPOSAL_HARD_MAX, Math.max(1, n));
++}
++
++export function expertAdvisorPrompt(input: {
++  idea: string;
++  workspacePath: string;
++  maxProposals?: number;
++}): string {
++  const maxProposals = clampProposalCount(input.maxProposals);
++  const idea = bounded(input.idea, 4_000);
++
++  return `Expert Advisor · Direction Discovery Before Execution
++
++You are a senior domain expert and consultant. The owner has a rough idea but limited expertise in its field, and does not know how to proceed. Your job is to surface professional directions the owner most likely does NOT know exist — the "you don't know what you don't know" gap — so the owner can simply pick one, not invent it.
++
++Rules:
++- Do not use tools, files, shell commands, MCP, web access, or background agents. Reason from your own expert knowledge only.
++- First infer the domain of the idea. If the idea is so empty or generic that you cannot infer a domain OR cannot produce genuinely useful, non-obvious directions, return exactly one focusing question instead (need_focus). Prefer to propose; only ask when proposing would be guesswork.
++- Produce up to ${maxProposals} DISTINCT directions. Fewer is fine; never pad with filler or near-duplicates.
++- Each proposal must earn its place by teaching the owner something: the "insight" field must state a non-obvious, expert-level point the owner probably has not considered — not a restatement of the idea.
++- "approach" states how a professional would actually do it (methods, mainstream tools, sequence), concisely.
++- "considerations" lists concrete pitfalls, trade-offs, or risks a non-expert would miss.
++- "objective" is a ready-to-run imperative brief that could be handed to an execution team as-is if the owner picks this direction. Make it self-contained and bounded.
++- Write every user-facing field (title, summary, insight, approach, considerations, objective, and any question) in the SAME language as the owner's idea.
++- Be honest: do not invent facts, fake precision, or promise outcomes you cannot justify from general expertise.
++- Return only one marked JSON block and no Markdown fences.
++
++Owner's idea: ${JSON.stringify(idea)}
++Owner workspace: ${JSON.stringify(input.workspacePath)}
++
++need_focus form (only when proposing would be guesswork):
++<expert_advisor>
++{"status":"need_focus","question":"one focusing question in the owner's language"}
++</expert_advisor>
++
++proposals form:
++<expert_advisor>
++{"status":"proposals","domain":"the field you inferred","proposals":[{"id":"stable-id","title":"short direction name","summary":"plain-language what this is","insight":"non-obvious expert point the owner likely doesn't know","approach":"how a pro would actually do it","considerations":["pitfall or trade-off"],"objective":"self-contained imperative brief to hand to an execution team"}]}
++</expert_advisor>`;
++}
++
++type AdvisorParseResult =
++  | { ok: true; result: AdvisorResult }
++  | { ok: false; reason: string };
++
++function evaluateAdvisorResult(text: string, maxProposals?: number): AdvisorParseResult {
++  const cap = clampProposalCount(maxProposals);
++  const match = text.match(/<expert_advisor>\s*([\s\S]*?)\s*<\/expert_advisor>/i);
++  if (!match) return { ok: false, reason: "Missing an <expert_advisor>...</expert_advisor> block." };
++  let raw: unknown;
++  try { raw = JSON.parse(match[1]); } catch (cause) {
++    return { ok: false, reason: `The JSON inside <expert_advisor> did not parse: ${(cause as Error).message}.` };
++  }
++  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
++    return { ok: false, reason: "The <expert_advisor> content must be a single JSON object." };
++  }
++  const value = raw as Record<string, unknown>;
++
++  if (value.status === "need_focus") {
++    const question = bounded(value.question, 1_000);
++    if (!question) return { ok: false, reason: "need_focus form is missing a non-empty \"question\"." };
++    return { ok: true, result: { status: "need_focus", question } };
++  }
++
++  if (value.status !== "proposals") {
++    return { ok: false, reason: `"status" must be exactly "need_focus" or "proposals", got ${JSON.stringify(value.status)}.` };
++  }
++  const domain = bounded(value.domain, 200);
++  if (!Array.isArray(value.proposals) || value.proposals.length < 1) {
++    return { ok: false, reason: "proposals form needs a non-empty \"proposals\" array." };
++  }
++  if (value.proposals.length > cap) {
++    return { ok: false, reason: `proposals form must contain at most ${cap} entries.` };
++  }
++  const ids = new Set<string>();
++  const proposals: AdvisorProposal[] = [];
++  for (const [index, rawProposal] of value.proposals.entries()) {
++    if (!rawProposal || typeof rawProposal !== "object" || Array.isArray(rawProposal)) {
++      return { ok: false, reason: `Proposal ${index + 1} must be a JSON object.` };
++    }
++    const proposal = rawProposal as Record<string, unknown>;
++    const id = bounded(proposal.id, 100) || `p${index + 1}`;
++    const title = bounded(proposal.title, 200);
++    const summary = bounded(proposal.summary, 1_000);
++    const insight = bounded(proposal.insight, 1_000);
++    const approach = bounded(proposal.approach, 1_500);
++    const considerations = Array.isArray(proposal.considerations)
++      ? proposal.considerations.map((item) => bounded(item, 500)).filter(Boolean).slice(0, 8)
++      : [];
++    const objective = bounded(proposal.objective, 2_000);
++    if (ids.has(id)) return { ok: false, reason: `Proposal ${index + 1} reuses id ${JSON.stringify(id)} — every proposal id must be unique.` };
++    if (!title) return { ok: false, reason: `Proposal ${index + 1} is missing a non-empty "title".` };
++    if (!insight) return { ok: false, reason: `Proposal ${JSON.stringify(id)} is missing a non-empty "insight" — the whole point is to teach the owner something non-obvious.` };
++    if (!objective) return { ok: false, reason: `Proposal ${JSON.stringify(id)} is missing a non-empty "objective" that could be handed to an execution team.` };
++    ids.add(id);
++    proposals.push({ id, title, summary, insight, approach, considerations, objective });
++  }
++  return { ok: true, result: { status: "proposals", domain, proposals } };
++}
++
++export function parseAdvisorResult(text: string, maxProposals?: number): AdvisorResult | null {
++  const result = evaluateAdvisorResult(text, maxProposals);
++  return result.ok ? result.result : null;
++}
++
++// Re-evaluates the same text to explain a parse failure in prose, so a repair
++// prompt can tell the model exactly what to fix (mirrors bossTask.ts).
++export function explainAdvisorFailure(text: string, maxProposals?: number): string | null {
++  const result = evaluateAdvisorResult(text, maxProposals);
++  return result.ok ? null : result.reason;
++}
++
++// Turns a chosen proposal into the objective string handed to the existing Boss
++// Task pipeline. Kept here (not in the route) so it is unit-testable and the
++// exact hand-off text is pinned.
++export function advisorObjectiveForBossTask(proposal: AdvisorProposal): string {
++  return proposal.objective;
++}
++
++// A short, human-readable summary of the whole advisor result, used when the
++// owner wants the proposals echoed into a log/thread.
++export function advisorProposalsDigest(result: Extract<AdvisorResult, { status: "proposals" }>): string {
++  const lines = result.proposals.map((proposal, index) => t(
++    "{n}. {title}\n   洞見：{insight}",
++    { n: index + 1, title: proposal.title, insight: proposal.insight },
++  ));
++  return t("【專家顧問·{domain}】以下是你可能沒想到的方向：\n\n{body}", {
++    domain: result.domain || t("一般"),
++    body: lines.join("\n\n"),
++  });
++}
+diff --git a/server/src/index.ts b/server/src/index.ts
+index 66a6cc1..2e9a66f 100644
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -173,6 +173,11 @@ import {
+   type BossTaskMessage,
+   type BossTaskMessageRole,
+ } from "./bossTask.js";
++import {
++  expertAdvisorPrompt,
++  parseAdvisorResult,
++  explainAdvisorFailure,
++} from "./expertAdvisor.js";
+ import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
+ import {
+   boundedDepartmentContext,
+@@ -3082,6 +3087,44 @@ registerReportingRoutes({
+ // ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
+ registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
+ 
++// ── 專家顧問：把一個粗略念頭展開成「以你自身專業不一定知道」的幾個專業方向，讓你
++//     只需挑一個，再直接餵進既有 Boss Task 執行到完成。無工具、一次性判斷（沿用
++//     Boss Task 的 decision runtime 與 no_tools 政策）；解析失敗補一次 repair 重試。
++app.post("/api/advisor/propose", async (req, res) => {
++  const idea = collaborationText(req.body?.idea, 4_000).trim();
++  if (!idea) { res.status(400).json({ error: t("請先給一個想法或主題，顧問才能幫你想方向") }); return; }
++  const preferredWorkspace = collaborationText(req.body?.workspacePath, 1_000) || null;
++  const runtime = resolveDecisionRuntime(req.body?.provider, req.body?.model, preferredWorkspace);
++  if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
++  const maxProposals = Number.isFinite(req.body?.maxProposals) ? Number(req.body.maxProposals) : undefined;
++  const workspace = preferredWorkspace || config.targetRepoPath;
++  const usage = await usageRegistry.refresh(runtime.provider, true);
++  const usageError = usageBlockReason(runtime.provider, usage, runtime.model);
++  if (usageError) {
++    res.status(409).json({ error: t("{provider} 目前無法進行顧問判斷：{error}", { provider: providerLabel(runtime.provider), error: usageError }), usage });
++    return;
++  }
++  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals });
++  let text: string;
++  try {
++    text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
++  } catch (error) {
++    res.status(502).json({ error: t("顧問模型無法完成判斷：{error}", { error: (error as Error).message }) });
++    return;
++  }
++  let result = parseAdvisorResult(text, maxProposals);
++  if (!result) {
++    const reason = explainAdvisorFailure(text, maxProposals) ?? "The response did not match the required format.";
++    const repair = `${prompt}\n\nYour previous response was invalid: ${reason} Return one corrected <expert_advisor> block only.`;
++    try {
++      text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
++      result = parseAdvisorResult(text, maxProposals);
++    } catch { result = null; }
++  }
++  if (!result) { res.status(502).json({ error: t("顧問模型未能給出有效的方向建議，請換個說法再試一次") }); return; }
++  res.json({ result });
++});
++
+ // ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
+ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
+ 
+@@ -3090,24 +3133,36 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
+ setInterval(() => {
+   const now = new Date();
+   const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
++  const nowMs = now.getTime();
+   const today = localDay(now);
+   for (const schedule of store.listSchedules()) {
+-    if (!schedule.enabled || schedule.lastRunDay === today || schedule.time > hhmm) continue;
++    if (!schedule.enabled) continue;
++    // interval_minutes 有值＝每 N 分鐘重複（用 last_run_at 判斷是否到點）；否則＝每日 HH:MM 一次。
++    const recurring = typeof schedule.intervalMinutes === "number" && schedule.intervalMinutes > 0;
++    if (recurring) {
++      const lastMs = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : NaN;
++      if (Number.isFinite(lastMs) && nowMs < lastMs + schedule.intervalMinutes! * 60_000) continue;
++    } else if (schedule.lastRunDay === today || schedule.time > hhmm) {
++      continue;
++    }
+     const worker = workers.get(schedule.workerId);
+     if (!worker) continue;
+     if (!workerProviderReady(worker)) continue;
++    const scheduleLabel = recurring
++      ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes ?? 0 })
++      : t("每日 {time}", { time: schedule.time });
+     // 無人看管風險口（作戰室裁決 P1）：⚡無限制模式跳過所有審批，不給自動排程觸發。
+     // 標記為今天已處理＋留一則說明，避免每 30 秒重試洗版。
+     if (worker.autoApproveMode === "invincible") {
+-      store.markScheduleRun(schedule.id, today);
+-      record(worker, { type: "error", message: t("⏰ 排程（每日 {time}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後，明天起自動恢復。", { time: schedule.time }) });
++      store.markScheduleRun(schedule.id, today, now.toISOString());
++      record(worker, { type: "error", message: t("⏰ 排程（{label}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後會自動恢復。", { label: scheduleLabel }) });
+       continue;
+     }
+     if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
+-    store.markScheduleRun(schedule.id, today);
+-    record(worker, { type: "user_message", text: t("⏰ 排程任務（每日 {time}）：{prompt}", { time: schedule.time, prompt: schedule.prompt }) });
++    store.markScheduleRun(schedule.id, today, now.toISOString());
++    record(worker, { type: "user_message", text: t("⏰ 排程任務（{label}）：{prompt}", { label: scheduleLabel, prompt: schedule.prompt }) });
+     try {
+-      worker.runner.send(t("【排程任務，每日 {time} 自動觸發】{prompt}", { time: schedule.time, prompt: schedule.prompt }), [], []);
++      worker.runner.send(t("【排程任務，{label} 自動觸發】{prompt}", { label: scheduleLabel, prompt: schedule.prompt }), [], []);
+       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+     } catch { /* 送失敗就等明天；user_message 已留在紀錄裡可追查 */ }
+   }
+diff --git a/server/src/scheduleRoutes.ts b/server/src/scheduleRoutes.ts
+index f67201a..9a9a519 100644
+--- a/server/src/scheduleRoutes.ts
++++ b/server/src/scheduleRoutes.ts
+@@ -4,6 +4,18 @@ import { t } from "./i18n.js";
+ import type { LocalStore } from "./store.js";
+ 
+ const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
++const MIN_INTERVAL_MINUTES = 5;
++const MAX_INTERVAL_MINUTES = 7 * 24 * 60; // 一週，避免手滑設出無界值
++
++// 解析「每 N 分鐘重複」間隔：undefined＝未提供；null／空＝清除(回到每日模式)；
++// 數字＝夾在 [5, 10080] 的整數分鐘。回 ok:false＝格式無效（非正數）。
++function normalizeInterval(value: unknown): { ok: true; value: number | null | undefined } | { ok: false } {
++  if (value === undefined) return { ok: true, value: undefined };
++  if (value === null || value === "") return { ok: true, value: null };
++  const n = Number(value);
++  if (!Number.isFinite(n) || n <= 0) return { ok: false };
++  return { ok: true, value: Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.floor(n))) };
++}
+ 
+ export function registerScheduleRoutes(input: {
+   app: Express;
+@@ -23,12 +35,15 @@ export function registerScheduleRoutes(input: {
+     if (!input.workerExists(workerId)) { res.status(400).json({ error: "unknown worker" }); return; }
+     if (!TIME.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
+     if (!prompt) { res.status(400).json({ error: t("請提供要執行的指示") }); return; }
+-    store.addSchedule(randomUUID(), workerId, time, prompt);
++    const interval = normalizeInterval(req.body?.intervalMinutes);
++    if (!interval.ok) { res.status(400).json({ error: t("重複間隔需為正整數分鐘（至少 {min} 分鐘）", { min: MIN_INTERVAL_MINUTES }) }); return; }
++    // 未提供間隔＝每日模式（null）；有值＝每 N 分鐘重複。time 兩種模式都存（重複模式忽略）。
++    store.addSchedule(randomUUID(), workerId, time, prompt, interval.value ?? null);
+     res.json({ ok: true, schedules: store.listSchedules() });
+   });
+ 
+   app.patch("/api/schedules/:id", (req, res) => {
+-    const fields: { time?: string; prompt?: string; enabled?: boolean } = {};
++    const fields: { time?: string; prompt?: string; enabled?: boolean; intervalMinutes?: number | null } = {};
+     if (req.body?.time !== undefined) {
+       const time = String(req.body.time);
+       if (!TIME.test(time)) { res.status(400).json({ error: t("時間格式須為 HH:MM") }); return; }
+@@ -40,6 +55,9 @@ export function registerScheduleRoutes(input: {
+       fields.prompt = prompt;
+     }
+     if (req.body?.enabled !== undefined) fields.enabled = Boolean(req.body.enabled);
++    const interval = normalizeInterval(req.body?.intervalMinutes);
++    if (!interval.ok) { res.status(400).json({ error: t("重複間隔需為正整數分鐘（至少 {min} 分鐘）", { min: MIN_INTERVAL_MINUTES }) }); return; }
++    if (interval.value !== undefined) fields.intervalMinutes = interval.value;
+     store.updateSchedule(req.params.id, fields);
+     res.json({ ok: true, schedules: store.listSchedules() });
+   });
+diff --git a/server/src/store.ts b/server/src/store.ts
+index 21c58b4..4a89ffb 100644
+--- a/server/src/store.ts
++++ b/server/src/store.ts
+@@ -1054,10 +1054,10 @@ export class LocalStore {
+     return events;
+   }
+ 
+-  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null }> {
++  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null }> {
+     const rows = this.db.prepare(
+-      "SELECT id, worker_id, time, prompt, enabled, last_run_day FROM schedules ORDER BY time ASC",
+-    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null }>;
++      "SELECT id, worker_id, time, prompt, enabled, last_run_day, interval_minutes, last_run_at FROM schedules ORDER BY time ASC",
++    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null; interval_minutes: number | null; last_run_at: string | null }>;
+     return rows.map((row) => ({
+       id: row.id,
+       workerId: row.worker_id,
+@@ -1065,27 +1065,31 @@ export class LocalStore {
+       prompt: row.prompt,
+       enabled: Boolean(row.enabled),
+       lastRunDay: row.last_run_day,
++      // interval_minutes 為 null＝每日 HH:MM 一次；有值＝每 N 分鐘重複。
++      intervalMinutes: row.interval_minutes,
++      lastRunAt: row.last_run_at,
+     }));
+   }
+ 
+-  addSchedule(id: string, workerId: string, time: string, prompt: string): void {
++  addSchedule(id: string, workerId: string, time: string, prompt: string, intervalMinutes: number | null = null): void {
+     this.db.prepare(
+-      "INSERT INTO schedules (id, worker_id, time, prompt, enabled) VALUES (?, ?, ?, ?, 1)",
+-    ).run(id, workerId, time, prompt);
++      "INSERT INTO schedules (id, worker_id, time, prompt, enabled, interval_minutes) VALUES (?, ?, ?, ?, 1, ?)",
++    ).run(id, workerId, time, prompt, intervalMinutes);
+   }
+ 
+-  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean }): void {
++  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean; intervalMinutes?: number | null }): void {
+     if (fields.time !== undefined) this.db.prepare("UPDATE schedules SET time = ? WHERE id = ?").run(fields.time, id);
+     if (fields.prompt !== undefined) this.db.prepare("UPDATE schedules SET prompt = ? WHERE id = ?").run(fields.prompt, id);
+     if (fields.enabled !== undefined) this.db.prepare("UPDATE schedules SET enabled = ? WHERE id = ?").run(fields.enabled ? 1 : 0, id);
++    if (fields.intervalMinutes !== undefined) this.db.prepare("UPDATE schedules SET interval_minutes = ? WHERE id = ?").run(fields.intervalMinutes, id);
+   }
+ 
+   deleteSchedule(id: string): void {
+     this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
+   }
+ 
+-  markScheduleRun(id: string, day: string): void {
+-    this.db.prepare("UPDATE schedules SET last_run_day = ? WHERE id = ?").run(day, id);
++  markScheduleRun(id: string, day: string, at: string = new Date().toISOString()): void {
++    this.db.prepare("UPDATE schedules SET last_run_day = ?, last_run_at = ? WHERE id = ?").run(day, at, id);
+   }
+ 
+   loadCapabilities(repoPath: string): CapabilityState | null {
+diff --git a/server/src/storeMigrations.ts b/server/src/storeMigrations.ts
+index ffd2132..f198702 100644
+--- a/server/src/storeMigrations.ts
++++ b/server/src/storeMigrations.ts
+@@ -130,6 +130,10 @@ function completeHistoricalStoreSchema(db: DatabaseSync): void {
+   addColumnIfMissing(db, "workers", "codex_account_id TEXT");
+   addColumnIfMissing(db, "workers", "account_id TEXT");
+   db.exec("UPDATE workers SET account_id = codex_account_id WHERE codex_account_id IS NOT NULL AND account_id IS NULL");
++  // 排程「每 N 分鐘重複」擴充：interval_minutes 為 null＝維持舊的「每日 HH:MM 一次」，
++  // 有值＝每 N 分鐘重複觸發（用 last_run_at 這個 ISO 時間戳判斷是否到點，取代 last_run_day）。
++  addColumnIfMissing(db, "schedules", "interval_minutes INTEGER");
++  addColumnIfMissing(db, "schedules", "last_run_at TEXT");
+ }
+ 
+ export const storeMigrations: readonly DatabaseMigration[] = [
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index f18e791..910b75a 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -252,6 +252,9 @@ export function App() {
+   // 都以為資料變了，就重跑 visualWorkers() 並呼叫 pixi setWorkers()，造成畫面持續無謂重算。改用 useMemo
+   // 讓「內容沒變時陣列參照就不變」，這些效果只在真的有變動時才觸發。
+   const workerList = useMemo(() => order.map((id) => workers[id]).filter(Boolean), [order, workers]);
++  // 全域「執行中」計數：不分工作區（workerList 是所有 NPC），頂欄燈號用——讓你在聊天／
++  // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
++  const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
+   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
+   const missionList = useMemo(() => Object.values(missions), [missions]);
+   const departmentList = useMemo(() => Object.values(departments), [departments]);
+@@ -1006,6 +1009,7 @@ export function App() {
+         wsReady={wsReady}
+         modelOptions={modelOptions}
+         workerCount={workerList.length}
++        runningCount={runningCount}
+         providerChanging={providerChanging}
+         accounts={Object.values(accounts)}
+         onSetWorkerAccount={handleSetWorkerAccount}
+diff --git a/web/src/components/BossTaskDesk.tsx b/web/src/components/BossTaskDesk.tsx
+index 4cca95e..b9e8f10 100644
+--- a/web/src/components/BossTaskDesk.tsx
++++ b/web/src/components/BossTaskDesk.tsx
+@@ -1,7 +1,8 @@
+ import { useEffect, useMemo, useRef, useState } from "react";
+ import { createPortal } from "react-dom";
+ import { t } from "../i18n";
+-import type { BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
++import type { AdvisorProposal, AdvisorResult, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
++import { apiRequest } from "../api";
+ import { RichText } from "./RichText";
+ import { TaskComposer } from "./TaskComposer";
+ import { type ConfirmTone } from "./ConfirmDialog";
+@@ -106,7 +107,50 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
+   const [maxMissionSteps, setMaxMissionSteps] = useState(3);
+   const [working, setWorking] = useState(false);
+   const [error, setError] = useState<string | null>(null);
++  // 專家顧問（沒方向時的前段）：一個粗略念頭 → 幾個「你可能沒想到」的方向 → 挑一個
++  // 就把它的 objective 預填進下面的交辦草稿（沿用 starterTasks 同款「填草稿＋重開」）。
++  const [advisorIdea, setAdvisorIdea] = useState("");
++  const [advisorLoading, setAdvisorLoading] = useState(false);
++  const [advisorError, setAdvisorError] = useState<string | null>(null);
++  const [advisorDomain, setAdvisorDomain] = useState<string | null>(null);
++  const [advisorQuestion, setAdvisorQuestion] = useState<string | null>(null);
++  const [advisorProposals, setAdvisorProposals] = useState<AdvisorProposal[]>([]);
+   const restoredSelection = useRef(false);
++
++  const runAdvisor = async () => {
++    const idea = advisorIdea.trim();
++    if (!idea || advisorLoading) return;
++    setAdvisorLoading(true);
++    setAdvisorError(null);
++    setAdvisorProposals([]);
++    setAdvisorQuestion(null);
++    setAdvisorDomain(null);
++    const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
++    try {
++      const data = await apiRequest<{ result: AdvisorResult }>("/api/advisor/propose", {
++        method: "POST",
++        body: { idea, workspacePath, provider: decision?.provider, model: decision?.model },
++        timeoutMs: 135_000,
++      });
++      if (data.result.status === "need_focus") {
++        setAdvisorQuestion(data.result.question);
++      } else {
++        setAdvisorProposals(data.result.proposals);
++        setAdvisorDomain(data.result.domain || null);
++      }
++    } catch (advisorFailure) {
++      setAdvisorError((advisorFailure as Error).message);
++    } finally {
++      setAdvisorLoading(false);
++    }
++  };
++
++  // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
++  const useProposalObjective = (objective: string) => {
++    try { localStorage.setItem(`pixel-crew:task-composer:boss:${workspacePath}:new`, objective); } catch { /* unavailable */ }
++    setNewTask(false);
++    requestAnimationFrame(() => setNewTask(true));
++  };
+   // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
+   // non-blocking, so a WS-driven status change can land while its dialog is
+   // still open; re-read through this ref instead of a stale closure.
+@@ -350,6 +394,44 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
+             requestAnimationFrame(() => setNewTask(true));
+           }}>{t(starter)}</button>)}
+         </div>
++        <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
++          <div className="boss-task-desk__advisor-head">
++            <strong>{t("沒方向？讓顧問幫你想")}</strong>
++            <small>{t("給一個粗略念頭或主題，顧問會用專業列出你可能沒想到的方向，挑一個就能交辦。")}</small>
++          </div>
++          <div className="boss-task-desk__advisor-input">
++            <input
++              value={advisorIdea}
++              onChange={(event) => setAdvisorIdea(event.target.value)}
++              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runAdvisor(); } }}
++              placeholder={t("例如：我想用 AI 做量化交易，但不知道從何下手")}
++              maxLength={4000}
++              aria-label={t("你的粗略念頭或主題")}
++            />
++            <button type="button" onClick={() => void runAdvisor()} disabled={advisorLoading || !advisorIdea.trim()}>
++              {advisorLoading ? t("顧問思考中…") : t("幫我想方向")}
++            </button>
++          </div>
++          {advisorError && <p className="boss-task-desk__advisor-error" role="alert">{advisorError}</p>}
++          {advisorQuestion && <div className="boss-task-desk__advisor-question">
++            <strong>{t("顧問想先確認一件事：")}</strong>
++            <p>{advisorQuestion}</p>
++            <small>{t("把答案補進上面的念頭，再按一次「幫我想方向」。")}</small>
++          </div>}
++          {advisorProposals.length > 0 && <div className="boss-task-desk__advisor-proposals">
++            {advisorDomain && <small className="boss-task-desk__advisor-domain">{t("領域：{domain}", { domain: advisorDomain })}</small>}
++            {advisorProposals.map((proposal) => (
++              <div key={proposal.id} className="boss-task-desk__advisor-card">
++                <strong>{proposal.title}</strong>
++                {proposal.summary && <p>{proposal.summary}</p>}
++                {proposal.insight && <p className="boss-task-desk__advisor-insight">{proposal.insight}</p>}
++                {proposal.approach && <p className="boss-task-desk__advisor-approach">{proposal.approach}</p>}
++                {proposal.considerations.length > 0 && <ul>{proposal.considerations.map((item, index) => <li key={index}>{item}</li>)}</ul>}
++                <button type="button" onClick={() => useProposalObjective(proposal.objective)}>{t("用這個方向交辦 →")}</button>
++              </div>
++            ))}
++          </div>}
++        </div>
+       </div> : <>
+         <div className={`boss-task-desk__status boss-task-desk__status--${selected.status}`}>
+           <span>{selected.executionMode === "research" && selected.status === "running" ? t("快速研究中") : statusLabel[selected.status]}</span>
+diff --git a/web/src/components/OpsModal.tsx b/web/src/components/OpsModal.tsx
+index 4b7f769..4575075 100644
+--- a/web/src/components/OpsModal.tsx
++++ b/web/src/components/OpsModal.tsx
+@@ -5,7 +5,7 @@ import { Modal } from "./Modal";
+ import type { WorkerState } from "../types";
+ 
+ type CostRow = { day: string; workerId: string; workerName: string; costUsd: number };
+-type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null };
++type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null };
+ type Diagnostics = { enabled: boolean; diagnostics: { generatedAt: string; scope: string; privacy: string; missions: { total: number; completed: number; failed: number; successRate: number | null; failuresByReason: Array<{ reason: string; count: number }> }; responsiveness: { websocketReconnects: number; longUiTasks: number; medianFps: number | null; fpsBand: string; medianApprovalWaitSeconds: number | null } } };
+ 
+ type Props = {
+@@ -21,6 +21,8 @@ export function OpsModal({ workers, notify, onClose }: Props) {
+   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
+   const [newWorkerId, setNewWorkerId] = useState(workers[0]?.id ?? "");
+   const [newTime, setNewTime] = useState("09:00");
++  const [newMode, setNewMode] = useState<"daily" | "interval">("daily");
++  const [newIntervalMinutes, setNewIntervalMinutes] = useState("60");
+   const [newPrompt, setNewPrompt] = useState("");
+   const [saving, setSaving] = useState(false);
+   // 每日預算草稿：workerId → 輸入框文字（"" = 無上限）。
+@@ -82,12 +84,16 @@ export function OpsModal({ workers, notify, onClose }: Props) {
+ 
+   async function addSchedule() {
+     if (!newWorkerId || !newPrompt.trim()) { notify(t("請選擇 NPC 並填寫指示"), "error"); return; }
++    const interval = newMode === "interval" ? Math.floor(Number(newIntervalMinutes) || 0) : null;
++    if (newMode === "interval" && (!interval || interval < 5)) { notify(t("重複間隔需為至少 5 分鐘"), "error"); return; }
+     setSaving(true);
+     try {
+-      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim() } });
++      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim(), intervalMinutes: interval } });
+       setSchedules(data.schedules);
+       setNewPrompt("");
+-      notify(t("排程已建立：每日 {time}", { time: newTime }));
++      notify(newMode === "interval"
++        ? t("排程已建立：每 {minutes} 分鐘", { minutes: interval ?? 0 })
++        : t("排程已建立：每日 {time}", { time: newTime }));
+     } catch (error) {
+       notify(error instanceof Error ? error.message : t("建立排程失敗"), "error");
+     } finally {
+@@ -177,12 +183,18 @@ export function OpsModal({ workers, notify, onClose }: Props) {
+ 
+         {tab === "schedules" && (
+           <div className="ops-modal__body">
+-            <h3>{t("新增排程（每天固定時間把指示交給 NPC）")}</h3>
++            <h3>{t("新增排程（固定時間、或每隔一段時間把指示交給 NPC）")}</h3>
+             <div className="ops-schedule__form">
+               <select value={newWorkerId} onChange={(event) => setNewWorkerId(event.target.value)} aria-label={t("選擇 NPC")}>
+                 {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+               </select>
+-              <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
++              <select value={newMode} onChange={(event) => setNewMode(event.target.value as "daily" | "interval")} aria-label={t("排程模式")}>
++                <option value="daily">{t("每日固定時間")}</option>
++                <option value="interval">{t("每隔一段時間重複")}</option>
++              </select>
++              {newMode === "daily"
++                ? <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
++                : <label className="ops-schedule__interval">{t("每")}<input type="number" min={5} step={5} value={newIntervalMinutes} onChange={(event) => setNewIntervalMinutes(event.target.value)} aria-label={t("重複間隔（分鐘）")} />{t("分鐘")}</label>}
+               <textarea
+                 value={newPrompt}
+                 onChange={(event) => setNewPrompt(event.target.value)}
+@@ -198,7 +210,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
+                 {schedules.map((schedule) => (
+                   <li key={schedule.id} className={schedule.enabled ? "" : "ops-schedule__item--off"}>
+                     <div className="ops-schedule__meta">
+-                      <strong>{schedule.time}</strong>
++                      <strong>{schedule.intervalMinutes ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes }) : schedule.time}</strong>
+                       <span>{workerName(schedule.workerId) ?? t("（NPC 已刪除）")}</span>
+                       {schedule.lastRunDay && <small>{t("上次執行 {day}", { day: schedule.lastRunDay })}</small>}
+                     </div>
+diff --git a/web/src/components/TopBar.tsx b/web/src/components/TopBar.tsx
+index 757ffaf..438c33e 100644
+--- a/web/src/components/TopBar.tsx
++++ b/web/src/components/TopBar.tsx
+@@ -31,6 +31,8 @@ type Props = {
+   wsReady: boolean;
+   modelOptions: ModelOption[];
+   workerCount: number;
++  /** 全域「執行中」NPC 數（不分工作區）；頂欄燈號用。 */
++  runningCount: number;
+   providerChanging?: boolean;
+   accounts?: AccountWithAuth[];
+   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
+@@ -79,6 +81,7 @@ export function TopBar({
+   wsReady,
+   modelOptions,
+   workerCount,
++  runningCount,
+   providerChanging = false,
+   accounts,
+   onSetWorkerAccount,
+@@ -303,6 +306,24 @@ export function TopBar({
+         professionalModeButtonRef={professionalModeButtonRef}
+       />
+       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
++      {/* 全域「在跑」燈號：不分工作區顯示目前有幾個 NPC 正在執行，讓你在聊天／別的
++          工作區時也能一眼看到背景是否還有 NPC 在跑；0 時暗掉並顯示「待命」。 */}
++      <div
++        className={`top-bar__running ${runningCount > 0 ? "top-bar__running--on" : ""}`}
++        role="status"
++        aria-live="polite"
++        title={runningCount > 0
++          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
++          : t("目前沒有 NPC 在執行，全部待命中")}
++        aria-label={runningCount > 0
++          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
++          : t("目前沒有 NPC 在執行，全部待命中")}
++      >
++        <i className="top-bar__running-dot" aria-hidden="true" />
++        {runningCount > 0
++          ? <><strong>{runningCount}</strong><span>{t("在跑")}</span></>
++          : <span>{t("待命")}</span>}
++      </div>
+       <div className="top-bar__spacer" />
+       {children}
+       <div className="top-bar__spacer" />
+diff --git a/web/src/i18n/en-app.ts b/web/src/i18n/en-app.ts
+index d36c695..3be7044 100644
+--- a/web/src/i18n/en-app.ts
++++ b/web/src/i18n/en-app.ts
+@@ -100,6 +100,9 @@ export const enApp: Record<string, string> = {
+   "需處理": "Needs attention",
+   "進行中": "In progress",
+   "待命": "Standby",
++  "在跑": "running",
++  "目前有 {count} 位 NPC 正在執行": "{count} NPC(s) currently running",
++  "目前沒有 NPC 在執行，全部待命中": "No NPCs running — all on standby",
+   "依部門職責與 NPC 職務自動路由": "Auto-routed by department responsibility and NPC role",
+   "{count} 位 NPC": "{count} NPCs",
+   "日誌模式": "Log mode",
+diff --git a/web/src/i18n/en-modals-a.ts b/web/src/i18n/en-modals-a.ts
+index f5e27e1..cea40b9 100644
+--- a/web/src/i18n/en-modals-a.ts
++++ b/web/src/i18n/en-modals-a.ts
+@@ -82,6 +82,17 @@ export const enModalsA: Record<string, string> = {
+   "交辦給部門": "Assign to department",
+   "今天想完成什麼？": "What do you want to get done today?",
+   "任務範例": "Task examples",
++  "專家顧問": "Expert advisor",
++  "沒方向？讓顧問幫你想": "No direction? Let the advisor think for you",
++  "給一個粗略念頭或主題，顧問會用專業列出你可能沒想到的方向，挑一個就能交辦。": "Give a rough idea or topic; the advisor uses domain expertise to lay out directions you may not have considered — pick one and assign it.",
++  "例如：我想用 AI 做量化交易，但不知道從何下手": "e.g. I want to use AI for quantitative trading but don't know where to start",
++  "你的粗略念頭或主題": "Your rough idea or topic",
++  "顧問思考中…": "Advisor thinking…",
++  "幫我想方向": "Suggest directions",
++  "顧問想先確認一件事：": "The advisor wants to confirm one thing first:",
++  "把答案補進上面的念頭，再按一次「幫我想方向」。": "Add your answer to the idea above, then press \"Suggest directions\" again.",
++  "領域：{domain}": "Field: {domain}",
++  "用這個方向交辦 →": "Assign this direction →",
+   "來源圖片最多 5 MiB": "Source image up to 5 MiB",
+   "來源圖片最大尺寸為 4096 × 4096": "Source image max size is 4096 × 4096",
+   "例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過": "e.g.:\nCan create customers and orders\nHas permission controls\nAll tests pass",
+diff --git a/web/src/styles/app-shell-and-focus.css b/web/src/styles/app-shell-and-focus.css
+index efaddf5..09b949b 100644
+--- a/web/src/styles/app-shell-and-focus.css
++++ b/web/src/styles/app-shell-and-focus.css
+@@ -18,6 +18,48 @@
+ .top-bar > * { pointer-events: auto; }
+ .top-bar__spacer { flex: 1; pointer-events: none; }
+ 
++/* 全域「在跑」燈號：常駐頂欄，不分工作區顯示執行中 NPC 數。
++   閒置（0）時整顆變暗；有在跑時邊框轉綠、圓點脈動，一眼可辨。 */
++.top-bar__running {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  min-height: 32px;
++  padding: 5px 10px;
++  border: 1px solid rgba(100, 172, 205, 0.14);
++  border-radius: 8px;
++  background: rgba(9, 16, 30, 0.6);
++  color: var(--text-dim);
++  white-space: nowrap;
++  user-select: none;
++}
++.top-bar__running strong { color: #7cf0b6; font: 700 12px/1 var(--mono); }
++.top-bar__running span { color: rgba(124, 240, 182, 0.7); font: 700 8px/1 var(--mono); letter-spacing: 0.12em; }
++.top-bar__running-dot {
++  width: 8px;
++  height: 8px;
++  border-radius: 50%;
++  background: #3a4a5c;
++  box-shadow: none;
++}
++.top-bar__running--on {
++  border-color: rgba(0, 255, 163, 0.38);
++  background: rgba(0, 255, 163, 0.08);
++}
++.top-bar__running--on span { color: rgba(124, 240, 182, 0.92); }
++.top-bar__running--on .top-bar__running-dot {
++  background: #00ffa3;
++  box-shadow: 0 0 8px rgba(0, 255, 163, 0.75);
++  animation: runningPulse 1.2s ease-in-out infinite;
++}
++@keyframes runningPulse {
++  0%, 100% { opacity: 1; transform: scale(1); }
++  50% { opacity: 0.45; transform: scale(0.7); }
++}
++@media (prefers-reduced-motion: reduce) {
++  .top-bar__running--on .top-bar__running-dot { animation: none; }
++}
++
+ .top-bar__brand {
+   display: flex;
+   align-items: center;
+diff --git a/web/src/styles/composer-and-operations.css b/web/src/styles/composer-and-operations.css
+index f6055e9..0a2cf26 100644
+--- a/web/src/styles/composer-and-operations.css
++++ b/web/src/styles/composer-and-operations.css
+@@ -1062,6 +1062,33 @@ summary:focus-visible,
+ .boss-task-desk__starters button { min-height: 34px; padding: 8px 12px; border: 1px solid rgba(100,172,205,.13); border-radius: 8px; background: rgba(8,18,35,.5); color: #8296af; cursor: pointer; font-size: 10px; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease; }
+ .boss-task-desk__starters button::before { content: "↗"; margin-right: 9px; color: #3c8095; font-family: var(--mono); }
+ .boss-task-desk__starters button:hover { transform: translateX(2px); border-color: rgba(0, 229, 255,.3); background: rgba(0, 229, 255,.055); color: #c4d7e8; }
++
++/* 專家顧問（沒方向時的前段）：輸入一個念頭 → 幾個「你可能沒想到」的方向卡片。 */
++.boss-task-desk__advisor { display: flex; width: 100%; margin-top: 16px; flex-direction: column; gap: 9px; padding-top: 14px; border-top: 1px dashed rgba(100,172,205,.16); text-align: left; }
++.boss-task-desk__advisor-head { display: flex; flex-direction: column; gap: 3px; }
++.boss-task-desk__advisor-head strong { color: #ffd27c; font-size: 11px; letter-spacing: .01em; }
++.boss-task-desk__advisor-head small { color: #60748c; font-size: 8px; line-height: 1.5; }
++.boss-task-desk__advisor-input { display: flex; gap: 6px; }
++.boss-task-desk__advisor-input input { flex: 1; min-width: 0; min-height: 34px; padding: 8px 11px; border: 1px solid rgba(255,194,92,.24); border-radius: 8px; background: rgba(8,18,35,.55); color: #d5e2f0; font-size: 10px; }
++.boss-task-desk__advisor-input input:focus { outline: none; border-color: rgba(255,194,92,.5); }
++.boss-task-desk__advisor-input button { min-height: 34px; padding: 8px 13px; border: 1px solid rgba(255,194,92,.35); border-radius: 8px; background: rgba(255,194,92,.1); color: #ffd27c; cursor: pointer; font-size: 10px; font-weight: 700; white-space: nowrap; }
++.boss-task-desk__advisor-input button:disabled { cursor: not-allowed; opacity: .45; }
++.boss-task-desk__advisor-input button:not(:disabled):hover { background: rgba(255,194,92,.18); }
++.boss-task-desk__advisor-error { margin: 0; color: #ff8ca3; font-size: 9px; }
++.boss-task-desk__advisor-question { padding: 9px 11px; border-left: 2px solid rgba(255,194,92,.55); background: rgba(255,194,92,.06); border-radius: 6px; }
++.boss-task-desk__advisor-question strong { color: #ffd27c; font-size: 10px; }
++.boss-task-desk__advisor-question p { margin: 5px 0; color: #d5e2f0; font-size: 10px; line-height: 1.55; }
++.boss-task-desk__advisor-question small { color: #60748c; font-size: 8px; }
++.boss-task-desk__advisor-proposals { display: flex; flex-direction: column; gap: 8px; }
++.boss-task-desk__advisor-domain { color: #60748c; font: 700 8px var(--mono); letter-spacing: .08em; }
++.boss-task-desk__advisor-card { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; border: 1px solid rgba(100,172,205,.16); border-radius: 9px; background: rgba(8,18,35,.5); }
++.boss-task-desk__advisor-card > strong { color: var(--text); font-size: 11px; }
++.boss-task-desk__advisor-card p { margin: 0; color: var(--text-dim); font-size: 9.5px; line-height: 1.6; }
++.boss-task-desk__advisor-insight { color: #ffd9a0 !important; }
++.boss-task-desk__advisor-approach { color: #9fc0d7 !important; }
++.boss-task-desk__advisor-card ul { margin: 2px 0 0; padding-left: 16px; color: #7f93ab; font-size: 9px; line-height: 1.55; }
++.boss-task-desk__advisor-card button { align-self: flex-start; margin-top: 4px; min-height: 30px; padding: 6px 12px; border: 1px solid rgba(0, 229, 255,.32); border-radius: 8px; background: rgba(0, 229, 255,.08); color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 700; }
++.boss-task-desk__advisor-card button:hover { background: rgba(0, 229, 255,.16); }
+ .boss-task-desk__status { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 8px; background: rgba(0, 229, 255,.04); }
+ .boss-task-desk__status span { color: var(--cyan); font-size: 10px; font-weight: 700; }
+ .boss-task-desk__status small { color: var(--text-dim); font-family: var(--mono); font-size: 8px; }
+diff --git a/web/src/types.ts b/web/src/types.ts
+index 9f6d4fe..5a98cfa 100644
+--- a/web/src/types.ts
++++ b/web/src/types.ts
+@@ -416,6 +416,21 @@ export type ExecutionBudget = {
+   codexQuota5hPercent: { min: number; max: number };
+ };
+ 
++// 專家顧問：把一個粗略念頭展開成「你可能沒想到」的專業方向；挑一個直接接 Boss Task。
++export type AdvisorProposal = {
++  id: string;
++  title: string;
++  summary: string;
++  insight: string;
++  approach: string;
++  considerations: string[];
++  objective: string;
++};
++
++export type AdvisorResult =
++  | { status: "proposals"; domain: string; proposals: AdvisorProposal[] }
++  | { status: "need_focus"; question: string };
++
+ export type BossTask = {
+   id: string;
+   title: string;

@@ -298,6 +298,21 @@ export class LocalStore {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- 跨裝置排隊佇列：排隊改存 server（原本只在瀏覽器 IndexedDB，手機/電腦各自為政、
+      -- 背景 NPC 也不會自動跑）。搬到這裡後：手機排的隊電腦看得到，且任何 NPC 一空下來
+      -- server 自己就把它的下一則送出，不用切回那個 NPC。
+      CREATE TABLE IF NOT EXISTS worker_queue (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        images_json TEXT NOT NULL DEFAULT '[]',
+        documents_json TEXT NOT NULL DEFAULT '[]',
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_worker_queue_worker
+        ON worker_queue(worker_id, position);
+
       CREATE TABLE IF NOT EXISTS slash_command_seed (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         commands TEXT NOT NULL,
@@ -975,6 +990,7 @@ export class LocalStore {
     this.flushEvents();
     this.safeWrite("delete worker", () => {
       this.db.prepare("DELETE FROM workers WHERE id = ?").run(id);
+      this.db.prepare("DELETE FROM worker_queue WHERE worker_id = ?").run(id);
     });
   }
 
@@ -1090,6 +1106,57 @@ export class LocalStore {
 
   markScheduleRun(id: string, day: string, at: string = new Date().toISOString()): void {
     this.db.prepare("UPDATE schedules SET last_run_day = ?, last_run_at = ? WHERE id = ?").run(day, at, id);
+  }
+
+  // ── 跨裝置排隊佇列 ─────────────────────────────────────────────────────────
+  // 排隊改存 server（原本只在瀏覽器 IndexedDB）：手機排的隊電腦看得到，且任何 NPC
+  // 一空下來 server 自己就 drain 下一則（見 index.ts 的 turn_end drain 掛點）。
+  private static parseJsonArray(value: string): unknown[] {
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  }
+
+  enqueueCommand(id: string, workerId: string, message: string, images: unknown[], documents: unknown[]): void {
+    const row = this.db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM worker_queue WHERE worker_id = ?").get(workerId) as { next: number };
+    this.db.prepare(
+      "INSERT INTO worker_queue (id, worker_id, message, images_json, documents_json, position) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(id, workerId, message, JSON.stringify(images ?? []), JSON.stringify(documents ?? []), row.next);
+  }
+
+  listQueue(workerId: string): Array<{ id: string; workerId: string; message: string; images: unknown[]; documents: unknown[]; createdAt: string }> {
+    const rows = this.db.prepare(
+      "SELECT id, worker_id, message, images_json, documents_json, created_at FROM worker_queue WHERE worker_id = ? ORDER BY position ASC, rowid ASC",
+    ).all(workerId) as Array<{ id: string; worker_id: string; message: string; images_json: string; documents_json: string; created_at: string }>;
+    return rows.map((row) => ({
+      id: row.id,
+      workerId: row.worker_id,
+      message: row.message,
+      images: LocalStore.parseJsonArray(row.images_json),
+      documents: LocalStore.parseJsonArray(row.documents_json),
+      createdAt: row.created_at,
+    }));
+  }
+
+  // 取出並刪除某 worker 佇列最前面一筆（drain 用）；空的回 null。
+  dequeueFirstQueued(workerId: string): { id: string; message: string; images: unknown[]; documents: unknown[] } | null {
+    const row = this.db.prepare(
+      "SELECT id, message, images_json, documents_json FROM worker_queue WHERE worker_id = ? ORDER BY position ASC, rowid ASC LIMIT 1",
+    ).get(workerId) as { id: string; message: string; images_json: string; documents_json: string } | undefined;
+    if (!row) return null;
+    this.db.prepare("DELETE FROM worker_queue WHERE id = ?").run(row.id);
+    return { id: row.id, message: row.message, images: LocalStore.parseJsonArray(row.images_json), documents: LocalStore.parseJsonArray(row.documents_json) };
+  }
+
+  removeQueueItem(workerId: string, id: string): void {
+    this.db.prepare("DELETE FROM worker_queue WHERE id = ? AND worker_id = ?").run(id, workerId);
+  }
+
+  reorderQueue(workerId: string, orderedIds: string[]): void {
+    const update = this.db.prepare("UPDATE worker_queue SET position = ? WHERE id = ? AND worker_id = ?");
+    orderedIds.forEach((id, index) => update.run(index, id, workerId));
+  }
+
+  clearWorkerQueue(workerId: string): void {
+    this.db.prepare("DELETE FROM worker_queue WHERE worker_id = ?").run(workerId);
   }
 
   loadCapabilities(repoPath: string): CapabilityState | null {
