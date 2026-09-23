@@ -8,6 +8,9 @@ import {
   FILE_ACCEPT,
   imagePayload,
   isImageFile,
+  isVideoFile,
+  MAX_IMAGES,
+  MAX_VIDEO_BYTES,
   readComposerDocument,
   readComposerImage,
   validateComposerAttachment,
@@ -84,6 +87,7 @@ export function TaskComposer({
   const serverQueueItems = serverQueue ?? [];
   const [draftValue, setDraftValue] = useComposerDraft(draftKey);
   const [failedFiles, setFailedFiles] = useState<File[]>([]);
+  const [videoProcessing, setVideoProcessing] = useState(false);
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
     switchingSession, restoringExtras, extrasSaved, persistenceWarning, ownerRef, updateCachedSession,
@@ -191,10 +195,54 @@ export function TaskComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueEnabled, busy, disabled, queued, draftKey, switchingSession, dispatchTick]);
 
+  // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
+  // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
+  async function processVideos(videoFiles: File[], owner: string) {
+    for (const file of videoFiles) {
+      if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
+      setVideoProcessing(true);
+      try {
+        const form = new FormData();
+        form.append("video", file, file.name);
+        const response = await fetch("/api/video/process", { method: "POST", body: form });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null);
+          throw new Error(detail?.error || t("影片處理失敗（{status}）", { status: response.status }));
+        }
+        const data = await response.json() as { images?: Array<{ name: string; mimeType: string; dataBase64: string }>; transcript?: string; transcriptError?: string | null };
+        const frames: ComposerImage[] = (data.images ?? []).map((frame, index) => ({
+          id: `vid-${Date.now()}-${index}`,
+          name: frame.name,
+          mimeType: frame.mimeType as ComposerImage["mimeType"],
+          dataBase64: frame.dataBase64,
+          previewUrl: `data:${frame.mimeType};base64,${frame.dataBase64}`,
+          size: Math.floor(frame.dataBase64.length * 0.75),
+        }));
+        const transcript = String(data.transcript ?? "").trim();
+        if (persistExtras && ownerRef.current !== owner) {
+          updateCachedSession(owner, (session) => ({ ...session, images: [...session.images, ...frames].slice(0, MAX_IMAGES), error: null }));
+        } else {
+          setImages((current) => [...current, ...frames].slice(0, MAX_IMAGES));
+          if (transcript) setDraftValue((current) => `${current}${current ? "\n\n" : ""}【影片音訊字幕】\n${transcript}`);
+          if (!transcript && data.transcriptError) setError(String(data.transcriptError));
+          else setError(null);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }
+      } catch (videoError) {
+        setError(videoError instanceof Error ? videoError.message : t("影片處理失敗"));
+      } finally {
+        setVideoProcessing(false);
+      }
+    }
+  }
+
   async function attachFiles(files: File[]) {
     const owner = ownerRef.current;
+    const videoFiles = files.filter(isVideoFile);
     const imageFiles = files.filter(isImageFile);
-    const documentFiles = files.filter((file) => !isImageFile(file));
+    const documentFiles = files.filter((file) => !isImageFile(file) && !isVideoFile(file));
+    if (videoFiles.length > 0) void processVideos(videoFiles, owner);
+    if (imageFiles.length === 0 && documentFiles.length === 0) return;
     const validationError = validateComposerAttachment({ imageFiles, documentFiles, currentImages: images, currentDocuments: documents });
     if (validationError) {
       setError(validationError);
@@ -451,6 +499,7 @@ export function TaskComposer({
         )}
         {leading}
         {textareaField}
+        {videoProcessing && <span className="command-composer__video-processing" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
         {queueEnabled && (useServerQueue ? serverQueueItems.length > 0 : queued.length > 0) && <QueuePanel
@@ -517,6 +566,7 @@ export function TaskComposer({
       {textareaField}
       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
     </div>
+    {videoProcessing && <div className="task-composer__error" role="status">{t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
     {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
   </form>;
 }

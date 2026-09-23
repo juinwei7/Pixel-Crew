@@ -57,6 +57,9 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN ?? "claude",
   codexBin: process.env.CODEX_BIN ?? "codex",
   codexSandbox: process.env.CODEX_SANDBOX ?? "workspace-write",
+  // 影片理解用：ffmpeg 抽影格＋音訊，ffprobe 探測時長。預設走 PATH。
+  ffmpegBin: process.env.FFMPEG_BIN?.trim() || "ffmpeg",
+  ffprobeBin: process.env.FFPROBE_BIN?.trim() || "ffprobe",
   port: Number(process.env.PORT ?? 8787),
   host: configuredHost,
   dbPath,

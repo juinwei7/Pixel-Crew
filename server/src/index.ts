@@ -69,6 +69,8 @@ import { VoiceEngineServer } from "./voice/voiceEngineServer.js";
 import { VoiceEngineInstaller } from "./voice/voiceEngineInstaller.js";
 import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.js";
 import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
+import multer from "multer";
+import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -3737,6 +3739,40 @@ const voiceEngineServer = new VoiceEngineServer(
 );
 const voiceTranscriber = new VoiceTranscriber(voiceEngineServer);
 registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber, engineInstaller: voiceEngineInstaller });
+
+// ── 影片理解：上傳影片 → ffmpeg 抽關鍵影格＋音訊 → whisper 轉文字 → 回傳「影格(當圖片)＋
+//     文字稿」，前端把它們塞進訊息一起送給 Claude（Claude 不吃影片，但吃圖片＋文字）。
+//     影片音訊可能很長，所以另建一個逾時放寬到 5 分鐘的 transcriber（語音輸入那顆維持 15 秒）。
+const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+const videoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VIDEO_BYTES } });
+const videoAudioTranscriber = new VoiceTranscriber(voiceEngineServer, fetch, 300_000);
+app.post("/api/video/process", videoUpload.single("video"), async (req, res) => {
+  if (!req.file || req.file.buffer.length === 0) { res.status(400).json({ error: t("請提供影片檔") }); return; }
+  let extracted;
+  try {
+    extracted = await extractVideoFramesAndAudio(req.file.buffer, { ffmpegBin: config.ffmpegBin, ffprobeBin: config.ffprobeBin, maxFrames: 8 });
+  } catch (error) {
+    const detail = error instanceof VideoProcessingError ? error.message : t("影片處理失敗");
+    res.status(422).json({ error: detail });
+    return;
+  }
+  // 音訊轉文字（whisper）：引擎沒裝或轉寫失敗都不致命——至少影格還在。
+  let transcript = "";
+  let transcriptError: string | null = null;
+  if (extracted.audioWav && videoAudioTranscriber.engineAvailable) {
+    try { transcript = await videoAudioTranscriber.transcribe(extracted.audioWav); }
+    catch (error) { transcriptError = error instanceof Error ? error.message : t("語音轉寫失敗"); }
+  } else if (extracted.audioWav) {
+    transcriptError = t("找不到本機語音轉寫引擎（音訊未轉文字，僅送出畫面）");
+  }
+  res.json({
+    images: extracted.frames.map((frame) => ({ name: frame.name, mimeType: "image/jpeg", dataBase64: frame.dataBase64 })),
+    transcript,
+    durationSeconds: extracted.durationSeconds,
+    audioAvailable: Boolean(extracted.audioWav),
+    transcriptError,
+  });
+});
 
 registerBackupImportTransport({
   app,

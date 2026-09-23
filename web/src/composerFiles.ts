@@ -12,7 +12,18 @@ export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
 export const SUPPORTED_DOCUMENT_EXTENSIONS = new Set(["txt", "md", "csv", "json", "html", "htm", "xml", "yaml", "yml", "log", "pdf", "docx", "xlsx", "pptx"]);
-export const FILE_ACCEPT = "image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
+// 影片：Claude 不吃影片，上傳後由 server 用 ffmpeg 抽關鍵影格＋whisper 轉音訊字幕，再當成
+// 圖片＋文字送出（見 /api/video/process）。這裡只認得副檔名/型別，實際處理在 server。
+export const SUPPORTED_VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/x-msvideo"]);
+export const SUPPORTED_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "mkv", "avi", "m4v"]);
+export const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+export const FILE_ACCEPT = "image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv,.avi,.m4v,.txt,.md,.csv,.json,.html,.htm,.xml,.yaml,.yml,.log,.pdf,.docx,.xlsx,.pptx";
+
+export function isVideoFile(file: File): boolean {
+  if (SUPPORTED_VIDEO_TYPES.has(file.type)) return true;
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
+}
 
 export function validateComposerAttachment(input: {
   imageFiles: File[];

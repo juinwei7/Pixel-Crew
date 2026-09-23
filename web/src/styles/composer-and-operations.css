@@ -410,6 +410,8 @@
 .command-composer__attachment--document span { color: #73a5b8; }
 .command-composer--attachments .command-palette { bottom: calc(100% + 78px); }
 .command-composer--attachments .command-composer__error { bottom: calc(100% + 78px); }
+.command-composer__video-processing { color: var(--cyan); font-size: 10px; animation: missionPulse 1.2s ease-in-out infinite; }
+.task-composer__error[role="status"] { color: var(--cyan); }
 .command-composer__error { position: absolute; right: 88px; bottom: calc(100% + 7px); max-width: 420px; padding: 7px 9px; border: 1px solid rgba(255, 46, 136,.28); border-radius: 7px; background: rgba(30,8,17,.96); color: #ff9aae; font-size: 10px; }
 .command-palette { position: absolute; right: 0; bottom: calc(100% + 9px); left: 0; overflow: hidden; border: 1px solid rgba(0, 229, 255,.22); border-radius: 14px; background: rgba(7,13,26,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); }
 .command-palette__head { display: flex; justify-content: space-between; padding: 10px 13px; border-bottom: 1px solid rgba(255,255,255,.06); color: rgba(0, 229, 255,.7); font: 700 8px var(--mono); letter-spacing: .17em; }
