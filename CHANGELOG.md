@@ -24,6 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Fixed
 
 - Fixed the microphone button's icon sitting against its left edge, and the round-table "..." menu opening past the right edge of a phone screen.
+- Translated the last 199 interface strings that still showed Chinese in the English build — accounts, backup and restore, the boss assignment's effort limits, the black window workbench, the studio rail, the guardian prompt, and the tool-call status lines. The English interface no longer mixes the two languages.
 - Fixed the first-run cloudflared download never completing. The install request used to block until the whole 19–70 MB file arrived, so it always hit the 40-second proxy timeout on a normal connection, and a dropped connection left the relay permanently stuck reporting "download in progress" until it was restarted.
 - Verified the downloaded cloudflared against its declared size instead of accepting a truncated file, cleaned up the partial file, and aborted stalled downloads instead of waiting forever.
 - Stopped leaving an orphaned cloudflared tunnel running when opening it timed out or when the relay exited, and reported cloudflared's own error output instead of a bare "failed to start".
