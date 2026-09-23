@@ -607,11 +607,29 @@
    版型骨架（三列 grid、dock、抽屜、點擊目標、輸入字級）在
    styles/responsive.css；這裡只留「哪些東西在手機上要收進 ••• 選單」。 */
 @media (max-width: 600px) {
-  .top-bar__brand { gap: 0; font-size: 0; letter-spacing: 0; }
+  /* 品牌在手機整個收掉。字已經因為太寬而藏起來了，只剩一顆不會動也不能點的
+     藍點，卻還佔著第一排的位置——黑窗那排早就是這樣處理的。 */
+  .top-bar__brand { display: none; }
+  /* 這排控件視覺上壓扁到 --tap-flat（36px），點擊區用 ::after 撐回完整的 44px。
+     兩排都塞滿 44 的話頂欄要 104px，在一支 844px 高的手機上就是 12% 的畫面被
+     導航吃掉——它不是內容。寬度仍然是完整的 --tap，橫向沒有省的必要。 */
   .top-bar > .top-bar__boss,
   .top-bar .top-bar__more > summary,
   .top-bar .top-bar__npc > summary,
-  .top-bar .top-bar__health { min-width: var(--tap); min-height: var(--tap); }
+  .top-bar .ui-mode-picker > summary,
+  /* 健康燈也要置中：內容（兩顆點）比 --tap 窄，預設的 flex-start 會把它們
+     靠左貼著，右邊多出一塊空白，跟旁邊兩顆圖示鈕擺在一起就看得出來歪。 */
+  .top-bar .top-bar__health { position: relative; min-width: var(--tap); min-height: var(--tap-flat); justify-content: center; }
+  .top-bar > .top-bar__boss::after,
+  .top-bar .top-bar__more > summary::after,
+  .top-bar .top-bar__npc > summary::after,
+  .top-bar .ui-mode-picker > summary::after,
+  .top-bar .top-bar__health::after {
+    content: "";
+    position: absolute;
+    /* 視覺 36 + 上下各 4 = 44。純粹放大手指的命中範圍，不影響版位。 */
+    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
+  }
   .top-bar__boss { min-width: var(--tap); padding: 5px; }
   /* 工作位置、供應商、語言、通知在任何寬度都已經收進那兩個選單了
      （見上面的「頂欄：只放重點」），這裡不必再各自關一次。 */

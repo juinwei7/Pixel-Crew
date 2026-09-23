@@ -611,7 +611,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
         <button type="button" className="black-workspace__split" onClick={() => split("right")} disabled={!selected || selected.minimized || selected.maximized}>{t("右切")}</button><button type="button" className="black-workspace__split" onClick={() => split("down")} disabled={!selected || selected.minimized || selected.maximized}>{t("下切")}</button>
       </>}
       {selected && <div className="black-workspace__settings">
-        <button type="button" className="black-workspace__launch" title={launchLabel} onClick={() => void launchAgent()} disabled={restartingId === selected.id || launchingId === selected.id || closingIds.has(selected.id) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}>{launchLabel}</button>
+        <button type="button" className="black-workspace__launch" title={launchLabel} onClick={() => void launchAgent()} disabled={restartingId === selected.id || launchingId === selected.id || closingIds.has(selected.id) || selected.agentStarted || terminalStatuses[selected.id] !== "ready"}><span>{launchLabel}</span></button>
         <details className="black-workspace__advanced" onKeyDown={dismissSettingsMenu} onToggle={closeOtherSettingsMenu}>
           <summary aria-label={t("進階設定")}>⋯</summary>
           <div>{isPhone && <section className="black-workspace__advanced-mobile" aria-label={t("目前 CLI 的設定")}>

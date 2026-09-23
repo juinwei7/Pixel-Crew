@@ -21,6 +21,8 @@
      不用自己再開一個 media query。 */
   --tap: 32px;
   --tap-sm: 28px;
+  /* 導航列用的扁版高度。桌面沒有「點擊下限」的問題，就是 --tap 本身。 */
+  --tap-flat: var(--tap);
 
   /* ── 視窗高度 ───────────────────────────────────────────────────────
      Safari 網址列會吃高度，100vh 量到的是「網址列收起後」的高度，所以
@@ -77,6 +79,9 @@
   :root {
     --tap: 44px;
     --tap-sm: 40px;
+    /* 頂欄那排刻意比 --tap 矮：視覺 36，點擊區靠 ::after 補回 44
+       （見 composer-and-operations.css 的頂欄段）。 */
+    --tap-flat: 36px;
     --modal-pad-x: var(--sp-4);
     --modal-pad-y: var(--sp-5);
     --modal-radius: 18px 18px 0 0;
@@ -332,8 +337,8 @@
     /* 這裡千萬不要寫 min-height: var(--top-bar-h)。那個變數是 TopBar 量完自己
        之後寫回來的，拿它當自己的下限就變成只增不減的棘輪：一旦某個寬度排成
        三排，之後再怎麼變寬都縮不回兩排。bar 這一列本來就是 auto，照內容長。 */
-    padding: var(--sp-2) var(--sp-2) var(--sp-1);
-    padding-top: calc(var(--safe-t) + var(--sp-2));
+    padding: var(--sp-1) var(--sp-2);
+    padding-top: calc(var(--safe-t) + var(--sp-1));
     padding-right: calc(var(--safe-r) + var(--sp-2));
     padding-left: calc(var(--safe-l) + var(--sp-2));
   }
@@ -503,7 +508,9 @@
     display: none;
   }
 
-  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__more {
+  /* 靠右的起點是「NPC 設定」那顆：右半邊是兩個選單加健康燈，它們要黏在一起。
+     掛在 ••• 上的話，NPC 會被留在左邊 BOSS 旁邊落單。 */
+  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__npc {
     margin-left: auto;
   }
 
@@ -511,7 +518,7 @@
      只好擠到下一排。改成只顯示目前這一個，左右滑或點開來換（ModeSwitch.tsx）。 */
   .ui-mode-switch { display: none; }
   .ui-mode-picker { display: block; }
-  .ui-mode-picker > summary { min-height: var(--tap); }
+  .ui-mode-picker > summary { min-height: var(--tap-flat); }
 
   /* 頂欄在手機是兩排：第一排切換工作模式＋交辦，第二排能量＋兩個選單＋健康燈。
      能量條能一起擠進第二排，是因為下面把「WORK ENERGY」「US$」和兩顆選單的
@@ -530,7 +537,7 @@
 
   .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud__summary {
     width: 100%;
-    min-height: var(--tap);
+    min-height: var(--tap-flat);
     gap: var(--sp-1);
     padding-inline: var(--sp-2);
     justify-content: space-between;
@@ -548,6 +555,10 @@
     justify-content: center;
     padding-inline: 0;
     font-size: 0;
+    /* gap 也要歸零。文字 font-size: 0 之後寬度是 0，但它仍然是一個 flex 項目，
+       圖示與它之間那 8px 照算——justify-content: center 對齊的是「圖示＋間距＋
+       空文字」這一整組，結果圖示被往左推了 4px（左 10、右 18）。 */
+    gap: 0;
   }
   .top-bar__npc > summary .ui-icon,
   .top-bar__more > summary .ui-icon { font-size: initial; }

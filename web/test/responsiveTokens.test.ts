@@ -142,6 +142,30 @@ test("the viewport meta opts into the safe area", () => {
   assert.match(html, /viewport-fit=cover/);
 });
 
+test("icon-only toolbar buttons zero out the shared icon gap", () => {
+  // font-size: 0 只讓文字沒有寬度，它仍然是一個 flex 項目，共用的
+  // gap: var(--sp-2) 照算——justify-content: center 對齊的是「圖示＋間距＋空文字」
+  // 這一整組，圖示就被往左推了半個間距（實測左 10、右 18）。
+  const shell = sheets.find((sheet) => sheet.name === "responsive.css");
+  assert.ok(shell);
+  const at = shell.source.indexOf(".top-bar__npc > summary,");
+  assert.ok(at > 0, "找不到手機版的純圖示按鈕規則");
+  const block = shell.source.slice(at, shell.source.indexOf("}", at));
+  assert.match(block, /font-size: 0;/);
+  assert.match(block, /gap: 0;/);
+});
+
+test("the flat toolbar height always ships with a full-size hit area", () => {
+  // 導航列的控件視覺上是 --tap-flat（36），但手指要的是 44：少了那層 ::after，
+  // 這排就變成一整排不到下限的點擊目標。
+  const shell = sheets.find((sheet) => sheet.name === "responsive.css");
+  const bar = sheets.find((sheet) => sheet.name === "composer-and-operations.css");
+  assert.ok(shell && bar);
+  assert.match(shell.source, /--tap-flat:\s*36px;/);
+  assert.match(bar.source, /min-height: var\(--tap-flat\)/);
+  assert.match(bar.source, /inset: calc\(\(var\(--tap-flat\) - var\(--tap\)\) \/ 2\) 0;/);
+});
+
 test("the shared layer's :has() rules can never beat a component's own", () => {
   // :has() 會把參數的權重一起算進去：button:has(> .ui-icon) 是 (0,1,1)，壓過
   // .top-bar__capability { display: none } 的 (0,1,0)，該收起來的按鈕就會莫名

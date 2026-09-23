@@ -268,10 +268,37 @@
   .black-workspace summary,
   .black-workspace__toolbar .energy-hud__summary { min-height: var(--tap); }
 
+  /* 工具列那排是導航不是內容：視覺壓到 --tap-flat，手指要的 44 用 ::after 補回去。
+     ⋯ 選單裡的項目維持完整的 --tap——那是上下相鄰的清單，把命中範圍往外撐會蓋到
+     隔壁那一列，變成點 A 卻觸發 B。
+     分頁下拉沒有 ::after（<select> 是取代元素，偽元素不會被畫出來），不過它有
+     88px 寬，36×88 的面積比一個 44×44 的方塊還大，實際點起來不會變難。 */
+  .black-workspace__toolbar > button,
+  /* 要寫兩個 class 才贏得過上面那條 .black-workspace select（0,1,1）。 */
+  .black-workspace__toolbar > .black-workspace__pane-select,
+  .black-workspace__toolbar .ui-mode-picker > summary,
+  .black-workspace__settings > button,
+  .black-workspace__settings > details > summary,
+  .black-workspace__toolbar .energy-hud__summary { position: relative; min-height: var(--tap-flat); }
+  .black-workspace__toolbar > button::after,
+  .black-workspace__toolbar .ui-mode-picker > summary::after,
+  .black-workspace__settings > button::after,
+  .black-workspace__settings > details > summary::after,
+  .black-workspace__toolbar .energy-hud__summary::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--tap-flat) - var(--tap)) / 2) 0;
+  }
+
   /* 品牌字樣在這個模式沒有功能，收掉把寬度讓給控制項。 */
   .black-workspace__brand { display: none; }
 
   .black-workspace .ui-mode-switch { flex: 0 0 auto; padding-right: 0; border-right: 0; }
+
+  /* ≤1023 給橫向捲軸讓位的 2px 在這裡沒有意義：手機這排不橫捲，留著只是讓
+     整排比最高的那顆再高 2px。overflow 也要解掉——它一旦是捲動容器，裡面那兩顆
+     用來撐開點擊區的 ::after 就會被裁回按鈕本身的 36px。 */
+  .black-workspace__settings { padding-bottom: 0; overflow: visible; }
 
   /* 分頁下拉：固定一個上限寬度，pane 再多也不會把這排撐開。 */
   .black-workspace__pane-select {
@@ -292,9 +319,14 @@
     padding-left: 0;
     border-left: 0;
   }
+  /* 截字放在內層 span：按鈕本身若是 overflow: hidden，撐開點擊區的 ::after
+     會連同被裁掉，那顆鈕就只剩 36px 高可以點。 */
   .black-workspace__settings .black-workspace__launch {
     min-width: 0;
     flex: 1 1 auto;
+  }
+  .black-workspace__settings .black-workspace__launch > span {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
