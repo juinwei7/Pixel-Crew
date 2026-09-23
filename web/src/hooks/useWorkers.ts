@@ -975,6 +975,7 @@ export function useWorkers() {
     documents?: CommandSubmission["documents"];
     clientMessageId?: string;
     idempotencyKey?: string;
+    dedicatedDepartment?: boolean;
   }): Promise<{ data?: BossTask; error?: string }> => {
     try {
       const data = await apiRequest<{ bossTask: BossTask }>("/api/boss-tasks", {

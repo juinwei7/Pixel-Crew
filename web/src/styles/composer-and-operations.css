@@ -1176,7 +1176,14 @@ summary:focus-visible,
 .boss-task-desk__restart { margin-top: 10px; border: 1px solid rgba(255,176,0,.38); border-radius: 7px; background: rgba(255,176,0,.08); color: var(--warn); padding: 7px 10px; cursor: pointer; font-size: 11px; }
 .boss-task-desk__restart:disabled { cursor: not-allowed; opacity: .45; }
 .boss-task-composer { position: relative; flex: 0 0 auto; padding: 10px 14px 14px; border-top: 1px solid rgba(0, 229, 255,.13); background: linear-gradient(180deg, rgba(5,12,25,.94), rgba(3,9,21,.98)); box-shadow: 0 -18px 40px rgba(1,5,13,.18); }
-.boss-task-composer__setup { display: flex; height: 30px; align-items: center; gap: 7px; margin-bottom: 8px; }
+.boss-task-composer__setup { display: flex; flex-wrap: wrap; min-height: 30px; align-items: center; gap: 7px; margin-bottom: 8px; }
+/* 「為此交辦開專屬部門」開關（省 token 的直接建部門路徑，預設開）。 */
+.boss-task-composer__dedicated { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px 0 7px; border: 1px solid rgba(120,150,180,.24); border-radius: 7px; background: rgba(6,15,31,.72); color: #8296ad; cursor: pointer; font: 700 9px var(--mono); letter-spacing: .04em; white-space: nowrap; transition: border-color .16s ease, color .16s ease, background .16s ease; }
+.boss-task-composer__dedicated-track { position: relative; width: 26px; height: 14px; border-radius: 999px; background: rgba(120,150,180,.3); flex: 0 0 auto; transition: background .18s ease; }
+.boss-task-composer__dedicated-thumb { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #cdd8e6; transition: transform .18s ease, background .18s ease; }
+.boss-task-composer__dedicated.is-on { border-color: rgba(0,229,255,.4); color: var(--cyan); background: rgba(0,229,255,.07); }
+.boss-task-composer__dedicated.is-on .boss-task-composer__dedicated-track { background: linear-gradient(90deg, #00e5ff, #6f9bff); }
+.boss-task-composer__dedicated.is-on .boss-task-composer__dedicated-thumb { transform: translateX(12px); background: #fff; }
 .boss-task-composer__setup label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; color: #637891; font: 700 8px var(--mono); letter-spacing: .06em; }
 .boss-task-composer__setup label > span { flex: 0 0 auto; }
 .boss-task-composer__setup select { min-width: 0; height: 30px; flex: 1; border: 1px solid rgba(100,172,205,.16); border-radius: 7px; background: rgba(6,15,31,.72); color: #c5d6e7; font: 10px var(--mono); padding: 0 28px 0 9px; }

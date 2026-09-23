@@ -109,19 +109,15 @@ export function bossTaskDecisionPrompt(input: {
   const budget = input.task.executionBudget ?? executionBudgetFor(input.task.executionProfile);
   const clarificationCount = input.task.messages.filter((message) => message.role === "decision_model").length;
   const clarificationRemaining = Math.max(0, clarificationLimit - clarificationCount);
+  // 精簡目錄：路由只需部門用途與職務名稱，不需每位成員的完整指示（很長）或 workerId。
+  // stage 只引用 departmentId，成員細節由部門 Mission 內部決定，別塞進這顆決策 prompt。
   const catalog = input.candidates.map((candidate) => ({
     departmentId: candidate.departmentId,
     name: candidate.departmentName,
     purpose: candidate.purpose,
     workspacePath: candidate.workspacePath,
-    leadWorkerId: candidate.leadWorkerId,
-    positions: candidate.members.map((member) => ({
-      workerId: member.workerId,
-      name: member.name,
-      role: member.role,
-      instructions: member.instructions,
-      provider: member.provider,
-    })),
+    roles: candidate.members.map((member) => member.role).filter((role): role is string => Boolean(role)),
+    memberCount: candidate.members.length,
   }));
   const conversation = input.task.messages
     .filter((message) => message.role === "boss" || message.role === "decision_model")

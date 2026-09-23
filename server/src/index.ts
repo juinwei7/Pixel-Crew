@@ -1269,7 +1269,9 @@ function finishMission(
       completedAt: null,
       formatRepairCount: 0,
     }));
-    if (mission.executionMode !== "research") mission.steps.push({
+    // 單步 mission 不再追加獨立的「彙整報告」回合——那一步的輸出本身就是交付物，
+    // missionReport 會取最後一步結果當部門報告，省下一整輪重貼所有步驟結果的 LLM 呼叫。
+    if (mission.executionMode !== "research" && mission.steps.length > 1) mission.steps.push({
       id: randomUUID(),
       title: t("向老闆提交部門報告"),
       objective: t("整合所有成員的執行、Consult 與 Review 結果，提交一份包含結論、驗收狀態、主要交付、驗證、風險與待決事項的最終報告"),
@@ -4644,6 +4646,55 @@ async function createDepartmentForObjective(input: {
   return department;
 }
 
+// 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
+// 專屬新部門，掛一個單一 stage，直接開跑（討論[目前無]＋規劃＋執行）。不呼叫決策模型、
+// 不重跑、不會卡到既有部門。省下整條管線最大的那顆 prompt（決策模型讀全部門目錄）。
+async function runDedicatedDepartmentTask(task: BossTask): Promise<void> {
+  const usage = await usageRegistry.refresh(task.decisionProvider, true);
+  const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
+  if (usageError) {
+    task.status = "needs_attention";
+    task.error = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
+    task.messages.push(bossTaskMessage("system", task.error));
+    persistBossTask(task);
+    return;
+  }
+  task.messages.push(bossTaskMessage("system", t("正在為這個交辦建立一支專屬部門並直接開工…")));
+  persistBossTask(task);
+  const department = await createDepartmentForObjective({
+    purpose: task.objective,
+    workspacePath: task.workspacePath,
+    provider: task.decisionProvider,
+    count: task.executionBudget?.maxAgents ?? 3,
+  });
+  if (!department) {
+    task.status = "needs_attention";
+    task.error = t("無法自動建立專屬部門（可能此工作區正在執行、NPC 人數已滿或規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。");
+    task.messages.push(bossTaskMessage("system", task.error));
+    persistBossTask(task);
+    return;
+  }
+  task.executionMode = "project";
+  task.stages = [{
+    id: randomUUID(),
+    departmentId: department.id,
+    departmentName: department.name,
+    title: t("執行交辦"),
+    objective: task.objective,
+    acceptanceCriteria: task.acceptanceCriteria,
+    dependsOn: [],
+    executionMode: "project",
+    status: "pending",
+    missionId: null,
+    report: null,
+  }];
+  task.status = "ready";
+  task.error = null;
+  task.messages.push(bossTaskMessage("system", t("已建立「{name}」，直接交給它規劃與執行。", { name: department.name })));
+  persistBossTask(task);
+  advanceBossTask(task);
+}
+
 async function decideBossTask(task: BossTask, allowCreateDepartment = true): Promise<void> {
   const candidates = bossTaskCandidates();
   if (candidates.length === 0 && !allowCreateDepartment) {
@@ -5122,7 +5173,9 @@ app.post("/api/boss-tasks", async (req, res) => {
   };
   if (!store.saveBossTask(task)) { res.status(500).json({ error: t("無法保存 Boss Task") }); return; }
   broadcastBossTask(task, true);
-  await decideBossTask(task);
+  // 「為此交辦開專屬部門」：走直接建部門路徑，跳過決策模型路由（省 token、不卡既有部門）。
+  if (req.body?.dedicatedDepartment) await runDedicatedDepartmentTask(task);
+  else await decideBossTask(task);
   res.status(201).json({ bossTask: bossTaskForDisplay(task) });
 });
 

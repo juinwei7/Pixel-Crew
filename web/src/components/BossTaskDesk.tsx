@@ -29,6 +29,7 @@ type Props = {
     documents?: CommandSubmission["documents"];
     clientMessageId?: string;
     idempotencyKey?: string;
+    dedicatedDepartment?: boolean;
   }): Promise<{ data?: BossTask; error?: string }>;
   onMessage(id: string, submission: CommandSubmission): Promise<{ data?: BossTask; error?: string }>;
   onUpdate(id: string, patch: { title?: string; archived?: boolean }): Promise<{ data?: BossTask; error?: string }>;
@@ -138,6 +139,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   // 交辦顧問方向時，用這個 seed 強制 TaskComposer 重掛，讓它重新從 localStorage 讀進 objective
   // ——因為沒有既有任務時 draftKey 前後相同、composer 不會自己重讀（就是「點了沒反應／再點消失」的根因）。
   const [composerSeed, setComposerSeed] = useState(0);
+  // 「為此交辦開專屬部門」：預設開＝按交辦直接為目標建一支專屬部門並開跑（省 token、不卡既有部門）；
+  // 關掉＝走原本的決策模型路由，交給既有部門。
+  const [dedicatedDepartment, setDedicatedDepartment] = useState(true);
   const restoredSelection = useRef(false);
 
   useEffect(() => {
@@ -270,6 +274,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         documents: submission.documents,
         clientMessageId: submission.clientMessageId,
         idempotencyKey: submission.idempotencyKey,
+        dedicatedDepartment,
       });
     }
     setWorking(false);
@@ -367,6 +372,17 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     focusMode={focusMode}
     leading={composerHost ? <span className="command-composer__target">BOSS</span> : undefined}
     toolbar={(!selected || newTask) && <div className="boss-task-composer__setup">
+      <button
+        type="button"
+        className={`boss-task-composer__dedicated${dedicatedDepartment ? " is-on" : ""}`}
+        role="switch"
+        aria-checked={dedicatedDepartment}
+        onClick={() => setDedicatedDepartment((value) => !value)}
+        title={t("開：按交辦直接為這個目標建一支專屬部門並開跑（省 token、不占用既有部門）。關：交給決策模型路由到既有部門。")}
+      >
+        <span className="boss-task-composer__dedicated-track"><span className="boss-task-composer__dedicated-thumb" /></span>
+        <span>{dedicatedDepartment ? t("為此交辦開專屬部門") : t("交給既有部門（路由）")}</span>
+      </button>
       <details><summary>{t("執行邊界與估算")} <span>{t("開始前設定")}</span></summary><div><label><span>{t("執行級別")}</span><select value={executionProfile} onChange={(event) => {
         const profile = event.target.value as ExecutionProfile;
         setExecutionProfile(profile);
