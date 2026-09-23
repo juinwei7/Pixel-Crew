@@ -1095,6 +1095,9 @@ summary:focus-visible,
 .boss-task-desk__advisor-input button { min-height: 34px; padding: 8px 13px; border: 1px solid rgba(255,194,92,.35); border-radius: 8px; background: rgba(255,194,92,.1); color: #ffd27c; cursor: pointer; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .boss-task-desk__advisor-input button:disabled { cursor: not-allowed; opacity: .45; }
 .boss-task-desk__advisor-input button:not(:disabled):hover { background: rgba(255,194,92,.18); }
+.boss-task-desk__advisor-proactive { width: 100%; min-height: 32px; padding: 7px 12px; border: 1px dashed rgba(255,194,92,.3); border-radius: 8px; background: transparent; color: #c9a86a; cursor: pointer; font-size: 9.5px; font-weight: 700; }
+.boss-task-desk__advisor-proactive:disabled { cursor: not-allowed; opacity: .45; }
+.boss-task-desk__advisor-proactive:not(:disabled):hover { background: rgba(255,194,92,.08); border-color: rgba(255,194,92,.5); color: #ffd27c; }
 .boss-task-desk__advisor-error { margin: 0; color: #ff8ca3; font-size: 9px; }
 .boss-task-desk__advisor-question { padding: 9px 11px; border-left: 2px solid rgba(255,194,92,.55); background: rgba(255,194,92,.06); border-radius: 6px; }
 .boss-task-desk__advisor-question strong { color: #ffd27c; font-size: 10px; }

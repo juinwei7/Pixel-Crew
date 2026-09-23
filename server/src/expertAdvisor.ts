@@ -45,34 +45,50 @@ export function expertAdvisorPrompt(input: {
   idea: string;
   workspacePath: string;
   maxProposals?: number;
+  /** 主動模式：使用者沒給念頭，改用工作區脈絡推領域、一律提案（不反問）。 */
+  proactive?: boolean;
 }): string {
   const maxProposals = clampProposalCount(input.maxProposals);
   const idea = bounded(input.idea, 4_000);
+  // 沒念頭（或明確要求主動）就走主動模式：從工作區脈絡主動端方向，永不 need_focus。
+  const proactive = Boolean(input.proactive) || idea.length === 0;
+
+  const intro = proactive
+    ? `You are a senior domain expert and consultant. The owner has NOT given a specific idea — they want you to PROACTIVELY surface professional directions worth pursuing that they most likely do NOT know exist ("you don't know what you don't know"), so they can simply pick one. Infer a plausible domain/theme from their workspace context below; if the workspace is uninformative, choose broadly useful, high-leverage directions a capable owner could act on.`
+    : `You are a senior domain expert and consultant. The owner has a rough idea but limited expertise in its field, and does not know how to proceed. Your job is to surface professional directions the owner most likely does NOT know exist — the "you don't know what you don't know" gap — so the owner can simply pick one, not invent it.`;
+  const domainRule = proactive
+    ? `- Infer the domain/theme from the owner's workspace context. In this proactive mode ALWAYS propose — never return need_focus.`
+    : `- First infer the domain of the idea. If the idea is so empty or generic that you cannot infer a domain OR cannot produce genuinely useful, non-obvious directions, return exactly one focusing question instead (need_focus). Prefer to propose; only ask when proposing would be guesswork.`;
+  const langRule = proactive
+    ? `- Write every user-facing field in Traditional Chinese unless the workspace context clearly indicates another language.`
+    : `- Write every user-facing field (title, summary, insight, approach, considerations, objective, and any question) in the SAME language as the owner's idea.`;
+  const ideaLine = proactive ? `Owner's idea: (none — proactive suggestion mode; infer from workspace)` : `Owner's idea: ${JSON.stringify(idea)}`;
+  const needFocusBlock = proactive ? "" : `
+need_focus form (only when proposing would be guesswork):
+<expert_advisor>
+{"status":"need_focus","question":"one focusing question in the owner's language"}
+</expert_advisor>
+`;
 
   return `Expert Advisor · Direction Discovery Before Execution
 
-You are a senior domain expert and consultant. The owner has a rough idea but limited expertise in its field, and does not know how to proceed. Your job is to surface professional directions the owner most likely does NOT know exist — the "you don't know what you don't know" gap — so the owner can simply pick one, not invent it.
+${intro}
 
 Rules:
 - Do not use tools, files, shell commands, MCP, web access, or background agents. Reason from your own expert knowledge only.
-- First infer the domain of the idea. If the idea is so empty or generic that you cannot infer a domain OR cannot produce genuinely useful, non-obvious directions, return exactly one focusing question instead (need_focus). Prefer to propose; only ask when proposing would be guesswork.
+${domainRule}
 - Produce up to ${maxProposals} DISTINCT directions. Fewer is fine; never pad with filler or near-duplicates.
 - Each proposal must earn its place by teaching the owner something: the "insight" field must state a non-obvious, expert-level point the owner probably has not considered — not a restatement of the idea.
 - "approach" states how a professional would actually do it (methods, mainstream tools, sequence), concisely.
 - "considerations" lists concrete pitfalls, trade-offs, or risks a non-expert would miss.
 - "objective" is a ready-to-run imperative brief that could be handed to an execution team as-is if the owner picks this direction. Make it self-contained and bounded.
-- Write every user-facing field (title, summary, insight, approach, considerations, objective, and any question) in the SAME language as the owner's idea.
+${langRule}
 - Be honest: do not invent facts, fake precision, or promise outcomes you cannot justify from general expertise.
 - Return only one marked JSON block and no Markdown fences.
 
-Owner's idea: ${JSON.stringify(idea)}
+${ideaLine}
 Owner workspace: ${JSON.stringify(input.workspacePath)}
-
-need_focus form (only when proposing would be guesswork):
-<expert_advisor>
-{"status":"need_focus","question":"one focusing question in the owner's language"}
-</expert_advisor>
-
+${needFocusBlock}
 proposals form:
 <expert_advisor>
 {"status":"proposals","domain":"the field you inferred","proposals":[{"id":"stable-id","title":"short direction name","summary":"plain-language what this is","insight":"non-obvious expert point the owner likely doesn't know","approach":"how a pro would actually do it","considerations":["pitfall or trade-off"],"objective":"self-contained imperative brief to hand to an execution team"}]}

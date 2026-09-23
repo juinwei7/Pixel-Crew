@@ -117,9 +117,10 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [advisorProposals, setAdvisorProposals] = useState<AdvisorProposal[]>([]);
   const restoredSelection = useRef(false);
 
-  const runAdvisor = async () => {
+  const runAdvisor = async (proactive = false) => {
     const idea = advisorIdea.trim();
-    if (!idea || advisorLoading) return;
+    // proactive（主動建議）時不需要念頭；一般模式仍要有念頭。
+    if ((!idea && !proactive) || advisorLoading) return;
     setAdvisorLoading(true);
     setAdvisorError(null);
     setAdvisorProposals([]);
@@ -129,8 +130,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     try {
       const data = await apiRequest<{ result: AdvisorResult }>("/api/advisor/propose", {
         method: "POST",
-        body: { idea, workspacePath, provider: decision?.provider, model: decision?.model },
-        timeoutMs: 135_000,
+        body: { idea, workspacePath, provider: decision?.provider, model: decision?.model, proactive },
+        // 生成方向較慢（冷啟＋思考＋4 段內容），逾時要比 server 的 150s 長，否則前端先斷。
+        timeoutMs: 160_000,
       });
       if (data.result.status === "need_focus") {
         setAdvisorQuestion(data.result.question);
@@ -412,6 +414,15 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
               {advisorLoading ? t("顧問思考中…") : t("幫我想方向")}
             </button>
           </div>
+          {/* 主動建議：完全沒想法時，讓顧問從你的工作區脈絡主動端幾個方向給你挑（只建議、不自動執行）。 */}
+          <button
+            type="button"
+            className="boss-task-desk__advisor-proactive"
+            onClick={() => void runAdvisor(true)}
+            disabled={advisorLoading}
+          >
+            {advisorLoading ? t("顧問思考中…") : t("完全沒想法？讓顧問主動給我建議")}
+          </button>
           {advisorError && <p className="boss-task-desk__advisor-error" role="alert">{advisorError}</p>}
           {advisorQuestion && <div className="boss-task-desk__advisor-question">
             <strong>{t("顧問想先確認一件事：")}</strong>

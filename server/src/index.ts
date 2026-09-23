@@ -3118,7 +3118,8 @@ registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(wor
 //     Boss Task 的 decision runtime 與 no_tools 政策）；解析失敗補一次 repair 重試。
 app.post("/api/advisor/propose", async (req, res) => {
   const idea = collaborationText(req.body?.idea, 4_000).trim();
-  if (!idea) { res.status(400).json({ error: t("請先給一個想法或主題，顧問才能幫你想方向") }); return; }
+  // 主動模式：沒給念頭（或前端明確要求 proactive）就讓顧問從工作區脈絡主動端方向，不再擋。
+  const proactive = Boolean(req.body?.proactive) || idea.length === 0;
   const preferredWorkspace = collaborationText(req.body?.workspacePath, 1_000) || null;
   const runtime = resolveDecisionRuntime(req.body?.provider, req.body?.model, preferredWorkspace);
   if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
@@ -3130,10 +3131,10 @@ app.post("/api/advisor/propose", async (req, res) => {
     res.status(409).json({ error: t("{provider} 目前無法進行顧問判斷：{error}", { provider: providerLabel(runtime.provider), error: usageError }), usage });
     return;
   }
-  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals });
+  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals, proactive });
   let text: string;
   try {
-    text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
+    text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
   } catch (error) {
     res.status(502).json({ error: t("顧問模型無法完成判斷：{error}", { error: (error as Error).message }) });
     return;
@@ -3143,7 +3144,7 @@ app.post("/api/advisor/propose", async (req, res) => {
     const reason = explainAdvisorFailure(text, maxProposals) ?? "The response did not match the required format.";
     const repair = `${prompt}\n\nYour previous response was invalid: ${reason} Return one corrected <expert_advisor> block only.`;
     try {
-      text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
+      text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, repair, 150_000, { kind: "no_tools" })).text;
       result = parseAdvisorResult(text, maxProposals);
     } catch { result = null; }
   }
