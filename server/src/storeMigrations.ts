@@ -130,6 +130,10 @@ function completeHistoricalStoreSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "workers", "codex_account_id TEXT");
   addColumnIfMissing(db, "workers", "account_id TEXT");
   db.exec("UPDATE workers SET account_id = codex_account_id WHERE codex_account_id IS NOT NULL AND account_id IS NULL");
+  // 排程「每 N 分鐘重複」擴充：interval_minutes 為 null＝維持舊的「每日 HH:MM 一次」，
+  // 有值＝每 N 分鐘重複觸發（用 last_run_at 這個 ISO 時間戳判斷是否到點，取代 last_run_day）。
+  addColumnIfMissing(db, "schedules", "interval_minutes INTEGER");
+  addColumnIfMissing(db, "schedules", "last_run_at TEXT");
 }
 
 export const storeMigrations: readonly DatabaseMigration[] = [

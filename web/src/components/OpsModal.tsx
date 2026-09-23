@@ -5,7 +5,7 @@ import { Modal } from "./Modal";
 import type { WorkerState } from "../types";
 
 type CostRow = { day: string; workerId: string; workerName: string; costUsd: number };
-type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null };
+type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null };
 type Diagnostics = { enabled: boolean; diagnostics: { generatedAt: string; scope: string; privacy: string; missions: { total: number; completed: number; failed: number; successRate: number | null; failuresByReason: Array<{ reason: string; count: number }> }; responsiveness: { websocketReconnects: number; longUiTasks: number; medianFps: number | null; fpsBand: string; medianApprovalWaitSeconds: number | null } } };
 
 type Props = {
@@ -21,6 +21,8 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
   const [newWorkerId, setNewWorkerId] = useState(workers[0]?.id ?? "");
   const [newTime, setNewTime] = useState("09:00");
+  const [newMode, setNewMode] = useState<"daily" | "interval">("daily");
+  const [newIntervalMinutes, setNewIntervalMinutes] = useState("60");
   const [newPrompt, setNewPrompt] = useState("");
   const [saving, setSaving] = useState(false);
   // 每日預算草稿：workerId → 輸入框文字（"" = 無上限）。
@@ -82,12 +84,16 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
   async function addSchedule() {
     if (!newWorkerId || !newPrompt.trim()) { notify(t("請選擇 NPC 並填寫指示"), "error"); return; }
+    const interval = newMode === "interval" ? Math.floor(Number(newIntervalMinutes) || 0) : null;
+    if (newMode === "interval" && (!interval || interval < 5)) { notify(t("重複間隔需為至少 5 分鐘"), "error"); return; }
     setSaving(true);
     try {
-      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim() } });
+      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim(), intervalMinutes: interval } });
       setSchedules(data.schedules);
       setNewPrompt("");
-      notify(t("排程已建立：每日 {time}", { time: newTime }));
+      notify(newMode === "interval"
+        ? t("排程已建立：每 {minutes} 分鐘", { minutes: interval ?? 0 })
+        : t("排程已建立：每日 {time}", { time: newTime }));
     } catch (error) {
       notify(error instanceof Error ? error.message : t("建立排程失敗"), "error");
     } finally {
@@ -177,12 +183,18 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
         {tab === "schedules" && (
           <div className="ops-modal__body">
-            <h3>{t("新增排程（每天固定時間把指示交給 NPC）")}</h3>
+            <h3>{t("新增排程（固定時間、或每隔一段時間把指示交給 NPC）")}</h3>
             <div className="ops-schedule__form">
               <select value={newWorkerId} onChange={(event) => setNewWorkerId(event.target.value)} aria-label={t("選擇 NPC")}>
                 {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
               </select>
-              <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
+              <select value={newMode} onChange={(event) => setNewMode(event.target.value as "daily" | "interval")} aria-label={t("排程模式")}>
+                <option value="daily">{t("每日固定時間")}</option>
+                <option value="interval">{t("每隔一段時間重複")}</option>
+              </select>
+              {newMode === "daily"
+                ? <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
+                : <label className="ops-schedule__interval">{t("每")}<input type="number" min={5} step={5} value={newIntervalMinutes} onChange={(event) => setNewIntervalMinutes(event.target.value)} aria-label={t("重複間隔（分鐘）")} />{t("分鐘")}</label>}
               <textarea
                 value={newPrompt}
                 onChange={(event) => setNewPrompt(event.target.value)}
@@ -198,7 +210,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
                 {schedules.map((schedule) => (
                   <li key={schedule.id} className={schedule.enabled ? "" : "ops-schedule__item--off"}>
                     <div className="ops-schedule__meta">
-                      <strong>{schedule.time}</strong>
+                      <strong>{schedule.intervalMinutes ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes }) : schedule.time}</strong>
                       <span>{workerName(schedule.workerId) ?? t("（NPC 已刪除）")}</span>
                       {schedule.lastRunDay && <small>{t("上次執行 {day}", { day: schedule.lastRunDay })}</small>}
                     </div>

@@ -1054,10 +1054,10 @@ export class LocalStore {
     return events;
   }
 
-  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null }> {
+  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null }> {
     const rows = this.db.prepare(
-      "SELECT id, worker_id, time, prompt, enabled, last_run_day FROM schedules ORDER BY time ASC",
-    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null }>;
+      "SELECT id, worker_id, time, prompt, enabled, last_run_day, interval_minutes, last_run_at FROM schedules ORDER BY time ASC",
+    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null; interval_minutes: number | null; last_run_at: string | null }>;
     return rows.map((row) => ({
       id: row.id,
       workerId: row.worker_id,
@@ -1065,27 +1065,31 @@ export class LocalStore {
       prompt: row.prompt,
       enabled: Boolean(row.enabled),
       lastRunDay: row.last_run_day,
+      // interval_minutes 為 null＝每日 HH:MM 一次；有值＝每 N 分鐘重複。
+      intervalMinutes: row.interval_minutes,
+      lastRunAt: row.last_run_at,
     }));
   }
 
-  addSchedule(id: string, workerId: string, time: string, prompt: string): void {
+  addSchedule(id: string, workerId: string, time: string, prompt: string, intervalMinutes: number | null = null): void {
     this.db.prepare(
-      "INSERT INTO schedules (id, worker_id, time, prompt, enabled) VALUES (?, ?, ?, ?, 1)",
-    ).run(id, workerId, time, prompt);
+      "INSERT INTO schedules (id, worker_id, time, prompt, enabled, interval_minutes) VALUES (?, ?, ?, ?, 1, ?)",
+    ).run(id, workerId, time, prompt, intervalMinutes);
   }
 
-  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean }): void {
+  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean; intervalMinutes?: number | null }): void {
     if (fields.time !== undefined) this.db.prepare("UPDATE schedules SET time = ? WHERE id = ?").run(fields.time, id);
     if (fields.prompt !== undefined) this.db.prepare("UPDATE schedules SET prompt = ? WHERE id = ?").run(fields.prompt, id);
     if (fields.enabled !== undefined) this.db.prepare("UPDATE schedules SET enabled = ? WHERE id = ?").run(fields.enabled ? 1 : 0, id);
+    if (fields.intervalMinutes !== undefined) this.db.prepare("UPDATE schedules SET interval_minutes = ? WHERE id = ?").run(fields.intervalMinutes, id);
   }
 
   deleteSchedule(id: string): void {
     this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
   }
 
-  markScheduleRun(id: string, day: string): void {
-    this.db.prepare("UPDATE schedules SET last_run_day = ? WHERE id = ?").run(day, id);
+  markScheduleRun(id: string, day: string, at: string = new Date().toISOString()): void {
+    this.db.prepare("UPDATE schedules SET last_run_day = ?, last_run_at = ? WHERE id = ?").run(day, at, id);
   }
 
   loadCapabilities(repoPath: string): CapabilityState | null {

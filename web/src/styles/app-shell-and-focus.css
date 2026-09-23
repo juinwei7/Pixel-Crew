@@ -18,6 +18,48 @@
 .top-bar > * { pointer-events: auto; }
 .top-bar__spacer { flex: 1; pointer-events: none; }
 
+/* 全域「在跑」燈號：常駐頂欄，不分工作區顯示執行中 NPC 數。
+   閒置（0）時整顆變暗；有在跑時邊框轉綠、圓點脈動，一眼可辨。 */
+.top-bar__running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid rgba(100, 172, 205, 0.14);
+  border-radius: 8px;
+  background: rgba(9, 16, 30, 0.6);
+  color: var(--text-dim);
+  white-space: nowrap;
+  user-select: none;
+}
+.top-bar__running strong { color: #7cf0b6; font: 700 12px/1 var(--mono); }
+.top-bar__running span { color: rgba(124, 240, 182, 0.7); font: 700 8px/1 var(--mono); letter-spacing: 0.12em; }
+.top-bar__running-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3a4a5c;
+  box-shadow: none;
+}
+.top-bar__running--on {
+  border-color: rgba(0, 255, 163, 0.38);
+  background: rgba(0, 255, 163, 0.08);
+}
+.top-bar__running--on span { color: rgba(124, 240, 182, 0.92); }
+.top-bar__running--on .top-bar__running-dot {
+  background: #00ffa3;
+  box-shadow: 0 0 8px rgba(0, 255, 163, 0.75);
+  animation: runningPulse 1.2s ease-in-out infinite;
+}
+@keyframes runningPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .top-bar__running--on .top-bar__running-dot { animation: none; }
+}
+
 .top-bar__brand {
   display: flex;
   align-items: center;

@@ -252,6 +252,9 @@ export function App() {
   // 都以為資料變了，就重跑 visualWorkers() 並呼叫 pixi setWorkers()，造成畫面持續無謂重算。改用 useMemo
   // 讓「內容沒變時陣列參照就不變」，這些效果只在真的有變動時才觸發。
   const workerList = useMemo(() => order.map((id) => workers[id]).filter(Boolean), [order, workers]);
+  // 全域「執行中」計數：不分工作區（workerList 是所有 NPC），頂欄燈號用——讓你在聊天／
+  // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
+  const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
   const missionList = useMemo(() => Object.values(missions), [missions]);
   const departmentList = useMemo(() => Object.values(departments), [departments]);
@@ -1006,6 +1009,7 @@ export function App() {
         wsReady={wsReady}
         modelOptions={modelOptions}
         workerCount={workerList.length}
+        runningCount={runningCount}
         providerChanging={providerChanging}
         accounts={Object.values(accounts)}
         onSetWorkerAccount={handleSetWorkerAccount}

@@ -1062,6 +1062,33 @@ summary:focus-visible,
 .boss-task-desk__starters button { min-height: 34px; padding: 8px 12px; border: 1px solid rgba(100,172,205,.13); border-radius: 8px; background: rgba(8,18,35,.5); color: #8296af; cursor: pointer; font-size: 10px; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease; }
 .boss-task-desk__starters button::before { content: "↗"; margin-right: 9px; color: #3c8095; font-family: var(--mono); }
 .boss-task-desk__starters button:hover { transform: translateX(2px); border-color: rgba(0, 229, 255,.3); background: rgba(0, 229, 255,.055); color: #c4d7e8; }
+
+/* 專家顧問（沒方向時的前段）：輸入一個念頭 → 幾個「你可能沒想到」的方向卡片。 */
+.boss-task-desk__advisor { display: flex; width: 100%; margin-top: 16px; flex-direction: column; gap: 9px; padding-top: 14px; border-top: 1px dashed rgba(100,172,205,.16); text-align: left; }
+.boss-task-desk__advisor-head { display: flex; flex-direction: column; gap: 3px; }
+.boss-task-desk__advisor-head strong { color: #ffd27c; font-size: 11px; letter-spacing: .01em; }
+.boss-task-desk__advisor-head small { color: #60748c; font-size: 8px; line-height: 1.5; }
+.boss-task-desk__advisor-input { display: flex; gap: 6px; }
+.boss-task-desk__advisor-input input { flex: 1; min-width: 0; min-height: 34px; padding: 8px 11px; border: 1px solid rgba(255,194,92,.24); border-radius: 8px; background: rgba(8,18,35,.55); color: #d5e2f0; font-size: 10px; }
+.boss-task-desk__advisor-input input:focus { outline: none; border-color: rgba(255,194,92,.5); }
+.boss-task-desk__advisor-input button { min-height: 34px; padding: 8px 13px; border: 1px solid rgba(255,194,92,.35); border-radius: 8px; background: rgba(255,194,92,.1); color: #ffd27c; cursor: pointer; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.boss-task-desk__advisor-input button:disabled { cursor: not-allowed; opacity: .45; }
+.boss-task-desk__advisor-input button:not(:disabled):hover { background: rgba(255,194,92,.18); }
+.boss-task-desk__advisor-error { margin: 0; color: #ff8ca3; font-size: 9px; }
+.boss-task-desk__advisor-question { padding: 9px 11px; border-left: 2px solid rgba(255,194,92,.55); background: rgba(255,194,92,.06); border-radius: 6px; }
+.boss-task-desk__advisor-question strong { color: #ffd27c; font-size: 10px; }
+.boss-task-desk__advisor-question p { margin: 5px 0; color: #d5e2f0; font-size: 10px; line-height: 1.55; }
+.boss-task-desk__advisor-question small { color: #60748c; font-size: 8px; }
+.boss-task-desk__advisor-proposals { display: flex; flex-direction: column; gap: 8px; }
+.boss-task-desk__advisor-domain { color: #60748c; font: 700 8px var(--mono); letter-spacing: .08em; }
+.boss-task-desk__advisor-card { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; border: 1px solid rgba(100,172,205,.16); border-radius: 9px; background: rgba(8,18,35,.5); }
+.boss-task-desk__advisor-card > strong { color: var(--text); font-size: 11px; }
+.boss-task-desk__advisor-card p { margin: 0; color: var(--text-dim); font-size: 9.5px; line-height: 1.6; }
+.boss-task-desk__advisor-insight { color: #ffd9a0 !important; }
+.boss-task-desk__advisor-approach { color: #9fc0d7 !important; }
+.boss-task-desk__advisor-card ul { margin: 2px 0 0; padding-left: 16px; color: #7f93ab; font-size: 9px; line-height: 1.55; }
+.boss-task-desk__advisor-card button { align-self: flex-start; margin-top: 4px; min-height: 30px; padding: 6px 12px; border: 1px solid rgba(0, 229, 255,.32); border-radius: 8px; background: rgba(0, 229, 255,.08); color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 700; }
+.boss-task-desk__advisor-card button:hover { background: rgba(0, 229, 255,.16); }
 .boss-task-desk__status { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 8px; background: rgba(0, 229, 255,.04); }
 .boss-task-desk__status span { color: var(--cyan); font-size: 10px; font-weight: 700; }
 .boss-task-desk__status small { color: var(--text-dim); font-family: var(--mono); font-size: 8px; }

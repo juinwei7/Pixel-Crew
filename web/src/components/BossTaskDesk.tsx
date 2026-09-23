@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
+import type { AdvisorProposal, AdvisorResult, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
+import { apiRequest } from "../api";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 import { type ConfirmTone } from "./ConfirmDialog";
@@ -106,7 +107,50 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [maxMissionSteps, setMaxMissionSteps] = useState(3);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 專家顧問（沒方向時的前段）：一個粗略念頭 → 幾個「你可能沒想到」的方向 → 挑一個
+  // 就把它的 objective 預填進下面的交辦草稿（沿用 starterTasks 同款「填草稿＋重開」）。
+  const [advisorIdea, setAdvisorIdea] = useState("");
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorError, setAdvisorError] = useState<string | null>(null);
+  const [advisorDomain, setAdvisorDomain] = useState<string | null>(null);
+  const [advisorQuestion, setAdvisorQuestion] = useState<string | null>(null);
+  const [advisorProposals, setAdvisorProposals] = useState<AdvisorProposal[]>([]);
   const restoredSelection = useRef(false);
+
+  const runAdvisor = async () => {
+    const idea = advisorIdea.trim();
+    if (!idea || advisorLoading) return;
+    setAdvisorLoading(true);
+    setAdvisorError(null);
+    setAdvisorProposals([]);
+    setAdvisorQuestion(null);
+    setAdvisorDomain(null);
+    const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
+    try {
+      const data = await apiRequest<{ result: AdvisorResult }>("/api/advisor/propose", {
+        method: "POST",
+        body: { idea, workspacePath, provider: decision?.provider, model: decision?.model },
+        timeoutMs: 135_000,
+      });
+      if (data.result.status === "need_focus") {
+        setAdvisorQuestion(data.result.question);
+      } else {
+        setAdvisorProposals(data.result.proposals);
+        setAdvisorDomain(data.result.domain || null);
+      }
+    } catch (advisorFailure) {
+      setAdvisorError((advisorFailure as Error).message);
+    } finally {
+      setAdvisorLoading(false);
+    }
+  };
+
+  // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
+  const useProposalObjective = (objective: string) => {
+    try { localStorage.setItem(`pixel-crew:task-composer:boss:${workspacePath}:new`, objective); } catch { /* unavailable */ }
+    setNewTask(false);
+    requestAnimationFrame(() => setNewTask(true));
+  };
   // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
   // non-blocking, so a WS-driven status change can land while its dialog is
   // still open; re-read through this ref instead of a stale closure.
@@ -349,6 +393,44 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
             setNewTask(false);
             requestAnimationFrame(() => setNewTask(true));
           }}>{t(starter)}</button>)}
+        </div>
+        <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
+          <div className="boss-task-desk__advisor-head">
+            <strong>{t("沒方向？讓顧問幫你想")}</strong>
+            <small>{t("給一個粗略念頭或主題，顧問會用專業列出你可能沒想到的方向，挑一個就能交辦。")}</small>
+          </div>
+          <div className="boss-task-desk__advisor-input">
+            <input
+              value={advisorIdea}
+              onChange={(event) => setAdvisorIdea(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runAdvisor(); } }}
+              placeholder={t("例如：我想用 AI 做量化交易，但不知道從何下手")}
+              maxLength={4000}
+              aria-label={t("你的粗略念頭或主題")}
+            />
+            <button type="button" onClick={() => void runAdvisor()} disabled={advisorLoading || !advisorIdea.trim()}>
+              {advisorLoading ? t("顧問思考中…") : t("幫我想方向")}
+            </button>
+          </div>
+          {advisorError && <p className="boss-task-desk__advisor-error" role="alert">{advisorError}</p>}
+          {advisorQuestion && <div className="boss-task-desk__advisor-question">
+            <strong>{t("顧問想先確認一件事：")}</strong>
+            <p>{advisorQuestion}</p>
+            <small>{t("把答案補進上面的念頭，再按一次「幫我想方向」。")}</small>
+          </div>}
+          {advisorProposals.length > 0 && <div className="boss-task-desk__advisor-proposals">
+            {advisorDomain && <small className="boss-task-desk__advisor-domain">{t("領域：{domain}", { domain: advisorDomain })}</small>}
+            {advisorProposals.map((proposal) => (
+              <div key={proposal.id} className="boss-task-desk__advisor-card">
+                <strong>{proposal.title}</strong>
+                {proposal.summary && <p>{proposal.summary}</p>}
+                {proposal.insight && <p className="boss-task-desk__advisor-insight">{proposal.insight}</p>}
+                {proposal.approach && <p className="boss-task-desk__advisor-approach">{proposal.approach}</p>}
+                {proposal.considerations.length > 0 && <ul>{proposal.considerations.map((item, index) => <li key={index}>{item}</li>)}</ul>}
+                <button type="button" onClick={() => useProposalObjective(proposal.objective)}>{t("用這個方向交辦 →")}</button>
+              </div>
+            ))}
+          </div>}
         </div>
       </div> : <>
         <div className={`boss-task-desk__status boss-task-desk__status--${selected.status}`}>

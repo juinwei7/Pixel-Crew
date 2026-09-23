@@ -31,6 +31,8 @@ type Props = {
   wsReady: boolean;
   modelOptions: ModelOption[];
   workerCount: number;
+  /** 全域「執行中」NPC 數（不分工作區）；頂欄燈號用。 */
+  runningCount: number;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
@@ -79,6 +81,7 @@ export function TopBar({
   wsReady,
   modelOptions,
   workerCount,
+  runningCount,
   providerChanging = false,
   accounts,
   onSetWorkerAccount,
@@ -303,6 +306,24 @@ export function TopBar({
         professionalModeButtonRef={professionalModeButtonRef}
       />
       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
+      {/* 全域「在跑」燈號：不分工作區顯示目前有幾個 NPC 正在執行，讓你在聊天／別的
+          工作區時也能一眼看到背景是否還有 NPC 在跑；0 時暗掉並顯示「待命」。 */}
+      <div
+        className={`top-bar__running ${runningCount > 0 ? "top-bar__running--on" : ""}`}
+        role="status"
+        aria-live="polite"
+        title={runningCount > 0
+          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
+          : t("目前沒有 NPC 在執行，全部待命中")}
+        aria-label={runningCount > 0
+          ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
+          : t("目前沒有 NPC 在執行，全部待命中")}
+      >
+        <i className="top-bar__running-dot" aria-hidden="true" />
+        {runningCount > 0
+          ? <><strong>{runningCount}</strong><span>{t("在跑")}</span></>
+          : <span>{t("待命")}</span>}
+      </div>
       <div className="top-bar__spacer" />
       {children}
       <div className="top-bar__spacer" />

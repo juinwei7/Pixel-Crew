@@ -416,6 +416,21 @@ export type ExecutionBudget = {
   codexQuota5hPercent: { min: number; max: number };
 };
 
+// 專家顧問：把一個粗略念頭展開成「你可能沒想到」的專業方向；挑一個直接接 Boss Task。
+export type AdvisorProposal = {
+  id: string;
+  title: string;
+  summary: string;
+  insight: string;
+  approach: string;
+  considerations: string[];
+  objective: string;
+};
+
+export type AdvisorResult =
+  | { status: "proposals"; domain: string; proposals: AdvisorProposal[] }
+  | { status: "need_focus"; question: string };
+
 export type BossTask = {
   id: string;
   title: string;

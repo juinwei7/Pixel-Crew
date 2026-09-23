@@ -173,6 +173,11 @@ import {
   type BossTaskMessage,
   type BossTaskMessageRole,
 } from "./bossTask.js";
+import {
+  expertAdvisorPrompt,
+  parseAdvisorResult,
+  explainAdvisorFailure,
+} from "./expertAdvisor.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
 import {
   boundedDepartmentContext,
@@ -3082,6 +3087,44 @@ registerReportingRoutes({
 // ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
 registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
 
+// ── 專家顧問：把一個粗略念頭展開成「以你自身專業不一定知道」的幾個專業方向，讓你
+//     只需挑一個，再直接餵進既有 Boss Task 執行到完成。無工具、一次性判斷（沿用
+//     Boss Task 的 decision runtime 與 no_tools 政策）；解析失敗補一次 repair 重試。
+app.post("/api/advisor/propose", async (req, res) => {
+  const idea = collaborationText(req.body?.idea, 4_000).trim();
+  if (!idea) { res.status(400).json({ error: t("請先給一個想法或主題，顧問才能幫你想方向") }); return; }
+  const preferredWorkspace = collaborationText(req.body?.workspacePath, 1_000) || null;
+  const runtime = resolveDecisionRuntime(req.body?.provider, req.body?.model, preferredWorkspace);
+  if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  const maxProposals = Number.isFinite(req.body?.maxProposals) ? Number(req.body.maxProposals) : undefined;
+  const workspace = preferredWorkspace || config.targetRepoPath;
+  const usage = await usageRegistry.refresh(runtime.provider, true);
+  const usageError = usageBlockReason(runtime.provider, usage, runtime.model);
+  if (usageError) {
+    res.status(409).json({ error: t("{provider} 目前無法進行顧問判斷：{error}", { provider: providerLabel(runtime.provider), error: usageError }), usage });
+    return;
+  }
+  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals });
+  let text: string;
+  try {
+    text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
+  } catch (error) {
+    res.status(502).json({ error: t("顧問模型無法完成判斷：{error}", { error: (error as Error).message }) });
+    return;
+  }
+  let result = parseAdvisorResult(text, maxProposals);
+  if (!result) {
+    const reason = explainAdvisorFailure(text, maxProposals) ?? "The response did not match the required format.";
+    const repair = `${prompt}\n\nYour previous response was invalid: ${reason} Return one corrected <expert_advisor> block only.`;
+    try {
+      text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
+      result = parseAdvisorResult(text, maxProposals);
+    } catch { result = null; }
+  }
+  if (!result) { res.status(502).json({ error: t("顧問模型未能給出有效的方向建議，請換個說法再試一次") }); return; }
+  res.json({ result });
+});
+
 // ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
 registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
 
@@ -3090,24 +3133,36 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const nowMs = now.getTime();
   const today = localDay(now);
   for (const schedule of store.listSchedules()) {
-    if (!schedule.enabled || schedule.lastRunDay === today || schedule.time > hhmm) continue;
+    if (!schedule.enabled) continue;
+    // interval_minutes 有值＝每 N 分鐘重複（用 last_run_at 判斷是否到點）；否則＝每日 HH:MM 一次。
+    const recurring = typeof schedule.intervalMinutes === "number" && schedule.intervalMinutes > 0;
+    if (recurring) {
+      const lastMs = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : NaN;
+      if (Number.isFinite(lastMs) && nowMs < lastMs + schedule.intervalMinutes! * 60_000) continue;
+    } else if (schedule.lastRunDay === today || schedule.time > hhmm) {
+      continue;
+    }
     const worker = workers.get(schedule.workerId);
     if (!worker) continue;
     if (!workerProviderReady(worker)) continue;
+    const scheduleLabel = recurring
+      ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes ?? 0 })
+      : t("每日 {time}", { time: schedule.time });
     // 無人看管風險口（作戰室裁決 P1）：⚡無限制模式跳過所有審批，不給自動排程觸發。
     // 標記為今天已處理＋留一則說明，避免每 30 秒重試洗版。
     if (worker.autoApproveMode === "invincible") {
-      store.markScheduleRun(schedule.id, today);
-      record(worker, { type: "error", message: t("⏰ 排程（每日 {time}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後，明天起自動恢復。", { time: schedule.time }) });
+      store.markScheduleRun(schedule.id, today, now.toISOString());
+      record(worker, { type: "error", message: t("⏰ 排程（{label}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後會自動恢復。", { label: scheduleLabel }) });
       continue;
     }
     if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
-    store.markScheduleRun(schedule.id, today);
-    record(worker, { type: "user_message", text: t("⏰ 排程任務（每日 {time}）：{prompt}", { time: schedule.time, prompt: schedule.prompt }) });
+    store.markScheduleRun(schedule.id, today, now.toISOString());
+    record(worker, { type: "user_message", text: t("⏰ 排程任務（{label}）：{prompt}", { label: scheduleLabel, prompt: schedule.prompt }) });
     try {
-      worker.runner.send(t("【排程任務，每日 {time} 自動觸發】{prompt}", { time: schedule.time, prompt: schedule.prompt }), [], []);
+      worker.runner.send(t("【排程任務，{label} 自動觸發】{prompt}", { label: scheduleLabel, prompt: schedule.prompt }), [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch { /* 送失敗就等明天；user_message 已留在紀錄裡可追查 */ }
   }
