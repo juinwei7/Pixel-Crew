@@ -4,10 +4,10 @@ import { t } from "./i18n";
 export type ComposerImage = MessageImagePayload & { id: string; previewUrl: string; size: number };
 export type ComposerDocument = MessageDocumentPayload & { id: string; size: number };
 
-export const MAX_IMAGES = 4;
+export const MAX_IMAGES = 10;
 export const MAX_DOCUMENTS = 4;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-export const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_TOTAL_IMAGE_BYTES = 30 * 1024 * 1024;
 export const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_TOTAL_DOCUMENT_BYTES = 20 * 1024 * 1024;
@@ -25,7 +25,7 @@ export function validateComposerAttachment(input: {
   if (documentFiles.length > MAX_DOCUMENTS - currentDocuments.length) return t("每則訊息最多 {max} 份文件", { max: MAX_DOCUMENTS });
   if (imageFiles.some((file) => !SUPPORTED_IMAGE_TYPES.has(file.type || imageMimeType(file.name)))) return t("只支援 PNG、JPEG 與 WebP 圖片");
   if (imageFiles.some((file) => file.size > MAX_IMAGE_BYTES)) return t("每張圖片不可超過 5 MiB");
-  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return t("圖片總大小不可超過 10 MiB");
+  if (currentImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_IMAGE_BYTES) return t("圖片總大小不可超過 {mib} MiB", { mib: MAX_TOTAL_IMAGE_BYTES / 1024 / 1024 });
   if (documentFiles.some((file) => !SUPPORTED_DOCUMENT_EXTENSIONS.has(fileExtension(file.name)))) return t("只支援文字、Markdown、CSV、JSON、HTML、XML、YAML、PDF 與 Office 文件");
   if (documentFiles.some((file) => file.size > MAX_DOCUMENT_BYTES)) return t("每份文件不可超過 10 MiB");
   if (currentDocuments.reduce((sum, document) => sum + document.size, 0) + documentFiles.reduce((sum, file) => sum + file.size, 0) > MAX_TOTAL_DOCUMENT_BYTES) return t("文件總大小不可超過 20 MiB");
