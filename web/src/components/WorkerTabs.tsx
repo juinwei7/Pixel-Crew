@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Department, DepartmentMission, WorkerState } from "../types";
 import type { CrewFilter } from "../uiPreferences";
-import { SHIRT_COLORS } from "../game/person";
 import { roomName } from "../workspace";
 import { filterCrew, workerAttention, type WorkerAttention } from "../crew";
+import { CrewChips, shirtColor } from "./CrewChips";
 import { computeDropIndex, moveId, reorderShift } from "../crewReorder";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
@@ -38,11 +38,6 @@ const MAX_WORKERS = 20;
 // Roughly the tallest the row menu gets (5 actions). Used to decide whether to
 // open it downward or flip it up when a row sits near the bottom of the rail.
 const MENU_ESTIMATED_HEIGHT = 210;
-
-function shirtColor(index: number): string {
-  const [color] = SHIRT_COLORS[index % SHIRT_COLORS.length];
-  return `#${color.toString(16).padStart(6, "0")}`;
-}
 
 const FILTERS: Array<{ id: CrewFilter; label: string }> = [
   { id: "all", label: t("全部") },
@@ -354,24 +349,7 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
      新增這些低頻操作收進「名冊」抽屜。 */
   if (isPhone) {
     return <div className="crew-strip-wrap" aria-hidden={inert || undefined} inert={inert ? "" : undefined}>
-      <div className="crew-strip" role="tablist" aria-label={t("人員")}>
-        {renderOrder.map((worker) => {
-          const status = workerAttention(worker);
-          return <button
-            key={worker.id}
-            type="button"
-            role="tab"
-            aria-selected={worker.id === activeId}
-            className={`crew-strip__chip${worker.id === activeId ? " crew-strip__chip--active" : ""}`}
-            title={`${worker.name} · ${roomName(worker.workspacePath)}`}
-            onClick={() => onSelect(worker.id)}
-          >
-            <span className="crew-row__avatar" style={{ background: shirtColor(worker.colorIndex) }}>{worker.avatarKind === "custom" ? "◆" : ""}</span>
-            <span className="crew-strip__name">{worker.name}</span>
-            <span className={`crew-strip__status crew-strip__status--${status}`} aria-hidden="true" />
-          </button>;
-        })}
-      </div>
+      <CrewChips workers={renderOrder} activeId={activeId} onSelect={onSelect} />
       <button type="button" className="crew-strip__roster" onClick={() => setRosterOpen(true)} aria-label={t("人員名冊")} title={t("人員名冊")}>
         <Icon name="user" size={18} />
       </button>

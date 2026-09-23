@@ -417,6 +417,27 @@
     backdrop-filter: blur(10px);
   }
 
+  /* 未讀：下拉選單以前是在文字前面加一個「●」。chip 沒有文字前綴的位置，
+     改成左上角一點。 */
+  .crew-strip__chip--unread::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--cyan);
+  }
+
+  /* 專業模式的工作對象：同一排 chip，佔滿標題列剩下的寬度並可橫向捲。 */
+  .focus-worker-switch--chips {
+    min-width: 0;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+
   .crew-strip__chip--active {
     border-color: rgba(0, 229, 255, 0.5);
     background: rgba(0, 229, 255, 0.1);

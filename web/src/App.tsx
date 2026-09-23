@@ -9,6 +9,7 @@ import { TopBar } from "./components/TopBar";
 import { TaskComposer } from "./components/TaskComposer";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { ConfirmDialog, type ConfirmTone } from "./components/ConfirmDialog";
+import { CrewChips } from "./components/CrewChips";
 import { EnergyHud, FocusEnergy } from "./components/EnergyHud";
 import { AuthGate } from "./components/AuthGate";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -362,6 +363,12 @@ export function App() {
     workers: focusWorkspaceWorkers.filter((worker) => worker.departmentId === department.id),
   })).filter((group) => group.workers.length > 0), [departments, focusWorkspaceWorkers]);
   const focusStudioStandaloneWorkers = useMemo(() => focusWorkspaceWorkers.filter((worker) => !worker.departmentId || !departments[worker.departmentId]), [departments, focusWorkspaceWorkers]);
+  /* chip 沒有 <optgroup>，所以把分組攤平成一條：部門成員照部門順序在前，
+     沒有部門的接在後面——跟下拉選單看到的順序一致。 */
+  const focusChipWorkers = useMemo(
+    () => [...focusStudioDepartmentGroups.flatMap((group) => group.workers), ...focusStudioStandaloneWorkers],
+    [focusStudioDepartmentGroups, focusStudioStandaloneWorkers],
+  );
 
   const dismissToast = useCallback((id: string) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
@@ -1099,7 +1106,18 @@ export function App() {
           <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
           {taskFocusMode ? <div className="focus-context-switch">
             {!focusPhone && focusKindSwitch}
-            {!bossAssignmentOpen && (!selectedDepartment ? (focusPanes.length <= 1 && <div className="focus-worker-switch">
+            {/* 手機換成跟像素模式同一排 chip：<select> 看不出「現在有誰、誰在等你」，
+                換人還要先展開原生選單。桌面維持下拉——那裡橫向空間有限，而且
+                滑鼠不需要 44px 的目標。 */}
+            {!bossAssignmentOpen && (!selectedDepartment ? (focusPanes.length <= 1 && (focusPhone ? <div className="focus-worker-switch focus-worker-switch--chips">
+              <CrewChips
+                workers={focusChipWorkers}
+                activeId={activeId}
+                label={t("專業模式工作對象")}
+                unread={(worker) => worker.id !== activeId && workerHasUnread(worker, focusSeenTurns[worker.id] ?? undefined)}
+                onSelect={(id) => assignWorkerToPane(focusedPaneId, id)}
+              />
+            </div> : <div className="focus-worker-switch">
               <select aria-label={t("切換專業模式的 NPC 工作介面")} value={activeId ?? ""} onChange={(event) => assignWorkerToPane(focusedPaneId, event.target.value)}>
                 {!activeId && <option value="" disabled>{t("選擇 NPC")}</option>}
                 {focusStudioDepartmentGroups.map(({ department, workers: departmentWorkers }) => <optgroup key={department.id} label={department.name}>{departmentWorkers.map((worker) => {
@@ -1108,7 +1126,7 @@ export function App() {
                 })}</optgroup>)}
                 {focusStudioStandaloneWorkers.map((worker) => <option key={worker.id} value={worker.id}>{focusWorkerLabel(worker)}</option>)}
               </select>
-            </div>) : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專業模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
+            </div>)) : <div className="focus-worker-switch focus-department-switch"><select aria-label={t("切換專業模式的部門工作介面")} value={selectedDepartment.id} onChange={(event) => selectDepartment(event.target.value)}>{Object.values(departments).map((department) => {
               const mission = Object.values(missions).find((candidate) => candidate.departmentId === department.id && ["planning", "executing", "reviewing", "needs_attention"].includes(candidate.status));
               return <option key={department.id} value={department.id}>{department.name}{mission ? ` · ${mission.status === "needs_attention" ? t("需處理") : t("進行中")}` : ` · ${t("待命")}`}</option>;
             })}</select></div>)}
