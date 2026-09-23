@@ -174,6 +174,30 @@ export function App() {
       notify(error instanceof Error ? error.message : t("讀取歷史失敗"), "error");
     }
   }
+
+  // 召集圓桌智囊團辯論一個主題（3 方兩輪→主持人裁決→裁決貼回 host NPC 接手執行）。
+  // 抽成共用函式：命令列的作戰室模式與「顧問方向送圓桌討論」都走這裡。
+  async function launchWarroom(topic: string): Promise<void> {
+    const text = topic.trim();
+    if (!text) return;
+    if (!activeId) { notify(t("請先選一個 NPC 當召集人"), "error"); return; }
+    if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return; }
+    setWarroomRunning(true);
+    notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
+    try {
+      const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
+        method: "POST",
+        // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
+        body: { topic: text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
+        timeoutMs: 13 * 60_000,
+      });
+      setWarroomResult(resp.result);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
+    } finally {
+      setWarroomRunning(false);
+    }
+  }
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
@@ -1197,6 +1221,11 @@ export function App() {
           onDelete={deleteBossTask}
           onRestart={restartBossTask}
           onCreateDepartment={() => setDepartmentCreatorOpen(true)}
+          onDebateDirection={(topic) => {
+            // 關掉交辦視窗，讓使用者看得到 3 個 NPC 走上會議桌辯論這個方向。
+            setBossAssignmentOpen(false);
+            void launchWarroom(topic);
+          }}
           onOpenMission={(missionId) => {
             const mission = missions[missionId];
             if (!mission?.departmentId) return;
@@ -1348,22 +1377,7 @@ export function App() {
           if (submissionMode !== "warroom") return send(activeId, command);
           // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個短命角色 NPC（ephemeralKind: "warroom"）走到會議桌，兩輪辯論（表態→反駁）、
           // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
-          if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return null; }
-          setWarroomRunning(true);
-          notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
-          try {
-            const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
-              method: "POST",
-              body: { topic: command.text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
-              // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
-              timeoutMs: 13 * 60_000,
-            });
-            setWarroomResult(resp.result);
-          } catch (error) {
-            notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
-          } finally {
-            setWarroomRunning(false);
-          }
+          await launchWarroom(command.text);
           return null;
         }}
         onInterrupt={() => {

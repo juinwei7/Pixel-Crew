@@ -36,6 +36,8 @@ type Props = {
   onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
   onOpenMission?(missionId: string): void;
   onCreateDepartment?(): void;
+  /** 把一個顧問方向送去圓桌智囊團辯論（3 方兩輪→裁決→host NPC 接手）。 */
+  onDebateDirection?(topic: string): void;
   onClose(): void;
   composerHost?: Element | null;
   focusMode?: boolean;
@@ -62,6 +64,19 @@ const starterTasks = [
 
 const LAST_BOSS_TASK_KEY = "pixel-crew:boss-last-task";
 const terminalStatuses: BossTask["status"][] = ["completed", "failed", "cancelled"];
+
+// 把一張顧問方向卡組成圓桌辯論的主題：帶上方向、洞見與目標，讓 3 方辯得有料。
+function advisorDebateTopic(proposal: AdvisorProposal, domain: string | null): string {
+  const parts = [
+    t("請評估專家顧問提出的這個方向是否值得投入、怎麼做最專業、有哪些風險與取捨，最後給出建議與可執行的下一步。"),
+    t("方向：{title}", { title: proposal.title }),
+  ];
+  if (domain) parts.push(t("領域：{domain}", { domain }));
+  if (proposal.summary) parts.push(t("說明：{summary}", { summary: proposal.summary }));
+  if (proposal.insight) parts.push(t("關鍵洞見：{insight}", { insight: proposal.insight }));
+  if (proposal.objective) parts.push(t("目標：{objective}", { objective: proposal.objective }));
+  return parts.join("\n");
+}
 
 function workspaceLabel(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
@@ -92,7 +107,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onCreateDepartment, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onCreateDepartment, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -487,7 +502,10 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
                 {proposal.insight && <p className="boss-task-desk__advisor-insight">{proposal.insight}</p>}
                 {proposal.approach && <p className="boss-task-desk__advisor-approach">{proposal.approach}</p>}
                 {proposal.considerations.length > 0 && <ul>{proposal.considerations.map((item, index) => <li key={index}>{item}</li>)}</ul>}
-                <button type="button" onClick={() => useProposalObjective(proposal.objective)}>{t("用這個方向交辦 →")}</button>
+                <div className="boss-task-desk__advisor-actions">
+                  <button type="button" onClick={() => useProposalObjective(proposal.objective)}>{t("用這個方向交辦 →")}</button>
+                  {onDebateDirection && <button type="button" className="boss-task-desk__advisor-debate" onClick={() => onDebateDirection(advisorDebateTopic(proposal, advisorDomain))}>{t("送圓桌智囊團討論 →")}</button>}
+                </div>
               </div>
             ))}
           </div>}

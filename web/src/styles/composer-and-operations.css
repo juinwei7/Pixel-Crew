@@ -1141,6 +1141,11 @@ summary:focus-visible,
 .boss-task-desk__advisor-card ul { margin: 2px 0 0; padding-left: 16px; color: #7f93ab; font-size: 9px; line-height: 1.55; }
 .boss-task-desk__advisor-card button { align-self: flex-start; margin-top: 4px; min-height: 30px; padding: 6px 12px; border: 1px solid rgba(0, 229, 255,.32); border-radius: 8px; background: rgba(0, 229, 255,.08); color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 700; }
 .boss-task-desk__advisor-card button:hover { background: rgba(0, 229, 255,.16); }
+/* 方向卡的兩個動作並排：交辦（青）＋送圓桌智囊團討論（紫）。 */
+.boss-task-desk__advisor-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.boss-task-desk__advisor-actions button { align-self: auto; margin-top: 0; }
+.boss-task-desk__advisor-debate { border-color: rgba(140,110,255,.4) !important; background: rgba(140,110,255,.1) !important; color: #c3b3ff !important; }
+.boss-task-desk__advisor-debate:hover { background: rgba(140,110,255,.2) !important; }
 .boss-task-desk__status { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 8px; background: rgba(0, 229, 255,.04); }
 .boss-task-desk__status span { color: var(--cyan); font-size: 10px; font-weight: 700; }
 .boss-task-desk__status small { color: var(--text-dim); font-family: var(--mono); font-size: 8px; }
