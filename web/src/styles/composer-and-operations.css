@@ -1,4 +1,26 @@
 /* Command composer */
+/* 貼連結看影片：偵測到影片網址時冒出的一鍵解析按鈕 */
+.composer-video-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 2px 0;
+  padding: 6px 12px;
+  border: 1px solid rgba(0, 229, 255, .34);
+  border-radius: 999px;
+  background: rgba(0, 229, 255, .09);
+  color: var(--cyan, #00e5ff);
+  cursor: pointer;
+  font: 11px var(--mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-video-link:hover { background: rgba(0, 229, 255, .16); border-color: rgba(0, 229, 255, .5); }
+.task-composer__video-link-row { display: flex; padding: 2px 4px 0; }
+
 .file-drop-overlay {
   position: fixed;
   z-index: 60000;

@@ -7,6 +7,7 @@ import {
   documentPayload,
   FILE_ACCEPT,
   imagePayload,
+  detectVideoUrl,
   isImageFile,
   isVideoFile,
   MAX_DOCUMENTS,
@@ -30,6 +31,13 @@ import { t } from "../i18n";
 
 // 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
 const INTERRUPT_GUARD_MS = 1000;
+
+// /api/video/process 與 /api/video/from-link 的共同回應形狀（影格＋字幕）。
+type VideoAnalysisResult = {
+  images?: Array<{ name: string; mimeType: string; dataBase64: string }>;
+  transcript?: string;
+  transcriptError?: string | null;
+};
 
 type PaletteConfig = {
   workspacePath: string;
@@ -201,6 +209,40 @@ export function TaskComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueEnabled, busy, disabled, queued, draftKey, switchingSession, dispatchTick]);
 
+  // 影片解析結果（影格＋字幕）套進輸入框：影格當圖片、字幕當隱形隨附檔。上傳檔與貼連結共用。
+  // label 是顯示用來源名（檔名或影片標題/連結），讓多張影格在輸入框收合成一個影片晶片。
+  async function applyVideoResult(data: VideoAnalysisResult, label: string, owner: string) {
+    const frames: ComposerImage[] = (data.images ?? []).map((frame, index) => ({
+      id: `vid-${Date.now()}-${index}`,
+      name: frame.name,
+      mimeType: frame.mimeType as ComposerImage["mimeType"],
+      dataBase64: frame.dataBase64,
+      previewUrl: `data:${frame.mimeType};base64,${frame.dataBase64}`,
+      size: Math.floor(frame.dataBase64.length * 0.75),
+      videoName: label,
+    }));
+    const transcript = String(data.transcript ?? "").trim();
+    // 字幕不再塞進「可編輯草稿」洗版（原本會秀一大坨「【影片音訊字幕】…」）。改成隱形隨附的
+    // 字幕檔：你只看到影格縮圖，送出時 Claude 一樣讀得到音訊內容——體感更接近「直接看影片」。
+    const transcriptDoc = transcript
+      ? await readComposerDocument(new File([transcript], t("影片字幕.txt"), { type: "text/plain" }))
+      : null;
+    if (persistExtras && ownerRef.current !== owner) {
+      updateCachedSession(owner, (session) => ({
+        ...session,
+        images: [...session.images, ...frames].slice(0, MAX_IMAGES),
+        documents: transcriptDoc ? [...session.documents, transcriptDoc].slice(0, MAX_DOCUMENTS) : session.documents,
+        error: null,
+      }));
+    } else {
+      setImages((current) => [...current, ...frames].slice(0, MAX_IMAGES));
+      if (transcriptDoc) setDocuments((current) => [...current, transcriptDoc].slice(0, MAX_DOCUMENTS));
+      if (!transcript && data.transcriptError) setError(String(data.transcriptError));
+      else setError(null);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }
+
   // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
   // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
   async function processVideos(videoFiles: File[], owner: string) {
@@ -217,40 +259,39 @@ export function TaskComposer({
           const detail = await response.json().catch(() => null);
           throw new Error(detail?.error || t("影片處理失敗（{status}）", { status: response.status }));
         }
-        const data = await response.json() as { images?: Array<{ name: string; mimeType: string; dataBase64: string }>; transcript?: string; transcriptError?: string | null };
-        const frames: ComposerImage[] = (data.images ?? []).map((frame, index) => ({
-          id: `vid-${Date.now()}-${index}`,
-          name: frame.name,
-          mimeType: frame.mimeType as ComposerImage["mimeType"],
-          dataBase64: frame.dataBase64,
-          previewUrl: `data:${frame.mimeType};base64,${frame.dataBase64}`,
-          size: Math.floor(frame.dataBase64.length * 0.75),
-          videoName: file.name, // 標記來源影片，讓多張影格在輸入框收合成一個影片晶片
-        }));
-        const transcript = String(data.transcript ?? "").trim();
-        // 字幕不再塞進「可編輯草稿」洗版（原本會秀一大坨「【影片音訊字幕】…」）。改成隱形隨附的
-        // 字幕檔：你只看到影格縮圖，送出時 Claude 一樣讀得到音訊內容——體感更接近「直接看影片」。
-        const transcriptDoc = transcript
-          ? await readComposerDocument(new File([transcript], t("影片字幕.txt"), { type: "text/plain" }))
-          : null;
-        if (persistExtras && ownerRef.current !== owner) {
-          updateCachedSession(owner, (session) => ({
-            ...session,
-            images: [...session.images, ...frames].slice(0, MAX_IMAGES),
-            documents: transcriptDoc ? [...session.documents, transcriptDoc].slice(0, MAX_DOCUMENTS) : session.documents,
-            error: null,
-          }));
-        } else {
-          setImages((current) => [...current, ...frames].slice(0, MAX_IMAGES));
-          if (transcriptDoc) setDocuments((current) => [...current, transcriptDoc].slice(0, MAX_DOCUMENTS));
-          if (!transcript && data.transcriptError) setError(String(data.transcriptError));
-          else setError(null);
-          requestAnimationFrame(() => textareaRef.current?.focus());
-        }
+        const data = await response.json() as VideoAnalysisResult;
+        await applyVideoResult(data, file.name, owner);
       } catch (videoError) {
         setError(videoError instanceof Error ? videoError.message : t("影片處理失敗"));
       }
     }
+    } finally {
+      setVideoProcessing(false);
+      setProcessingVideoNames([]);
+    }
+  }
+
+  // 貼連結看影片：把公開影片連結送到 server（yt-dlp 下載 → 同一條抽影格＋字幕管線）。
+  // 顯示一個「🎬 解析中」佔位晶片；完成後影格＋字幕就跟上傳影片一樣掛進輸入框。
+  async function processVideoLink(url: string) {
+    const owner = ownerRef.current;
+    const label = t("連結影片");
+    setVideoProcessing(true);
+    setProcessingVideoNames([label]);
+    try {
+      const response = await fetch("/api/video/from-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.error || t("影片下載失敗（{status}）", { status: response.status }));
+      }
+      const data = await response.json() as VideoAnalysisResult;
+      await applyVideoResult(data, label, owner);
+    } catch (linkError) {
+      setError(linkError instanceof Error ? linkError.message : t("影片下載失敗"));
     } finally {
       setVideoProcessing(false);
       setProcessingVideoNames([]);
@@ -447,6 +488,15 @@ export function TaskComposer({
     }
     return groups;
   })();
+  // 貼連結看影片：輸入框內偵測到影片平台網址 → 冒一顆按鈕，一鍵下載＋抽影格＋字幕。
+  // 已經抓過（有「連結影片」附件）或正在解析時就不再提示，避免重複洗版。
+  const linkVideoLabel = t("連結影片");
+  const detectedVideoUrl = detectVideoUrl(draftValue);
+  const videoLinkPrompt = detectedVideoUrl && !videoProcessing && !images.some((image) => image.videoName === linkVideoLabel) ? (
+    <button type="button" className="composer-video-link" title={detectedVideoUrl} onClick={() => void processVideoLink(detectedVideoUrl)}>
+      🎬 {t("解析這支影片（抓畫面＋字幕）")}
+    </button>
+  ) : null;
   const attachmentsBlock = hasAttachments && (
     dock ? <div className="command-composer__attachments" aria-label={t("待傳送附件")}>
       {imageChipGroups.map((group, index) => group.videoName
@@ -561,6 +611,7 @@ export function TaskComposer({
         )}
         {leading}
         {textareaField}
+        {videoLinkPrompt}
         {videoProcessing && <span className="command-composer__video-processing" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
@@ -628,6 +679,7 @@ export function TaskComposer({
       {textareaField}
       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
     </div>
+    {videoLinkPrompt && <div className="task-composer__video-link-row">{videoLinkPrompt}</div>}
     {videoProcessing && <div className="task-composer__error" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
     {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
   </form>;

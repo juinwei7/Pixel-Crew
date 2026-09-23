@@ -437,6 +437,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   // atBottom 的「即時」鏡像：state 是非同步的，串流/重繪時自動貼底會讀到過期的 atBottom
   // 而把使用者硬拉回底部。用 ref 在 onScroll 同步更新，自動貼底只看這個 ref，就不會誤拉。
   const atBottomRef = useRef(true);
+  const touchStartYRef = useRef(0);
   const setAtBottomBoth = (value: boolean) => { atBottomRef.current = value; setAtBottom(value); };
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
@@ -516,7 +517,18 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   }
 
   const log = (
-    <div className="quest-log" ref={logRef} onScroll={() => {
+    <div className="quest-log" ref={logRef}
+      // 手勢比 scroll 事件更早觸發：手指往上滑/滾輪往上的當下就立刻解除自動跟隨，
+      // 否則串流每秒多次重繪的 useEffect 會讀到還沒更新的 atBottomRef（=舊的「在底部」）
+      // 在使用者滑上去的瞬間把人硬甩回底。onScroll 慢半拍補不到這個競速窗口。
+      onWheel={(event) => { if (event.deltaY < 0) atBottomRef.current = false; }}
+      onTouchStart={(event) => { touchStartYRef.current = event.touches[0]?.clientY ?? 0; }}
+      onTouchMove={(event) => {
+        // 手指往下移動 = 內容往上捲（想看更早的）。用方向判定而非位置門檻，
+        // 因為第一個 touchmove 時 scrollTop 可能還沒更新、位置門檻會漏判。
+        if ((event.touches[0]?.clientY ?? 0) > touchStartYRef.current + 2) atBottomRef.current = false;
+      }}
+      onScroll={() => {
       const el = logRef.current;
       if (!el) return;
       if (focusMode && readerKey) focusScrollPositions.set(readerKey, el.scrollTop);

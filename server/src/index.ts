@@ -71,6 +71,7 @@ import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.
 import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import multer from "multer";
 import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
+import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -3777,11 +3778,11 @@ registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTr
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 const videoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VIDEO_BYTES } });
 const videoAudioTranscriber = new VoiceTranscriber(voiceEngineServer, fetch, 300_000);
-app.post("/api/video/process", videoUpload.single("video"), async (req, res) => {
-  if (!req.file || req.file.buffer.length === 0) { res.status(400).json({ error: t("請提供影片檔") }); return; }
+// 影片 buffer → 抽影格＋whisper → 回應 JSON。上傳檔與貼連結兩條入口共用同一段管線。
+async function respondWithVideoAnalysis(res: Response, video: Buffer): Promise<void> {
   let extracted;
   try {
-    extracted = await extractVideoFramesAndAudio(req.file.buffer, { ffmpegBin: config.ffmpegBin, ffprobeBin: config.ffprobeBin, maxFrames: 8 });
+    extracted = await extractVideoFramesAndAudio(video, { ffmpegBin: config.ffmpegBin, ffprobeBin: config.ffprobeBin, maxFrames: 8 });
   } catch (error) {
     const detail = error instanceof VideoProcessingError ? error.message : t("影片處理失敗");
     res.status(422).json({ error: detail });
@@ -3803,6 +3804,27 @@ app.post("/api/video/process", videoUpload.single("video"), async (req, res) => 
     audioAvailable: Boolean(extracted.audioWav),
     transcriptError,
   });
+}
+
+app.post("/api/video/process", videoUpload.single("video"), async (req, res) => {
+  if (!req.file || req.file.buffer.length === 0) { res.status(400).json({ error: t("請提供影片檔") }); return; }
+  await respondWithVideoAnalysis(res, req.file.buffer);
+});
+
+// 貼連結看影片：yt-dlp 下載公開影片 → 走上面同一條抽影格＋轉字幕管線。
+app.post("/api/video/from-link", express.json({ limit: "8kb" }), async (req, res) => {
+  const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+  if (!url) { res.status(400).json({ error: t("請提供影片連結") }); return; }
+  if (!isProbableVideoUrl(url)) { res.status(400).json({ error: t("請提供有效的 http(s) 影片連結") }); return; }
+  let downloaded;
+  try {
+    downloaded = await downloadVideoFromUrl(url, { ytDlpBin: config.ytDlpBin, maxBytes: MAX_VIDEO_BYTES, timeoutMs: 240_000 });
+  } catch (error) {
+    const detail = error instanceof VideoDownloadError ? error.message : t("影片下載失敗");
+    res.status(422).json({ error: detail });
+    return;
+  }
+  await respondWithVideoAnalysis(res, downloaded.buffer);
 });
 
 registerBackupImportTransport({
