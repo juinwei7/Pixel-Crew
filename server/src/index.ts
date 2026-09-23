@@ -4584,9 +4584,69 @@ function persistBossTask(task: BossTask, created = false): void {
   broadcastBossTask(task, created);
 }
 
-async function decideBossTask(task: BossTask): Promise<void> {
+// 為一個交辦目標即時建立一支專屬部門（AI 規劃成員→建立→上線），讓決策模型在沒有
+// 合適既有部門時能「自己開部門」再討論、執行。成功回傳部門，失敗回 null（呼叫端回退）。
+async function createDepartmentForObjective(input: {
+  purpose: string;
+  workspacePath: string;
+  provider: ProviderId;
+  count: number;
+}): Promise<Department | null> {
+  const { workspacePath, provider } = input;
+  const purpose = normalizeDepartmentPurpose(input.purpose);
+  if (!purpose) return null;
+  if (workspaceMission(workspacePath)) return null; // 此工作區正在跑 mission，先不建
+  const available = MAX_WORKERS - workers.size;
+  if (available < 1 || !providerReady(provider)) return null;
+  const count = Math.min(Math.max(2, Math.floor(input.count) || 3), available);
+  const existingMembers = [...workers.values()]
+    .filter((member) => sameWorkspacePath(member.runner.workspacePath, workspacePath))
+    .map((member) => ({ name: member.runner.name, role: member.persona?.role || null }));
+  const prompt = departmentPlanPrompt({ purpose, count, workspacePath, existingMembers });
+  let plan: DepartmentPlan | null;
+  try {
+    const result = await runDetachedTurn(provider, workspacePath, null, undefined, null, prompt, 90_000);
+    plan = parseDepartmentPlan(result.text, count);
+  } catch { return null; }
+  const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
+  if (!plan || plan.members.length === 0 || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) return null;
+  const departmentId = randomUUID();
+  const now = new Date().toISOString();
+  const created = plan.members.map((member) => createWorker(
+    member.name,
+    undefined,
+    provider,
+    workspacePath,
+    undefined,
+    normalizePersona({ role: member.role, instructions: member.instructions }),
+    departmentId,
+    { warmup: false, persist: false, broadcast: false },
+  ));
+  const department: Department = {
+    id: departmentId,
+    name: t("{name}部門", { name: purpose.slice(0, 20) }),
+    purpose,
+    workspacePath,
+    leadWorkerId: created[0].id,
+    memberWorkerIds: created.map((worker) => worker.id),
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
+    for (const worker of created) { worker.runner.stop(); workers.delete(worker.id); }
+    return null;
+  }
+  departments.set(department.id, department);
+  broadcast({ type: "department_created", department });
+  for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
+  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+  else void codexCapabilitiesFor(workspacePath).refresh();
+  return department;
+}
+
+async function decideBossTask(task: BossTask, allowCreateDepartment = true): Promise<void> {
   const candidates = bossTaskCandidates();
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !allowCreateDepartment) {
     task.status = "needs_attention";
     task.error = t("目前沒有可用的部門；請先建立具有職務的部門");
     task.messages.push(bossTaskMessage("system", task.error));
@@ -4605,10 +4665,10 @@ async function decideBossTask(task: BossTask): Promise<void> {
   const clarificationBudget = bossTaskClarificationBudget(task);
   const prompt = bossTaskDecisionPrompt({ task, candidates });
   const workspace = candidates.find((candidate) => sameWorkspacePath(candidate.workspacePath, task.workspacePath))?.workspacePath
-    ?? candidates[0].workspacePath;
+    ?? candidates[0]?.workspacePath ?? task.workspacePath;
   let output = "";
   try {
-    output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
+    output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
     let decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     const clarificationPastBudget = decision?.status === "clarification" && clarificationBudget.remaining === 0;
     if (!decision || clarificationPastBudget) {
@@ -4616,7 +4676,7 @@ async function decideBossTask(task: BossTask): Promise<void> {
         ? "You asked another clarification question, but the clarification budget is exhausted."
         : explainBossTaskDecisionFailure(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile)) ?? "The response did not match the required format.";
       const repair = `${prompt}\n\nYour previous response was invalid: ${reason}${clarificationPastBudget ? " You must produce a ready execution graph from the existing answers." : ""} Return one corrected <boss_task_decision> block only.`;
-      output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
+      output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, repair, 150_000, { kind: "no_tools" })).text;
       decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     }
     if (!decision || (decision.status === "clarification" && clarificationBudget.remaining === 0)) {
@@ -4627,6 +4687,31 @@ async function decideBossTask(task: BossTask): Promise<void> {
       task.status = "needs_input";
       task.messages.push(bossTaskMessage("decision_model", decision.question));
       persistBossTask(task);
+      return;
+    }
+    if (decision.status === "create_department") {
+      // 沒有合適的既有部門：自己開一支專屬部門，再重跑一次決策把工作交給它（只建一次，防迴圈）。
+      if (!allowCreateDepartment) {
+        throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
+      }
+      task.messages.push(bossTaskMessage("system", t("沒有合適的既有部門，正在為這個交辦建立專屬部門：{purpose}…", { purpose: decision.departmentPurpose })));
+      persistBossTask(task);
+      const department = await createDepartmentForObjective({
+        purpose: decision.departmentPurpose,
+        workspacePath: task.workspacePath,
+        provider: task.decisionProvider,
+        count: decision.memberCount,
+      });
+      if (!department) {
+        task.status = "needs_attention";
+        task.error = t("無法自動建立專屬部門（可能此工作區正在執行、人數已滿或規劃失敗），請手動建立部門後再交辦。");
+        task.messages.push(bossTaskMessage("system", task.error));
+        persistBossTask(task);
+        return;
+      }
+      task.messages.push(bossTaskMessage("system", t("已建立「{name}」，交給它繼續規劃與執行。", { name: department.name })));
+      persistBossTask(task);
+      await decideBossTask(task, false);
       return;
     }
     const byDepartment = new Map(candidates.map((candidate) => [candidate.departmentId, candidate]));

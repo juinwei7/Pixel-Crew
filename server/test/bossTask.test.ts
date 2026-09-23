@@ -108,6 +108,33 @@ test("parses clarification without creating stages", () => {
   });
 });
 
+test("parses create_department and clamps memberCount to 2-4", () => {
+  const decision = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","departmentPurpose":"本地優先個人 AI 助理研發","memberCount":9,"rationale":["No existing department covers local RAG + Ollama work"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(decision?.status, "create_department");
+  if (decision?.status === "create_department") {
+    assert.equal(decision.departmentPurpose, "本地優先個人 AI 助理研發");
+    assert.equal(decision.memberCount, 4); // clamped down from 9
+    assert.ok(decision.rationale.length >= 1);
+  }
+});
+
+test("create_department defaults memberCount to 3 and requires a purpose", () => {
+  const defaulted = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","departmentPurpose":"資安稽核","rationale":["fresh domain"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(defaulted?.status === "create_department" && defaulted.memberCount, 3);
+  // Missing purpose is invalid (would create a nameless team).
+  const noPurpose = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","memberCount":3,"rationale":["x"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(noPurpose, null);
+});
+
 test("validates a multi-department acyclic graph and rejects a cycle", () => {
   const ready = parseBossTaskDecision(
     `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"Plan, build, verify","rationale":["Distinct ownership"],"stages":[{"id":"plan","departmentId":"pm","title":"Plan","objective":"Define MVP","acceptanceCriteria":["Approved scope"],"dependsOn":[]},{"id":"build","departmentId":"eng","title":"Build","objective":"Implement MVP","acceptanceCriteria":["Working system"],"dependsOn":["plan"]},{"id":"verify","departmentId":"qa","title":"Verify","objective":"Test MVP","acceptanceCriteria":["Test report"],"dependsOn":["build"]}]}</boss_task_decision>`,

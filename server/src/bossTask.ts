@@ -75,6 +75,14 @@ export type BossTaskDecision =
       rationale: string[];
     }
   | {
+      // 沒有合適的既有部門時，決策模型改為要求「開一支專屬部門」：系統會 AI 規劃成員、
+      // 建立部門，再重跑一次決策把工作交給它（自己創建部門 → 討論 → 執行）。
+      status: "create_department";
+      departmentPurpose: string;
+      memberCount: number;
+      rationale: string[];
+    }
+  | {
       status: "ready";
       executionMode: BossExecutionMode;
       summary: string;
@@ -129,6 +137,7 @@ Execution boundary selected by the owner: ${budget.label} (${budget.profile}). T
 Rules:
 - Do not use tools, files, shell commands, MCP, web access, or background agents.
 - Use only exact department ids from the catalog.
+- If NONE of the catalog departments' purposes genuinely fit this objective's domain, do NOT force-fit it into an unrelated department. Instead return create_department with a concise department purpose and how many NPCs (2-4) it needs; the system will create that dedicated department and then re-plan the routing. Prefer an existing department only when its purpose truly covers the work; prefer creating a dedicated team over a bad fit.
 - Do not assign work when scope, target users, expected outcome, authority, security boundary, or acceptance boundary is materially ambiguous.
 - Broad product requests such as "build an ERP" normally require discovery before execution.
 - Clarification is exceptional, not a required step. Make reasonable, reversible departmental assumptions when the outcome can already be executed safely.
@@ -156,6 +165,11 @@ Eligible department catalog: ${JSON.stringify(catalog)}
 Clarification form:
 <boss_task_decision>
 {"status":"clarification","question":"one blocking question","rationale":["why this blocks safe assignment"]}
+</boss_task_decision>
+
+Create-department form (only when no catalog department fits — the system creates it, then re-plans):
+<boss_task_decision>
+{"status":"create_department","departmentPurpose":"concise purpose of the dedicated team this objective needs","memberCount":3,"rationale":["why no existing department fits and this team is the right shape"]}
 </boss_task_decision>
 
 Ready form:
@@ -216,7 +230,14 @@ function evaluateBossTaskDecision(
     if (rationale.length === 0) return { ok: false, reason: "Clarification form needs a non-empty \"rationale\" array." };
     return { ok: true, decision: { status: "clarification", question, rationale } };
   }
-  if (value.status !== "ready") return { ok: false, reason: `"status" must be exactly "clarification" or "ready", got ${JSON.stringify(value.status)}.` };
+  if (value.status === "create_department") {
+    const departmentPurpose = bounded(value.departmentPurpose, 200);
+    if (!departmentPurpose) return { ok: false, reason: "create_department form is missing a non-empty \"departmentPurpose\"." };
+    const rawCount = typeof value.memberCount === "number" && Number.isFinite(value.memberCount) ? Math.floor(value.memberCount) : 3;
+    const memberCount = Math.min(4, Math.max(2, rawCount));
+    return { ok: true, decision: { status: "create_department", departmentPurpose, memberCount, rationale } };
+  }
+  if (value.status !== "ready") return { ok: false, reason: `"status" must be exactly "clarification", "create_department", or "ready", got ${JSON.stringify(value.status)}.` };
   if (value.executionMode !== "research" && value.executionMode !== "project") {
     return { ok: false, reason: 'Ready form needs "executionMode" set to exactly "research" or "project".' };
   }
