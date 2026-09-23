@@ -36,7 +36,7 @@
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.55);
 }
 
-.top-bar__mode-switch {
+.ui-mode-switch {
   display: inline-flex;
   overflow: hidden;
   flex: 0 0 auto;
@@ -46,7 +46,7 @@
   background: rgba(5, 11, 23, 0.76);
 }
 
-.top-bar__mode-switch button {
+.ui-mode-switch button {
   min-height: 28px;
   padding: 4px 9px;
   border: 0;
@@ -58,8 +58,60 @@
   letter-spacing: 0.06em;
 }
 
-.top-bar__mode-switch button:hover { color: #c4d4e5; }
-.top-bar__mode-switch button.active { background: rgba(0, 229, 255, 0.13); color: var(--cyan); }
+.ui-mode-switch button:hover { color: #c4d4e5; }
+.ui-mode-switch button.active { background: rgba(0, 229, 255, 0.13); color: var(--cyan); }
+
+/* 手機版的收合形態：只顯示目前的模式，另外兩個收進來（見 ModeSwitch.tsx）。
+   兩種版型都印在 DOM 裡，由這裡與 responsive.css 決定誰出現。 */
+.ui-mode-picker { position: relative; display: none; flex: 0 0 auto; }
+.ui-mode-picker > summary {
+  /* min-width 取最長的那個標籤：寬度跟著模式變的話，切換時整條 bar 會跳一下。 */
+  min-width: 96px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border: 1px solid rgba(100, 172, 205, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 11, 23, 0.76);
+  color: var(--cyan);
+  cursor: pointer;
+  list-style: none;
+  font: 700 9px var(--mono);
+  letter-spacing: 0.06em;
+  /* 滑動換模式：不要讓瀏覽器先把水平位移解讀成捲動／上一頁手勢。 */
+  touch-action: pan-y;
+  user-select: none;
+}
+.ui-mode-picker > summary::-webkit-details-marker { display: none; }
+.ui-mode-picker__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: grid;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(7, 13, 26, 0.98);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.44);
+}
+.ui-mode-picker__menu button {
+  min-width: 140px;
+  min-height: var(--tap, 40px);
+  padding: 0 10px;
+  border: 1px solid rgba(143, 184, 232, 0.13);
+  border-radius: 7px;
+  background: rgba(0, 229, 255, 0.05);
+  color: #b7c9df;
+  cursor: pointer;
+  text-align: left;
+  font: 700 10px var(--mono);
+  letter-spacing: 0.06em;
+}
+.ui-mode-picker__menu button.active { border-color: rgba(0, 229, 255, 0.38); color: var(--cyan); }
 
 /* Independent engineering desktop. It intentionally sits above — and does
    not inherit controls from — the Pixel office and professional reader. */
@@ -71,7 +123,13 @@
 .black-workspace button { padding: 5px 9px; cursor: pointer; }
 .black-workspace button:hover, .black-workspace button.active { border-color: #4fbd9a; color: #bfffd4; background: #123024; }
 .black-workspace select, .black-workspace input { padding: 4px 7px; max-width: 144px; }
-.black-workspace__modes { display: inline-flex; gap: 3px; padding-right: 8px; border-right: 1px solid #263139; }
+/* 黑窗工具列用同一顆 ModeSwitch，但外觀跟著這裡的終端機配色走：拿掉頂欄
+   那個青色外框，按鈕本身已經被 .black-workspace button 統一過了。 */
+.black-workspace .ui-mode-switch { gap: 3px; padding: 0 8px 0 0; border: 0; border-right: 1px solid #263139; border-radius: 0; background: none; }
+.black-workspace .ui-mode-switch button { min-height: 30px; border: 1px solid #263139; border-radius: 6px; background: #11171b; color: #c4d5d0; font: 600 11px var(--mono); letter-spacing: normal; }
+.black-workspace .ui-mode-switch button:hover, .black-workspace .ui-mode-switch button.active { border-color: #4fbd9a; color: #bfffd4; background: #123024; }
+.black-workspace .ui-mode-picker > summary { border-color: #4fbd9a; background: #123024; color: #bfffd4; font: 600 11px var(--mono); letter-spacing: normal; }
+.black-workspace .ui-mode-picker__menu { border-color: #263139; background: #0b0e10; }
 .black-workspace__toolbar .energy-hud { z-index: 5; }.black-workspace__toolbar .energy-hud__summary { min-height: 34px; gap: 10px; padding: 4px 10px; border-color: #263b42; background: #0b1418; }.black-workspace__toolbar .energy-hud__title { color: #55d5dc; }.black-workspace__toolbar .energy-meter { gap: 5px; }.black-workspace__toolbar .energy-meter__track { width: 42px; }.black-workspace__toolbar .energy-hud__cost { display: none; }
 .black-workspace__tabs { display: flex; min-width: 0; flex: 1; gap: 5px; overflow: auto; }
 .black-workspace__tabs button { display: inline-flex; align-items: center; gap: 7px; max-width: 150px; white-space: nowrap; }
@@ -157,6 +215,16 @@
 .black-window__resize--e,.black-window__resize--w { top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }.black-window__resize--e { right: -4px; }.black-window__resize--w { left: -4px; }
 .black-window__resize--ne,.black-window__resize--nw,.black-window__resize--se,.black-window__resize--sw { width: 14px; height: 14px; }.black-window__resize--ne { top:-5px;right:-5px;cursor:nesw-resize; }.black-window__resize--sw { bottom:-5px;left:-5px;cursor:nesw-resize; }.black-window__resize--nw { top:-5px;left:-5px;cursor:nwse-resize; }.black-window__resize--se { bottom:-5px;right:-5px;cursor:nwse-resize; }
 
+/* 黑窗這排比頂欄擠得多（品牌＋模式＋用量＋分頁＋新增／分割＋設定），英文下
+   自然寬度約 1210px：1280 的筆電剛好，再窄就開始裁字。以前是把「Black Window」
+   壓成 65px 硬塞進去——字被切掉還看不出來。改成在這個寬度以下就換成收合的那顆
+   （省 166px），真的還是不夠時讓它換行，而不是把內容推出視窗外裁掉。 */
+@media (max-width: 1250px) {
+  .black-workspace .ui-mode-switch { display: none; }
+  .black-workspace .ui-mode-picker { display: block; }
+  .black-workspace__toolbar { flex-wrap: wrap; }
+}
+
 @media (max-width: 1023px) { .black-workspace__toolbar { max-height: 46vh; overflow-x: hidden; overflow-y: auto; align-items: flex-start; flex-wrap: wrap; }.black-workspace__brand { padding-right: 6px; }.black-workspace__tabs { order: 3; width: 100%; flex-basis: 100%; }.black-workspace__settings { order: 4; width: 100%; overflow-x: auto; border-left: 0; padding-left: 0; padding-bottom: 2px; }.black-workspace__main { grid-template-columns: 1fr; }.black-workspace__rail { display: none; }.black-window { left: 8px !important; top: 8px !important; width: calc(100% - 16px) !important; height: calc(100% - 16px) !important; min-width: 0; }.black-window--minimized { height: 38px !important; min-height: 38px; }.black-window:not(.black-window--active) { display: none; } }
 
 /* Fixed panels escape the compact toolbar's scroll clipping. Keep them in
@@ -188,6 +256,10 @@
     flex-wrap: wrap;
     gap: var(--sp-1);
     padding: calc(var(--safe-t) + var(--sp-1)) var(--sp-2) var(--sp-1);
+    /* 解掉 ≤1023 那段的捲動容器：手機這排只有一列，不需要捲，而只要它是捲動
+       容器就會把模式選單整片裁掉（實測 details 開著、選單有版位，但看不到）。 */
+    max-height: none;
+    overflow: visible;
   }
 
   .black-workspace button,
@@ -199,10 +271,7 @@
   /* 品牌字樣在這個模式沒有功能，收掉把寬度讓給控制項。 */
   .black-workspace__brand { display: none; }
 
-  .black-workspace__modes { flex: 0 0 auto; padding-right: 0; border-right: 0; }
-  /* 兩個字的標籤，10px 內距讀起來才不會擠成一條；分頁改成下拉之後這一排
-     有空間，不需要再把它們壓到 4px。 */
-  .black-workspace__modes button { padding-inline: 10px; }
+  .black-workspace .ui-mode-switch { flex: 0 0 auto; padding-right: 0; border-right: 0; }
 
   /* 分頁下拉：固定一個上限寬度，pane 再多也不會把這排撐開。 */
   .black-workspace__pane-select {

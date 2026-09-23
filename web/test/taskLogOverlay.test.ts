@@ -131,8 +131,9 @@ test("the black window toolbar collapses to a single row on a phone", () => {
   assert.match(blackWindow, /\{!isPhone && <EnergyHud/);
   assert.match(blackWindow, /black-workspace__pane-select/);
   assert.match(blackWindow, /black-workspace__advanced-mobile/);
-  // 模式切換是使用者明確要求一定要留在列上的。
-  assert.match(blackWindow, /className="black-workspace__modes"/);
+  // 模式切換是使用者明確要求一定要留在列上的；跟頂欄共用同一顆 ModeSwitch
+  // （手機收合成一顆、可以左右滑），不要再各自手刻一排按鈕。
+  assert.match(blackWindow, /<ModeSwitch current=\{2\}/);
   assert.doesNotMatch(blackWindow, /\{isPhone && <EnergyHud/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.black-workspace__brand \{ display: none; \}/);
   assert.match(css, /\.black-workspace__settings \{[^}]*flex: 1 1 0;/);

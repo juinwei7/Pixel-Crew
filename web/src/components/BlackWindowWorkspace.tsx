@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { AccountWithAuth, AutoApproveMode, ProviderAuthState, ProviderId, ProviderUsageState } from "../types";
 import { BLACK_WINDOW_FONT_SIZE_MAX, BLACK_WINDOW_FONT_SIZE_MIN, blackWindowAccountValue, blackWindowAgentStartCommand, clampBlackWindowFontSize, clampWindow, dedupeTerminalDestroy, destroyWorkspaceTerminalTabs, keyboardAdjustBlackWindow, loadBlackWindowLayout, mergeDraggedWindowGeometry, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, newBlackWindow, newBlackWorkspace, parseBlackWindowAccountValue, parseBlackWindowLayout, reorderBlackWorkspaces, restartBlackWindow, saveBlackWindowLayout, snapWindow, topmostBlackWindow, workspaceHasRunningAgent, type BlackWindow, type BlackWindowAgentConfig, type BlackWindowKeyboardDirection, type BlackWindowLayout } from "../blackWindowWorkspace";
 import { BlackWindowTerminal, type BlackWindowTerminalHandle } from "./BlackWindowTerminal";
+import { ModeSwitch } from "./ModeSwitch";
 import { EnergyHud } from "./EnergyHud";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { useIsPhone } from "../hooks/useIsPhone";
-import { paneAfterSwipe, swipeStep } from "../blackWindowSwipe";
+import { paneAfterSwipe, swipeStep } from "../swipeGesture";
 import { type ConfirmTone } from "./ConfirmDialog";
 import { type Toast } from "./ToastRegion";
 import { t } from "../i18n";
@@ -294,7 +295,7 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
     return { ...current, selectedId: id, selectedWorkspaceId: target.workspaceId, windows: current.windows.map((entry) => entry.id === id ? { ...entry, z, minimized: false } : entry) };
   });
   /* 手機：在 pane 上左右滑動換 CLI。手勢只在「單指觸控 + 有第二個 pane」
-     時才成立，門檻與方向判斷在 blackWindowSwipe.ts（純函式、可測）。
+     時才成立，門檻與方向判斷在 swipeGesture.ts（純函式、可測）。
      捲 scrollback（垂直）、在終端機裡選字（慢）都不會誤觸。 */
   const swipeRef = useRef<{ pointerId: number; x: number; y: number; at: number } | null>(null);
 
@@ -591,7 +592,9 @@ export function BlackWindowWorkspace({ defaultWorkspacePath, accounts, defaultAu
   return <section className="black-workspace" aria-label={t("黑窗工程工作台")}>
     <header className="black-workspace__toolbar">
       <div className="black-workspace__brand" aria-label="PIXEL CREW"><i />PIXEL CREW</div>
-      <div className="black-workspace__modes" role="group" aria-label={t("工作模式")}><button onClick={onPixel}>{t("像素")}</button><button onClick={onProfessional}>{t("專業")}</button><button className="active">{t("黑窗")}</button></div>
+      {/* 跟頂欄同一顆控制項：手機同樣收合成一顆、可以左右滑（見 ModeSwitch.tsx）。
+          這排在 390px 手機上本來就已經橫向溢出，三顆並排的模式鈕是主因。 */}
+      <ModeSwitch current={2} onSelect={(index) => { if (index === 0) onPixel(); else if (index === 1) onProfessional(); }} />
       {!isPhone && <EnergyHud usage={usage} accountUsage={accountUsage} accounts={accounts} onRefresh={onRefreshUsage} totalCostUsd={totalCostUsd}/>}
       {/* 手機：分頁改成一個下拉。橫向的分頁列在窄螢幕一定會自己佔掉一整排，
           而且 pane 數量一多就要橫捲；下拉固定一個寬度，數量再多也不變。 */}

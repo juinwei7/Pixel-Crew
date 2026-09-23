@@ -326,7 +326,9 @@
     grid-area: bar;
     /* 能量條換到第二列，不再絕對定位浮在場景上蓋住 ••• 選單與日誌標題。 */
     flex-wrap: wrap;
-    gap: var(--sp-1) var(--sp-2);
+    /* 橫向 4px 不是美學選擇：六個控件之間省下的 20px，正好是 320px 螢幕
+       能不能把它們排成一列的差距。每顆自己的點擊區仍然是完整的 --tap。 */
+    gap: var(--sp-1);
     /* 這裡千萬不要寫 min-height: var(--top-bar-h)。那個變數是 TopBar 量完自己
        之後寫回來的，拿它當自己的下限就變成只增不減的棘輪：一旦某個寬度排成
        三排，之後再怎麼變寬都縮不回兩排。bar 這一列本來就是 auto，照內容長。 */
@@ -505,20 +507,23 @@
     margin-left: auto;
   }
 
-  /* 320px 時三個模式鈕 + BOSS + ••• + 健康燈剛好差幾 px 排不下。寬度讓它
-     依內容縮，高度仍然是完整的 --tap。 */
-  .game-root:not(.game-root--focus):not(.game-root--black-window) .top-bar__mode-switch button {
-    min-width: 0;
-    padding-inline: var(--sp-2);
-  }
+  /* 三顆並排的模式鈕在手機會吃掉頂欄六成寬（英文 227px／374px），剩下的控件
+     只好擠到下一排。改成只顯示目前這一個，左右滑或點開來換（ModeSwitch.tsx）。 */
+  .ui-mode-switch { display: none; }
+  .ui-mode-picker { display: block; }
+  .ui-mode-picker > summary { min-height: var(--tap); }
 
   /* 頂欄在手機是兩排：第一排切換工作模式＋交辦，第二排能量＋兩個選單＋健康燈。
      能量條能一起擠進第二排，是因為下面把「WORK ENERGY」「US$」和兩顆選單的
      文字標籤都收掉了——三排要 158px，等於小螢幕的五分之一，太多。 */
+  /* 能量條排在最後而且不接受被壓扁（min-width）：這樣它要嘛整條留在第一列，
+     要嘛整條換到第二列。讓它可以無限縮的話，flex 會先把它榨乾再去換行，結果
+     是健康燈自己孤零零掉到第二列，看起來像壞掉。 */
   .game-root:not(.game-root--focus):not(.game-root--black-window) .energy-hud {
     position: static;
+    order: 9;
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 150px;
     transform: none;
     scale: 1;
   }
@@ -555,10 +560,6 @@
     gap: var(--sp-1);
   }
 
-  /* 供應商名稱換成 data-short 的縮寫：360px 的 Android 上，完整的
-     CLAUDE／CODEX 會把健康燈擠到第三排。完整名稱在展開的用量明細裡。 */
-  .top-bar .energy-meter > span { font-size: 0; }
-  .top-bar .energy-meter > span::after { content: attr(data-short); font: inherit; font-size: 7px; }
 
   /* 展開的用量明細改成貼齊視窗兩側的浮層，而不是從縮放過的角落長出來。 */
   .energy-detail {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { paneAfterSwipe, swipeStep, SWIPE_MIN_DISTANCE, SWIPE_MAX_MS } from "../src/blackWindowSwipe";
+import { paneAfterSwipe, swipeStep, SWIPE_MIN_DISTANCE, SWIPE_MAX_MS } from "../src/swipeGesture";
 
 test("a decisive horizontal flick switches pane", () => {
   assert.equal(swipeStep({ dx: -120, dy: 10, elapsedMs: 180 }), 1);  // 左滑 → 下一個

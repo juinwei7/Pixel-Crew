@@ -608,7 +608,6 @@
    styles/responsive.css；這裡只留「哪些東西在手機上要收進 ••• 選單」。 */
 @media (max-width: 600px) {
   .top-bar__brand { gap: 0; font-size: 0; letter-spacing: 0; }
-  .top-bar__mode-switch button,
   .top-bar > .top-bar__boss,
   .top-bar .top-bar__more > summary,
   .top-bar .top-bar__npc > summary,

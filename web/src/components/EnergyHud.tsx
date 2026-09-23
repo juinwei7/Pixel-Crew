@@ -66,9 +66,7 @@ function ProviderMeter({ provider, state }: { provider: ProviderId; state: Provi
   const remaining = headline(state);
   return (
     <div className={`energy-meter energy-meter--${tone(remaining)}`} title={remaining == null ? t("尚無用量資料") : t("剩餘工作能量 {pct}%", { pct: remaining })}>
-      {/* data-short 給手機用：窄螢幕上頂欄要把兩條用量跟兩個選單擠進同一排，
-          CLAUDE／CODEX 兩個字就佔掉將近 90px。縮寫由 CSS 換上（見 responsive.css）。 */}
-      <span data-short={provider === "claude" ? "CL" : "CX"}>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
+      <span>{provider === "claude" ? "CLAUDE" : "CODEX"}</span>
       <div className="energy-meter__track"><i style={{ width: `${remaining ?? 0}%` }} /></div>
       <strong>{remaining == null ? "--" : `${remaining}%`}</strong>
       {state.loading && <b aria-label={t("更新中")} title={t("背景更新中")}>·</b>}

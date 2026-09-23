@@ -66,7 +66,7 @@ test("top bar exposes an accessible Pixel / Professional / Black Window mode swi
     onProfessionalModeChange={() => {}}
     onBlackWindowModeChange={() => {}}
   />);
-  assert.match(html, /top-bar__mode-switch/);
+  assert.match(html, /ui-mode-switch/);
   assert.match(html, /aria-label="工作模式"/);
   assert.match(html, />像素</);
   assert.match(html, />專業</);
