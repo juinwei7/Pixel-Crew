@@ -97,11 +97,12 @@ test("LocalStore snapshots historical schemas before recording versioned migrati
           { version: 5, name: "add-local-diagnostic-events" },
           { version: 6, name: "add-worker-resume-candidates" },
           { version: 7, name: "preserve-legacy-claude-session-home" },
+          { version: 8, name: "add-schedule-interval-columns" },
         ],
       );
       assert.deepEqual(
         (upgraded.prepare("SELECT status FROM schema_migration_runs ORDER BY version").all() as Array<Record<string, unknown>>).map((row) => ({ ...row })),
-        [{ status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }],
+        [{ status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }, { status: "applied" }],
       );
     } finally {
       upgraded.close();
@@ -121,7 +122,7 @@ test("a fresh LocalStore records its schema versions without creating an empty s
     try {
       assert.deepEqual(
         (db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<Record<string, unknown>>).map((row) => ({ ...row })),
-        [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }],
+        [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }],
       );
     } finally {
       db.close();
