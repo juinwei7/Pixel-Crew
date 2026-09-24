@@ -159,6 +159,7 @@ flowchart LR
 - macOS、Linux，或 64-bit Windows 10 22H2 / Windows 11
 - 至少安裝 Claude Code CLI 或 Codex CLI 其中一種（尚未登入也能啟動，介面會引導完成登入）
 - 一個允許所選 Agent 操作的本機 repository
+- 選用：影片理解需要本機有 `ffmpeg` 與 `ffprobe`（抽影格＋音訊）；貼影片連結另需 `yt-dlp`。三者都可用下表的環境變數指定絕對路徑；沒有安裝時只有影片相關功能不可用，其餘不受影響
 
 先確認 CLI 可用：
 
@@ -254,6 +255,9 @@ npm run dev
 | `PORT` | `8787` | 後端連接埠 |
 | `DB_PATH` | OS 使用者應用資料目錄 | SQLite 資料庫位置；Windows 預設 `%LOCALAPPDATA%\Pixel Crew\cockpit.sqlite` |
 | `AVATAR_DIR` | 與資料庫同層的 `avatars/` | 正規化 NPC PNG 與已驗證 GIF 的本機儲存目錄 |
+| `FFMPEG_BIN` | `ffmpeg` | 選用；影片抽影格與音訊的執行檔，可填絕對路徑 |
+| `FFPROBE_BIN` | `ffprobe` | 選用；探測影片長度的執行檔，可填絕對路徑 |
+| `YTDLP_BIN` | `yt-dlp` | 選用；「貼連結看影片」下載用的執行檔，可填絕對路徑 |
 | `WHISPER_SERVER_BIN` | `whisper-server` | 選用的 `whisper.cpp` 轉寫服務執行檔；可填絕對路徑 |
 | `VOICE_SERVER_PORT` | `8793` | 本機 `whisper-server` 的 loopback 連接埠 |
 

@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Expert advisor: hand the boss desk a rough idea and a senior-advisor model lays out several professional directions — each with the insight an insider would raise, how the work is actually done, the risks you would not have thought of, and an objective you can assign as-is. Pick one and the existing plan/execute/report pipeline takes it from there. A "suggest something" mode proposes directions without an idea to start from, and any direction can be sent to the round-table debate instead of straight to work.
+- Autopilot for boss assignments: when one assignment finishes, the decision model reads what was completed plus the workspace and picks the next objective itself, up to a step limit you set (15 by default).
+- A boss assignment with no suitable department can open a dedicated team for itself — 2 to 4 short-lived members that plan, execute, and disband when the work is done. Off by default; turn it on per assignment.
+- Department discussions are now visible: the NPCs' actual messages and tool calls appear as an activity feed on the mission, expanded while it runs, and readable from the assignment page.
+- The work queue moved to the server, so an NPC drains its own queue when it goes idle — in the background, and a queue made on the phone runs on the computer too.
+- Schedules can repeat every N minutes instead of only once a day.
+- Video understanding: upload a video, or paste a link from a public video site. Frames are extracted with `ffmpeg` and the audio is transcribed with the existing local whisper engine, so the NPC both sees and hears it. Needs `ffmpeg`/`ffprobe` locally, plus `yt-dlp` for links; only the video features are unavailable without them.
+- The top bar shows how many NPCs are running across every workspace. Open it to list them, including the sub-agents running inside an NPC, and jump to one.
+- A message can carry 10 images instead of 4 (30 MiB total).
+
+### Changed
+
+- A simple boss assignment uses 40–70% fewer tokens: it goes straight to the department that will do the work instead of building a summarizing/pruning decision pass first.
+- Assignment status reads "executing" rather than "running", and a busy NPC carries a pulsing dot so background work is visible at a glance.
+
+### Fixed
+
+- The department task log and the assignment and mission lists came back empty on Windows: entries are stored under the workspace path, and the lookup normalized the path (lower-case on Windows) while the write did not — so an exact match never found anything, for every workspace. Both sides now normalize, and existing rows are migrated.
+- Archiving a boss assignment that had used a dedicated department destroyed that assignment's mission records, even though archiving promises to keep every conversation, stage, and report. Disbanding a team now keeps the rows the records point at.
+- A queued message could be lost for good: it was removed from the queue before being sent, so any send failure dropped it along with its attachments. The item now stays queued until the send succeeds.
+- A failed automatic retry after a lost `--resume` conversation could take down every worker at once instead of failing that one turn, and a later unrelated failure in a resumed session could silently discard the whole conversation.
+- The initial snapshot could still send a worker's entire retained history when one long turn pushed the cut past the window, undoing the size work that keeps a phone connection usable.
+- On a phone, scrolling up to read earlier messages no longer yanks you back to the bottom, and a streaming reply no longer makes the thread jump.
+- Reinstalling a provider CLI repeatedly no longer wedges the installer until a reboot: stale lock files and dead process ids are cleared first.
+- A planned restart on Windows no longer reports "the service stopped unexpectedly".
+- A stuck assignment can be deleted.
+
 ## [2.5.0] - 2026-09-23
 
 ### Added
