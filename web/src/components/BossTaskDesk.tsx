@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { AdvisorProposal, AdvisorResult, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
+import type { AdvisorProposal, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
+import { getAdvisorEntry, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 import { writeComposerDraft } from "../hooks/useComposerDraft";
@@ -130,14 +131,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [error, setError] = useState<string | null>(null);
   // 專家顧問（沒方向時的前段）：一個粗略念頭 → 幾個「你可能沒想到」的方向 → 挑一個
   // 就把它的 objective 預填進下面的交辦草稿（沿用 starterTasks 同款「填草稿＋重開」）。
-  const [advisorIdea, setAdvisorIdea] = useState("");
-  const [advisorLoading, setAdvisorLoading] = useState(false);
-  const [advisorError, setAdvisorError] = useState<string | null>(null);
-  const [advisorDomain, setAdvisorDomain] = useState<string | null>(null);
-  const [advisorQuestion, setAdvisorQuestion] = useState<string | null>(null);
-  const [advisorProposals, setAdvisorProposals] = useState<AdvisorProposal[]>([]);
+  // 狀態放在模組級 advisorStore（依 workspace 分鍵），讓生成中／已生成的結果在切到別的
+  // NPC 再回來時不會消失——BossTaskDesk 一離開 Boss Desk 就卸載，本地 state 會被清掉。
+  const advisor = useSyncExternalStore(subscribeAdvisor, () => getAdvisorEntry(workspacePath), () => getAdvisorEntry(workspacePath));
+  const { idea: advisorIdea, loading: advisorLoading, error: advisorError, domain: advisorDomain, question: advisorQuestion, proposals: advisorProposals } = advisor;
+  const setAdvisorIdea = (value: string) => setAdvisorIdeaStore(workspacePath, value);
   // 顧問生成一次要 ~100–115 秒（冷啟＋思考＋4 段內容）：期間跑一個計時＋輪播訊息的動畫，
-  // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。
+  // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。elapsed 由 store 的
+  // startedAt 推導，遠端換頁重掛後仍能接續正確秒數。
   const [advisorElapsed, setAdvisorElapsed] = useState(0);
   // 交辦顧問方向時，用這個 seed 強制 TaskComposer 重掛，讓它重新從 localStorage 讀進 objective
   // ——因為沒有既有任務時 draftKey 前後相同、composer 不會自己重讀（就是「點了沒反應／再點消失」的根因）。
@@ -148,14 +149,13 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const restoredSelection = useRef(false);
 
   useEffect(() => {
-    if (!advisorLoading) return;
-    setAdvisorElapsed(0);
-    const started = performance.now();
-    const timer = window.setInterval(() => {
-      setAdvisorElapsed(Math.floor((performance.now() - started) / 1000));
-    }, 250);
+    if (!advisorLoading || advisor.startedAt == null) { setAdvisorElapsed(0); return; }
+    const startedAt = advisor.startedAt;
+    const tick = () => setAdvisorElapsed(Math.max(0, Math.floor((performance.now() - startedAt) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 250);
     return () => window.clearInterval(timer);
-  }, [advisorLoading]);
+  }, [advisorLoading, advisor.startedAt]);
 
   // 依已過秒數輪播「顧問正在做什麼」的擬真階段訊息（純視覺，不代表真實後端步驟）。
   const advisorPhases = [
@@ -168,34 +168,10 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const advisorPhase = advisorPhases[Math.min(advisorPhases.length - 1, Math.floor(advisorElapsed / 24))];
   const advisorProgress = Math.min(96, Math.round((advisorElapsed / 110) * 100));
 
-  const runAdvisor = async (proactive = false) => {
-    const idea = advisorIdea.trim();
-    // proactive（主動建議）時不需要念頭；一般模式仍要有念頭。
-    if ((!idea && !proactive) || advisorLoading) return;
-    setAdvisorLoading(true);
-    setAdvisorError(null);
-    setAdvisorProposals([]);
-    setAdvisorQuestion(null);
-    setAdvisorDomain(null);
+  const runAdvisor = (proactive = false) => {
+    // 交易在 store 內執行，即使離開 Boss Desk 卸載了本元件也會跑完並保存結果。
     const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
-    try {
-      const data = await apiRequest<{ result: AdvisorResult }>("/api/advisor/propose", {
-        method: "POST",
-        body: { idea, workspacePath, provider: decision?.provider, model: decision?.model, proactive },
-        // 生成方向較慢（冷啟＋思考＋4 段內容），逾時要比 server 的 150s 長，否則前端先斷。
-        timeoutMs: 160_000,
-      });
-      if (data.result.status === "need_focus") {
-        setAdvisorQuestion(data.result.question);
-      } else {
-        setAdvisorProposals(data.result.proposals);
-        setAdvisorDomain(data.result.domain || null);
-      }
-    } catch (advisorFailure) {
-      setAdvisorError((advisorFailure as Error).message);
-    } finally {
-      setAdvisorLoading(false);
-    }
+    void runAdvisorStore(workspacePath, { proactive, provider: decision?.provider, model: decision?.model });
   };
 
   // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
