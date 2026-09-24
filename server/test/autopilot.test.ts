@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AUTOPILOT_DEFAULT_STEPS,
+  AUTOPILOT_MAX_MINUTES,
   AUTOPILOT_MAX_STEPS,
   AUTOPILOT_MIN_STEPS,
   autopilotNextPrompt,
+  clampAutopilotMinutes,
   clampAutopilotSteps,
   explainAutopilotFailure,
   parseAutopilotDecision,
@@ -18,6 +20,18 @@ test("clampAutopilotSteps bounds to [MIN, MAX] and defaults on garbage", () => {
   assert.equal(clampAutopilotSteps(-5), AUTOPILOT_MIN_STEPS);
   assert.equal(clampAutopilotSteps(9999), AUTOPILOT_MAX_STEPS); // can't architect around the ceiling
   assert.equal(clampAutopilotSteps(7.9), 7); // floored
+});
+
+test("clampAutopilotMinutes: blank/garbage/≤0 → null (no cap), positives floored & ceiling-bounded", () => {
+  // 沒填或非法一律「不設時間上限」（回 null），別把 0 或負數變成一個秒殺的截止時刻。
+  assert.equal(clampAutopilotMinutes(undefined), null);
+  assert.equal(clampAutopilotMinutes("30"), null); // non-number → no cap
+  assert.equal(clampAutopilotMinutes(NaN), null);
+  assert.equal(clampAutopilotMinutes(0), null);
+  assert.equal(clampAutopilotMinutes(-10), null);
+  assert.equal(clampAutopilotMinutes(30), 30);
+  assert.equal(clampAutopilotMinutes(45.9), 45); // floored
+  assert.equal(clampAutopilotMinutes(999999), AUTOPILOT_MAX_MINUTES); // 24h ceiling
 });
 
 test("autopilotNextPrompt embeds history, workspace, remaining, and both output forms", () => {

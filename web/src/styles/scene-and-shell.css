@@ -1913,6 +1913,63 @@ body {
 @keyframes autopilot-live { 50% { opacity: 0.6; } }
 @media (prefers-reduced-motion: reduce) { .autopilot-toggle.is-on .autopilot-toggle__label { animation: none; } }
 
+/* 包住開關 + 設定框：讓開關保持靠右，設定框相對它絕對定位彈出。 */
+.autopilot-control { position: relative; margin-left: auto; display: inline-flex; }
+.autopilot-control .autopilot-toggle { margin-left: 0; }
+.autopilot-config {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(70, 176, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(10, 20, 36, 0.97);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.autopilot-config__row { display: flex; flex-direction: column; gap: 4px; }
+.autopilot-config__row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #cdd8e6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.autopilot-config__row input {
+  width: 84px;
+  padding: 4px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 8px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font-size: 12px;
+  text-align: right;
+}
+.autopilot-config__row small { color: #7c8ea3; font-size: 9.5px; }
+.autopilot-config__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.autopilot-config__actions button {
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid rgba(120, 150, 180, 0.3);
+  background: transparent;
+  color: #9fb2c6;
+}
+.autopilot-config__start {
+  border-color: rgba(70, 220, 160, 0.55) !important;
+  background: linear-gradient(90deg, rgba(53, 213, 155, 0.9), rgba(70, 176, 255, 0.9)) !important;
+  color: #06121a !important;
+}
+.autopilot-config__start:disabled { opacity: 0.55; cursor: progress; }
+
 .holo-panel__eyebrow {
   color: rgba(0, 229, 255, 0.68);
   font-family: var(--mono);

@@ -16,6 +16,15 @@ export function clampAutopilotSteps(value: unknown): number {
   return Math.min(AUTOPILOT_MAX_STEPS, Math.max(AUTOPILOT_MIN_STEPS, n));
 }
 
+/** 選填的時間上限（分鐘）：沒填、非數字或 ≤0 都當「不設上限」回 null；上限 24 小時防呆。 */
+export const AUTOPILOT_MAX_MINUTES = 1440;
+export function clampAutopilotMinutes(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const n = Math.floor(value);
+  if (n <= 0) return null;
+  return Math.min(AUTOPILOT_MAX_MINUTES, n);
+}
+
 export type AutopilotDecision =
   | { action: "task"; objective: string; reason: string }
   | { action: "stop"; reason: string };

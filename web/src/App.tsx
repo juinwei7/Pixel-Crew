@@ -425,13 +425,18 @@ export function App() {
   // 老闆交辦自動循環開關（狀態屬於目前工作區；重啟後伺服器預設關）。
   const [autopilotEnabled, setAutopilotEnabled] = useState(false);
   const [autopilotSteps, setAutopilotSteps] = useState(0);
+  const [autopilotDeadline, setAutopilotDeadline] = useState<number | null>(null);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
+  // 開之前的設定框：讓使用者指定步數與（選填）時間上限，任一達到就自動停。
+  const [autopilotConfigOpen, setAutopilotConfigOpen] = useState(false);
+  const [autopilotStepInput, setAutopilotStepInput] = useState("15");
+  const [autopilotMinutesInput, setAutopilotMinutesInput] = useState("");
   // 開 Boss Desk 或切工作區時，向伺服器要一次權威狀態。
   useEffect(() => {
     if (!bossAssignmentOpen || !activeWorkspace) return;
     let cancelled = false;
-    void apiRequest<{ enabled: boolean; stepsRemaining: number }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
-      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); } })
+    void apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
+      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); setAutopilotDeadline(state.deadlineAt ?? null); } })
       .catch(() => { /* 拿不到就維持現狀 */ });
     return () => { cancelled = true; };
   }, [bossAssignmentOpen, activeWorkspace]);
@@ -442,18 +447,23 @@ export function App() {
     if (norm(lastAutopilot.workspacePath) !== norm(activeWorkspace)) return;
     setAutopilotEnabled(lastAutopilot.enabled);
     setAutopilotSteps(lastAutopilot.stepsRemaining);
+    setAutopilotDeadline(lastAutopilot.deadlineAt ?? null);
   }, [lastAutopilot, activeWorkspace]);
-  const toggleAutopilot = useCallback(async (enabled: boolean) => {
+  const toggleAutopilot = useCallback(async (enabled: boolean, opts?: { maxSteps?: number; maxMinutes?: number }) => {
     setAutopilotBusy(true);
     try {
-      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number }>("/api/autopilot", {
+      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null }>("/api/autopilot", {
         method: "POST",
-        body: { workspacePath: activeWorkspace, enabled },
+        body: { workspacePath: activeWorkspace, enabled, maxSteps: opts?.maxSteps, maxMinutes: opts?.maxMinutes },
       });
       setAutopilotEnabled(state.enabled);
       setAutopilotSteps(state.stepsRemaining);
+      setAutopilotDeadline(state.deadlineAt ?? null);
+      const mins = state.deadlineAt ? Math.max(1, Math.round((state.deadlineAt - Date.now()) / 60_000)) : 0;
       notify(enabled
-        ? t("已開啟自動循環：交辦完成後會自己接著往下走（最多 {n} 步），隨時可關。", { n: state.stepsRemaining })
+        ? mins
+          ? t("已開啟自動循環：最多 {n} 步、或約 {m} 分鐘後自動停，隨時可關。", { n: state.stepsRemaining, m: mins })
+          : t("已開啟自動循環：交辦完成後會自己接著往下走（最多 {n} 步），隨時可關。", { n: state.stepsRemaining })
         : t("已關閉自動循環。"), "ok");
     } catch (error) {
       notify(error instanceof Error ? error.message : t("切換自動循環失敗"), "error");
@@ -461,6 +471,18 @@ export function App() {
       setAutopilotBusy(false);
     }
   }, [activeWorkspace, notify]);
+  // 從設定框按「開始」：解析輸入（步數 clamp 1–50、分鐘選填），送出後關框。
+  const startAutopilotFromConfig = useCallback(() => {
+    const steps = Math.min(50, Math.max(1, Math.round(Number(autopilotStepInput) || 15)));
+    const minutesRaw = Number(autopilotMinutesInput);
+    const maxMinutes = autopilotMinutesInput.trim() && Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.round(minutesRaw) : undefined;
+    setAutopilotConfigOpen(false);
+    void toggleAutopilot(true, { maxSteps: steps, maxMinutes });
+  }, [autopilotStepInput, autopilotMinutesInput, toggleAutopilot]);
+  // 開 Boss Desk 狀態變動時關掉設定框，避免殘留。
+  useEffect(() => { if (!bossAssignmentOpen) setAutopilotConfigOpen(false); }, [bossAssignmentOpen]);
+  // 顯示用的剩餘分鐘（每 30 秒重算一次即可，粗略顯示）。
+  const autopilotMinutesLeft = useMemo(() => (autopilotDeadline ? Math.max(0, Math.round((autopilotDeadline - Date.now()) / 60_000)) : null), [autopilotDeadline, autopilotSteps]);
   // In-app stand-in for window.confirm: renders a ConfirmDialog and resolves
   // once the user picks confirm/cancel (or presses Esc, which counts as cancel).
   const confirm = useCallback((message: string, tone: ConfirmTone = "default") => {
@@ -1194,18 +1216,41 @@ export function App() {
         }} />}
         <div className="holo-panel__title">
           <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
-          {bossAssignmentOpen && <button
-            type="button"
-            className={`autopilot-toggle${autopilotEnabled ? " is-on" : ""}`}
-            role="switch"
-            aria-checked={autopilotEnabled}
-            disabled={autopilotBusy}
-            onClick={() => void toggleAutopilot(!autopilotEnabled)}
-            title={t("自動循環：交辦完成後，讓決策模型自己決定下一步並繼續，直到你關掉或撞護欄")}
-          >
-            <span className="autopilot-toggle__track"><span className="autopilot-toggle__thumb" /></span>
-            <span className="autopilot-toggle__label">{autopilotEnabled ? t("自動循環中 · 剩 {n} 步", { n: autopilotSteps }) : t("自動循環")}</span>
-          </button>}
+          {bossAssignmentOpen && <div className="autopilot-control">
+            <button
+              type="button"
+              className={`autopilot-toggle${autopilotEnabled ? " is-on" : ""}`}
+              role="switch"
+              aria-checked={autopilotEnabled}
+              disabled={autopilotBusy}
+              // 開＝彈設定框選步數/時間；關＝一鍵直接關。
+              onClick={() => { if (autopilotEnabled) void toggleAutopilot(false); else setAutopilotConfigOpen((open) => !open); }}
+              title={t("自動循環：交辦完成後，讓決策模型自己決定下一步並繼續，直到你關掉或撞上步數／時間上限")}
+            >
+              <span className="autopilot-toggle__track"><span className="autopilot-toggle__thumb" /></span>
+              <span className="autopilot-toggle__label">{autopilotEnabled
+                ? autopilotMinutesLeft != null
+                  ? t("自動循環中 · 剩 {n} 步 · {m} 分", { n: autopilotSteps, m: autopilotMinutesLeft })
+                  : t("自動循環中 · 剩 {n} 步", { n: autopilotSteps })
+                : t("自動循環")}</span>
+            </button>
+            {autopilotConfigOpen && !autopilotEnabled && <div className="autopilot-config" role="dialog" aria-label={t("自動循環設定")}>
+              <div className="autopilot-config__row">
+                <label>{t("步數上限")}<input type="number" min={1} max={50} value={autopilotStepInput}
+                  onChange={(event) => setAutopilotStepInput(event.target.value)} /></label>
+                <small>{t("做完一張交辦算一步，1–50")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={autopilotMinutesInput}
+                  onChange={(event) => setAutopilotMinutesInput(event.target.value)} /></label>
+                <small>{t("選填；到點會在下一張交辦收工時停")}</small>
+              </div>
+              <div className="autopilot-config__actions">
+                <button type="button" className="autopilot-config__cancel" onClick={() => setAutopilotConfigOpen(false)}>{t("取消")}</button>
+                <button type="button" className="autopilot-config__start" disabled={autopilotBusy} onClick={startAutopilotFromConfig}>{t("開始")}</button>
+              </div>
+            </div>}
+          </div>}
           {taskFocusMode ? <div className="focus-context-switch">
             {!focusPhone && focusKindSwitch}
             {/* 手機換成跟像素模式同一排 chip：<select> 看不出「現在有誰、誰在等你」，

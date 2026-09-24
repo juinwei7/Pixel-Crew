@@ -187,6 +187,7 @@ import {
 import {
   autopilotNextPrompt,
   clampAutopilotSteps,
+  clampAutopilotMinutes,
   parseAutopilotDecision,
   type AutopilotHistoryEntry,
 } from "./autopilot.js";
@@ -4963,7 +4964,7 @@ function advanceBossTasksForMission(missionId: string): void {
 
 // ===== Autopilot（老闆交辦自動循環）==========================================
 // 開關按 workspace 記在記憶體：有值＝開，重啟後全清空（護欄：重啟預設關，無人時不偷跑）。
-type AutopilotState = { stepsRemaining: number; running: boolean };
+type AutopilotState = { stepsRemaining: number; running: boolean; deadlineAt: number | null };
 const autopilotByWorkspace = new Map<string, AutopilotState>();
 // 同一張交辦的終態只觸發一次循環（advanceBossTask 可能被多次呼叫）。
 const autopilotFired = new Set<string>();
@@ -4978,20 +4979,28 @@ function autopilotWorkspaceLabel(workspacePath: string): string {
   return workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath;
 }
 
-function autopilotSnapshot(workspacePath: string): { enabled: boolean; stepsRemaining: number } {
+function autopilotSnapshot(workspacePath: string): { enabled: boolean; stepsRemaining: number; deadlineAt: number | null } {
   const state = autopilotByWorkspace.get(autopilotKey(workspacePath));
-  return { enabled: Boolean(state), stepsRemaining: state?.stepsRemaining ?? 0 };
+  return { enabled: Boolean(state), stepsRemaining: state?.stepsRemaining ?? 0, deadlineAt: state?.deadlineAt ?? null };
 }
 
 function broadcastAutopilot(workspacePath: string): void {
   const snap = autopilotSnapshot(workspacePath);
-  broadcast({ type: "autopilot", workspacePath: autopilotKey(workspacePath), enabled: snap.enabled, stepsRemaining: snap.stepsRemaining });
+  broadcast({ type: "autopilot", workspacePath: autopilotKey(workspacePath), enabled: snap.enabled, stepsRemaining: snap.stepsRemaining, deadlineAt: snap.deadlineAt });
 }
 
-function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number): void {
+function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number, maxMinutes?: number): void {
   const key = autopilotKey(workspacePath);
-  if (enabled) autopilotByWorkspace.set(key, { stepsRemaining: clampAutopilotSteps(maxSteps), running: false });
-  else autopilotByWorkspace.delete(key);
+  if (enabled) {
+    const minutes = clampAutopilotMinutes(maxMinutes);
+    autopilotByWorkspace.set(key, {
+      stepsRemaining: clampAutopilotSteps(maxSteps),
+      running: false,
+      deadlineAt: minutes ? Date.now() + minutes * 60_000 : null,
+    });
+  } else {
+    autopilotByWorkspace.delete(key);
+  }
   broadcastAutopilot(workspacePath);
 }
 
@@ -5063,6 +5072,11 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
     disableAutopilotWithNote(justFinished, t("✅ 自動循環已達步數上限，已自動停止。要繼續就再打開開關。"));
     return;
   }
+  // 時間上限是「軟上限」：在每張交辦收工的節點檢查，過了截止時刻就停在這個邊界（不會攔腰砍斷進行中的交辦）。
+  if (state.deadlineAt && Date.now() >= state.deadlineAt) {
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達時間上限，已自動停止。要繼續就再打開開關。"));
+    return;
+  }
   state.running = true;
   autopilotAdvancing = true;
   try {
@@ -5127,7 +5141,8 @@ app.post("/api/autopilot", (req, res) => {
     if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
   }
   const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
-  setAutopilot(workspacePath, enabled, maxSteps);
+  const maxMinutes = enabled && Number.isFinite(req.body?.maxMinutes) ? Number(req.body.maxMinutes) : undefined;
+  setAutopilot(workspacePath, enabled, maxSteps, maxMinutes);
   res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
 });
 
