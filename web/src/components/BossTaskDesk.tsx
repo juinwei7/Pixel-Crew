@@ -37,6 +37,8 @@ type Props = {
   onDelete(id: string): Promise<{ error?: string }>;
   onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
   onOpenMission?(missionId: string): void;
+  /** 補抓已結束 Mission 的活動流（初始 snapshot 不帶）。 */
+  onLoadActivity?(missionId: string): Promise<void>;
   onCreateDepartment?(): void;
   /** 把一個顧問方向送去圓桌智囊團辯論（3 方兩輪→裁決→host NPC 接手）。 */
   onDebateDirection?(topic: string): void;
@@ -111,7 +113,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onLoadActivity, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -144,7 +146,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [composerSeed, setComposerSeed] = useState(0);
   // 「為此交辦開專屬部門」：預設開＝按交辦直接為目標建一支專屬部門並開跑（省 token、不卡既有部門）；
   // 關掉＝走原本的決策模型路由，交給既有部門。
-  const [dedicatedDepartment, setDedicatedDepartment] = useState(true);
+  // 預設關閉：開著等於每次交辦都另開一支臨時部門，會多一次規劃模型呼叫、繞過 20 人上限、
+  // 把一次性成員寫進 SQLite，而使用者自己建的部門永遠不會被用到。需要時再開。
+  const [dedicatedDepartment, setDedicatedDepartment] = useState(false);
   const restoredSelection = useRef(false);
 
   useEffect(() => {
@@ -546,11 +550,20 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           {selected.stages.map((stage, index) => {
             const stageMission = stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined;
             const stageActive = stageMission?.status === "planning" || stageMission?.status === "executing" || stageMission?.status === "reviewing";
+            const hasStageActivity = (stageMission?.executionEvents?.length ?? 0) > 0;
+            // 同 DepartmentMissionDialog：已結束的 Mission 在初始 snapshot 裡沒有活動流，
+            // 入口還是要留著，展開時再單筆補抓，否則重整後「看部門討論」就消失了。
+            const canLoadStageActivity = !hasStageActivity && Boolean(stageMission) && Boolean(onLoadActivity)
+              && (stageMission!.status === "completed" || stageMission!.status === "failed" || stageMission!.status === "cancelled");
             return <div key={stage.id} className="boss-task-stage">
               <button type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
                 <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stageMission, workers)}</small></span>
               </button>
-              {(stageMission?.executionEvents?.length ?? 0) > 0 && <details className="boss-task-stage__peek" open={stageActive}>
+              {(hasStageActivity || canLoadStageActivity) && <details
+                className="boss-task-stage__peek"
+                open={stageActive}
+                onToggle={(event) => { if (event.currentTarget.open && canLoadStageActivity) void onLoadActivity!(stageMission!.id); }}
+              >
                 <summary>{t("看部門討論")}</summary>
                 <MissionActivityFeed events={stageMission!.executionEvents} workers={workers} limit={40} />
               </details>}

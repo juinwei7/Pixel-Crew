@@ -15,7 +15,7 @@ export type IconName =
   | "globe" | "bell" | "brain" | "key" | "board" | "chart" | "moon" | "box"
   | "link" | "help" | "speech" | "warroom" | "mic" | "gear"
   | "shield" | "refresh" | "warning" | "user" | "building"
-  | "wrench" | "search" | "paperclip" | "image" | "file" | "table" | "archive"
+  | "wrench" | "search" | "paperclip" | "image" | "film" | "file" | "table" | "archive"
   | "code" | "flag" | "target" | "fire" | "running" | "cat" | "lock"
   | "cloud" | "phone" | "thought" | "check" | "trash"
   | "power" | "star" | "clock" | "stop";
@@ -44,6 +44,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   search: <><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 5 5" /></>,
   paperclip: <path d="M20 11 12 19a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />,
   image: <><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m4 18 5-5 4 4 3-3 4 4" /></>,
+  film: <><rect x="3" y="7" width="12" height="10" rx="2" /><path d="m15 11 6-3v8l-6-3Z" /></>,
   file: <><path d="M6 3h8l5 5v13H6Z" /><path d="M14 3v5h5M9 13h6M9 17h6" /></>,
   table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M9 4v16M15 4v16" /></>,
   archive: <><rect x="3" y="4" width="18" height="5" rx="1" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" /><path d="M10 13h4" /></>,

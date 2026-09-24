@@ -26,6 +26,8 @@ type Props = {
   onResolve(id: string, action: "retry" | "retry_execute" | "reassign" | "accept_risk" | "guide", guidance?: string, workerId?: string): Promise<string | null>;
   onResolveApproval?(missionId: string, approvalId: string, decision: ApprovalDecision): Promise<string | null>;
   onAsk?(missionId: string, question: string): Promise<string | null>;
+  /** 補抓已結束 Mission 的活動流（初始 snapshot 不帶，見下面的展開入口）。 */
+  onLoadActivity?(missionId: string): Promise<void>;
   onClose(): void;
   embedded?: boolean;
   focusMode?: boolean;
@@ -55,7 +57,7 @@ export async function prepareAndStartDepartmentMission(
   return onStart(input.bossWorkerId, prepared.data.missionToken);
 }
 
-export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks = [], departmentRecord, onPrepare, onStart, onLoadThread, onMessageDepartment, onResetSessions, resetRequestKey = 0, onCancel, onRetryReview, onApprovePlan, onResolve, onResolveApproval, onAsk, onClose, embedded = false, focusMode = false, missionDetailId = null, focusSection = null, onSelectWorker, composerHost }: Props) {
+export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks = [], departmentRecord, onPrepare, onStart, onLoadThread, onMessageDepartment, onResetSessions, resetRequestKey = 0, onCancel, onRetryReview, onApprovePlan, onResolve, onResolveApproval, onAsk, onLoadActivity, onClose, embedded = false, focusMode = false, missionDetailId = null, focusSection = null, onSelectWorker, composerHost }: Props) {
   const [criteria, setCriteria] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,6 +215,11 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
     // Keep text_delta (the NPCs' actual words) — only drop noisy raw deltas and meta.
     const activityGroups = missionActivityGroups(mission.executionEvents);
     const missionActive = mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing";
+    // 已結束的 Mission 在初始 snapshot 裡不帶 executionEvents（server 的 missionForSnapshot
+    // 為了不把手機的初始 snapshot 撐爆而拿掉），所以這裡即使目前是空的也要留下可展開的入口，
+    // 展開時才單筆補抓。少了它，重新整理後「部門討論與執行」就永遠消失了。
+    const canLoadActivity = activityGroups.length === 0 && Boolean(onLoadActivity)
+      && (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled");
     return <div key={mission.id} className="department-chat__exchange">
       <article className="department-chat__message department-chat__message--owner"><span>{t("老闆")}</span><p>{mission.objective}</p></article>
       <article className={`mission-card mission-card--${mission.status}`}>
@@ -257,8 +264,12 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
           </article>;
         })}
       </section>}
-      {activityGroups.length > 0 && <details className="mission-card__activity" open={missionActive}>
-        <summary>{t("部門討論與執行 · {count}", { count: activityGroups.length })}</summary>
+      {(activityGroups.length > 0 || canLoadActivity) && <details
+        className="mission-card__activity"
+        open={missionActive}
+        onToggle={(event) => { if (event.currentTarget.open && canLoadActivity) void onLoadActivity!(mission.id); }}
+      >
+        <summary>{activityGroups.length > 0 ? t("部門討論與執行 · {count}", { count: activityGroups.length }) : t("部門討論與執行")}</summary>
         <MissionActivityFeed events={mission.executionEvents} workers={workers} />
       </details>}
       {mission.error && <div className="handoff-dialog__error">{mission.error}</div>}

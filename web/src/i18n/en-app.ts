@@ -101,6 +101,8 @@ export const enApp: Record<string, string> = {
   "進行中": "In progress",
   "待命": "Standby",
   "在跑": "running",
+  "影片解析中…完成後自動送出": "Processing video… it will send automatically when done",
+  "處理影片中…（抽畫面＋音訊轉文字）": "Processing video… (extracting frames + transcribing audio)",
   "目前有 {count} 位 NPC 正在執行": "{count} NPC(s) currently running",
   "目前沒有 NPC 在執行，全部待命中": "No NPCs running — all on standby",
   "依部門職責與 NPC 職務自動路由": "Auto-routed by department responsibility and NPC role",

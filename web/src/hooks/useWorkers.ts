@@ -1048,6 +1048,19 @@ export function useWorkers() {
     }
   }, []);
 
+  // 已結束的 Mission 在初始 snapshot 裡不帶 executionEvents（server 的 missionForSnapshot
+  // 為了不把 snapshot 撐爆而拿掉），所以要看它的活動流就得單筆補抓一次。少了這一步，
+  // 「部門討論與執行」那個區塊在重新整理後會永遠是空的。
+  const loadMissionActivity = useCallback(async (id: string): Promise<void> => {
+    try {
+      const data = await apiRequest<{ mission?: DepartmentMission }>(`/api/missions/${id}`);
+      const mission = data?.mission;
+      if (mission) setMissions((prev) => ({ ...prev, [mission.id]: mission }));
+    } catch {
+      // 補抓失敗就維持原狀（活動流空著），不影響其他操作。
+    }
+  }, []);
+
   const missionAction = useCallback(async (id: string, action: "cancel" | "retry-review" | "approve-plan"): Promise<string | null> => {
     try {
       await apiRequest(`/api/missions/${id}/${action}`, { method: "POST" });
@@ -1420,6 +1433,7 @@ export function useWorkers() {
     retryMissionReview: (id: string) => missionAction(id, "retry-review"),
     approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),
     resolveMission,
+    loadMissionActivity,
     switchWorkspace,
     closeWorker,
     renameWorker,
