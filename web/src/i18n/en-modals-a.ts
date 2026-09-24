@@ -137,7 +137,7 @@ export const enModalsA: Record<string, string> = {
   "安裝完成後仍需由你在官方 CLI 完成登入。": "After installation you'll still need to sign in yourself in the official CLI.",
   "完成安裝或登入後按「重新檢查」；系統也會每 3 秒自動確認。": "After finishing installation or sign-in, click \"Recheck\"; the system also auto-checks every 3 seconds.",
   "完成後會自動交回 {name} 並繼續執行，不需要再手動轉交。": "It will automatically hand back to {name} and continue once done — no need to hand it off manually.",
-  "完成的標準": "Definition of done",
+  "完成後會逐條核對這些條件": "These criteria are checked one by one once the work is done",
   "官方安裝說明 ↗": "Official install guide ↗",
   "官方角色": "Official avatar",
   "官方角色選擇": "Official avatar selection",

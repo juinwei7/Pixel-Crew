@@ -172,9 +172,12 @@ import {
   bossTaskDecisionPrompt,
   bossTaskClarificationBudget,
   bossTaskFinalReport,
+  bossTaskAcceptancePrompt,
+  parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   type BossTask,
+  type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
   type BossTaskMessageRole,
 } from "./bossTask.js";
@@ -4885,12 +4888,25 @@ function advanceBossTaskStages(task: BossTask): void {
     }
   }
   if (task.stages.length > 0 && task.stages.every((stage) => stage.status === "completed")) {
-    task.status = "completed";
-    task.error = null;
-    task.completedAt = new Date().toISOString();
-    task.finalReport = bossTaskFinalReport(task);
-    task.messages.push(bossTaskMessage("report", task.finalReport));
-    persistBossTask(task);
+    // 沒有驗收條件可核對：直接產出報告（維持原行為，省一次判斷）。
+    if (task.acceptanceCriteria.length === 0) {
+      task.status = "completed";
+      task.error = null;
+      task.completedAt = new Date().toISOString();
+      task.finalReport = bossTaskFinalReport(task);
+      task.messages.push(bossTaskMessage("report", task.finalReport));
+      persistBossTask(task);
+      return;
+    }
+    // 有驗收條件：先讓決策模型逐條核對各部門報告，再出報告（非同步，避免阻塞推進鏈）。
+    if (!bossTaskFinalizing.has(task.id)) {
+      bossTaskFinalizing.add(task.id);
+      task.status = "synthesizing";
+      task.error = null;
+      task.messages.push(bossTaskMessage("system", t("所有部門已交付，正在逐條核對驗收條件…")));
+      persistBossTask(task);
+      void finalizeBossTaskWithAcceptance(task).finally(() => bossTaskFinalizing.delete(task.id));
+    }
     return;
   }
   if (task.stages.some((stage) => stage.status === "running" || stage.status === "needs_attention")) {
@@ -4954,6 +4970,31 @@ function advanceBossTaskStages(task: BossTask): void {
   task.error = null;
   task.messages.push(bossTaskMessage("system", t("已交給 {department}：{title}", { department: next.departmentName, title: next.title })));
   persistBossTask(task);
+}
+
+// 同一張交辦只跑一次逐條驗收收尾（advanceBossTaskStages 可能被多次呼叫）。
+const bossTaskFinalizing = new Set<string>();
+
+// 所有部門階段完成後的收尾：讓決策模型逐條核對驗收條件，再產出最終報告。
+// 任何失敗（用量受限、模型異常、解析不出）都保底降級為「無法驗證」，絕不讓交辦卡在 synthesizing。
+async function finalizeBossTaskWithAcceptance(task: BossTask): Promise<void> {
+  let verdicts: BossTaskAcceptanceVerdict[] | null = null;
+  try {
+    const prompt = bossTaskAcceptancePrompt(task);
+    const text = (await runDetachedTurn(task.decisionProvider, task.workspacePath, task.decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+    verdicts = parseBossTaskAcceptanceVerdicts(text, task.acceptanceCriteria);
+  } catch (error) {
+    console.error(`[boss-task] acceptance verification failed for task ${task.id}:`, error);
+  }
+  task.status = "completed";
+  task.error = null;
+  task.completedAt = new Date().toISOString();
+  task.finalReport = bossTaskFinalReport(task, verdicts ?? undefined);
+  task.messages.push(bossTaskMessage("report", task.finalReport));
+  persistBossTask(task);
+  // 收尾完成才是真正的終態：此時再觸發自動循環與臨時團隊清理。
+  autopilotHook(task);
+  ephemeralCleanupHook(task);
 }
 
 function advanceBossTasksForMission(missionId: string): void {

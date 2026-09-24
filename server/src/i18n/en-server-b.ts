@@ -110,6 +110,15 @@ export const enServerB: Record<string, string> = {
   "# Boss Task 最終報告\n\n## 交辦目標\n\n{objective}\n\n## {resultHeading}\n\n{sections}\n\n## 驗收與後續\n\n{acceptanceBlock}\n\n{closing}": "# Boss Task Final Report\n\n## Assigned Objective\n\n{objective}\n\n## {resultHeading}\n\n{sections}\n\n## Acceptance & Next Steps\n\n{acceptanceBlock}\n\n{closing}",
   "研究結論": "Research Conclusion",
   "跨部門執行結果": "Cross-Department Execution Result",
+  "所有部門已交付，正在逐條核對驗收條件…": "All departments have delivered; verifying the acceptance criteria one by one…",
+  "以下為原始驗收條件；本次未能自動逐條核對，請自行確認：": "Below are the original acceptance criteria; they could not be auto-verified one by one this time, so please confirm them yourself:",
+  "✅ 達成": "✅ Met",
+  "❌ 未達成": "❌ Not met",
+  "➖ 無法驗證": "➖ Unverifiable",
+  "逐條核對驗收條件：{total} 項中 {met} 項達成、{unmet} 項未達成。": "Acceptance criteria checked one by one: {met} of {total} met, {unmet} not met.",
+  "狀態": "Status",
+  "驗收條件": "Acceptance criteria",
+  "依據": "Evidence",
   // --- dayReport.ts ---
   "（NPC 已離開）": "(NPC has left)",
   // --- workflowDocument.ts ---

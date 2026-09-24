@@ -5,6 +5,8 @@ import {
   bossTaskClarificationBudget,
   bossTaskDecisionPrompt,
   bossTaskFinalReport,
+  bossTaskAcceptancePrompt,
+  parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   type BossTask,
@@ -249,6 +251,100 @@ test("consolidates department reports into one Boss report", () => {
   assert.match(report, /MVP scope/);
   assert.match(report, /All tests passed/);
   assert.match(report, /QA passes/);
+});
+
+function completedTask(criteria: string[], reports: string[]): BossTask {
+  return {
+    id: "task",
+    title: "Build ERP",
+    archivedAt: null,
+    workspacePath: "/repo",
+    decisionProvider: "codex",
+    decisionModel: "gpt",
+    objective: "Build ERP",
+    acceptanceCriteria: criteria,
+    status: "completed",
+    messages: [],
+    stages: reports.map((report, index) => ({
+      id: `s${index}`,
+      departmentId: `d${index}`,
+      departmentName: `Dept ${index}`,
+      title: `Stage ${index}`,
+      objective: "do",
+      acceptanceCriteria: [],
+      dependsOn: [],
+      status: "completed" as const,
+      missionId: `m${index}`,
+      report,
+    })),
+    finalReport: null,
+    error: null,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+    completedAt: "2026-01-01",
+  } satisfies BossTask;
+}
+
+test("acceptance prompt carries every criterion and each stage report for judging", () => {
+  const task = completedTask(["Login works", "Data persists"], ["Auth shipped", "DB wired"]);
+  const prompt = bossTaskAcceptancePrompt(task);
+  assert.match(prompt, /Acceptance Verification/);
+  assert.match(prompt, /Login works/);
+  assert.match(prompt, /Data persists/);
+  assert.match(prompt, /Auth shipped/);
+  assert.match(prompt, /DB wired/);
+  assert.match(prompt, /<boss_task_acceptance>/);
+});
+
+test("verdict parser aligns to criteria order and fills gaps with unverifiable", () => {
+  const criteria = ["A", "B", "C"];
+  const text = `noise <boss_task_acceptance>{"verdicts":[{"index":1,"status":"met","evidence":"done"},{"index":2,"status":"unmet","evidence":"missing"}]}</boss_task_acceptance>`;
+  const verdicts = parseBossTaskAcceptanceVerdicts(text, criteria);
+  assert.equal(verdicts.length, 3);
+  assert.deepEqual(verdicts.map((v) => v.status), ["met", "unmet", "unverifiable"]);
+  assert.equal(verdicts[0].criterion, "A");
+  assert.equal(verdicts[0].evidence, "done");
+  assert.equal(verdicts[2].evidence, "");
+});
+
+test("verdict parser degrades to all-unverifiable when the block is missing or invalid", () => {
+  const criteria = ["A", "B"];
+  for (const text of ["", "no block here", "<boss_task_acceptance>not json</boss_task_acceptance>"]) {
+    const verdicts = parseBossTaskAcceptanceVerdicts(text, criteria);
+    assert.equal(verdicts.length, 2);
+    assert.ok(verdicts.every((v) => v.status === "unverifiable"));
+  }
+  // Out-of-range or bad status values are ignored, not trusted.
+  const bad = parseBossTaskAcceptanceVerdicts(
+    `<boss_task_acceptance>{"verdicts":[{"index":9,"status":"met"},{"index":1,"status":"perfect"}]}</boss_task_acceptance>`,
+    criteria,
+  );
+  assert.deepEqual(bad.map((v) => v.status), ["unverifiable", "unverifiable"]);
+});
+
+test("final report renders a per-criterion verdict table with a met/unmet tally", () => {
+  const task = completedTask(["Login works", "Data persists"], ["report"]);
+  const report = bossTaskFinalReport(task, [
+    { criterion: "Login works", status: "met", evidence: "auth tested" },
+    { criterion: "Data persists", status: "unmet", evidence: "no db" },
+  ]);
+  assert.match(report, /1 項達成/);
+  assert.match(report, /\| --- \| --- \| --- \|/);
+  assert.match(report, /達成.*Login works.*auth tested/);
+  assert.match(report, /未達成.*Data persists.*no db/);
+});
+
+test("final report escapes pipes so criterion text cannot break the table", () => {
+  const task = completedTask(["a | b"], ["report"]);
+  const report = bossTaskFinalReport(task, [{ criterion: "a | b", status: "met", evidence: "" }]);
+  assert.match(report, /a \\\| b/);
+});
+
+test("final report without verdicts stays honest that criteria were not auto-checked", () => {
+  const task = completedTask(["Login works"], ["report"]);
+  const report = bossTaskFinalReport(task);
+  assert.match(report, /未能自動逐條核對/);
+  assert.match(report, /- Login works/);
 });
 
 test("record metadata can be renamed, while only terminal Boss tasks can be archived", () => {

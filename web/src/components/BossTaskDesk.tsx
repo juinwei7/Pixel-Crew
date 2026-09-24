@@ -384,7 +384,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <option value="">{t("自動選擇 Claude / Codex")}</option>
         {decisionModels.map((option) => <option key={`${option.provider}:${option.model}`} value={`${option.provider}:${option.model}`}>{option.label}</option>)}
       </select></label></div></details>
-      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成的標準")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
+      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成後會逐條核對這些條件")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
     </div>}
     onSubmit={submit}
   />;

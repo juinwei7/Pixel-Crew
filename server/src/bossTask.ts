@@ -321,16 +321,112 @@ export function explainBossTaskDecisionFailure(
   return result.ok ? null : result.reason;
 }
 
-export function bossTaskFinalReport(task: BossTask): string {
+// 驗收核對：逐條把「驗收條件」對照各部門交付的報告，標記達成 / 未達成 / 無法驗證。
+export type AcceptanceStatus = "met" | "unmet" | "unverifiable";
+export type BossTaskAcceptanceVerdict = {
+  criterion: string;
+  status: AcceptanceStatus;
+  evidence: string;
+};
+
+// 給決策模型的「逐條驗收」判斷 prompt：只讀各部門的最終報告文字，逐條裁決，不動任何檔案。
+export function bossTaskAcceptancePrompt(task: Pick<BossTask, "objective" | "acceptanceCriteria" | "stages">): string {
+  const criteria = task.acceptanceCriteria.slice(0, 8).map((item) => bounded(item, 500)).filter(Boolean);
+  const reports = task.stages.map((stage, index) => ({
+    stage: index + 1,
+    department: stage.departmentName,
+    title: stage.title,
+    report: bounded(stage.report ?? "", 8_000),
+  }));
+  return `Boss Task · Acceptance Verification
+
+You are the Boss's decision model. The cross-department work is finished. Judge each acceptance criterion strictly against ONLY the department reports below — do not assume, do not use tools, files, shell, MCP, or web access, and do not invent evidence.
+
+For each criterion decide exactly one status:
+- "met": the reports contain concrete evidence the criterion is satisfied.
+- "unmet": the reports show it was NOT satisfied, or explicitly contradict it.
+- "unverifiable": the reports do not contain enough information to decide either way. Prefer this over guessing.
+
+Keep "evidence" to one short sentence quoting or paraphrasing the specific report content that justifies the status (or, for unverifiable, what is missing). Judge only the criteria listed; keep their order and 1-based index.
+
+Original objective: ${JSON.stringify(bounded(task.objective, 2_000))}
+Acceptance criteria (1-based): ${JSON.stringify(criteria)}
+Department reports: ${JSON.stringify(reports)}
+
+Return only this one marked JSON block, no Markdown fences:
+<boss_task_acceptance>
+{"verdicts":[{"index":1,"status":"met|unmet|unverifiable","evidence":"one short sentence"}]}
+</boss_task_acceptance>`;
+}
+
+// 解析逐條驗收結果，對齊 criteria 的順序與長度；缺漏或無效一律退回 unverifiable（永不拋錯，供保底降級）。
+export function parseBossTaskAcceptanceVerdicts(text: string, criteria: string[]): BossTaskAcceptanceVerdict[] {
+  const list = criteria.map((item) => bounded(item, 500)).filter(Boolean);
+  const byIndex = new Map<number, { status: AcceptanceStatus; evidence: string }>();
+  const match = typeof text === "string" ? text.match(/<boss_task_acceptance>\s*([\s\S]*?)\s*<\/boss_task_acceptance>/i) : null;
+  if (match) {
+    try {
+      const raw = JSON.parse(match[1]) as { verdicts?: unknown };
+      const verdicts = Array.isArray(raw?.verdicts) ? raw.verdicts : [];
+      for (const entry of verdicts) {
+        if (!entry || typeof entry !== "object") continue;
+        const row = entry as Record<string, unknown>;
+        const index = typeof row.index === "number" && Number.isFinite(row.index) ? Math.floor(row.index) : NaN;
+        if (!Number.isInteger(index) || index < 1 || index > list.length) continue;
+        const status: AcceptanceStatus = row.status === "met" || row.status === "unmet" ? row.status : "unverifiable";
+        if (!byIndex.has(index)) byIndex.set(index, { status, evidence: bounded(row.evidence, 300) });
+      }
+    } catch {
+      // 解析失敗：整體降級為 unverifiable。
+    }
+  }
+  return list.map((criterion, i) => {
+    const verdict = byIndex.get(i + 1);
+    return { criterion, status: verdict?.status ?? "unverifiable", evidence: verdict?.evidence ?? "" };
+  });
+}
+
+function acceptanceTableCell(text: string): string {
+  const cleaned = text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+  return cleaned || "—";
+}
+
+// 組出報告中的「驗收核對」區塊：有逐條裁決就渲染成表格＋達成統計；無裁決但有條件則誠實標示未能自動核對。
+function bossTaskAcceptanceBlock(task: BossTask, verdicts?: BossTaskAcceptanceVerdict[]): string {
+  if (!task.acceptanceCriteria.length) {
+    return t("- 已由各部門依任務目標完成合理驗證並回報風險。");
+  }
+  if (!verdicts || verdicts.length === 0) {
+    const bullets = task.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n");
+    return `${t("以下為原始驗收條件；本次未能自動逐條核對，請自行確認：")}\n${bullets}`;
+  }
+  const label: Record<AcceptanceStatus, string> = {
+    met: t("✅ 達成"),
+    unmet: t("❌ 未達成"),
+    unverifiable: t("➖ 無法驗證"),
+  };
+  const met = verdicts.filter((verdict) => verdict.status === "met").length;
+  const unmet = verdicts.filter((verdict) => verdict.status === "unmet").length;
+  const summary = t("逐條核對驗收條件：{total} 項中 {met} 項達成、{unmet} 項未達成。", {
+    total: verdicts.length,
+    met,
+    unmet,
+  });
+  const header = `| ${t("狀態")} | ${t("驗收條件")} | ${t("依據")} |\n| --- | --- | --- |`;
+  const rows = verdicts
+    .map((verdict) => `| ${label[verdict.status]} | ${acceptanceTableCell(verdict.criterion)} | ${acceptanceTableCell(verdict.evidence)} |`)
+    .join("\n");
+  return `${summary}\n\n${header}\n${rows}`;
+}
+
+export function bossTaskFinalReport(task: BossTask, verdicts?: BossTaskAcceptanceVerdict[]): string {
   const sections = task.stages.map((stage) => t("## {title} · {departmentName}\n\n{report}", {
     title: stage.title,
     departmentName: stage.departmentName,
     report: stage.report || t("部門未提供報告。"),
   }));
   const research = task.executionMode === "research" || task.stages[0]?.executionMode === "research";
-  const acceptanceBlock = task.acceptanceCriteria.length
-    ? task.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")
-    : t("- 已由各部門依任務目標完成合理驗證並回報風險。");
+  const acceptanceBlock = bossTaskAcceptanceBlock(task, verdicts);
   const closing = research
     ? t("以上為快速研究結果。你可以追問依據，或另行要求深入研究、回測或建立正式交付物。")
     : t("以上為 {count} 個部門階段的彙整結果。你可以在 Boss Task 對話中繼續詢問或交辦修改。", { count: task.stages.length });
