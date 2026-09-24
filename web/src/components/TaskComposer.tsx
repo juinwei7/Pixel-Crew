@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { composerTextareaHeight, insertVoiceTranscript, newClientMessageIdentity, shouldSubmitComposerKey } from "../composerCore";
 import { composerEnterAction } from "../commandInteraction";
+import { Icon } from "./Icon";
 import {
   documentBadge,
   documentPayload,
@@ -100,7 +101,7 @@ export function TaskComposer({
   // 使用者在影片還在解析時按了送出：先記住，等解析完(videoProcessing 轉 false)自動送出，
   // 這樣文字＋影片(影格＋字幕)會「一起」送，不會漏掉影片。
   const [awaitingVideoSend, setAwaitingVideoSend] = useState(false);
-  // 解析中的影片檔名：一放進來就先冒一個「🎬 解析中」佔位晶片(閃爍)，解析完換成正式影片晶片。
+  // 解析中的影片檔名：一放進來就先冒一個「解析中」佔位晶片(閃爍)，解析完換成正式影片晶片。
   const [processingVideoNames, setProcessingVideoNames] = useState<string[]>([]);
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
@@ -272,7 +273,7 @@ export function TaskComposer({
   }
 
   // 貼連結看影片：把公開影片連結送到 server（yt-dlp 下載 → 同一條抽影格＋字幕管線）。
-  // 顯示一個「🎬 解析中」佔位晶片；完成後影格＋字幕就跟上傳影片一樣掛進輸入框。
+  // 顯示一個「解析中」佔位晶片；完成後影格＋字幕就跟上傳影片一樣掛進輸入框。
   async function processVideoLink(url: string) {
     const owner = ownerRef.current;
     const label = t("連結影片");
@@ -473,7 +474,7 @@ export function TaskComposer({
   const submitLabelToShow = canInterrupt ? t("中止") : queueEnabled && busy && hasContent ? t("排隊") : working ? busyLabel : submitLabel;
 
   // 收合影片影格：同一支影片的多張關鍵影格併成「一個」影片晶片（cover=第一格、count=張數），
-  // 其餘圖片各自一個。這樣影片解析完不會冒出一坨縮圖，只看到一個「🎬 影片 · N 格」。
+  // 其餘圖片各自一個。這樣影片解析完不會冒出一坨縮圖，只看到一個「影片 · N 格」。
   const imageChipGroups = (() => {
     const groups: Array<{ key: string; cover: ComposerImage; videoName?: string; count: number }> = [];
     const seen = new Set<string>();
@@ -494,7 +495,7 @@ export function TaskComposer({
   const detectedVideoUrl = detectVideoUrl(draftValue);
   const videoLinkPrompt = detectedVideoUrl && !videoProcessing && !images.some((image) => image.videoName === linkVideoLabel) ? (
     <button type="button" className="composer-video-link" title={detectedVideoUrl} onClick={() => void processVideoLink(detectedVideoUrl)}>
-      🎬 {t("解析這支影片（抓畫面＋字幕）")}
+      <Icon name="film" /> {t("解析這支影片（抓畫面＋字幕）")}
     </button>
   ) : null;
   const attachmentsBlock = hasAttachments && (
@@ -502,7 +503,7 @@ export function TaskComposer({
       {imageChipGroups.map((group, index) => group.videoName
         ? <div className="command-composer__attachment command-composer__attachment--video" key={group.key} title={group.videoName}>
           <img src={group.cover.previewUrl} alt={group.videoName} />
-          <span>🎬 {t("{n} 格", { n: group.count })}</span>
+          <span><Icon name="film" /> {t("{n} 格", { n: group.count })}</span>
           <button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button>
         </div>
         : <div className="command-composer__attachment" key={group.key}>
@@ -511,7 +512,7 @@ export function TaskComposer({
           <button type="button" aria-label={t("移除圖片 {n}", { n: index + 1 })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button>
         </div>)}
       {processingVideoNames.map((name) => <div className="command-composer__attachment command-composer__attachment--video command-composer__attachment--processing" key={`proc:${name}`} title={name}>
-        <span className="command-composer__attachment-proc" aria-hidden="true">🎬</span>
+        <span className="command-composer__attachment-proc" aria-hidden="true"><Icon name="film" /></span>
         <span>{t("解析中")}</span>
       </div>)}
       {documents.map((document, index) => <div className="command-composer__attachment command-composer__attachment--document" key={document.id} title={document.name}>
@@ -522,9 +523,9 @@ export function TaskComposer({
       </div>)}
     </div> : <div className="task-composer__attachments">
       {imageChipGroups.map((group) => group.videoName
-        ? <div key={group.key} className="task-composer__attachment task-composer__attachment--video" title={group.videoName}><img src={group.cover.previewUrl} alt={group.videoName} /><span>🎬 {t("影片 · {n} 格", { n: group.count })}</span><button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button></div>
+        ? <div key={group.key} className="task-composer__attachment task-composer__attachment--video" title={group.videoName}><img src={group.cover.previewUrl} alt={group.videoName} /><span><Icon name="film" /> {t("影片 · {n} 格", { n: group.count })}</span><button type="button" aria-label={t("移除影片")} onClick={() => setImages((current) => current.filter((item) => item.videoName !== group.videoName))}>×</button></div>
         : <div key={group.key} className="task-composer__attachment"><img src={group.cover.previewUrl} alt={group.cover.name} /><span>{group.cover.name}</span><button type="button" aria-label={t("移除 {name}", { name: group.cover.name })} onClick={() => setImages((current) => current.filter((item) => item.id !== group.cover.id))}>×</button></div>)}
-      {processingVideoNames.map((name) => <div key={`proc:${name}`} className="task-composer__attachment task-composer__attachment--video task-composer__attachment--processing" title={name}><span className="task-composer__attachment-proc" aria-hidden="true">🎬</span><span>{t("解析中…")}</span></div>)}
+      {processingVideoNames.map((name) => <div key={`proc:${name}`} className="task-composer__attachment task-composer__attachment--video task-composer__attachment--processing" title={name}><span className="task-composer__attachment-proc" aria-hidden="true"><Icon name="film" /></span><span>{t("解析中…")}</span></div>)}
       {documents.map((document) => <div key={document.id} className="task-composer__attachment task-composer__attachment--file"><strong>{documentBadge(document.name)}</strong><span>{document.name}</span><button type="button" aria-label={t("移除 {name}", { name: document.name })} onClick={() => setDocuments((current) => current.filter((item) => item.id !== document.id))}>×</button></div>)}
     </div>
   );
@@ -612,7 +613,7 @@ export function TaskComposer({
         {leading}
         {textareaField}
         {videoLinkPrompt}
-        {videoProcessing && <span className="command-composer__video-processing" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
+        {videoProcessing && <span className="command-composer__video-processing" role="status">{awaitingVideoSend ? <><Icon name="film" /> {t("影片解析中…完成後自動送出")}</> : t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
         {queueEnabled && (useServerQueue ? serverQueueItems.length > 0 : queued.length > 0) && <QueuePanel
@@ -680,7 +681,7 @@ export function TaskComposer({
       <button className="task-composer__submit" type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
     </div>
     {videoLinkPrompt && <div className="task-composer__video-link-row">{videoLinkPrompt}</div>}
-    {videoProcessing && <div className="task-composer__error" role="status">{awaitingVideoSend ? t("🎬 影片解析中…完成後自動送出") : t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
+    {videoProcessing && <div className="task-composer__error" role="status">{awaitingVideoSend ? <><Icon name="film" /> {t("影片解析中…完成後自動送出")}</> : t("處理影片中…（抽畫面＋音訊轉文字）")}</div>}
     {error && <div className="task-composer__error" role="alert">{error}{failedFiles.length > 0 && <button type="button" onClick={() => void attachFiles(failedFiles)}>{t("重試附件")}</button>}</div>}
   </form>;
 }

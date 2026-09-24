@@ -424,7 +424,7 @@
 .command-composer__attachment { position: relative; width: 62px; height: 62px; overflow: hidden; border: 1px solid rgba(0, 229, 255,.32); border-radius: 10px; background: rgba(5,11,23,.96); box-shadow: 0 10px 28px rgba(0,0,0,.32); pointer-events: auto; }
 .command-composer__attachment img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .command-composer__attachment span { position: absolute; right: 4px; bottom: 4px; padding: 2px 4px; border-radius: 4px; background: rgba(2,7,16,.82); color: #bceefa; font: 700 7px var(--mono); }
-/* 影片附件收合晶片：一支影片＝一個晶片（🎬 N 格），跟散圖區隔。 */
+/* 影片附件收合晶片：一支影片＝一個晶片（影片 · N 格），跟散圖區隔。 */
 .command-composer__attachment--video, .task-composer__attachment--video { border-color: rgba(255,146,220,.5); }
 .command-composer__attachment--video span, .task-composer__attachment--video span { background: rgba(60,10,45,.86); color: #ffc6ec; }
 /* 影片解析中的佔位晶片：閃爍表示處理中，解析完換成正式影片晶片。 */

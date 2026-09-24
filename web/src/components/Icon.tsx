@@ -18,7 +18,7 @@ export type IconName =
   | "wrench" | "search" | "paperclip" | "image" | "file" | "table" | "archive"
   | "code" | "flag" | "target" | "fire" | "running" | "cat" | "lock"
   | "cloud" | "phone" | "thought" | "check" | "trash"
-  | "power" | "star" | "clock" | "stop";
+  | "power" | "star" | "clock" | "stop" | "film";
 
 const PATHS: Record<IconName, JSX.Element> = {
   globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" /></>,
@@ -63,6 +63,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   star: <path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.2L12 17.4 6.4 20.3l1.1-6.2L3 9.7l6.2-.9Z" />,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+  film: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m10 9 5 3-5 3Z" /></>,
 };
 
 type Props = {

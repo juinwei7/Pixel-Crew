@@ -27,7 +27,7 @@ export function isVideoFile(file: File): boolean {
   return SUPPORTED_VIDEO_EXTENSIONS.has(ext);
 }
 
-// 貼連結看影片：認得常見影片平台的網址，讓輸入框冒出「🎬 解析這支影片」按鈕（yt-dlp 支援
+// 貼連結看影片：認得常見影片平台的網址，讓輸入框冒出「解析這支影片」按鈕（yt-dlp 支援
 // 上千站，這裡只列最常見的幾家做自動偵測；其餘站點仍可由 server 端下載，只是不自動提示）。
 const VIDEO_URL_HOSTS = /(?:^|\.)(?:youtube\.com|youtu\.be|youtube-nocookie\.com|tiktok\.com|douyin\.com|iesdouyin\.com|bilibili\.com|b23\.tv|vimeo\.com|facebook\.com|fb\.watch|instagram\.com|twitter\.com|x\.com|twitch\.tv|dailymotion\.com|nicovideo\.jp|kuaishou\.com)$/i;
 export function detectVideoUrl(text: string): string | null {

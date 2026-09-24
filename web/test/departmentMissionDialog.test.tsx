@@ -56,7 +56,7 @@ test("renders same-department Mission progress, assignees, review result, and re
   assert.match(html, /Old review/);
   assert.match(html, /這項工作需要你的核准/);
   assert.match(html, /本次任務都允許/);
-  assert.match(html, /任務執行紀錄 · 2/);
+  assert.match(html, /部門討論與執行 · 2/);
   assert.match(html, /tool-row__name">list</);
   assert.match(html, /MCP·issues/);
   assert.match(html, /等待核准：更新 issue/);
@@ -85,7 +85,7 @@ test("collapses consecutive tool calls from the same NPC into one grouped activi
     onPrepare={async () => ({ error: "unused" })} onStart={noopAction}
     onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction} onResolveApproval={noopAction} onClose={() => undefined}
   />);
-  assert.match(html, /任務執行紀錄 · 4/);
+  assert.match(html, /部門討論與執行 · 1/);
   assert.match(html, /tool-group__summary/);
   assert.match(html, />2 項</);
   const builderNameCount = (html.match(/mission-activity-row__who">Builder</g) ?? []).length;
