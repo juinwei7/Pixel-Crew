@@ -1287,7 +1287,15 @@ summary:focus-visible,
   .boss-task-desk__controls { width: 100%; }
   .boss-task-desk__controls select { min-width: 0; flex: 1; }
   .boss-task-composer__setup label > span { display: none; }
-  .boss-task-composer__setup details > div { right: -1px; }
+  /* 手機：展開面板改走行內流、佔滿整行，不再絕對定位漂浮——否則錨定在畫面中段按鈕右緣、
+     往左展開最寬達 calc(100vw-64px) 會把左半截推出畫面左緣被切掉（跑版）。 */
+  .boss-task-composer__setup details[open] { flex: 1 1 100%; }
+  .boss-task-composer__setup details > div {
+    position: static;
+    width: auto;
+    margin-top: 6px;
+    box-shadow: none;
+  }
 }
 .mission-workspace { min-height: 0; flex: 1; overflow-y: auto; scrollbar-gutter: stable; }
 .mission-dialog__card--embedded { display: flex; min-height: 100%; width: auto; max-height: none; flex-direction: column; overflow: visible; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
