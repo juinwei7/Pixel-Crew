@@ -78,7 +78,8 @@ export function expertAdvisorPrompt(input: {
     ? `\n- For THIS run, bias your exploration toward this angle so repeated runs surface genuinely different territory: ${JSON.stringify(varietyHint)}. Deliberately AVOID the most obvious, generic, first-thing-everyone-suggests directions; prefer fresh, specific, non-repetitive ideas.`
     : "";
   const domainRule = proactive
-    ? `- Infer the domain/theme from the owner's workspace context. In this proactive mode ALWAYS propose — never return need_focus.${varietyRule}`
+    ? `- Infer the domain/theme from the owner's workspace context. In this proactive mode ALWAYS propose — never return need_focus.
+- If the workspace gives no clear domain signal, do NOT invent one narrow domain and fill the list with variations of it (that makes every run look the same). Each proposal must come from a GENUINELY DIFFERENT field, so the list spans diverse territory — pick whatever fits across unrelated areas (e.g. software/automation, content, operations, finance, health, education, hardware, services) rather than several angles on one guessed niche. Set the top-level "domain" to a short label describing that breadth (for example "跨領域高槓桿方向"), not a single niche you guessed.${varietyRule}`
     : `- First infer the domain of the idea. If the idea is so empty or generic that you cannot infer a domain OR cannot produce genuinely useful, non-obvious directions, return exactly one focusing question instead (need_focus). Prefer to propose; only ask when proposing would be guesswork.`;
   const langRule = proactive
     ? `- Write every user-facing field in Traditional Chinese unless the workspace context clearly indicates another language.`

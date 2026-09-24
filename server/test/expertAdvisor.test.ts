@@ -40,6 +40,20 @@ test("prompt clamps the proposal ceiling into a sane range", () => {
   assert.match(expertAdvisorPrompt({ idea: "x", workspacePath: "/r" }), new RegExp(`up to ${ADVISOR_MAX_PROPOSALS} DISTINCT`));
 });
 
+test("proactive mode with no domain signal demands genuinely different fields, not variants of one guessed niche", () => {
+  // Root cause of the "全是米線" repetition: an uninformative workspace (e.g. one
+  // literally named 測試) gives no domain signal, so the model would anchor on a
+  // single fabricated niche and only vary the angle within it. Proactive mode must
+  // instead force each proposal into a different field.
+  const prompt = expertAdvisorPrompt({ idea: "", workspacePath: "/c/users/victo/desktop/測試", proactive: true });
+  assert.match(prompt, /ALWAYS propose/);
+  assert.match(prompt, /GENUINELY DIFFERENT field/);
+  assert.match(prompt, /do NOT invent one narrow domain/i);
+  // The owner-idea path (real idea, non-proactive) stays domain-focused — no breadth mandate.
+  const focused = expertAdvisorPrompt({ idea: "我想用 AI 做量化交易", workspacePath: "/repo" });
+  assert.doesNotMatch(focused, /GENUINELY DIFFERENT field/);
+});
+
 test("parses a well-formed proposals block", () => {
   const result = parseAdvisorResult(proposalsBlock([validProposal]));
   assert.ok(result && result.status === "proposals");
