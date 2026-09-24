@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { snapshotHistory, SNAPSHOT_MAX_EVENTS, SNAPSHOT_MIN_TURNS } from "../src/snapshotHistory.js";
+import { snapshotHistory, SNAPSHOT_HARD_MAX_EVENTS, SNAPSHOT_MAX_EVENTS, SNAPSHOT_MIN_TURNS } from "../src/snapshotHistory.js";
 import type { RunnerEvent } from "../src/claudeRunner.js";
 
 // 造一個「turn」：user_message 開頭，接著 n 筆 text_delta。
@@ -56,4 +56,21 @@ test("完全沒有 user_message（只有孤兒事件）時保留尾段、不爆�
   for (let i = 0; i < SNAPSHOT_MAX_EVENTS + 300; i++) history.push({ type: "text_delta", text: "x" } as RunnerEvent);
   const out = snapshotHistory(history);
   assert.equal(out.length, SNAPSHOT_MAX_EVENTS);
+});
+
+// 核心回歸：上限要真的是上限。舊版 start = min(視窗邊界, 最近 N turn 起點) 可以退回 index 0，
+// 於是整段歷史（最多 MAX_HISTORY=2000 筆）照送，初始 snapshot 又脹回十幾 MB。
+test("退到 turn 邊界也不得超過硬上限", () => {
+  // 兩個各自遠大於視窗的 turn：舊版會退到第一個 turn 的起點＝整段都送。
+  const history = [...turn("a", SNAPSHOT_HARD_MAX_EVENTS), ...turn("b", SNAPSHOT_HARD_MAX_EVENTS)];
+  const out = snapshotHistory(history);
+  assert.ok(out.length <= SNAPSHOT_HARD_MAX_EVENTS, `不得超過硬上限，實際 ${out.length}`);
+  assert.equal(out[0].type, "user_message", "切點仍要落在 turn 開頭，日誌才不空白");
+});
+
+test("單一超長 turn 超過硬上限時，保留 user_message ＋尾段（有界且不空白）", () => {
+  const history = turn("huge", SNAPSHOT_HARD_MAX_EVENTS + 500);
+  const out = snapshotHistory(history);
+  assert.ok(out.length <= SNAPSHOT_HARD_MAX_EVENTS, `不得超過硬上限，實際 ${out.length}`);
+  assert.equal(out[0].type, "user_message", "開頭必須是 user_message，否則前端整個日誌空白");
 });

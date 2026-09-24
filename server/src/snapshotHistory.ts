@@ -9,6 +9,11 @@ export const SNAPSHOT_MAX_FIELD_CHARS = 6_000; // 單一欄位序列化長度上
 // 裁切時「每個 NPC 獨立」至少保留最近這麼多個完整 turn（＝使用者說的「最新的兩個結果」）。
 // 保證切點一定落在某個 user_message 上，前端永遠重建得出 turn、日誌不會整個變空白。
 export const SNAPSHOT_MIN_TURNS = 2;
+// 硬上限。SNAPSHOT_MAX_EVENTS 是「視窗」，但為了不從半截 turn 開頭切，起點會往前退到
+// turn 邊界，所以實際筆數會溢出視窗——溢出到「整段歷史照送」就等於上限失效（單一超長
+// turn 或連續幾個長 turn 都會走到那裡），初始 snapshot 又會回到十幾 MB。這是那個往前退
+// 的天花板：超過就連「保留 SNAPSHOT_MIN_TURNS 個完整 turn」都要讓步。
+export const SNAPSHOT_HARD_MAX_EVENTS = SNAPSHOT_MAX_EVENTS * 2;
 
 function clampField(value: unknown): unknown {
   let s: string;
@@ -65,6 +70,20 @@ export function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
     // 單一超長 turn 的孤兒（alignedInWindow 為 undefined）時退回最近 N 個 turn 的起點。
     // 兩個候選都是 user_message 的索引，所以 start 一定是 turn 邊界，日誌不會空白。
     start = alignedInWindow === undefined ? minTurnsStart : Math.min(alignedInWindow, minTurnsStart);
+    if (n - start > SNAPSHOT_HARD_MAX_EVENTS) {
+      // 退到 turn 邊界後還是爆掉硬上限。先試「能塞進上限的最早 turn 邊界」（仍是完整 turn）。
+      const fitting = turnStarts.find((i) => n - i <= SNAPSHOT_HARD_MAX_EVENTS);
+      if (fitting !== undefined) {
+        start = fitting;
+      } else {
+        // 連最後一個 turn 自己都超過上限（單一超長 turn）。此時「完整 turn」和「有界」不可
+        // 兼得，取前端真正需要的那一半：turn 的 user_message ＋該 turn 的尾段。前端只要看到
+        // user_message 就開得出 turn，中間少幾筆不會讓日誌整片空白（見上面的說明）。
+        const lastTurnStart = turnStarts[turnStarts.length - 1];
+        const tail = history.slice(n - (SNAPSHOT_HARD_MAX_EVENTS - 1));
+        return [history[lastTurnStart], ...tail].map(trimEventForSnapshot);
+      }
+    }
   }
   return history.slice(start).map(trimEventForSnapshot);
 }

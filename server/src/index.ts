@@ -527,11 +527,32 @@ function requireWorker(res: Response, id: string): Worker | null {
   }
   return worker;
 }
+// 刪掉短命 worker 的資料列，但保留還被部門 Mission 當 boss 引用的那一列：
+// department_missions.boss_worker_id 是 ON DELETE CASCADE，刪了會把封存的 Mission
+// 紀錄一起銷毀，而交辦頁明說「封存會保留全部對話、部門階段與報告」。留下來的列帶著
+// ephemeral_kind 標記，不會被還原成 NPC，也不佔滿編名額——它只是封存紀錄的外鍵錨點。
+function deleteEphemeralWorkerRow(workerId: string): void {
+  if (store.countMissionsByBossWorker(workerId) > 0) return;
+  store.deleteWorker(workerId);
+}
 // 清掉上次中斷（例如崩潰/重啟在任務中途）留下的臨時團隊：短命部門用完即散，重啟不該殘留。
-// 靠名稱前綴認出，連同其成員一起從 SQLite 刪掉，才不會變殭屍部門堆積。
-const staleEphemeralDepartments = store.listDepartments().filter((department) => department.name.startsWith(EPHEMERAL_DEPT_PREFIX));
+// 認法是成員持久化的 ephemeral_kind，不是部門名稱——名稱是使用者可改的顯示字串，拿它
+// 當協定一改名就失效（見 warroom.ts 的同一個教訓）。名稱前綴只留作舊 DB 的相容退路。
+const persistedWorkersAtStartup = store.loadWorkers(0);
+const ephemeralWorkerIdsByDepartment = new Map<string, string[]>();
+for (const worker of persistedWorkersAtStartup) {
+  if (!worker.ephemeralKind || !worker.departmentId) continue;
+  ephemeralWorkerIdsByDepartment.set(
+    worker.departmentId,
+    [...(ephemeralWorkerIdsByDepartment.get(worker.departmentId) ?? []), worker.id],
+  );
+}
+const staleEphemeralDepartments = store.listDepartments().filter((department) =>
+  ephemeralWorkerIdsByDepartment.has(department.id) || department.name.startsWith(EPHEMERAL_DEPT_PREFIX));
 for (const department of staleEphemeralDepartments) {
-  for (const member of store.loadWorkers(0).filter((worker) => worker.departmentId === department.id)) store.deleteWorker(member.id);
+  const memberIds = ephemeralWorkerIdsByDepartment.get(department.id)
+    ?? persistedWorkersAtStartup.filter((worker) => worker.departmentId === department.id).map((worker) => worker.id);
+  for (const workerId of memberIds) deleteEphemeralWorkerRow(workerId);
   store.deleteDepartment(department.id);
 }
 if (staleEphemeralDepartments.length > 0) {
@@ -848,6 +869,7 @@ function workerPersistenceRecord(worker: Worker): Omit<PersistedWorker, "events"
     departmentId: worker.departmentId,
     accountId: worker.accountId,
     claudeHomeMode: worker.claudeHomeMode,
+    ephemeralKind: worker.ephemeralKind,
     ...session,
   };
 }
@@ -2490,7 +2512,8 @@ let snapshotBudgetWarnedAt = 0;
 
 // 初始 snapshot 瘦身：已結束（completed/failed/cancelled）的 Mission 去掉 executionEvents。
 // 那是初始 snapshot 肥大的主因（實測 16MB，完成的量化 mission 單筆可達 1~2.5MB）；完成的
-// Mission 的活動流前端會在你點開時用 GET /api/missions/:id 單筆抓，snapshot 不必帶。進行中的
+// Mission 的活動流前端會在你點開「部門討論與執行」時用 GET /api/missions/:id 單筆補抓
+// （web 的 useWorkers.loadMissionActivity），snapshot 不必帶。進行中的
 // Mission 保留事件（活著要看），只把單筆超大的工具輸出/輸入裁短。
 function missionForSnapshot(mission: DepartmentMission): DepartmentMission {
   if (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled") {
@@ -4659,7 +4682,7 @@ function disbandEphemeralDepartment(departmentId: string): void {
     if (!worker) continue;
     try { worker.runner.stop(); } catch { /* already stopped */ }
     workers.delete(workerId);
-    store.deleteWorker(workerId);
+    deleteEphemeralWorkerRow(workerId);
     deleteExtras(workerId);
     clearWorkerHookState(workerId);
     broadcast({ type: "worker_removed", workerId });
@@ -6744,12 +6767,18 @@ function workerAcceptsUserSend(worker: Worker): boolean {
     && !missionInProgress(worker.id);
 }
 
+// 送出失敗時佇列項目要留著（不能先刪再送，失敗就永久消失），但 record() 遇到 error
+// 事件自己會再排一次 drain，所以同一則必須限制重試次數，否則會變成每個 tick 重試一次
+// 的無窮迴圈。連續失敗這麼多次才放棄並移除。
+const QUEUE_MAX_SEND_ATTEMPTS = 3;
+const queueSendAttempts = new Map<string, { itemId: string; attempts: number }>();
+
 // worker 空閒時把佇列最前面一則送出。預算超標就留著（下次再試），不丟。
 function drainWorkerQueue(worker: Worker): void {
   if (!workerAcceptsUserSend(worker)) return;
   const budget = getExtras(worker.id).dailyBudgetUsd;
   if (budget != null && todayCostUsd(worker.id) >= budget) return;
-  const next = store.dequeueFirstQueued(worker.id);
+  const next = store.peekFirstQueued(worker.id);
   if (!next) return;
   let images: ReturnType<typeof parseMessageImages> = [];
   let documents: ReturnType<typeof parseMessageDocuments> = [];
@@ -6758,14 +6787,27 @@ function drainWorkerQueue(worker: Worker): void {
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
-  record(worker, { type: "user_message", text });
   try {
     worker.runner.send(next.message, images, documents);
-    limitTurnText.set(worker.id, text);
-    broadcast({ type: "worker_status", workerId: worker.id, busy: true });
   } catch (error) {
+    const previous = queueSendAttempts.get(worker.id);
+    const attempts = previous?.itemId === next.id ? previous.attempts + 1 : 1;
+    const givingUp = attempts >= QUEUE_MAX_SEND_ATTEMPTS;
+    if (givingUp) {
+      queueSendAttempts.delete(worker.id);
+      store.removeQueueItem(worker.id, next.id);
+    } else {
+      queueSendAttempts.set(worker.id, { itemId: next.id, attempts });
+    }
     record(worker, { type: "error", message: error instanceof Error ? error.message : t("無法送出排隊訊息") });
+    if (givingUp) broadcastQueue(worker.id);
+    return;
   }
+  queueSendAttempts.delete(worker.id);
+  store.removeQueueItem(worker.id, next.id);
+  record(worker, { type: "user_message", text });
+  limitTurnText.set(worker.id, text);
+  broadcast({ type: "worker_status", workerId: worker.id, busy: true });
   broadcastQueue(worker.id);
 }
 
@@ -8149,7 +8191,9 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
 });
 
 for (const savedWorker of store.loadWorkers(MAX_HISTORY)
-  // 同上：資料列只有名字，舊版殘骸靠字首認。
+  // 短命工不還原成 NPC——包含為了 Mission 外鍵留下的封存錨點列，它們也不該佔滿編名額。
+  .filter((worker) => !worker.ephemeralKind)
+  // 同上：舊資料列沒有 ephemeral_kind，只有名字，舊版殘骸靠字首認。
   .filter((worker) => !isLegacyEphemeralWorkerName(worker.name))
   .slice(0, MAX_WORKERS)) {
   createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker, null, null, { warmup: true });

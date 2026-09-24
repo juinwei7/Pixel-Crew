@@ -423,7 +423,12 @@ export class ClaudeSession implements AgentSession {
     // Claude CLI 對 --resume 一個不存在的對話，會印一行純文字 "No conversation
     // found with session ID: ..." 然後非零退出（不是 JSON），可能落在 stdout 或
     // stderr。任一處看到就記下，讓 fail() 判斷是否要自動改開新對話重跑。
+    // 這個標記（和 stderrBuf）活的是「整個 spawn」，但「清成新對話重跑」只有在
+    // resume 之後還沒跑完任何一回合時才成立：resume 成功後又跑了幾回合，晚一點
+    // 因為無關原因（斷網、CLI crash）失敗時若還吃這條路徑，會把整段對話靜默丟掉。
+    // 所以記下 spawn 當下的回合數當閘門——任何一回合完成都會讓它前進。
     let sawMissingConversation = false;
+    const turnsAtSpawn = this.completedTurns;
     rl.on("line", (line) => {
       if (gen !== this.generation || !line.trim()) return;
       let parsed: any;
@@ -482,6 +487,7 @@ export class ClaudeSession implements AgentSession {
       if (
         this.busy &&
         this.resumedThisSpawn &&
+        this.completedTurns === turnsAtSpawn &&
         this.lastUserSend &&
         (sawMissingConversation || message.includes("No conversation found"))
       ) {
@@ -491,7 +497,19 @@ export class ClaudeSession implements AgentSession {
         this.claudeSessionId = randomUUID();
         this.busy = false;                // send() 會自行重設 busy 並重新暫存輸入
         this.cleanupInputDocuments();
-        this.send(retry.text, retry.images, retry.documents, retry.options);
+        // send() 失敗會 rethrow（暫存附件失敗、claude binary 不見導致 spawn 失敗…），
+        // 而 fail() 只從 child 的 error/close handler 進來，例外逃出去就是
+        // uncaughtException，會拖垮所有 worker 而不只這一個（同上面 stdin EPIPE 的
+        // 理由）。所以重試自己失敗時退回正常的「這回合失敗」路徑。
+        try {
+          this.send(retry.text, retry.images, retry.documents, retry.options);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.error(`[claudeRunner] 自動重開新對話失敗：${reason}`);
+          this.busy = false;
+          this.cleanupInputDocuments();
+          this.onEvent({ type: "error", message: reason });
+        }
         return;
       }
       if (this.busy) {
