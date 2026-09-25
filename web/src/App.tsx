@@ -4,6 +4,7 @@ import { topDismissibleLayer, useKeyboardShortcuts } from "./hooks/useKeyboardSh
 import { useUiPreferences, clampTaskLogWidth, clampTaskLogHeight, isTaskLogVisible, shouldAutoCollapseTaskLog } from "./uiPreferences";
 import { GameCanvas } from "./components/GameCanvas";
 import { QuestLog } from "./components/QuestLog";
+import { MissionActivityFeed } from "./components/MissionActivityFeed";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
 import { roomName } from "./workspace";
@@ -31,7 +32,7 @@ import { discussionSubmission, toggleDiscussionMode, type DiscussionMode } from 
 import { roundtablePrompt } from "./roundtablePrompt";
 import { apiRequest } from "./api";
 import { t } from "./i18n";
-import type { ApprovalDecision, WorkerState } from "./types";
+import type { ApprovalDecision, DepartmentMission, WorkerState } from "./types";
 
 import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
 import { latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnread } from "./crew";
@@ -89,7 +90,7 @@ export function App() {
     workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
-    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
     send, enqueueCommand, removeQueued, reorderQueued, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -319,6 +320,12 @@ export function App() {
   const roundtableIdSet = useMemo(() => new Set(roundtableWorkerIds), [roundtableWorkerIds]);
   const active = activeId ? workers[activeId] : undefined;
   const selectedDepartment = selectedDepartmentId ? departments[selectedDepartmentId] : undefined;
+  // 點交辦房門牌會開部門面板並關掉 BOSS 頁——若選中的正是交辦部門，像素場景必須留在
+  // 交辦房，不然人會被莫名丟回主辦公室（成員任一位是 dedicated 短命工＝交辦部門）。
+  const selectedDepartmentIsBossCrew = useMemo(
+    () => selectedDepartmentId != null && workerList.some((worker) => worker.departmentId === selectedDepartmentId && worker.ephemeralKind === "dedicated"),
+    [selectedDepartmentId, workerList],
+  );
   const selectedDepartmentLead = selectedDepartment
     ? workers[selectedDepartment.leadWorkerId] ?? selectedDepartment.memberWorkerIds.map((id) => workers[id]).find(Boolean)
     : undefined;
@@ -393,6 +400,55 @@ export function App() {
       command: `${worker.name} · ${turn.command}`,
     })));
   }, [active?.turns, taskSearch, taskSearchScope, workerList]);
+  // 老闆交辦/部門任務裡，NPC 是被「任務」調去幹活的，執行過程掛在任務上，本來只在
+  // 老闆任務日誌看得到、點 NPC 本人卻是空的。這裡找出目前這個 NPC 正在參與的進行中任務，
+  // 讓它自己的活動頁也看得到（濾出屬於它的事件），並提供一鍵跳到完整任務。
+  const activeWorkerMission = useMemo<DepartmentMission | undefined>(() => {
+    const wid = active?.id;
+    if (!wid || taskSearch.trim()) return undefined;
+    const isActive = (status: string) => ["planning", "executing", "reviewing", "needs_attention"].includes(status);
+    return Object.values(missions)
+      .filter((mission) => isActive(mission.status) && (
+        mission.bossWorkerId === wid
+        || mission.steps.some((step) => step.assigneeWorkerId === wid)
+        || (mission.executionEvents ?? []).some((event) => event.workerId === wid)
+        // planning 階段 steps/events 都還沒有這個成員——用部門歸屬兜底，
+        // 點交辦房裡任何隊員都能看到任務卡，而不是一片空白。
+        || (active?.departmentId != null && mission.departmentId === active.departmentId)
+      ))
+      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+  }, [active?.id, active?.departmentId, missions, taskSearch]);
+  const openWorkerMission = useCallback((mission: DepartmentMission) => {
+    if (mission.origin === "boss" || !mission.departmentId) {
+      setBossAssignmentOpen(true);
+      setSelectedDepartmentId(null);
+    } else {
+      setBossAssignmentOpen(false);
+      setSelectedDepartmentId(mission.departmentId);
+    }
+    setBossMissionDetailId(mission.id);
+    updatePreferences({ taskLogOpen: true });
+  }, [updatePreferences]);
+  const workerMissionActivity = useMemo(() => {
+    if (!activeWorkerMission || !active) return undefined;
+    const wid = active.id;
+    const events = (activeWorkerMission.executionEvents ?? []).filter((event) => event.workerId === wid);
+    const statusLabel = activeWorkerMission.status === "planning" ? t("規劃中")
+      : activeWorkerMission.status === "executing" ? t("執行中")
+      : activeWorkerMission.status === "reviewing" ? t("審查中")
+      : t("需要處理");
+    return <div className="worker-mission-activity">
+      <div className="worker-mission-activity__head">
+        <span className="worker-mission-activity__badge">{t("正在執行部門任務")}</span>
+        <span className={`worker-mission-activity__status worker-mission-activity__status--${activeWorkerMission.status}`}>{statusLabel}</span>
+        <button type="button" className="worker-mission-activity__jump" onClick={() => openWorkerMission(activeWorkerMission)}>{t("查看完整任務 →")}</button>
+      </div>
+      <p className="worker-mission-activity__objective">{activeWorkerMission.objective}</p>
+      {events.length > 0
+        ? <MissionActivityFeed events={events} workers={workerList} />
+        : <p className="worker-mission-activity__empty">{t("任務剛開始，這位 NPC 還沒有動作。稍等或點上方查看完整任務。")}</p>}
+    </div>;
+  }, [activeWorkerMission, active, workerList, openWorkerMission]);
   const focusStudios = useMemo(() => buildFocusStudios(workspacePaths, workerList.map((worker) => {
     const attention = workerAttention(worker);
     return {
@@ -431,12 +487,15 @@ export function App() {
   const [autopilotConfigOpen, setAutopilotConfigOpen] = useState(false);
   const [autopilotStepInput, setAutopilotStepInput] = useState("15");
   const [autopilotMinutesInput, setAutopilotMinutesInput] = useState("");
+  // 卡住時自動接手：讓決策模型先嘗試解卡（重試／帶指示重跑／接受風險），解不了才停下等人。
+  const [autopilotAutoResolve, setAutopilotAutoResolve] = useState(false);
+  const [autopilotAutoResolveInput, setAutopilotAutoResolveInput] = useState(false);
   // 開 Boss Desk 或切工作區時，向伺服器要一次權威狀態。
   useEffect(() => {
     if (!bossAssignmentOpen || !activeWorkspace) return;
     let cancelled = false;
-    void apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
-      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); setAutopilotDeadline(state.deadlineAt ?? null); } })
+    void apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve?: boolean }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
+      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); setAutopilotDeadline(state.deadlineAt ?? null); setAutopilotAutoResolve(Boolean(state.autoResolve)); } })
       .catch(() => { /* 拿不到就維持現狀 */ });
     return () => { cancelled = true; };
   }, [bossAssignmentOpen, activeWorkspace]);
@@ -448,17 +507,19 @@ export function App() {
     setAutopilotEnabled(lastAutopilot.enabled);
     setAutopilotSteps(lastAutopilot.stepsRemaining);
     setAutopilotDeadline(lastAutopilot.deadlineAt ?? null);
+    setAutopilotAutoResolve(lastAutopilot.autoResolve);
   }, [lastAutopilot, activeWorkspace]);
-  const toggleAutopilot = useCallback(async (enabled: boolean, opts?: { maxSteps?: number; maxMinutes?: number }) => {
+  const toggleAutopilot = useCallback(async (enabled: boolean, opts?: { maxSteps?: number; maxMinutes?: number; autoResolve?: boolean }) => {
     setAutopilotBusy(true);
     try {
-      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null }>("/api/autopilot", {
+      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve?: boolean }>("/api/autopilot", {
         method: "POST",
-        body: { workspacePath: activeWorkspace, enabled, maxSteps: opts?.maxSteps, maxMinutes: opts?.maxMinutes },
+        body: { workspacePath: activeWorkspace, enabled, maxSteps: opts?.maxSteps, maxMinutes: opts?.maxMinutes, autoResolve: opts?.autoResolve },
       });
       setAutopilotEnabled(state.enabled);
       setAutopilotSteps(state.stepsRemaining);
       setAutopilotDeadline(state.deadlineAt ?? null);
+      setAutopilotAutoResolve(Boolean(state.autoResolve));
       const mins = state.deadlineAt ? Math.max(1, Math.round((state.deadlineAt - Date.now()) / 60_000)) : 0;
       notify(enabled
         ? mins
@@ -477,8 +538,8 @@ export function App() {
     const minutesRaw = Number(autopilotMinutesInput);
     const maxMinutes = autopilotMinutesInput.trim() && Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.round(minutesRaw) : undefined;
     setAutopilotConfigOpen(false);
-    void toggleAutopilot(true, { maxSteps: steps, maxMinutes });
-  }, [autopilotStepInput, autopilotMinutesInput, toggleAutopilot]);
+    void toggleAutopilot(true, { maxSteps: steps, maxMinutes, autoResolve: autopilotAutoResolveInput });
+  }, [autopilotStepInput, autopilotMinutesInput, autopilotAutoResolveInput, toggleAutopilot]);
   // 開 Boss Desk 狀態變動時關掉設定框，避免殘留。
   useEffect(() => { if (!bossAssignmentOpen) setAutopilotConfigOpen(false); }, [bossAssignmentOpen]);
   // 顯示用的剩餘分鐘（每 30 秒重算一次即可，粗略顯示）。
@@ -1084,6 +1145,7 @@ export function App() {
         missions={missionList}
         departments={departmentList}
         roundtableIds={roundtableIdSet}
+        bossRoom={bossAssignmentOpen || active?.ephemeralKind === "dedicated" || selectedDepartmentIsBossCrew}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
@@ -1231,7 +1293,9 @@ export function App() {
               <span className="autopilot-toggle__label">{autopilotEnabled
                 ? autopilotMinutesLeft != null
                   ? t("自動循環中 · 剩 {n} 步 · {m} 分", { n: autopilotSteps, m: autopilotMinutesLeft })
-                  : t("自動循環中 · 剩 {n} 步", { n: autopilotSteps })
+                  : autopilotAutoResolve
+                    ? t("自動循環中 · 剩 {n} 步 · 會自動接手", { n: autopilotSteps })
+                    : t("自動循環中 · 剩 {n} 步", { n: autopilotSteps })
                 : t("自動循環")}</span>
             </button>
             {autopilotConfigOpen && !autopilotEnabled && <div className="autopilot-config" role="dialog" aria-label={t("自動循環設定")}>
@@ -1244,6 +1308,11 @@ export function App() {
                 <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={autopilotMinutesInput}
                   onChange={(event) => setAutopilotMinutesInput(event.target.value)} /></label>
                 <small>{t("選填；到點會在下一張交辦收工時停")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label className="autopilot-config__check"><input type="checkbox" checked={autopilotAutoResolveInput}
+                  onChange={(event) => setAutopilotAutoResolveInput(event.target.checked)} />{t("卡住時自動接手")}</label>
+                <small>{t("交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 2 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你")}</small>
               </div>
               <div className="autopilot-config__actions">
                 <button type="button" className="autopilot-config__cancel" onClick={() => setAutopilotConfigOpen(false)}>{t("取消")}</button>
@@ -1317,6 +1386,7 @@ export function App() {
           onUpdate={updateBossTask}
           onDelete={deleteBossTask}
           onRestart={restartBossTask}
+          onCancelTask={cancelBossTask}
           onCreateDepartment={() => setDepartmentCreatorOpen(true)}
           onDebateDirection={(topic) => {
             // 關掉交辦視窗，讓使用者看得到 3 個 NPC 走上會議桌辯論這個方向。
@@ -1369,7 +1439,7 @@ export function App() {
           onAddPane={addFocusPane}
           onRemovePane={removeFocusPane}
           onApprove={resolveTaskApproval}
-        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} />)}
+        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} missionActivity={workerMissionActivity} />)}
         {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
           focusMode={taskFocusMode}

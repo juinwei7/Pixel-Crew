@@ -39,8 +39,41 @@ test("accepts a Quick Consult or Review only when it returns to the department l
   const continuation = { ...execute, title: "Boss continues", assigneeWorkerId: "boss" };
   const accepted = parseMissionPlan(plan([consult, continuation]), new Set(["boss", "builder", "reviewer"]), "boss");
   assert.equal(accepted.plan?.steps[0].kind, "consult");
+  // 收尾 Execute 排錯人是形式錯誤：自動收回主管，而不是打停整個 Mission。
   const wrongReturn = parseMissionPlan(plan([consult, { ...continuation, assigneeWorkerId: "builder" }]), new Set(["boss", "builder", "reviewer"]), "boss");
-  assert.match(wrongReturn.error ?? "", /必須交回部門主管/);
+  assert.equal(wrongReturn.error, undefined);
+  assert.equal(wrongReturn.plan?.steps[1].assigneeWorkerId, "boss");
+});
+
+test("assignment mistakes are auto-corrected in place instead of pausing the mission", () => {
+  // 快速協作的 Consult 排給主管自己 → 改派給第一位其他成員（真實案例：臨時團隊主管把 Review 排給自己，整單卡 needs_attention）。
+  const selfConsult = { title: "Ask", objective: "Investigate", kind: "consult", assigneeWorkerId: "boss", acceptanceCriteria: ["advice"] };
+  const back = { ...execute, title: "Boss continues", assigneeWorkerId: "boss" };
+  const fixedQuick = parseMissionPlan(plan([selfConsult, back]), new Set(["boss", "builder", "reviewer"]), "boss");
+  assert.equal(fixedQuick.error, undefined);
+  assert.equal(fixedQuick.plan?.steps[0].assigneeWorkerId, "builder");
+  // 單人部門無人可改派：維持原錯誤（這才是真的不可修）。
+  const solo = parseMissionPlan(plan([{ ...selfConsult }, back]), new Set(["boss"]), "boss");
+  assert.match(solo.error ?? "", /必須指派給另一位部門 NPC/);
+  // 多步驟計畫：Review 與 Execute 同人 → 改派另一位成員。
+  const sameReviewer = plan([execute, { ...review, assigneeWorkerId: "builder" }]);
+  const fixedReview = parseMissionPlan(sameReviewer, new Set(["builder", "reviewer"]));
+  assert.equal(fixedReview.error, undefined);
+  assert.equal(fixedReview.plan?.steps[1].assigneeWorkerId, "reviewer");
+  // 研究模式：最後的 Execute 沒排給主管 → 收回主管；Consult 排給主管 → 改派專家。
+  const answer = { ...execute, title: "Answer owner", assigneeWorkerId: "reviewer" };
+  const bossConsult = { title: "Check", objective: "Evidence", kind: "consult", assigneeWorkerId: "boss", acceptanceCriteria: ["cite"] };
+  const fixedResearch = parseMissionPlan(plan([bossConsult, answer]), new Set(["boss", "reviewer"]), "boss", new Set(), "research");
+  assert.equal(fixedResearch.error, undefined);
+  assert.equal(fixedResearch.plan?.steps[0].assigneeWorkerId, "reviewer");
+  assert.equal(fixedResearch.plan?.steps[1].assigneeWorkerId, "boss");
+});
+
+test("format repair prompt names the rejection reason so the retry can fix it", () => {
+  const withProblem = missionFormatRepairPrompt("plan", "some output", "快速協作的 Consult／Review 必須指派給另一位部門 NPC");
+  assert.match(withProblem, /上次輸出被拒絕的原因：快速協作的 Consult／Review 必須指派給另一位部門 NPC/);
+  const without = missionFormatRepairPrompt("plan", "some output");
+  assert.ok(!without.includes("上次輸出被拒絕的原因"));
 });
 
 test("research plans are one lead answer or one consult plus the lead answer", () => {

@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // 給「Web 除錯（Chrome）」當 preLaunchTask：起 vite dev（5173），
+      // /api 與 /ws 會 proxy 到正在跑的 Pixel Crew（8787）。
+      "label": "web: vite dev",
+      "type": "shell",
+      "command": "npm run dev -w web",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "." },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "Local:.*5173"
+        }
+      },
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    }
+  ]
+}

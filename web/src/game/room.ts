@@ -78,6 +78,31 @@ export class Room {
       .fill({ color: 0x0b1425, alpha: 0.2 })
       .stroke({ width: 1, color: 0x243654, alpha: 0.18 });
 
+    // （試過鋪一塊帶邊框的中央地毯——空房間裡看起來就是兩圈突兀的框線，已拿掉。）
+
+    // Wall furniture on the free wall spans (poster is at x128, clock x79,
+    // window 246–338). A bookshelf to the right of the window and two framed
+    // pictures to the left make the back wall read as a furnished office.
+    // Bookshelf (right of window)
+    g.rect(348, 10, 58, 36).fill(0x141b30);
+    g.rect(350, 12, 54, 32).fill(0x0c1322);
+    for (const shelfY of [22, 33]) g.rect(350, shelfY, 54, 1).fill(0x2a3a60);
+    const BOOKS = [0x7c5cff, 0x4de3ff, 0xff6f91, 0xffd166, 0x37d6a3, 0x8fb8e8];
+    for (let i = 0; i < 8; i++) {
+      g.rect(352 + i * 6, 14, 4, 7).fill({ color: BOOKS[i % BOOKS.length], alpha: 0.8 });
+      g.rect(352 + i * 6, 25, 4, 7).fill({ color: BOOKS[(i + 3) % BOOKS.length], alpha: 0.8 });
+    }
+    g.rect(350, 36, 54, 6).fill(0x1a2340); // lower cabinet
+    // Two framed pictures (between poster and window)
+    const frame = (x: number, y: number, w: number, h: number, art: number) => {
+      g.rect(x, y, w, h).fill(0x243150);
+      g.rect(x + 1, y + 1, w - 2, h - 2).fill(0x0e1526);
+      g.rect(x + 2, y + 2, w - 4, h - 4).fill({ color: art, alpha: 0.6 });
+    };
+    frame(166, 12, 18, 16, 0x37d6a3);
+    frame(196, 14, 20, 18, 0xffb15c);
+
+
     this.starSeeds = Array.from({ length: 28 }, () => ({
       x: 249 + Math.random() * 86,
       y: 8 + Math.random() * 32,

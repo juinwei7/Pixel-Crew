@@ -746,6 +746,18 @@
 .mission-activity-row--error .mission-activity-row__label { color: var(--err); }
 .mission-activity-row--pending .mission-activity-row__icon { color: #ffb75e; }
 
+/* 點 NPC 本人時，若它正被部門任務調去幹活，就在它的活動頁頂端顯示「正在執行部門任務」
+   卡片＋濾出屬於它的即時活動，並提供一鍵跳到完整任務（否則這頁對任務中的 NPC 是空的）。 */
+.worker-mission-activity { margin: 8px 10px 12px; border: 1px solid rgba(0,229,255,.24); border-radius: 10px; background: rgba(6,16,32,.72); overflow: hidden; }
+.worker-mission-activity__head { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid rgba(145,164,194,.12); }
+.worker-mission-activity__badge { flex: 0 0 auto; color: #7ed8ea; font: 700 9px var(--mono); letter-spacing: .05em; }
+.worker-mission-activity__status { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: rgba(0,229,255,.12); color: #a9eefa; font: 700 9px var(--mono); }
+.worker-mission-activity__status--needs_attention { background: rgba(255,183,94,.16); color: #ffcf8a; }
+.worker-mission-activity__jump { margin-left: auto; flex: 0 0 auto; border: 1px solid rgba(0,229,255,.32); border-radius: 7px; background: transparent; color: #a9eefa; cursor: pointer; font: 700 9px var(--mono); padding: 4px 9px; }
+.worker-mission-activity__jump:hover { border-color: rgba(0,229,255,.6); color: #e9fbff; }
+.worker-mission-activity__objective { margin: 8px 11px; color: #cfe0f0; font-size: 11px; line-height: 1.55; }
+.worker-mission-activity__empty { margin: 4px 11px 11px; color: #7c90a8; font-size: 10px; line-height: 1.5; }
+
 /* 手機（≤600）：抽屜外殼 / 整頁外殼、44px 點擊目標、16px 輸入字級都由
    .ui-modal 處理（styles/responsive.css）。這裡只留三個視窗自己的欄位收合。 */
 @media (max-width: 600px) {

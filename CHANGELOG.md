@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-09-25
+
+### Added
+
+- Autopilot can now take over when an assignment stalls. With "auto-resume when stuck" checked, the decision model retries the step, re-runs it with a concrete instruction, accepts a reviewed risk, or answers its own clarification question with a safe bounded assumption — at most twice per assignment, and always deferring anything that needs the boss personally (real data, credentials, spending, irreversible calls) back to a stop.
+- The autopilot switch survives restarts: its state persists server-side per workspace and is restored on boot, so an update or reboot no longer silently turns the loop off.
+- Remote access can start itself with the app: a new checkbox in the Remote Access panel launches the relay on boot, so after a reboot the phone can connect without anyone touching the desktop first.
+- The boss-room scene got livelier: the on-duty arrow bobs instead of sitting still, NPCs walk to the matching work station while their tool is running, and during discussion steps the current speaker's latest words float above their head like the web-search window does.
+
+### Changed
+
+- Autopilot's next-step decision no longer gives up early: when the finished thread is blocked on boss-only input it pivots to a different genuinely valuable objective (making deliverables more usable, hardening, tooling) and only stops when no direction offers real value.
+- Boss-task discovery now takes a required-input inventory before planning: if the objective depends on a file or dataset that was not attached, it asks for it up front instead of burning a whole run to find out.
+
+### Fixed
+
+- Assignment plans with a formality mistake — the lead assigning the quick consult/review to itself, the closing execute to someone else, or a review to its own executor — are now corrected in place, the way the resolve dialog would, instead of pausing the whole mission; the one-shot format repair also names the exact rejection reason so the retry knows what to fix.
+- Boss tasks no longer zombie after a restart: a stage whose mission record vanished is re-queued for dispatch, and a boot sweep advances every running task so the recovery actually happens without waiting for an event that will never come.
+- The remote-access secret file moved out of the app directory into the data root, so updates no longer regenerate the signing key — the passcode, guardian password, and every signed-in device now survive an update instead of being reset.
+- The pixel scene no longer empties out when the BOSS view is open without a dedicated crew: an empty boss room falls back to the main office instead of hiding every standing NPC.
+
+### Security
+
+- Share guests can no longer reach the host shell through the WebSocket path. The relay strips any client-supplied access-level header, stamps each proxied connection with the verified level, and the app refuses terminal control for share guests — closing a bypass around the HTTP-layer guardian and owner-only rules.
+
 ## [2.5.0] - 2026-09-23
 
 ### Added

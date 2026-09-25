@@ -102,7 +102,7 @@ function bounded(value: unknown, max: number): string {
 }
 
 export function bossTaskDecisionPrompt(input: {
-  task: Pick<BossTask, "objective" | "acceptanceCriteria" | "workspacePath" | "messages" | "executionProfile" | "executionBudget">;
+  task: Pick<BossTask, "objective" | "acceptanceCriteria" | "workspacePath" | "messages" | "executionProfile" | "executionBudget" | "attachmentIds">;
   candidates: AssignmentDecisionCandidate[];
 }): string {
   const clarificationLimit = 3;
@@ -135,6 +135,7 @@ Rules:
 - Use only exact department ids from the catalog.
 - If NONE of the catalog departments' purposes genuinely fit this objective's domain, do NOT force-fit it into an unrelated department. Instead return create_department with a concise department purpose and how many NPCs (2-4) it needs; the system will create that dedicated department and then re-plan the routing. Prefer an existing department only when its purpose truly covers the work; prefer creating a dedicated team over a bad fit.
 - Do not assign work when scope, target users, expected outcome, authority, security boundary, or acceptance boundary is materially ambiguous.
+- Required-input preflight: before planning, identify the concrete inputs this objective depends on (data files, datasets, credentials, access to systems). Count the "Attachments provided" number below as available input. If a required input is not attached, not plausibly already in the workspace, and not something the assigned team can produce itself, spend your clarification asking for it NOW — a missing input discovered mid-execution wastes the whole run. If no clarifications remain, scope the plan to what actually exists and make the first stage verify inputs before any heavy work.
 - Broad product requests such as "build an ERP" normally require discovery before execution.
 - Clarification is exceptional, not a required step. Make reasonable, reversible departmental assumptions when the outcome can already be executed safely.
 - Treat an imperative as a one-time request to execute now unless the Boss explicitly asks for recurrence, scheduling, or a future time.
@@ -154,6 +155,7 @@ Rules:
 
 Original objective: ${JSON.stringify(bounded(input.task.objective, 4_000))}
 Acceptance criteria: ${JSON.stringify(input.task.acceptanceCriteria.slice(0, 8).map((item) => bounded(item, 500)))}
+Attachments provided by the Boss: ${(input.task.attachmentIds ?? []).length} file(s)
 Boss workspace: ${JSON.stringify(input.task.workspacePath)}
 Persistent discovery conversation: ${JSON.stringify(conversation)}
 Eligible department catalog: ${JSON.stringify(catalog)}

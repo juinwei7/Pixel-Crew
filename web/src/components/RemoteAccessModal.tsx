@@ -55,6 +55,27 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
   const [pass, setPass] = useState("");
   const [demo, setDemo] = useState(false);
   const [cf, setCf] = useState<CfInfo | null>(null); // 下載中的即時進度（輪詢來的，比 st 新）
+  // 開機自動啟動轉接站：存 server 端 app-settings（非瀏覽器），重開機後手機不用等人手動開。
+  const [autoStart, setAutoStart] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiRequest<{ settings?: { remoteAccessAutoStart?: boolean } }>("/api/app-settings")
+      .then((r) => { if (!cancelled) setAutoStart(Boolean(r.settings?.remoteAccessAutoStart)); })
+      .catch(() => { if (!cancelled) setAutoStart(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function toggleAutoStart(next: boolean) {
+    setAutoStart(next);
+    try {
+      await apiRequest("/api/app-settings", { method: "POST", body: { remoteAccessAutoStart: next } });
+      notify(next ? t("已開啟：開啟程式時會自動啟動遠端存取") : t("已關閉遠端存取自動啟動"), "ok");
+    } catch (e) {
+      setAutoStart(!next);
+      notify((e as Error).message, "error");
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -195,6 +216,12 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
             {demo ? t("← 離開預覽") : t("預覽新手引導")}
           </button>
         </p>
+        {autoStart !== null && !demo && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#9fb0dd", margin: "0 0 12px", cursor: "pointer" }}>
+            <input type="checkbox" checked={autoStart} onChange={(e) => void toggleAutoStart(e.target.checked)} style={{ accentColor: "#5b8cff" }} />
+            {t("開啟程式時自動啟動遠端存取（重開機後手機不用等電腦端手動開）")}
+          </label>
+        )}
 
         {demo ? <DemoWalkthrough onDone={() => setDemo(false)} /> : running === null ? (
           <p style={{ color: "#8ea0d0" }}>{t("讀取中…")}</p>

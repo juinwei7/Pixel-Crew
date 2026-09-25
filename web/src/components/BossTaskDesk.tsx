@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AdvisorProposal, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
-import { getAdvisorEntry, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
+import { clearAdvisorErrors, getAdvisorEntry, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 import { writeComposerDraft } from "../hooks/useComposerDraft";
@@ -37,6 +37,8 @@ type Props = {
   onUpdate(id: string, patch: { title?: string; archived?: boolean }): Promise<{ data?: BossTask; error?: string }>;
   onDelete(id: string): Promise<{ error?: string }>;
   onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
+  /** 一鍵中止整張交辦（取消進行中 Mission＋解散臨時團隊）。 */
+  onCancelTask?(id: string): Promise<string | null>;
   onOpenMission?(missionId: string): void;
   onCreateDepartment?(): void;
   /** 把一個顧問方向送去圓桌智囊團辯論（3 方兩輪→裁決→host NPC 接手）。 */
@@ -112,7 +114,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onCancelTask, onOpenMission, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -147,6 +149,13 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   // 關掉＝走原本的決策模型路由，交給既有部門。
   const [dedicatedDepartment, setDedicatedDepartment] = useState(true);
   const restoredSelection = useRef(false);
+
+  // Returning to the Boss Desk (this component remounts on entry) is a natural
+  // "am I still offline?" moment — clear any stale advisor connection error so a
+  // blip from a previous visit doesn't keep flashing "無法連線" while the server
+  // is actually reachable. In-app navigation keeps the WS open, so the reconnect
+  // handler wouldn't fire; this covers that path.
+  useEffect(() => { clearAdvisorErrors(); }, []);
 
   useEffect(() => {
     if (!advisorLoading || advisor.startedAt == null) { setAdvisorElapsed(0); return; }
@@ -326,6 +335,15 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     const committed = await onRestart(selected.id, true);
     setWorking(false);
     if (committed.error) setError(committed.error);
+  }
+
+  async function cancelTask() {
+    if (!selected || !onCancelTask || working) return;
+    if (!(await confirm(t("中止這個交辦？進行中的部門工作會立刻停止，臨時團隊會解散；對話紀錄與附件保留，之後仍可清空重新交辦。"), "danger"))) return;
+    setWorking(true); setError(null);
+    const failure = await onCancelTask(selected.id);
+    setWorking(false);
+    if (failure) setError(failure);
   }
 
   const canReply = selected && ["needs_input", "needs_attention", "completed", "failed"].includes(selected.status);
@@ -533,6 +551,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
             </div>;
           })}
         </div>}
+        {onCancelTask && !selected.archivedAt && !terminalStatuses.includes(selected.status) && <button type="button" className="boss-task-desk__cancel" disabled={working} onClick={() => void cancelTask()}>{t("中止交辦")}</button>}
         {onRestart && !selected.archivedAt && <button type="button" className="boss-task-desk__restart" disabled={working || selected.status === "discovering" || selected.status === "synthesizing"} onClick={() => void restartTask()}>{t("清空並重新交辦")}</button>}
       </>}
     </div>

@@ -257,11 +257,17 @@ export function parseMissionPlan(
     });
   }
   if (!steps.some((step) => step.kind === "execute")) return { error: t("Mission 至少需要一個 Execute 步驟") };
+  // 指派錯人是「形式錯誤」不是「內容錯誤」——主管常把 Consult/Review 排給自己、或忘了把
+  // Execute 收回自己。這類錯誤有唯一合法修法時就地導正（跟 UI 的「重新指派」同效果），
+  // 別為此把整個 Mission 打停等老闆；只有真的無人可派才回報錯誤。
+  const alternativeTo = (excluded: string): string | null =>
+    [...allowedWorkerIds].find((id) => id !== excluded) ?? null;
   if (executionMode === "research") {
     const finalStep = steps[steps.length - 1];
-    if (finalStep.kind !== "execute" || (bossWorkerId && finalStep.assigneeWorkerId !== bossWorkerId)) {
+    if (finalStep.kind !== "execute") {
       return { error: t("研究模式最後一步必須是由部門主管完成的 Execute 回答") };
     }
+    if (bossWorkerId && finalStep.assigneeWorkerId !== bossWorkerId) finalStep.assigneeWorkerId = bossWorkerId;
     if (steps.length === 2 && steps[0].kind !== "consult") {
       return { error: t("研究模式的雙步驟流程只能是專家 Consult 後接主管 Execute") };
     }
@@ -269,15 +275,21 @@ export function parseMissionPlan(
       return { error: t("研究模式不建立 Review 修正迴圈；需要時以一次 Consult 提供反證與風險") };
     }
     if (steps.length === 2 && bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) {
-      return { error: t("研究模式的 Consult 必須指派給主管以外的專家") };
+      const specialist = alternativeTo(bossWorkerId);
+      if (!specialist) return { error: t("研究模式的 Consult 必須指派給主管以外的專家") };
+      steps[0].assigneeWorkerId = specialist;
     }
     return { plan: { summary: text(value.summary, 2_000), steps } };
   }
   const quick = steps[0].kind === "consult" || steps[0].kind === "review";
   if (quick) {
     if (steps.length !== 2 || steps[1].kind !== "execute") return { error: t("快速協作必須是 Consult／Review 後接一個主管 Execute") };
-    if (bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) return { error: t("快速協作的 Consult／Review 必須指派給另一位部門 NPC") };
-    if (bossWorkerId && steps[1].assigneeWorkerId !== bossWorkerId) return { error: t("快速協作的最後 Execute 必須交回部門主管") };
+    if (bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) {
+      const specialist = alternativeTo(bossWorkerId);
+      if (!specialist) return { error: t("快速協作的 Consult／Review 必須指派給另一位部門 NPC") };
+      steps[0].assigneeWorkerId = specialist;
+    }
+    if (bossWorkerId && steps[1].assigneeWorkerId !== bossWorkerId) steps[1].assigneeWorkerId = bossWorkerId;
   } else {
     if (steps.some((step) => step.kind === "consult")) return { error: t("Consult 只能作為快速協作的第一步") };
     for (let index = 0; index < steps.length; index++) {
@@ -285,7 +297,9 @@ export function parseMissionPlan(
         return { error: t("Mission Review 步驟 {n} 必須緊接在 Execute 之後", { n: index + 1 }) };
       }
       if (steps[index].kind === "review" && steps[index - 1]?.assigneeWorkerId === steps[index].assigneeWorkerId) {
-        return { error: t("Mission Review 步驟 {n} 必須由與 Execute 不同 NPC 負責", { n: index + 1 }) };
+        const reviewer = alternativeTo(steps[index].assigneeWorkerId);
+        if (!reviewer) return { error: t("Mission Review 步驟 {n} 必須由與 Execute 不同 NPC 負責", { n: index + 1 }) };
+        steps[index].assigneeWorkerId = reviewer;
       }
     }
   }
@@ -545,12 +559,14 @@ export function missionStepPrompt(input: {
 export function missionFormatRepairPrompt(
   kind: "plan" | "review" | "consult",
   priorOutput: string,
+  problem?: string,
 ): string {
   const contract = kind === "plan"
     ? '<department_mission_plan>{"summary":"","steps":[]}</department_mission_plan>'
     : `<collaboration_result>{"verdict":"${kind === "consult" ? "advice|inconclusive" : "pass|changes_requested|inconclusive"}","summary":"","findings":[],"risks":[],"openQuestions":[],"recommendedNextAction":""}</collaboration_result>`;
+  const problemLine = problem ? t("\n上次輸出被拒絕的原因：{problem}\n請針對這個原因修正。", { problem: text(problem, 500) }) : "";
   return t(
-    "你已完成工作，但輸出缺少必要的結構化格式。這是唯一一次格式修復。\n不要使用工具、不要啟動 Agent、不要重做分析，也不要修改檔案。只把下方既有結論整理成合法 JSON 並包在指定標記內。\n指定格式：{contract}\n\n既有輸出：\n{priorOutput}",
-    { contract, priorOutput: text(priorOutput, 30_000) },
+    "你已完成工作，但輸出缺少必要的結構化格式。這是唯一一次格式修復。\n不要使用工具、不要啟動 Agent、不要重做分析，也不要修改檔案。只把下方既有結論整理成合法 JSON 並包在指定標記內。\n指定格式：{contract}{problemLine}\n\n既有輸出：\n{priorOutput}",
+    { contract, priorOutput: text(priorOutput, 30_000), problemLine },
   );
 }

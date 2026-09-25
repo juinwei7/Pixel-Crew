@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, QueuedCommandDto, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
+import { clearAdvisorErrors, resumeAdvisorRuns } from "../advisorStore";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import { runtimeWsOrigin } from "../runtimeOrigin";
@@ -91,7 +92,7 @@ type ServerMessage =
   | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
   | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] }
   | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] }
-  | { type: "autopilot"; workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt?: number | null }
+  | { type: "autopilot"; workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt?: number | null; autoResolve?: boolean }
   | { type: "terminal_mux_layout"; layout: string; version: number };
 
 type WorkerSummary = {
@@ -149,7 +150,7 @@ export function useWorkers() {
   });
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   // 老闆交辦自動循環：伺服器每次開關/步數變動都廣播最新狀態（含正規化後的 workspace key）。
-  const [lastAutopilot, setLastAutopilot] = useState<{ workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt: number | null } | null>(null);
+  const [lastAutopilot, setLastAutopilot] = useState<{ workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve: boolean } | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -207,6 +208,11 @@ export function useWorkers() {
         if (connectedOnce) void apiRequest("/api/diagnostics/events", { method: "POST", body: { kind: "websocket_reconnect", value: 1 } }).catch(() => {});
         connectedOnce = true;
         setWsReady(true);
+        // The socket being open proves the server is reachable again. Transparently
+        // re-run any advisor generation that a disconnect interrupted, and drop any
+        // stale "無法連線" advisor error left over from a blip that has since healed.
+        resumeAdvisorRuns();
+        clearAdvisorErrors();
       };
       socket.onclose = () => {
         setWsReady(false);
@@ -488,7 +494,7 @@ export function useWorkers() {
           break;
         }
         case "autopilot": {
-          setLastAutopilot({ workspacePath: String(data.workspacePath ?? ""), enabled: Boolean(data.enabled), stepsRemaining: Number(data.stepsRemaining ?? 0), deadlineAt: data.deadlineAt == null ? null : Number(data.deadlineAt) });
+          setLastAutopilot({ workspacePath: String(data.workspacePath ?? ""), enabled: Boolean(data.enabled), stepsRemaining: Number(data.stepsRemaining ?? 0), deadlineAt: data.deadlineAt == null ? null : Number(data.deadlineAt), autoResolve: Boolean(data.autoResolve) });
           break;
         }
         case "account_login_result": {
@@ -1048,6 +1054,17 @@ export function useWorkers() {
     }
   }, []);
 
+  // 一鍵中止整張 Boss 交辦：停掉所有進行中的部門 Mission、任務轉 cancelled、臨時團隊解散。
+  const cancelBossTask = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ bossTask?: BossTask }>(`/api/boss-tasks/${id}/cancel`, { method: "POST", timeoutMs: 60_000 });
+      if (data.bossTask) setBossTasks((current) => ({ ...current, [data.bossTask!.id]: data.bossTask! }));
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
   const missionAction = useCallback(async (id: string, action: "cancel" | "retry-review" | "approve-plan"): Promise<string | null> => {
     try {
       await apiRequest(`/api/missions/${id}/${action}`, { method: "POST" });
@@ -1416,6 +1433,7 @@ export function useWorkers() {
     updateBossTask,
     deleteBossTask,
     restartBossTask,
+    cancelBossTask,
     cancelMission: (id: string) => missionAction(id, "cancel"),
     retryMissionReview: (id: string) => missionAction(id, "retry-review"),
     approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),

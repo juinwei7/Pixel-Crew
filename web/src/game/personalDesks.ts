@@ -15,6 +15,10 @@ export type PersonalDeskState = {
   workspaceLabel: string;
   collaborationPhase: DepartmentPhase;
   missionProgress?: { completed: number; total: number } | null;
+  /** 老闆交辦臨時部門成員——整個部門會被圈進一間有牆的獨立房間，與常駐夥伴分開。 */
+  ephemeral?: boolean;
+  /** 部門任務「當前步驟」的負責人——桌位畫值勤指標，一眼看出現在到誰。 */
+  onDuty?: boolean;
 };
 
 export type DepartmentSeat = {
@@ -40,6 +44,8 @@ export type DepartmentSegment = {
 
 export type DepartmentZone = {
   kind: "department" | "personal";
+  /** 老闆交辦臨時部門：畫成一間有牆、有門牌的獨立房間，而不是安靜的地墊。 */
+  boss: boolean;
   workspacePath: string;
   workspaceLabel: string;
   memberCount: number;
@@ -59,6 +65,9 @@ type DeskEntry = {
   highlight: Graphics;
   blueprint: Graphics;
   effect: Graphics;
+  /** 值勤箭頭（每幀重繪做上下浮動動畫），與 highlight 分離避免被 setWorkers 的 clear 打斷。 */
+  duty: Graphics;
+  onDuty: boolean;
   parts: Graphics[];
   transition: "building" | "ready" | "removing";
   transitionMs: number;
@@ -121,23 +130,35 @@ export function departmentDeskLayout(workers: PersonalDeskState[]): DepartmentDe
     else groups.set(key, [worker]);
   }
 
+  // 老闆交辦臨時部門（ephemeral）排在最後、而且獨佔自己的列，不跟常駐夥伴同排——
+  // 這樣常駐區保持乾淨，臨時部門各自圈成一間看得出邊界的房間。
+  const isBossGroup = (members: PersonalDeskState[]) => members.some((member) => member.ephemeral);
+  const standingGroups = [...groups.values()].filter((members) => !isBossGroup(members));
+  const bossGroups = [...groups.values()].filter(isBossGroup);
+
   const budget = ART_W - ROW_MARGIN * 2;
   type Chunk = { members: PersonalDeskState[]; left: number };
   const rows: Array<{ width: number; chunks: Chunk[] }> = [];
-  for (const members of groups.values()) {
-    for (let start = 0; start < members.length; start += DEPARTMENT_SEAT_COLUMNS) {
-      const chunkMembers = members.slice(start, start + DEPARTMENT_SEAT_COLUMNS);
-      const width = zoneWidth(chunkMembers.length);
-      let row = rows[rows.length - 1];
-      if (!row || (row.chunks.length > 0 && row.width + DEPT_GAP + width > budget)) {
-        row = { width: 0, chunks: [] };
-        rows.push(row);
+  const packGroups = (groupList: PersonalDeskState[][], forceOwnRow: boolean) => {
+    for (const members of groupList) {
+      for (let start = 0; start < members.length; start += DEPARTMENT_SEAT_COLUMNS) {
+        const chunkMembers = members.slice(start, start + DEPARTMENT_SEAT_COLUMNS);
+        const width = zoneWidth(chunkMembers.length);
+        let row = rows[rows.length - 1];
+        // forceOwnRow：老闆交辦房間開新列（start===0 的第一段），不與別的部門併排。
+        const mustBreak = forceOwnRow && start === 0;
+        if (!row || mustBreak || (row.chunks.length > 0 && row.width + DEPT_GAP + width > budget)) {
+          row = { width: 0, chunks: [] };
+          rows.push(row);
+        }
+        const left = row.chunks.length > 0 ? row.width + DEPT_GAP : 0;
+        row.chunks.push({ members: chunkMembers, left });
+        row.width = left + width;
       }
-      const left = row.chunks.length > 0 ? row.width + DEPT_GAP : 0;
-      row.chunks.push({ members: chunkMembers, left });
-      row.width = left + width;
     }
-  }
+  };
+  packGroups(standingGroups, false);
+  packGroups(bossGroups, true);
 
   // Rows sit at the upper third of the department band instead of clinging to
   // its top edge, so a small crew doesn't leave a huge dead floor below.
@@ -186,8 +207,10 @@ export function departmentDeskLayout(workers: PersonalDeskState[]): DepartmentDe
     });
     const phase = members.find((member) => member.collaborationPhase)?.collaborationPhase ?? null;
     const missionProgress = members.find((member) => member.missionProgress)?.missionProgress ?? null;
+    const boss = members.some((member) => member.ephemeral);
     return {
       kind: members.length >= 2 ? "department" : "personal",
+      boss,
       workspacePath: departmentKey,
       workspaceLabel: members[0].workspaceLabel,
       memberCount: members.length,
@@ -249,6 +272,15 @@ export class PersonalDeskLayer {
           alpha: 0.72,
         });
       }
+      // 值勤指標：部門任務「當前步驟」的負責人。金色實框（靜態）＋螢幕上方一枚
+      // 上下浮動的向下箭頭（動畫在 update(dt) 每幀重繪），讓「現在到誰了」在一排
+      // 同款桌位裡一眼可辨（與淡色的選取框刻意做出強弱差）。
+      entry.onDuty = Boolean(worker.onDuty);
+      if (worker.onDuty) {
+        entry.highlight.roundRect(-19, -26, 38, 34, 5).stroke({ width: 1.5, color: 0xffc061, alpha: 0.95 });
+      } else {
+        entry.duty.clear();
+      }
     });
 
     for (const [id, entry] of this.entries) {
@@ -258,6 +290,8 @@ export class PersonalDeskLayer {
         entry.transitionMs = 0;
         entry.container.eventMode = "none";
         entry.highlight.clear();
+        entry.duty.clear();
+        entry.onDuty = false;
       }
     }
     return layout;
@@ -285,6 +319,17 @@ export class PersonalDeskLayer {
       }
     }
     for (const [id, entry] of this.entries) {
+      // 值勤箭頭動畫：上下浮動＋輕微呼吸亮度，reduce-motion 時退回靜態。
+      if (entry.onDuty && entry.transition === "ready") {
+        const now = performance.now();
+        const bob = this.reduceMotion ? 0 : Math.sin(now * 0.005) * 2.5;
+        const glow = this.reduceMotion ? 0.9 : 0.75 + 0.25 * (0.5 + 0.5 * Math.sin(now * 0.005));
+        entry.duty.clear();
+        entry.duty.poly([-4, -32 + bob, 4, -32 + bob, 0, -27 + bob]).fill({ color: 0xffc061, alpha: glow });
+        entry.duty.rect(-1.5, -37 + bob, 3, 4).fill({ color: 0xffc061, alpha: glow * 0.85 });
+      } else if (entry.onDuty) {
+        entry.duty.clear();
+      }
       entry.transitionMs += dt;
       if (entry.transition === "building") {
         const progress = steppedProgress(entry.transitionMs / BUILD_MS);
@@ -312,12 +357,33 @@ export class PersonalDeskLayer {
     for (const department of departments) {
       const group = new Container();
       const base = new Graphics();
+      // 老闆交辦臨時部門畫成一間「有牆的獨立房間」（暖金色系，與常駐夥伴的冷色地墊區隔），
+      // 讓使用者一眼認出這是臨時交辦、又能看到裡面的 NPC 在各自桌上做事。
+      const BOSS_ROOM = 0xffc061;
       for (const segment of department.segments) {
         const width = segment.right - segment.left;
         const height = segment.bottom - segment.top;
-        // Quiet floor mat: soft tint, faint border, pixel corner brackets —
-        // the architecture should frame the crew, not compete with it.
-        if (department.kind === "department") {
+        if (department.boss) {
+          // Walled room: warm-lit floor, a solid enclosing wall, corner posts,
+          // and a doorway threshold on the bottom wall (a lighter gap).
+          base.roundRect(segment.left, segment.top, width, height, 4)
+            .fill({ color: BOSS_ROOM, alpha: 0.11 })
+            .stroke({ width: 1.5, color: BOSS_ROOM, alpha: 0.55 });
+          base.roundRect(segment.left + 2, segment.top + 2, width - 4, height - 4, 3)
+            .stroke({ width: 1, color: BOSS_ROOM, alpha: 0.16 });
+          const post = (x: number, y: number) => base.rect(x - 1.5, y - 1.5, 3, 3).fill({ color: BOSS_ROOM, alpha: 0.9 });
+          post(segment.left, segment.top);
+          post(segment.right, segment.top);
+          post(segment.left, segment.bottom);
+          post(segment.right, segment.bottom);
+          // Doorway: a lighter threshold segment centred on the bottom wall.
+          const doorW = Math.min(14, Math.max(8, width * 0.24));
+          const doorX = (segment.left + segment.right) / 2 - doorW / 2;
+          base.rect(doorX, segment.bottom - 0.5, doorW, 1).fill({ color: 0x0e1526, alpha: 0.9 });
+          base.rect(doorX, segment.bottom - 0.5, doorW, 1).fill({ color: BOSS_ROOM, alpha: 0.3 });
+        } else if (department.kind === "department") {
+          // Quiet floor mat: soft tint, faint border, pixel corner brackets —
+          // the architecture should frame the crew, not compete with it.
           base.roundRect(segment.left, segment.top, width, height, 3)
             .fill({ color: department.accent, alpha: 0.08 })
             .stroke({ width: 1, color: department.accent, alpha: 0.22 });
@@ -352,8 +418,10 @@ export class PersonalDeskLayer {
         : department.phase === "mission_consult" ? "CONSULT"
         : department.phase === "needs_attention" ? "NEEDS INPUT" : "";
       const suffixParts = [
-        department.kind === "department" ? t("{count}人", { count: department.memberCount }) : t("個人工作站"),
-        phaseLabel || (this.onDepartmentSelect ? t("交辦") : ""),
+        department.boss ? t("交辦房 · {count}人", { count: department.memberCount })
+          : department.kind === "department" ? t("{count}人", { count: department.memberCount })
+          : t("個人工作站"),
+        phaseLabel || (department.boss ? "" : this.onDepartmentSelect ? t("交辦") : ""),
       ]
         .filter(Boolean);
       const suffix = suffixParts.length ? ` · ${suffixParts.join(" · ")}` : "";
@@ -361,7 +429,9 @@ export class PersonalDeskLayer {
       const text = new Text({
         text: `${department.workspaceLabel}${suffix}`,
         style: {
-          fill: department.kind === "personal" ? 0x647895
+          fill: department.boss
+              ? (department.phase === "needs_attention" ? 0xffa24d : 0xffd08a)
+            : department.kind === "personal" ? 0x647895
             : department.phase === "returning" ? 0x6fdcb0
             : department.phase === "planning" ? 0xa991ff
             : department.phase === "mission_review" || department.phase === "mission_consult" ? 0xffc87a
@@ -381,7 +451,7 @@ export class PersonalDeskLayer {
         keep--;
         text.text = `${department.workspaceLabel.slice(0, keep)}…${suffix}`;
       }
-      text.alpha = department.kind === "personal" ? 0.58 : 0.8;
+      text.alpha = department.boss ? 0.92 : department.kind === "personal" ? 0.58 : 0.8;
       text.anchor.set(0.5, 1);
       text.position.set((first.left + first.right) / 2, first.top - 2);
       group.addChild(base, text);
@@ -408,7 +478,7 @@ export class PersonalDeskLayer {
         });
         group.addChild(sign);
 
-        if (department.kind === "department" && this.onDepartmentRename) {
+        if (department.kind === "department" && !department.boss && this.onDepartmentRename) {
           const pencil = new Text({
             text: "✎",
             style: {
@@ -529,13 +599,16 @@ export class PersonalDeskLayer {
       deskPid = -1;
       if (!this.isDragging()) this.onSelect(worker.id);
     });
-    container.addChild(highlight, blueprint, ...parts, effect);
+    const duty = new Graphics();
+    container.addChild(highlight, blueprint, ...parts, effect, duty);
     for (const part of parts) part.visible = false;
     return {
       container,
       highlight,
       blueprint,
       effect,
+      duty,
+      onDuty: false,
       parts,
       transition: "building",
       transitionMs: 0,

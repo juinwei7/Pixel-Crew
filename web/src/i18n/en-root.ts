@@ -54,9 +54,6 @@ export const enRoot: Record<string, string> = {
 
   // kanban.ts
   "待辦": "To Do",
-  "進行中": "In Progress",
-  "需要處理": "Needs Attention",
-  "已完成": "Done",
   "計畫等你核准": "Plan awaiting your approval",
   "審查沒有結論，等你決定": "Review was inconclusive, awaiting your decision",
   "修正次數用完，等你指示": "Out of correction attempts, awaiting your instructions",
@@ -89,7 +86,6 @@ export const enRoot: Record<string, string> = {
   "一段話講清楚最後怎麼做。": "One paragraph making clear what to do.",
   "分歧 / 風險": "Disagreements / Risks",
   "有就列；沒有就寫「無」": "List them if any; write \"None\" if not",
-  "下一步": "Next Steps",
   "具體行動": "Concrete action",
 
   // crew.ts

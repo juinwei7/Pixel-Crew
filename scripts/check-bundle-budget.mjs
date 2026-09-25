@@ -9,11 +9,12 @@ const budgets = [
   { name: "application entry", match: /^index-[\w-]+\.js$/, max: 360 * 1024 },
   { name: "Pixi vendor", match: /^pixi-[\w-]+\.js$/, max: 620 * 1024 },
   { name: "rich text vendor", match: /^rich-text-[\w-]+\.js$/, max: 380 * 1024 },
-  // 英文字典補完（2026-09，從 ~100 KiB 到 ~114 KiB）之後調高。這個 chunk 是
-  // 靜態 import，所以中文使用者也會下載到——真正的解法是等 lang 決定後才
-  // 動態載入字典，但那會讓 i18n 模組變成 async，牽動所有 importer 的初始化
-  // 順序，不適合在發版前動。先把上限訂在「補完後 + 一點餘裕」，繼續擋住意外膨脹。
-  { name: "i18n catalog", match: /^i18n-[\w-]+\.js$/, max: 120 * 1024 },
+  // 英文字典補完（2026-09，從 ~100 KiB 到 ~114 KiB；v2.5.1 再補譯 203 句到
+  // ~121 KiB）之後調高。這個 chunk 是靜態 import，所以中文使用者也會下載到——
+  // 真正的解法是等 lang 決定後才動態載入字典，但那會讓 i18n 模組變成 async，
+  // 牽動所有 importer 的初始化順序，不適合在發版前動。先把上限訂在
+  // 「補完後 + 一點餘裕」，繼續擋住意外膨脹。
+  { name: "i18n catalog", match: /^i18n-[\w-]+\.js$/, max: 128 * 1024 },
   // three.js is only pulled in by QrTree's remote-access QR animation; it's
   // isolated into its own vendor chunk (see vite.config.ts manualChunks) so
   // RemoteAccessModal's own feature code stays under the generic lazy cap

@@ -66,7 +66,6 @@ export const enModalsC: Record<string, string> = {
   "點名字可開工作日誌": "Click a name to open its work log",
 
   // KanbanModal
-  "任務看板": "Task Board",
   "讀取中…": "Loading…",
   "看板還是空的。點「BOSS 交辦工作」，用一句話描述目標，AI 會拆解成卡片、指派給各部門 NPC，進度都會出現在這裡。":
     "The board is empty. Click \"Boss Assign Work,\" describe your goal in a sentence, and AI will break it into cards and assign them to department NPCs — progress will show up here.",
@@ -205,7 +204,6 @@ export const enModalsC: Record<string, string> = {
   "更新排程失敗": "Failed to update schedule",
   "排程已刪除": "Schedule deleted",
   "刪除排程失敗": "Failed to delete schedule",
-  "營運面板": "Operations",
   "成本日報": "Cost Report",
   "排程任務": "Scheduled Tasks",
   "每日預算上限（達標後當天不再接新指示，隔天自動恢復）": "Daily budget cap (once reached, no new instructions are accepted that day; resumes automatically the next day)",

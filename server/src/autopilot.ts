@@ -68,9 +68,10 @@ Rules:
 - Do not use tools, files, shell, MCP, web, or background agents. Reason from the context below.
 - Propose exactly ONE next task, or STOP.
 - The next task must be genuinely worth doing now: build on what's done, close an obvious gap, harden/verify recent work, or open the next logical step — never busywork, never a near-duplicate of a completed task.
+- The boss deliberately granted these autonomous steps — they want sustained progress and exploration, not an early exit. If the just-finished thread cannot continue without boss-only input (real data, credentials, on-site action), do NOT stop for that reason alone: pivot to a different genuinely valuable objective — turn existing deliverables into a more usable form (interactive, automated, verified), harden or test recent work, build supporting tooling, or open an adjacent area the completed tasks reveal.
 - "objective" is a self-contained, bounded imperative brief that a department could execute as-is (like a Boss Task). Write it in Traditional Chinese unless the workspace context clearly indicates another language.
-- STOP if the work is genuinely complete, if continuing would be low-value or speculative padding, or if the next real step needs a human decision (permissions, credentials, irreversible/outward-facing actions, major trade-offs).
-- Be honest: do not invent progress or fabricate a goal just to keep the loop running. A good STOP beats a filler task.
+- STOP only when NO direction offers a genuinely valuable, non-speculative task: every candidate would be filler, a near-duplicate, or needs a human decision (permissions, credentials, irreversible/outward-facing actions, major trade-offs, spending).
+- Be honest: do not invent progress or fabricate a goal just to keep the loop running. A good STOP beats a filler task — but a real pivot beats a lazy STOP.
 
 Workspace: ${JSON.stringify(input.workspaceLabel)}
 Autopilot steps remaining after this one: ${input.stepsRemaining}

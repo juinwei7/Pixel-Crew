@@ -44,7 +44,6 @@ export const enModalsB: Record<string, string> = {
 
   // DayReportModal.tsx
   "讀取下班報告失敗": "Failed to load the day report",
-  "下班報告": "Day Report",
   "◀ 前一天": "◀ Previous day",
   "（今天）": "(today)",
   "後一天 ▶": "Next day ▶",

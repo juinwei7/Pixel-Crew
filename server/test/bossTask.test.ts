@@ -98,6 +98,23 @@ test("clarification budget is semantic-flow guardrail and reaches zero after thr
   assert.match(prompt, /Do not return clarification/i);
 });
 
+test("required-input preflight: prompt surfaces attachment count and demands asking for missing inputs up front", () => {
+  const base = {
+    objective: "對主資料表做實體解析清理並驗證準確率",
+    acceptanceCriteria: [],
+    workspacePath: "/repo",
+    messages: [{ id: "m1", role: "boss" as const, text: "清理主資料", createdAt: "2026-01-01" }],
+  };
+  // 沒附件：模型必須知道「0 file(s)」，缺輸入要當下就問，別跑到一半才發現。
+  const bare = bossTaskDecisionPrompt({ task: base, candidates });
+  assert.match(bare, /Required-input preflight/);
+  assert.match(bare, /Attachments provided by the Boss: 0 file\(s\)/);
+  assert.match(bare, /missing input discovered mid-execution wastes the whole run/i);
+  // 有附件：數量如實呈現，讓模型把附件當成已到位的輸入。
+  const attached = bossTaskDecisionPrompt({ task: { ...base, attachmentIds: ["a1", "a2"] }, candidates });
+  assert.match(attached, /Attachments provided by the Boss: 2 file\(s\)/);
+});
+
 test("parses clarification without creating stages", () => {
   const decision = parseBossTaskDecision(
     `<boss_task_decision>{"status":"clarification","question":"Which ERP modules belong in the first release?","rationale":["The requested product boundary is unknown"]}</boss_task_decision>`,

@@ -122,6 +122,35 @@ test("登入錯誤不放行；登入成功後的請求會改寫 Host 並拿掉 O
   assert.equal(proxied.url, "/api/echo");
 });
 
+test("存取層級 header：owner/訪客各自注入，且用戶端偽造一律被覆寫（終端機 shell 防越權的地基）", async (t) => {
+  const ws = makeWorkspace();
+  const upstream = await echoUpstream();
+  const relay = await startRelay({
+    PC_TSPROXY_CONFIG: ws.config,
+    PC_CLOUDFLARED_EXE: ws.exe,
+    PC_TSPROXY_TARGET_PORT: String(upstream.port),
+  });
+  t.after(() => { relay.child.kill(); upstream.server.close(); ws.cleanup(); });
+
+  // owner：注入 x-pc-access: own，且把用戶端偽造的 shr 蓋掉。
+  const owner = await login(relay.api, "test-passcode");
+  const ownerEcho = await (await relay.api("/api/echo", {
+    headers: { cookie: owner!, "x-pc-access": "shr" }, // 惡意用戶端想降不了、也偽造不了
+  })).json();
+  assert.equal(ownerEcho.headers["x-pc-access"], "own", "owner 連線必須被標成 own");
+
+  // 分享訪客：注入 x-pc-access: shr，且把用戶端偽造的 own 蓋掉（否則可騙後端開 shell）。
+  await relay.api("/__gate/api/share", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, hours: 1, passcode: "share-passcode" }),
+  });
+  const guest = await login(relay.api, "share-passcode");
+  const guestEcho = await (await relay.api("/api/workers", {
+    headers: { cookie: guest!, "x-pc-access": "own" }, // 偽造 own 企圖越權
+  })).json();
+  assert.equal(guestEcho.headers["x-pc-access"], "shr", "訪客連線必須被強制標成 shr，偽造的 own 不得穿透");
+});
+
 test("分享訪客：讀取放行、高危操作 owner 專屬、其餘要監護密碼", async (t) => {
   const ws = makeWorkspace();
   const upstream = await echoUpstream();
@@ -156,6 +185,53 @@ test("分享訪客：讀取放行、高危操作 owner 專屬、其餘要監護�
   const del = await as("/api/boss-tasks/someone-elses-task", { method: "DELETE" });
   assert.equal(del.status, 403);
   assert.equal((await del.json()).error, "guardian_required");
+});
+
+test("監護密碼：設定後訪客用它 step-up 解鎖，才放行動既有資料（功能未壞的端到端驗證）", async (t) => {
+  const ws = makeWorkspace();
+  const upstream = await echoUpstream();
+  const relay = await startRelay({
+    PC_TSPROXY_CONFIG: ws.config,
+    PC_CLOUDFLARED_EXE: ws.exe,
+    PC_TSPROXY_TARGET_PORT: String(upstream.port),
+  });
+  t.after(() => { relay.child.kill(); upstream.server.close(); ws.cleanup(); });
+
+  // owner 設定監護密碼＋開分享。
+  const ownerCookie = await login(relay.api, "test-passcode");
+  const setGuardian = await relay.api("/__gate/guardian-config", {
+    method: "POST", redirect: "manual",
+    headers: { cookie: ownerCookie!, "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ passcode: "guard-pass" }).toString(),
+  });
+  assert.ok(setGuardian.status < 400, "owner 設定監護密碼應成功");
+  await relay.api("/__gate/api/share", {
+    method: "POST", headers: { cookie: ownerCookie!, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, hours: 1, passcode: "share-passcode" }),
+  });
+
+  const guest = await login(relay.api, "share-passcode");
+  // 未解鎖：動既有資料被擋。
+  const blocked = await relay.api("/api/boss-tasks/existing", { method: "DELETE", headers: { cookie: guest! } });
+  assert.equal((await blocked.json()).error, "guardian_required");
+  // 錯的監護密碼不給解鎖。
+  const badUnlock = await relay.api("/__gate/guardian", {
+    method: "POST", headers: { cookie: guest!, "Content-Type": "application/json" },
+    body: JSON.stringify({ passcode: "wrong" }),
+  });
+  assert.equal(badUnlock.status, 401);
+  // 對的監護密碼換到 grd cookie，帶著它就放行。
+  const unlock = await relay.api("/__gate/guardian", {
+    method: "POST", headers: { cookie: guest!, "Content-Type": "application/json" },
+    body: JSON.stringify({ passcode: "guard-pass" }),
+  });
+  assert.equal(unlock.status, 200);
+  const grd = unlock.headers.get("set-cookie")?.split(";")[0] ?? "";
+  assert.ok(grd.startsWith("pc_grd="), "解鎖成功應回 grd cookie");
+  const allowed = await relay.api("/api/boss-tasks/existing", {
+    method: "DELETE", headers: { cookie: `${guest!}; ${grd}` },
+  });
+  assert.equal(allowed.status, 200, "帶著監護解鎖 cookie 應被放行到本體");
 });
 
 test("分享密碼下限與前端一致（6 碼）", async (t) => {

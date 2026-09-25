@@ -553,9 +553,10 @@ export type WorkerState = {
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
   resumeCandidate?: { workerId: string; taskText: string; sessionId: string; interruptedAt: string; resetAt: string | null } | null;
-  /** 編排器建立、跑完就消失的短命 NPC（作戰室成員、研究員）。場景據此把
-      他們拉到會議桌圍坐。以前是比對名字的 emoji 字首，現在由 server 明講。 */
-  ephemeralKind?: "warroom" | "research" | null;
+  /** 編排器建立、跑完就消失的短命 NPC（作戰室成員、研究員、老闆交辦專屬部門）。
+      場景據此把作戰室成員拉到會議桌圍坐、把 "dedicated"（老闆交辦臨時部門）圈進
+      自己的獨立房間。以前是比對名字的 emoji 字首，現在由 server 明講。 */
+  ephemeralKind?: "warroom" | "research" | "dedicated" | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

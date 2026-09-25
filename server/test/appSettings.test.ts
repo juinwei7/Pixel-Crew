@@ -14,8 +14,14 @@ test("normalize：空值與垃圾輸入回預設", () => {
 test("normalize：合法布林值保留", () => {
   assert.deepEqual(
     normalizeAppSettings({ brainSwapEnabled: false, limitResumeEnabled: true }),
-    { brainSwapEnabled: false, limitResumeEnabled: true, diagnosticsEnabled: true, lang: "zh" },
+    { brainSwapEnabled: false, limitResumeEnabled: true, diagnosticsEnabled: true, remoteAccessAutoStart: false, lang: "zh" },
   );
+});
+
+test("normalize：遠端自動啟動預設關、只收布林", () => {
+  assert.equal(DEFAULT_APP_SETTINGS.remoteAccessAutoStart, false);
+  assert.equal(normalizeAppSettings({ remoteAccessAutoStart: true }).remoteAccessAutoStart, true);
+  assert.equal(normalizeAppSettings({ remoteAccessAutoStart: "yes" }).remoteAccessAutoStart, false);
 });
 
 test("normalize：lang 只收 zh/en，垃圾值回預設 zh", () => {

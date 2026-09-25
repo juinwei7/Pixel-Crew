@@ -1952,6 +1952,8 @@ body {
   text-align: right;
 }
 .autopilot-config__row small { color: #7c8ea3; font-size: 9.5px; }
+.autopilot-config__row label.autopilot-config__check { justify-content: flex-start; cursor: pointer; }
+.autopilot-config__row label.autopilot-config__check input { width: auto; accent-color: #35d59b; }
 .autopilot-config__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .autopilot-config__actions button {
   padding: 5px 14px;

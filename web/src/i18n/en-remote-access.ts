@@ -69,7 +69,6 @@ export const enRemoteAccess: Record<string, string> = {
   "還有 {h} 小時 {m} 分鐘": "{h}h {m}m left",
   "還有 {m} 分鐘": "{m}m left",
   "已關閉分享": "Share closed",
-  "處理中…": "Working…",
   "關閉分享": "Close share",
   "到期方式": "Expiry mode",
   "快捷": "Quick",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
 import { extractMarkdownHeadings, RichText } from "./RichText";
@@ -391,7 +391,14 @@ function statusChip(status: Turn["status"], waitingForApproval: boolean) {
   return <span className="turn-chip turn-chip--done">{t("完成")}</span>;
 }
 
-function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+// Memoised so a streaming turn only re-renders its own card. The reducer keeps
+// referential identity for every finished turn (only the running turn gets a
+// fresh object per event), so the shallow prop compare skips the entire history
+// each token — without this, a long log re-reconciles hundreds of markdown
+// trees per streamed token, which reads as scroll jank/jitter on mobile.
+// onPin takes the turn key (not a per-turn closure) so its reference stays
+// stable across renders and doesn't defeat the memo.
+const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(turnKey: string): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const open = focusMode || (expanded ?? (isLatest || turn.status === "running" || turn.status === "error"));
   const waitingForApproval = turn.items.some((item) => item.kind === "approval" && item.status === "pending");
@@ -406,7 +413,7 @@ function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, o
           <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
           {statusChip(turn.status, waitingForApproval)}
         </button>}
-        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("取消釘選這份報告") : t("釘選這份報告")} title={pinned ? t("取消釘選") : t("釘選報告")} onClick={onPin}><Icon name="star" className={pinned ? "" : "ui-icon--hollow"} /></button>}
+        {focusMode && <button type="button" className={`turn-card__pin ${pinned ? "active" : ""}`} aria-pressed={pinned} aria-label={pinned ? t("取消釘選這份報告") : t("釘選這份報告")} title={pinned ? t("取消釘選") : t("釘選報告")} onClick={() => onPin?.(turn.key)}><Icon name="star" className={pinned ? "" : "ui-icon--hollow"} /></button>}
         <CopyButton value={turn.command} label={t("複製指令")} />
       </div>
       {open && (
@@ -421,7 +428,7 @@ function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, o
       )}
     </div>
   );
-}
+});
 
 function navStatus(turn: Turn): string {
   if (turn.items.some((item) => item.kind === "approval" && item.status === "pending")) return t("等待核准");
@@ -430,7 +437,7 @@ function navStatus(turn: Turn): string {
   return t("完成");
 }
 
-export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, studioRail, studioRailCollapsed = true }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; studioRail?: ReactNode; studioRailCollapsed?: boolean }) {
+export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, studioRail, studioRailCollapsed = true, missionActivity }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; studioRail?: ReactNode; studioRailCollapsed?: boolean; missionActivity?: ReactNode }) {
   const logRef = useRef<HTMLDivElement>(null);
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -499,7 +506,9 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
     setRenderLimit(RENDER_CHUNK);
   }, [readerKey]);
 
-  function togglePinned(turnKey: string) {
+  // Stable across renders so it doesn't defeat TurnCard's memo (each card gets
+  // the same onPin reference; the turn key is supplied at click time).
+  const togglePinned = useCallback((turnKey: string) => {
     setPinnedTurns((current) => {
       const next = new Set(current);
       if (next.has(turnKey)) next.delete(turnKey);
@@ -507,7 +516,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       persistPinnedReports(readerKey, next);
       return next;
     });
-  }
+  }, [readerKey]);
 
   function goToSearchResult(index: number) {
     if (visibleTurns.length === 0) return;
@@ -547,7 +556,8 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         <div><button type="button" disabled={visibleTurns.length === 0} aria-label={t("上一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex - 1)}>↑</button><small>{visibleTurns.length > 0 ? `${searchResultIndex + 1}/${visibleTurns.length}` : "0/0"}</small><button type="button" disabled={visibleTurns.length === 0} aria-label={t("下一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex + 1)}>↓</button></div>
       </div>}
       {pending.length > 0 && <div className="approval-shelf" role="alert" aria-live="assertive"><div className="approval-shelf__label">{t("需要你的核准")}</div>{pending.map((item) => <ApprovalCard key={item.key} item={item} onApprove={onApprove} />)}</div>}
-      {turns.length === 0 && (
+      {missionActivity}
+      {turns.length === 0 && !missionActivity && (
         <div className="quest-log__empty">
           {t("在下面下指令,例如「幫我完成工作」——小人會去任務板查還沒做完的事。")}
           <br />
@@ -563,7 +573,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         </button>
       )}
       {renderedTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={() => togglePinned(turn.key)} onApprove={onApprove} />
+        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} />
       ))}
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;

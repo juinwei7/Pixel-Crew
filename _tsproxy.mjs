@@ -20,7 +20,26 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = process.env.PC_TSPROXY_CONFIG || path.join(__dirname, '_tsproxy.secret.json');
+// secret 檔的存放位置：安裝版的更新流程會「整個換掉 app/ 資料夾」，secret 檔若放在
+// app/ 裡（舊行為），每次更新都會被洗掉——簽章密鑰重生、手機登入全失效、設定精靈歸零。
+// 安裝版（特徵：旁邊有 runtime/ 資料夾）改放上一層的資料根目錄（{LocalAppData}/Pixel Crew），
+// 更新只換 app/ 不動資料根目錄；並把舊位置的檔案一次性搬過去。源碼 checkout 維持舊位置。
+function defaultConfigPath() {
+  const legacy = path.join(__dirname, '_tsproxy.secret.json');
+  const installedBundle = fs.existsSync(path.join(__dirname, 'runtime'));
+  if (!installedBundle) return legacy;
+  const durable = path.join(path.dirname(__dirname), '_tsproxy.secret.json');
+  try {
+    if (!fs.existsSync(durable) && fs.existsSync(legacy)) {
+      fs.copyFileSync(legacy, durable);
+      try { fs.chmodSync(durable, 0o600); } catch {}
+    }
+    return durable;
+  } catch {
+    return legacy; // 資料根目錄動不了（罕見）→ 退回舊位置，行為與過去一致
+  }
+}
+const CONFIG_PATH = process.env.PC_TSPROXY_CONFIG || defaultConfigPath();
 const STARTUP_LOG_PATH = process.env.PC_TSPROXY_LOG || '';
 function startupLog(message) {
   // Parent starts this process detached and intentionally has no terminal.  A
@@ -837,11 +856,18 @@ ${as.supported ? `<div class="sec"><h2>開機自啟 ${as.enabled ? '<span class=
 }
 
 const backendTarget = () => ({ host: TARGET_HOST, port: TARGET_PORT });
-function rewriteHeaders(headers, target = backendTarget()) {
+// ACCESS_HEADER 讓本體 8787 知道「這條連線是 owner 還是分享訪客(shr)」。
+// 安全關鍵：務必先刪掉用戶端自己帶進來的同名 header 再由轉接站蓋上驗證後的值，
+// 否則訪客可自行偽造 x-pc-access: own 騙過後端。本體只在信任轉接站注入的前提下用它，
+// 8787 只綁 127.0.0.1，公網流量一定經過這裡，這個值到達後端前一定被覆寫。
+const ACCESS_HEADER = 'x-pc-access';
+function rewriteHeaders(headers, target = backendTarget(), accessLevel = null) {
   const h = { ...headers };
   h.host = `${target.host}:${target.port}`;
   delete h.origin;
   delete h.referer;
+  delete h[ACCESS_HEADER]; // 防偽造：無條件清掉用戶端帶來的存取層級 header
+  if (accessLevel) h[ACCESS_HEADER] = accessLevel; // 蓋上轉接站驗證後的真實層級
   return h;
 }
 const backendPath = (url) => /^(?:\/api(?:\/|\?|$)|\/internal(?:\/|\?|$)|\/healthz(?:\?|$)|\/ws(?:\/|\?|$))/.test(url);
@@ -906,7 +932,7 @@ async function resolveWebTarget() {
   return webTargetCheck;
 }
 
-function proxyHttp(clientReq, clientRes) {
+function proxyHttp(clientReq, clientRes, accessLevel = null) {
   const url = clientReq.url || '/';
   // Vite's /@fs escape hatch is useful for local development but must never
   // become a remotely reachable authenticated file browser.
@@ -920,7 +946,7 @@ function proxyHttp(clientReq, clientRes) {
     if (clientRes.destroyed) return;
     const proxyReq = http.request({
       host: target.host, port: target.port, method: clientReq.method,
-      path: url, headers: rewriteHeaders(clientReq.headers, target),
+      path: url, headers: rewriteHeaders(clientReq.headers, target, accessLevel),
     }, (proxyRes) => {
       clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
       proxyRes.pipe(clientRes);
@@ -937,10 +963,10 @@ function proxyHttp(clientReq, clientRes) {
   }).catch(() => { try { clientRes.writeHead(502); clientRes.end('proxy error'); } catch {} });
 }
 // 透傳並緩衝回應（僅用於 shr 建立請求，建立回應通常很小）；2xx 時把 id 記進 session。
-function proxyCapture(clientReq, clientRes, onBody) {
+function proxyCapture(clientReq, clientRes, onBody, accessLevel = null) {
   const proxyReq = http.request({
     host: TARGET_HOST, port: TARGET_PORT, method: clientReq.method,
-    path: clientReq.url, headers: rewriteHeaders(clientReq.headers),
+    path: clientReq.url, headers: rewriteHeaders(clientReq.headers, backendTarget(), accessLevel),
   }, (proxyRes) => {
     const chunks = [];
     proxyRes.on('data', (c) => chunks.push(c));
@@ -1401,10 +1427,10 @@ const server = http.createServer((req, res) => {
     } else {
       // 安全建立：緩衝回應抓 id 記進 session，之後可免密碼刪改自己建的。
       const collection = createCollection(req.method, p);
-      if (collection && sid) { proxyCapture(req, res, (buf) => recordCreated(sid, collection, buf)); return; }
+      if (collection && sid) { proxyCapture(req, res, (buf) => recordCreated(sid, collection, buf), 'shr'); return; }
     }
   }
-  proxyHttp(req, res);
+  proxyHttp(req, res, level === 'own' ? 'own' : 'shr');
 });
 
 // WebSocket / HTTP upgrade：同樣要先登入
@@ -1415,8 +1441,11 @@ server.on('upgrade', async (req, clientSocket, head) => {
   }
   // /ws is Pixel Crew's application socket; other upgrade paths belong to
   // Vite HMR when the source-development UI is selected.
+  // 存取層級隨升級請求注入本體：分享訪客(shr)的 WebSocket 只能收即時畫面，不能驅動
+  // 終端機(黑窗 shell)——否則 HTTP 層辛苦擋下的高危寫入會被 WS 這條路整個繞過。
+  const wsLevel = authLevel(req) === 'own' ? 'own' : 'shr';
   const target = backendPath(req.url || '/') ? backendTarget() : await resolveWebTarget();
-  const headers = rewriteHeaders(req.headers, target);
+  const headers = rewriteHeaders(req.headers, target, wsLevel);
   const upstream = net.connect(target.port, target.host, () => {
     let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
     for (const [k, v] of Object.entries(headers)) {

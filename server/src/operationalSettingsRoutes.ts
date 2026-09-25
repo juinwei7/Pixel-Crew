@@ -25,6 +25,7 @@ export function registerOperationalSettingsRoutes(input: {
     if (typeof req.body?.brainSwapEnabled === "boolean") patch.brainSwapEnabled = req.body.brainSwapEnabled;
     if (typeof req.body?.limitResumeEnabled === "boolean") patch.limitResumeEnabled = req.body.limitResumeEnabled;
     if (typeof req.body?.diagnosticsEnabled === "boolean") patch.diagnosticsEnabled = req.body.diagnosticsEnabled;
+    if (typeof req.body?.remoteAccessAutoStart === "boolean") patch.remoteAccessAutoStart = req.body.remoteAccessAutoStart;
     if (req.body?.lang === "zh" || req.body?.lang === "en") patch.lang = req.body.lang;
     const settings = appSettings.update(patch);
     input.setLang(settings.lang);

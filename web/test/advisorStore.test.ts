@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getAdvisorEntry, setAdvisorIdea, subscribeAdvisor } from "../src/advisorStore";
+import { clearAdvisorErrors, getAdvisorEntry, resumeAdvisorRuns, runAdvisor, setAdvisorIdea, subscribeAdvisor } from "../src/advisorStore";
+
+// Drive apiRequest (which calls global.fetch) into a chosen outcome, run the
+// body, then restore fetch. "reject" reproduces a connection blip (fetch throws
+// a TypeError → ApiRequestError "無法連線到 Pixel Crew Server…"); "server500" is a
+// genuine backend failure; "ok" returns proposals.
+async function withFetch(kind: "reject" | "server500" | "ok", body: () => Promise<void> | void): Promise<void> {
+  const original = globalThis.fetch;
+  if (kind === "reject") globalThis.fetch = (() => Promise.reject(new TypeError("network down"))) as typeof fetch;
+  else if (kind === "server500") globalThis.fetch = (() => Promise.resolve({ ok: false, status: 500, json: async () => ({ error: "advisor exploded" }) })) as unknown as typeof fetch;
+  else globalThis.fetch = (() => Promise.resolve({ ok: true, status: 200, json: async () => ({ result: { status: "ok", proposals: [{ id: "p1" }], domain: "d" } }) })) as unknown as typeof fetch;
+  try { await body(); } finally { globalThis.fetch = original; }
+}
 
 // The whole point of the module-level store is that advisor state outlives
 // BossTaskDesk unmounting when the owner switches NPCs. These lock the sync
@@ -36,6 +48,48 @@ test("an unknown workspace reads a safe empty default", () => {
   assert.equal(entry.idea, "");
   assert.equal(entry.loading, false);
   assert.deepEqual(entry.proposals, []);
+});
+
+test("a connection blip keeps resume params so a reconnect can retry; a real server error drops them", async () => {
+  const blip = "/repo/advisor-blip";
+  await withFetch("reject", () => runAdvisor(blip, { proactive: true }));
+  // The scary banner is set, but the run is marked resumable (params retained).
+  assert.match(getAdvisorEntry(blip).error ?? "", /Pixel Crew Server/);
+  assert.deepEqual(getAdvisorEntry(blip).resume, { proactive: true, provider: undefined, model: undefined });
+
+  const broken = "/repo/advisor-server-error";
+  await withFetch("server500", () => runAdvisor(broken, { proactive: true }));
+  // A genuine backend failure must NOT be auto-retried on every reconnect.
+  assert.equal(getAdvisorEntry(broken).error, "advisor exploded");
+  assert.equal(getAdvisorEntry(broken).resume, null);
+});
+
+test("clearAdvisorErrors drops the stale banner but leaves resume armed", async () => {
+  const ws = "/repo/advisor-clear";
+  await withFetch("reject", () => runAdvisor(ws, { proactive: true }));
+  assert.ok(getAdvisorEntry(ws).error);
+  clearAdvisorErrors();
+  // Banner gone, but the interrupted run can still be resumed.
+  assert.equal(getAdvisorEntry(ws).error, null);
+  assert.deepEqual(getAdvisorEntry(ws).resume, { proactive: true, provider: undefined, model: undefined });
+});
+
+test("resumeAdvisorRuns re-runs an interrupted run and a success clears resume (no loop)", async () => {
+  const ws = "/repo/advisor-resume";
+  await withFetch("reject", () => runAdvisor(ws, { proactive: true }));
+  assert.ok(getAdvisorEntry(ws).resume, "armed after the blip");
+
+  await withFetch("ok", async () => {
+    resumeAdvisorRuns();
+    // runAdvisor flips loading synchronously before its first await.
+    assert.equal(getAdvisorEntry(ws).loading, true, "resume actually kicked off a run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  const entry = getAdvisorEntry(ws);
+  assert.deepEqual(entry.proposals, [{ id: "p1" }]);
+  assert.equal(entry.error, null);
+  assert.equal(entry.resume, null, "resume cleared on success so it can't loop");
+  assert.equal(entry.loading, false);
 });
 
 test("subscribers are notified on change and stop after unsubscribe", () => {

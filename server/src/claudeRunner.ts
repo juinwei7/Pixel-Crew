@@ -294,6 +294,20 @@ export class ClaudeSession implements AgentSession {
       return Promise.resolve({ behavior: "deny", message: t("唯讀 NPC 協作不允許需要額外權限的操作") });
     }
     const mode = this.getAutoApproveMode();
+    // 完全自動核准下的 AskUserQuestion：不停下等人（無人值守管線會就此卡死），也不盲目放行
+    // （headless 沒有 UI 能收答案）——改成引導式拒絕，請 NPC 依任務目標自行決定並繼續。
+    if (toolName === "AskUserQuestion" && (mode === "full" || mode === "invincible")) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "tool",
+        title: t("AskUserQuestion 已自動改為自主決定"),
+        input, command, cwd: this.workspacePath,
+        reason: t("完全自動核准模式：沒有人值守回答提問，已請 NPC 依任務目標自行做最合理的決定並繼續"),
+        decisions: [], toolName, riskReason: riskReasonFor(command),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("（自動核准）目前沒有人值守回答提問。請依任務目標與現有資訊，自行做出最合理的決定並直接繼續執行；把你的抉擇與理由寫進交付內容即可。") });
+    }
     const autoApproval = evaluateAutoApproval(mode, toolName, command);
 
     if (autoApproval.allowed) {

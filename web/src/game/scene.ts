@@ -63,6 +63,10 @@ export type WorkerSceneState = {
   avatarPresetId: string;
   selectId: string;
   temporary: boolean;
+  /** 老闆交辦臨時部門成員——desk 層據此把整個部門圈進獨立房間。 */
+  ephemeral?: boolean;
+  /** 部門任務當前步驟的負責人——desk 層畫值勤指標。 */
+  onDuty?: boolean;
   /** True while a tool-call approval is waiting on the user. */
   waiting: boolean;
   workspacePath: string;
@@ -192,6 +196,8 @@ export async function createScene(
 
   room.container.zIndex = -1000;
   particles.g.zIndex = 10000;
+  // （試過用大橢圓光暈做室內燈光——pixi Graphics 沒有漸層，實機上看起來是幾個
+  //   突兀的「奇怪圓圈」，已拿掉。要做燈光得用貼圖或濾鏡，之後再議。）
   world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g, cat.container);
 
   // 日夜循環只作用在窗外：天空顏色照真實時間依關鍵影格連續漸變（白天亮藍、

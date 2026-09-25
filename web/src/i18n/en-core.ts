@@ -196,7 +196,6 @@ export const enCore: Record<string, string> = {
   "下班報告與一日回放：今天花了多少、完成了什麼、事件時間軸": "Day report and replay: today's spend, what got done, event timeline",
   "重啟伺服器": "Restart server",
   "優雅重啟伺服器：等所有 NPC 空檔後自動重啟，不會打斷任何回合": "Graceful restart: waits until all NPCs are idle, never interrupts a turn",
-  "新手導覽": "Tour",
   "新手導覽：讓導覽貓帶你重新認識辦公室": "Tour: let the guide cat walk you through the office again",
   "Pixel Crew v{version} 已發布": "Pixel Crew v{version} is out",
   "目前版本 v{version}": "Current version v{version}",

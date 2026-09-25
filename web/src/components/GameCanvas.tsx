@@ -3,6 +3,8 @@ import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, Dep
 import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/person";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
+import { bossRoomWorkers } from "../game/bossRoomFilter";
+import { latestMissionSpeech, missionStationOverride } from "../game/missionScene";
 import { FURNITURE_DEFS } from "../game/furniture";
 import { roomName } from "../workspace";
 import { milestoneLevel } from "../milestones";
@@ -44,6 +46,10 @@ type VisualWorker = {
   avatarPresetId: string;
   busy: boolean;
   temporary: boolean;
+  /** 老闆交辦臨時部門的 NPC（ephemeralKind="dedicated"）——場景把整個部門圈進獨立房間。 */
+  ephemeral: boolean;
+  /** 部門任務「當前步驟」的負責人——桌位亮值勤指標，回答「現在到誰了」。 */
+  onDuty: boolean;
   waiting: boolean;
   provider: WorkerState["provider"];
   model: string | null;
@@ -90,9 +96,13 @@ export function radialMenuDirection(x: number, width: number): "left" | "right" 
 // 穩定的空集合預設值：避免每次 render 都 new Set() 造成參照改變、白白觸發下游重算。
 const EMPTY_ROUNDTABLE_IDS: ReadonlySet<string> = new Set();
 
-function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS): VisualWorker[] {
+function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false): VisualWorker[] {
   const departmentById = new Map(departments.map((department) => [department.id, department]));
-  return groupWorkersByWorkspace(workers).flatMap((worker) => {
+  // 兩間房：主辦公室（原本的房間）只住常駐夥伴；BOSS 交辦房只住老闆交辦的臨時部門
+  // （ephemeralKind="dedicated"）。開著 BOSS 頁時場景切到交辦房，關掉就回主辦公室；
+  // 交辦房沒人時退回主辦公室，避免場景空成一片（bossRoomFilter.ts）。
+  const roomWorkers = bossRoomWorkers(workers, bossRoom);
+  return groupWorkersByWorkspace(roomWorkers).flatMap((worker) => {
     const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
     const collaboration = collaborations.find((task) =>
       ["running", "returning"].includes(task.status) &&
@@ -111,12 +121,21 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
     //   得把那顆 emoji 顯示出來。現在協定寫在欄位上，名字純粹是名字。）
     const isWarRoomPeer = worker.ephemeralKind === "warroom";
     const roundtabling = !handingOff && (isWarRoomPeer || (roundtableIds.has(worker.id) && worker.busy));
+    // Mission 場景生命力（missionScene.ts）：有工具在跑但角色還停在自家桌 → 走去對應
+    // 工作站；討論類步驟輪到他發言、沒有工具在跑 → 把最新講的話截成對話泡。
+    const stationOverride = !handingOff && !roundtabling ? missionStationOverride(worker) : null;
+    const missionTalking = !handingOff && !roundtabling && !stationOverride && worker.busy
+      && missionStep != null && missionStep.assigneeWorkerId === worker.id
+      ? latestMissionSpeech(mission?.executionEvents, worker.id)
+      : null;
     const parent: VisualWorker = {
       id: worker.id,
       selectId: worker.id,
       name: worker.name,
       character: handingOff ? { ...worker.character, activity: "thinking", station: "home", speech: t("LLM 交接中…") }
         : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("作戰室辯論中…") : t("作戰室") }
+        : stationOverride ? { ...worker.character, station: stationOverride }
+        : missionTalking ? { ...worker.character, activity: "thinking", speech: missionTalking }
         : worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
@@ -125,6 +144,8 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       avatarPresetId: worker.avatarPresetId,
       busy: worker.busy,
       temporary: false,
+      ephemeral: worker.ephemeralKind === "dedicated",
+      onDuty: Boolean(missionStep && missionStep.assigneeWorkerId === worker.id && ["executing", "reviewing"].includes(mission?.status ?? "")),
       waiting: Boolean(pendingApprovalFor(worker)),
       provider: worker.provider,
       model: worker.model,
@@ -164,6 +185,8 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       avatarPresetId: "classic",
       busy: true,
       temporary: true,
+      ephemeral: false,
+      onDuty: false,
       waiting: false,
       provider: worker.provider,
       model: worker.model,
@@ -187,6 +210,8 @@ type Props = {
   missions?: DepartmentMission[];
   departments?: Department[];
   roundtableIds?: ReadonlySet<string>;
+  /** true＝顯示「BOSS 交辦房」（只有老闆交辦的臨時部門）；false＝主辦公室（常駐夥伴）。 */
+  bossRoom?: boolean;
   /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
   swapThresholdTokens?: number;
   /** 點擊作戰室會議桌時觸發（App 用它開作戰室模式並聚焦輸入框）。 */
@@ -212,7 +237,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -275,6 +300,8 @@ export function GameCanvas({
   latestMissions.current = missions;
   const latestDepartments = useRef(departments);
   latestDepartments.current = departments;
+  const latestBossRoom = useRef(bossRoom);
+  latestBossRoom.current = bossRoom;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const milestoneRef = useRef(0);
@@ -444,7 +471,7 @@ export function GameCanvas({
     });
 
     function pushWorkers() {
-      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current));
+      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current));
     }
 
     return () => {
@@ -457,8 +484,8 @@ export function GameCanvas({
 
   useEffect(() => {
     latest.current = { workers, activeId };
-    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds));
-  }, [workers, activeId, collaborations, missions, departments, roundtableIds]);
+    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom));
+  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom]);
 
 
   useEffect(() => {
