@@ -150,6 +150,7 @@ export const enModalsA: Record<string, string> = {
   "封存會保留全部對話、部門階段與報告。": "Archiving keeps the full conversation, department stages, and report.",
   "封存記錄": "Archive record",
   "任務會在工作區「{workspace}」執行；需求太概略時會先問清楚再安排部門。": "Runs in workspace \"{workspace}\"; if the request is too vague it'll ask first, then assign a department.",
+  "更多設定": "More settings",
   "將所有工人、對話紀錄與角色圖片打包成一個檔案，可用系統工具自行檢查。匯出備份不會中斷正在執行的工人。": "Bundles all workers, conversation history, and avatar images into one file you can inspect with system tools. Exporting a backup doesn't interrupt running workers.",
   "尚未填寫觸發情境": "No trigger scenario filled in yet",
   "尚未安裝": "Not installed",
