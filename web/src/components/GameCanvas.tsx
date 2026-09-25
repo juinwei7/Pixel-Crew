@@ -98,9 +98,9 @@ const EMPTY_ROUNDTABLE_IDS: ReadonlySet<string> = new Set();
 
 function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false): VisualWorker[] {
   const departmentById = new Map(departments.map((department) => [department.id, department]));
-  // 兩間房：主辦公室（原本的房間）只住常駐夥伴；BOSS 交辦房只住老闆交辦的臨時部門
-  // （ephemeralKind="dedicated"）。開著 BOSS 頁時場景切到交辦房，關掉就回主辦公室；
-  // 交辦房沒人時退回主辦公室，避免場景空成一片（bossRoomFilter.ts）。
+  // 主辦公室平常只住常駐夥伴，短命的交辦部隊（ephemeralKind="dedicated"）收起來；
+  // 一開 BOSS 頁則整間辦公室全員顯示（常駐部門 + 交辦部隊），不再把其他部門藏掉
+  // 害場景看起來空白（bossRoomFilter.ts）。
   const roomWorkers = bossRoomWorkers(workers, bossRoom);
   return groupWorkersByWorkspace(roomWorkers).flatMap((worker) => {
     const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
