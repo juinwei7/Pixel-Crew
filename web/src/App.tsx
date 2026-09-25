@@ -326,6 +326,20 @@ export function App() {
     () => selectedDepartmentId != null && workerList.some((worker) => worker.departmentId === selectedDepartmentId && worker.ephemeralKind === "dedicated"),
     [selectedDepartmentId, workerList],
   );
+  // 進行中交辦實際在跑（或待跑）的部門 id：像素場景的「交辦房」用它顯示「正在做這張交辦的
+  // 那群人」——不論交辦是開了專屬部隊，還是被路由給既有部門，一開 BOSS 都切到這些部門。
+  // 交辦一結束（stage 完成/失敗/取消）就移出集合，交辦房沒人時 bossRoomFilter 退回主辦公室。
+  const bossTaskDepartmentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of Object.values(bossTasks)) {
+      if (["completed", "failed", "cancelled"].includes(task.status)) continue;
+      for (const stage of task.stages) {
+        if (["completed", "failed", "cancelled"].includes(stage.status)) continue;
+        if (stage.departmentId) ids.add(stage.departmentId);
+      }
+    }
+    return ids;
+  }, [bossTasks]);
   const selectedDepartmentLead = selectedDepartment
     ? workers[selectedDepartment.leadWorkerId] ?? selectedDepartment.memberWorkerIds.map((id) => workers[id]).find(Boolean)
     : undefined;
@@ -1146,6 +1160,7 @@ export function App() {
         departments={departmentList}
         roundtableIds={roundtableIdSet}
         bossRoom={bossAssignmentOpen || active?.ephemeralKind === "dedicated" || selectedDepartmentIsBossCrew}
+        bossTaskDepartmentIds={bossTaskDepartmentIds}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
@@ -1312,7 +1327,7 @@ export function App() {
               <div className="autopilot-config__row">
                 <label className="autopilot-config__check"><input type="checkbox" checked={autopilotAutoResolveInput}
                   onChange={(event) => setAutopilotAutoResolveInput(event.target.checked)} />{t("卡住時自動接手")}</label>
-                <small>{t("交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 2 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你")}</small>
+                <small>{t("交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 5 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你")}</small>
               </div>
               <div className="autopilot-config__actions">
                 <button type="button" className="autopilot-config__cancel" onClick={() => setAutopilotConfigOpen(false)}>{t("取消")}</button>

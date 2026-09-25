@@ -42,16 +42,39 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
   return Number.isInteger(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
 }
 
+// 把 profile 的基準估算範圍，依縮放因子等比壓縮；四捨五入並保底，避免出現 0 或負值。
+function scaleRange(range: { min: number; max: number }, factor: number, floor: number, decimals = 0): { min: number; max: number } {
+  const round = (n: number) => {
+    const scaled = n * factor;
+    if (decimals > 0) {
+      const p = 10 ** decimals;
+      return Math.max(floor, Math.round(scaled * p) / p);
+    }
+    return Math.max(floor, Math.round(scaled));
+  };
+  return { min: round(range.min), max: round(range.max) };
+}
+
 export function executionBudgetFor(value: unknown, overrides: ExecutionBudgetOverrides = {}): ExecutionBudget {
   const budget = EXECUTION_BUDGETS[normalizeExecutionProfile(value)];
+  const maxAgents = boundedInteger(overrides.maxAgents, budget.maxAgents, 1, budget.maxAgents);
+  const maxStages = boundedInteger(overrides.maxStages, budget.maxStages, 1, budget.maxStages);
+  const maxMissionSteps = boundedInteger(overrides.maxMissionSteps, budget.maxMissionSteps, 2, budget.maxMissionSteps);
+  // 預估值隨「實際生效的旋鈕」縮放：profile 只定上限，把 stages／steps／agents 調小，預估就跟著降。
+  // 三個旋鈕都維持預設時，三個比值皆為 1 → 縮放後與 profile 原表完全一致，不動既有預設。
+  const breadth = (maxStages / budget.maxStages) * (maxMissionSteps / budget.maxMissionSteps);
+  const agentRatio = maxAgents / budget.maxAgents;
+  const turnsScale = breadth * (0.6 + 0.4 * agentRatio); // 回合數 ≈ 廣度 × 並行度
+  const durationScale = breadth;                          // 牆鐘時間 ≈ 階段 × 步數（agent 並行不額外拉長工期）
+  const costScale = turnsScale;                           // 花費 ≈ 回合數
   return {
     ...budget,
-    maxAgents: boundedInteger(overrides.maxAgents, budget.maxAgents, 1, budget.maxAgents),
-    maxStages: boundedInteger(overrides.maxStages, budget.maxStages, 1, budget.maxStages),
-    maxMissionSteps: boundedInteger(overrides.maxMissionSteps, budget.maxMissionSteps, 2, budget.maxMissionSteps),
-    estimatedAgentTurns: { ...budget.estimatedAgentTurns },
-    estimatedDurationMinutes: { ...budget.estimatedDurationMinutes },
-    claudeUsd: { ...budget.claudeUsd },
-    codexQuota5hPercent: { ...budget.codexQuota5hPercent },
+    maxAgents,
+    maxStages,
+    maxMissionSteps,
+    estimatedAgentTurns: scaleRange(budget.estimatedAgentTurns, turnsScale, 1),
+    estimatedDurationMinutes: scaleRange(budget.estimatedDurationMinutes, durationScale, 1),
+    claudeUsd: scaleRange(budget.claudeUsd, costScale, 0.01, 2),
+    codexQuota5hPercent: scaleRange(budget.codexQuota5hPercent, costScale, 1),
   };
 }

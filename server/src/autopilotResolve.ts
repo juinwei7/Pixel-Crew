@@ -6,7 +6,7 @@
 import { t } from "./i18n.js";
 
 /** 同一張交辦最多自動接手幾次——超過就代表這個卡點不是指示能解的，停下等人。 */
-export const AUTOPILOT_RESOLVE_MAX_ATTEMPTS = 2;
+export const AUTOPILOT_RESOLVE_MAX_ATTEMPTS = 5;
 
 export type AutopilotResolveDecision =
   | { action: "retry" | "retry_execute" | "accept_risk"; guidance: string }

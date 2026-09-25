@@ -278,7 +278,7 @@ export const enModalsD: Record<string, string> = {
   "不限": "No limit",
   "選填；到點會在下一張交辦收工時停": "Optional; when it's up, autopilot stops as the next assignment wraps",
   "卡住時自動接手": "Auto-resume when stuck",
-  "交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 2 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你": "When an assignment stalls or asks a question, the decision model first tries to unblock it or answer with a safe assumption (at most 2 per assignment; stand-in answers are labelled and correctable); anything needing your own data, permissions, or an irreversible decision still stops and waits for you",
+  "交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 5 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你": "When an assignment stalls or asks a question, the decision model first tries to unblock it or answer with a safe assumption (at most 5 per assignment; stand-in answers are labelled and correctable); anything needing your own data, permissions, or an irreversible decision still stops and waits for you",
   "開始": "Start",
   "Codex": "Codex",
   "Claude Code": "Claude Code",

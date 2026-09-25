@@ -172,6 +172,53 @@ test("validates a multi-department acyclic graph and rejects a cycle", () => {
   assert.equal(cycle, null);
 });
 
+test("directExecute flag is parsed per stage and defaults off", () => {
+  const withFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"trivial write","rationale":["single action"],"stages":[{"id":"write","departmentId":"eng","title":"Write file","objective":"Create one small file","acceptanceCriteria":["file exists"],"dependsOn":[],"directExecute":true}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withFlag?.status, "ready");
+  if (withFlag?.status === "ready") assert.equal(withFlag.stages[0].directExecute, true);
+
+  const withoutFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"normal","rationale":["multi step"],"stages":[{"id":"build","departmentId":"eng","title":"Build","objective":"Implement the feature","acceptanceCriteria":["works"],"dependsOn":[]}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withoutFlag?.status, "ready");
+  // 未給旗標時 directExecute 必須是 undefined（falsy）——不能誤啟快速道
+  if (withoutFlag?.status === "ready") assert.notEqual(withoutFlag.stages[0].directExecute, true);
+
+  // 非布林垃圾值不得被當真
+  const garbage = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"garbage flag","rationale":["x"],"stages":[{"id":"s","departmentId":"eng","title":"S","objective":"do","acceptanceCriteria":["ok"],"dependsOn":[],"directExecute":"yes"}]}</boss_task_decision>`,
+    candidates,
+  );
+  if (garbage?.status === "ready") assert.notEqual(garbage.stages[0].directExecute, true);
+});
+
+test("noReview flag is parsed per stage and defaults off", () => {
+  const withFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"simple multi-doc","rationale":["low risk authoring"],"stages":[{"id":"docs","departmentId":"eng","title":"Write docs","objective":"Author a set of related documents","acceptanceCriteria":["files exist"],"dependsOn":[],"noReview":true}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withFlag?.status, "ready");
+  if (withFlag?.status === "ready") assert.equal(withFlag.stages[0].noReview, true);
+
+  const withoutFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"risky logic","rationale":["needs QA"],"stages":[{"id":"impl","departmentId":"eng","title":"Implement","objective":"Write the calculation engine","acceptanceCriteria":["passes"],"dependsOn":[]}]}</boss_task_decision>`,
+    candidates,
+  );
+  // 未給旗標時 noReview 必須是 undefined（falsy）——不能誤啟剝 review
+  if (withoutFlag?.status === "ready") assert.notEqual(withoutFlag.stages[0].noReview, true);
+
+  // 非布林垃圾值不得被當真
+  const garbage = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"garbage","rationale":["x"],"stages":[{"id":"s","departmentId":"eng","title":"S","objective":"do","acceptanceCriteria":["ok"],"dependsOn":[],"noReview":"yes"}]}</boss_task_decision>`,
+    candidates,
+  );
+  if (garbage?.status === "ready") assert.notEqual(garbage.stages[0].noReview, true);
+});
+
 test("selected execution boundary rejects a graph beyond its stage ceiling", () => {
   const fourStages = `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"too broad for standard","rationale":["four owners"],"stages":[{"id":"a","departmentId":"pm","title":"A","objective":"A","acceptanceCriteria":["A"],"dependsOn":[]},{"id":"b","departmentId":"eng","title":"B","objective":"B","acceptanceCriteria":["B"],"dependsOn":["a"]},{"id":"c","departmentId":"qa","title":"C","objective":"C","acceptanceCriteria":["C"],"dependsOn":["b"]},{"id":"d","departmentId":"pm","title":"D","objective":"D","acceptanceCriteria":["D"],"dependsOn":["c"]}]}</boss_task_decision>`;
   assert.match(explainBossTaskDecisionFailure(fourStages, candidates, "standard") ?? "", /1 to 3/);

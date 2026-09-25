@@ -3,10 +3,11 @@ import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AdvisorProposal, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
-import { clearAdvisorErrors, getAdvisorEntry, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
+import { clearAdvisorErrors, getActiveAdvisorWorkspace, getAdvisorEntry, releaseAdvisorPin, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
 import { writeComposerDraft } from "../hooks/useComposerDraft";
+import { useIsPhone } from "../hooks/useIsPhone";
 import { MissionActivityFeed } from "./MissionActivityFeed";
 import { type ConfirmTone } from "./ConfirmDialog";
 
@@ -60,12 +61,6 @@ const statusLabel: Record<BossTask["status"], string> = {
   failed: t("未完成"),
   cancelled: t("已取消"),
 };
-
-const starterTasks = [
-  "規劃並開發一套簡易 ERP",
-  "整理上週營運數據並提出建議",
-  "檢查目前產品並安排改善計畫",
-];
 
 const LAST_BOSS_TASK_KEY = "pixel-crew:boss-last-task";
 const terminalStatuses: BossTask["status"][] = ["completed", "failed", "cancelled"];
@@ -135,9 +130,16 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   // 就把它的 objective 預填進下面的交辦草稿（沿用 starterTasks 同款「填草稿＋重開」）。
   // 狀態放在模組級 advisorStore（依 workspace 分鍵），讓生成中／已生成的結果在切到別的
   // NPC 再回來時不會消失——BossTaskDesk 一離開 Boss Desk 就卸載，本地 state 會被清掉。
-  const advisor = useSyncExternalStore(subscribeAdvisor, () => getAdvisorEntry(workspacePath), () => getAdvisorEntry(workspacePath));
+  // 顧問狀態依 workspace 分鍵，但 Boss Desk 是對「目前作用中工作區」開的。若在 A 工作區發起
+  // 生成後切到 B 工作區的 NPC，activeWorkspace 變 B、讀到 B 的空狀態→生成看似消失，非得切回 A 才
+  // 看得到。這裡改讀「釘選工作區」（正在生成／剛生成好的那個）；沒有釘選時才退回目前工作區。顧問
+  // 的念頭／生成，以及「用此方向交辦」的草稿與建立任務都跟著它走，方向才不會落到別的工作區。
+  const pinnedAdvisorWorkspace = useSyncExternalStore(subscribeAdvisor, getActiveAdvisorWorkspace, getActiveAdvisorWorkspace);
+  const advisorWorkspace = pinnedAdvisorWorkspace ?? workspacePath;
+  const advisorPinnedElsewhere = advisorWorkspace !== workspacePath;
+  const advisor = useSyncExternalStore(subscribeAdvisor, () => getAdvisorEntry(advisorWorkspace), () => getAdvisorEntry(advisorWorkspace));
   const { idea: advisorIdea, loading: advisorLoading, error: advisorError, domain: advisorDomain, question: advisorQuestion, proposals: advisorProposals } = advisor;
-  const setAdvisorIdea = (value: string) => setAdvisorIdeaStore(workspacePath, value);
+  const setAdvisorIdea = (value: string) => setAdvisorIdeaStore(advisorWorkspace, value);
   // 顧問生成一次要 ~100–115 秒（冷啟＋思考＋4 段內容）：期間跑一個計時＋輪播訊息的動畫，
   // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。elapsed 由 store 的
   // startedAt 推導，遠端換頁重掛後仍能接續正確秒數。
@@ -148,6 +150,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   // 「為此交辦開專屬部門」：預設開＝按交辦直接為目標建一支專屬部門並開跑（省 token、不卡既有部門）；
   // 關掉＝走原本的決策模型路由，交給既有部門。
   const [dedicatedDepartment, setDedicatedDepartment] = useState(true);
+  // 手機上把「執行邊界／進階設定／驗收條件」三顆進階設定收進一顆「更多設定」，讓交辦第一眼
+  // 只剩專屬部門開關＋輸入框，不被三排設定推到畫面最底；桌機維持三顆攤開。
+  const isPhone = useIsPhone();
   const restoredSelection = useRef(false);
 
   // Returning to the Boss Desk (this component remounts on entry) is a natural
@@ -180,8 +185,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const runAdvisor = (proactive = false) => {
     // 交易在 store 內執行，即使離開 Boss Desk 卸載了本元件也會跑完並保存結果。
     const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
-    void runAdvisorStore(workspacePath, { proactive, provider: decision?.provider, model: decision?.model });
+    // 對目前檢視的工作區生成（advisorWorkspace）：沒有釘選時就是目前工作區；正看著別區釘選結果時
+    // 則是續跑那個工作區（念頭欄也綁在它上面，兩者一致）。要為目前工作區另起爐灶，先按「改用目前
+    // 工作區」清掉釘選再生成。
+    void runAdvisorStore(advisorWorkspace, { proactive, provider: decision?.provider, model: decision?.model });
   };
+
+  // 「改用目前工作區」：清掉別區釘選的顧問結果，讓 Boss Desk 退回目前工作區開全新交辦。
+  const dismissPinnedAdvisor = () => releaseAdvisorPin(advisorWorkspace, true);
 
   // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
   const useProposalObjective = (objective: string) => {
@@ -190,7 +201,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     setShowArchived(false);
     setSelectedId(null);
     setNewTask(true);
-    writeComposerDraft(`boss:${workspacePath}:new`, objective);
+    // 用 advisorWorkspace（生成該方向的工作區）作草稿鍵：與下方 composer 的 :new draftKey 一致，且
+    // 交辦會建立在生成方向的工作區，方向不會落到別的工作區。
+    writeComposerDraft(`boss:${advisorWorkspace}:new`, objective);
     setComposerSeed((seed) => seed + 1);
   };
   // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
@@ -230,14 +243,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   }, [selected?.id, selected?.title]);
 
   useEffect(() => {
-    const modelKey = `pixel-crew:boss-decision-model:${workspacePath}`;
+    const modelKey = `pixel-crew:boss-decision-model:${advisorWorkspace}`;
     try {
       const savedModel = localStorage.getItem(modelKey) ?? "";
       setDecisionKey(decisionModels.some((option) => `${option.provider}:${option.model}` === savedModel) ? savedModel : "");
     } catch {
       setDecisionKey("");
     }
-  }, [decisionModels, selected?.id, workspacePath]);
+  }, [decisionModels, selected?.id, advisorWorkspace]);
 
   async function submit(submission: CommandSubmission): Promise<string | null> {
     const text = submission.text.trim();
@@ -245,6 +258,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     setWorking(true);
     setError(null);
     let result: { data?: BossTask; error?: string };
+    const isCreate = !(selected && !newTask);
     if (selected && !newTask) {
       result = await onMessage(selected.id, submission);
     } else {
@@ -252,7 +266,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
       result = await onCreate({
         message: text || "請依附加檔案規劃並完成任務",
         acceptanceCriteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 8),
-        workspacePath,
+        workspacePath: advisorWorkspace,
         decisionProvider: decision?.provider,
         decisionModel: decision?.model,
         executionProfile,
@@ -272,6 +286,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
       return message;
     }
     setCriteria("");
+    // 任務已建立，這筆顧問結果算「消化完」→ 解除釘選，之後開新交辦回到目前工作區；但若還在生成
+    // 中（例如另跑的主動建議）就別打斷，讓它繼續浮在原工作區。
+    if (isCreate && !getAdvisorEntry(advisorWorkspace).loading) releaseAdvisorPin(advisorWorkspace);
     setSelectedId(result.data.id);
     setNewTask(false);
     setShowArchived(false);
@@ -357,9 +374,35 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         ? t("追問結果、要求修改，或追加後續工作")
         : t("目前正在跨部門執行；進度會自動回報");
 
+  const settingSections = <>
+      <details><summary>{t("執行邊界與估算")} <span>{t("開始前設定")}</span></summary><div><label><span>{t("執行級別")}</span><select value={executionProfile} onChange={(event) => {
+        const profile = event.target.value as ExecutionProfile;
+        setExecutionProfile(profile);
+        if (profile === "quick") { setMaxAgents(2); setMaxMissionSteps(2); }
+        else if (profile === "deep") { setMaxAgents(6); setMaxMissionSteps(4); }
+        else { setMaxAgents(4); setMaxMissionSteps(3); }
+      }}>
+        <option value="quick">{t("快速 · 最少協作")}</option>
+        <option value="standard">{t("標準 · 平衡範圍")}</option>
+        <option value="deep">{t("深度 · 複雜任務")}</option>
+      </select></label><label><span>{t("最多 NPC")}</span><input type="number" min={1} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 6 : 4} value={maxAgents} onChange={(event) => setMaxAgents(Number(event.target.value))} /></label><label><span>{t("每 Mission 最多步驟")}</span><input type="number" min={2} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 4 : 3} value={maxMissionSteps} onChange={(event) => setMaxMissionSteps(Number(event.target.value))} /></label><small>{executionProfile === "quick"
+        ? t("上限：2 位 NPC、1 個部門階段、每 Mission 2 步；約 2–10 分鐘。")
+        : executionProfile === "deep"
+          ? t("上限：6 位 NPC、5 個部門階段、每 Mission 4 步；約 30–90 分鐘。")
+          : t("上限：4 位 NPC、3 個部門階段、每 Mission 3 步；約 10–35 分鐘。")}</small><small>{t("預估：Claude 約 US$ 0.02–2.00；Codex 約影響 5 小時 quota 1–30%。實際依工作內容與模型而變，非保證值；超過上限會停止派工，不會靜默擴張。")}</small></div></details>
+      <details><summary>{t("進階設定")} <span>{t("選填")}</span></summary><div><label><span>{t("決策模型")}</span><select value={decisionKey} onChange={(event) => {
+        setDecisionKey(event.target.value);
+        try { localStorage.setItem(`pixel-crew:boss-decision-model:${advisorWorkspace}`, event.target.value); } catch { /* unavailable */ }
+      }}>
+        <option value="">{t("自動選擇 Claude / Codex")}</option>
+        {decisionModels.map((option) => <option key={`${option.provider}:${option.model}`} value={`${option.provider}:${option.model}`}>{option.label}</option>)}
+      </select></label></div></details>
+      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成後會逐條核對這些條件")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
+  </>;
+
   const composer = <TaskComposer
     key={`boss-composer-${composerSeed}`}
-    draftKey={`boss:${selected && !newTask ? selected.id : `${workspacePath}:new`}`}
+    draftKey={`boss:${selected && !newTask ? selected.id : `${advisorWorkspace}:new`}`}
     placeholder={placeholder}
     submitLabel={selected && !newTask ? t("送出") : t("交辦")}
     busyLabel={t("處理中…")}
@@ -380,29 +423,9 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <span className="boss-task-composer__dedicated-track"><span className="boss-task-composer__dedicated-thumb" /></span>
         <span>{dedicatedDepartment ? t("為此交辦開專屬部門") : t("交給既有部門（路由）")}</span>
       </button>
-      <details><summary>{t("執行邊界與估算")} <span>{t("開始前設定")}</span></summary><div><label><span>{t("執行級別")}</span><select value={executionProfile} onChange={(event) => {
-        const profile = event.target.value as ExecutionProfile;
-        setExecutionProfile(profile);
-        if (profile === "quick") { setMaxAgents(2); setMaxMissionSteps(2); }
-        else if (profile === "deep") { setMaxAgents(6); setMaxMissionSteps(4); }
-        else { setMaxAgents(4); setMaxMissionSteps(3); }
-      }}>
-        <option value="quick">{t("快速 · 最少協作")}</option>
-        <option value="standard">{t("標準 · 平衡範圍")}</option>
-        <option value="deep">{t("深度 · 複雜任務")}</option>
-      </select></label><label><span>{t("最多 NPC")}</span><input type="number" min={1} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 6 : 4} value={maxAgents} onChange={(event) => setMaxAgents(Number(event.target.value))} /></label><label><span>{t("每 Mission 最多步驟")}</span><input type="number" min={2} max={executionProfile === "quick" ? 2 : executionProfile === "deep" ? 4 : 3} value={maxMissionSteps} onChange={(event) => setMaxMissionSteps(Number(event.target.value))} /></label><small>{executionProfile === "quick"
-        ? t("上限：2 位 NPC、1 個部門階段、每 Mission 2 步；約 2–10 分鐘。")
-        : executionProfile === "deep"
-          ? t("上限：6 位 NPC、5 個部門階段、每 Mission 4 步；約 30–90 分鐘。")
-          : t("上限：4 位 NPC、3 個部門階段、每 Mission 3 步；約 10–35 分鐘。")}</small><small>{t("預估：Claude 約 US$ 0.02–2.00；Codex 約影響 5 小時 quota 1–30%。實際依工作內容與模型而變，非保證值；超過上限會停止派工，不會靜默擴張。")}</small></div></details>
-      <details><summary>{t("進階設定")} <span>{t("選填")}</span></summary><div><label><span>{t("決策模型")}</span><select value={decisionKey} onChange={(event) => {
-        setDecisionKey(event.target.value);
-        try { localStorage.setItem(`pixel-crew:boss-decision-model:${workspacePath}`, event.target.value); } catch { /* unavailable */ }
-      }}>
-        <option value="">{t("自動選擇 Claude / Codex")}</option>
-        {decisionModels.map((option) => <option key={`${option.provider}:${option.model}`} value={`${option.provider}:${option.model}`}>{option.label}</option>)}
-      </select></label></div></details>
-      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成後會逐條核對這些條件")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
+      {isPhone
+        ? <details className="boss-task-composer__advanced"><summary>{t("更多設定")} <span>{t("選填")}</span></summary><div className="boss-task-composer__advanced-inner">{settingSections}</div></details>
+        : settingSections}
     </div>}
     onSubmit={submit}
   />;
@@ -450,15 +473,18 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <div className="boss-task-desk__empty-mark" aria-hidden="true">B</div>
         <span>BOSS DESK</span>
         <strong>{t("今天想完成什麼？")}</strong>
-        <p>{t("將以目前工作區「{workspace}」開始；需求太概略時會先詢問，明確後才安排部門。", { workspace: workspaceLabel(workspacePath) })}</p>
-        <div className="boss-task-desk__starters" aria-label={t("任務範例")}>
-          {starterTasks.map((starter) => <button key={starter} type="button" onClick={() => useProposalObjective(t(starter))}>{t(starter)}</button>)}
-        </div>
+        <p>{t("任務會在工作區「{workspace}」執行；需求太概略時會先問清楚再安排部門。", { workspace: workspaceLabel(advisorWorkspace) })}</p>
         <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
           <div className="boss-task-desk__advisor-head">
             <strong>{t("沒方向？讓顧問幫你想")}</strong>
             <small>{t("給一個粗略念頭或主題，顧問會用專業列出你可能沒想到的方向，挑一個就能交辦。")}</small>
           </div>
+          {advisorPinnedElsewhere && <div className="boss-task-desk__advisor-pinned" role="status">
+            <span>{advisorLoading
+              ? t("正在生成工作區「{workspace}」的顧問方向，切到哪都看得到。", { workspace: workspaceLabel(advisorWorkspace) })
+              : t("目前顯示的是工作區「{workspace}」的顧問方向。", { workspace: workspaceLabel(advisorWorkspace) })}</span>
+            <button type="button" onClick={dismissPinnedAdvisor}>{t("改用目前工作區「{workspace}」", { workspace: workspaceLabel(workspacePath) })}</button>
+          </div>}
           <div className="boss-task-desk__advisor-input">
             <input
               value={advisorIdea}

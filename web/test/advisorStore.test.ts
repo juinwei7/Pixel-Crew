@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearAdvisorErrors, getAdvisorEntry, resumeAdvisorRuns, runAdvisor, setAdvisorIdea, subscribeAdvisor } from "../src/advisorStore";
+import { clearAdvisorErrors, getActiveAdvisorWorkspace, getAdvisorEntry, releaseAdvisorPin, resumeAdvisorRuns, runAdvisor, setAdvisorIdea, subscribeAdvisor } from "../src/advisorStore";
 
 // Drive apiRequest (which calls global.fetch) into a chosen outcome, run the
 // body, then restore fetch. "reject" reproduces a connection blip (fetch throws
@@ -90,6 +90,61 @@ test("resumeAdvisorRuns re-runs an interrupted run and a success clears resume (
   assert.equal(entry.error, null);
   assert.equal(entry.resume, null, "resume cleared on success so it can't loop");
   assert.equal(entry.loading, false);
+});
+
+// The pin is what fixes "generation vanished after switching to another workspace":
+// the Boss Desk reads the pinned workspace's advisor, not blindly the active one.
+
+test("a run pins its workspace as soon as it starts loading (before it resolves)", async () => {
+  const ws = "/repo/pin-loading";
+  await withFetch("ok", async () => {
+    const running = runAdvisor(ws, { proactive: true });
+    // runAdvisor flips loading + pins synchronously before its first await.
+    assert.equal(getActiveAdvisorWorkspace(), ws, "pinned the moment the run kicks off");
+    await running;
+  });
+  // A completed run with proposals stays pinned so switching NPCs still shows it.
+  assert.equal(getActiveAdvisorWorkspace(), ws);
+});
+
+test("a newer run in another workspace takes over the pin", async () => {
+  const first = "/repo/pin-first";
+  const second = "/repo/pin-second";
+  await withFetch("ok", () => runAdvisor(first, { proactive: true }));
+  await withFetch("ok", () => runAdvisor(second, { proactive: true }));
+  assert.equal(getActiveAdvisorWorkspace(), second, "most recent generation wins the pin");
+});
+
+test("plain releaseAdvisorPin unpins but keeps the generated result", async () => {
+  const ws = "/repo/pin-release";
+  await withFetch("ok", () => runAdvisor(ws, { proactive: true }));
+  assert.equal(getActiveAdvisorWorkspace(), ws);
+  releaseAdvisorPin(ws);
+  assert.equal(getActiveAdvisorWorkspace(), null, "no longer pinned → Boss Desk falls back to active workspace");
+  assert.deepEqual(getAdvisorEntry(ws).proposals, [{ id: "p1" }], "returning to that workspace still shows what was generated");
+});
+
+test("releaseAdvisorPin with clearEntry (dismiss) unpins AND wipes the stale result", async () => {
+  const ws = "/repo/pin-clear";
+  await withFetch("ok", () => runAdvisor(ws, { proactive: true }));
+  releaseAdvisorPin(ws, true);
+  assert.equal(getActiveAdvisorWorkspace(), null);
+  assert.deepEqual(getAdvisorEntry(ws).proposals, [], "dismiss clears the proposals");
+  assert.equal(getAdvisorEntry(ws).idea, "");
+});
+
+test("releasing a workspace that is not the pinned one leaves the pin intact", async () => {
+  const pinned = "/repo/pin-keep";
+  const other = "/repo/pin-other";
+  await withFetch("ok", () => runAdvisor(pinned, { proactive: true }));
+  releaseAdvisorPin(other);
+  assert.equal(getActiveAdvisorWorkspace(), pinned, "releasing a different workspace must not steal the pin");
+});
+
+test("writing an idea alone does not pin a workspace (only a run does)", () => {
+  const ws = "/repo/pin-idea-only";
+  setAdvisorIdea(ws, "just typing, never generated");
+  assert.notEqual(getActiveAdvisorWorkspace(), ws, "typing must not hijack the Boss Desk to this workspace");
 });
 
 test("subscribers are notified on change and stop after unsubscribe", () => {

@@ -40,6 +40,12 @@ export type BossTaskStage = {
   missionId: string | null;
   report: string | null;
   executionMode?: BossExecutionMode;
+  // 決策模型判定「單一部門、單一動作、無需多步規劃與獨立查證」的瑣碎階段時設 true：
+  // 該階段的 Mission 走單步直執行快速道（跳過規劃 LLM 與 review），省掉整輪來回。
+  directExecute?: boolean;
+  // 決策模型判定「簡單、低風險的多步交付（例如寫一組相關文件），需要規劃但不需獨立查證」時設 true：
+  // 該階段的 Mission 照常規劃步驟，但系統會在解析計畫後「結構性剝掉所有 review 步驟」——不靠規劃模型自律。
+  noReview?: boolean;
 };
 
 export type BossTask = {
@@ -94,6 +100,8 @@ export type BossTaskDecision =
         objective: string;
         acceptanceCriteria: string[];
         dependsOn: string[];
+        directExecute?: boolean;
+        noReview?: boolean;
       }>;
     };
 
@@ -151,6 +159,8 @@ Rules:
 - Use multiple departments when their distinct responsibilities materially contribute.
 - Stages must be bounded, have unique ids, and form an acyclic dependency graph.
 - Include independent verification when an eligible QA/review specialty exists and the work creates or changes a product.
+- Set a stage's "directExecute": true ONLY when that stage is a single, unambiguous, low-risk action or a direct factual/analytical answer that needs no multi-step plan and no independent verification — e.g. answer a factual/arithmetic question, write or edit one small file, a quick lookup or summary. That stage then runs in ONE execute turn with no separate planning round and no review, which is much faster. Omit it (defaults false) whenever the work has multiple sub-steps, produces a substantial artifact, changes important state, or genuinely benefits from QA. When in doubt, omit it.
+- Set a stage's "noReview": true when the work is simple, low-risk authoring or file/data creation that genuinely needs multiple ordered steps (so NOT a single directExecute), but does NOT need an independent verification step — e.g. writing a set of related documents, straightforward multi-file content, plain data entry. The department still plans the steps, but runs no separate review step (faster). Reserve reviews (leave noReview false) for program logic, configuration, calculations, or deliverables whose incorrectness would cause a real failure. directExecute and noReview are independent: directExecute is for a single action; noReview is for simple-but-multi-step work.
 - Return only one marked JSON block and no Markdown fences.
 
 Original objective: ${JSON.stringify(bounded(input.task.objective, 4_000))}
@@ -172,7 +182,7 @@ Create-department form (only when no catalog department fits — the system crea
 
 Ready form:
 <boss_task_decision>
-{"status":"ready","executionMode":"research|project","summary":"execution approach","rationale":["routing reason"],"stages":[{"id":"stable-stage-id","departmentId":"exact catalog id","title":"stage title","objective":"bounded department deliverable","acceptanceCriteria":["observable outcome"],"dependsOn":[]}]}
+{"status":"ready","executionMode":"research|project","summary":"execution approach","rationale":["routing reason"],"stages":[{"id":"stable-stage-id","departmentId":"exact catalog id","title":"stage title","objective":"bounded department deliverable","acceptanceCriteria":["observable outcome"],"dependsOn":[],"directExecute":false,"noReview":false}]}
 </boss_task_decision>`;
 }
 
@@ -273,7 +283,9 @@ function evaluateBossTaskDecision(
     if (acceptanceCriteria.length === 0) return { ok: false, reason: `Stage ${JSON.stringify(id)} needs at least one non-empty "acceptanceCriteria" entry.` };
     ids.add(id);
     assignedDepartments.add(departmentId);
-    stages.push({ id, departmentId, title, objective, acceptanceCriteria, dependsOn });
+    const directExecute = stage.directExecute === true;
+    const noReview = stage.noReview === true;
+    stages.push({ id, departmentId, title, objective, acceptanceCriteria, dependsOn, ...(directExecute ? { directExecute: true } : {}), ...(noReview ? { noReview: true } : {}) });
   }
   if (executionMode === "research" && stages[0].dependsOn.length > 0) {
     return { ok: false, reason: "The single research stage cannot depend on another Boss stage." };

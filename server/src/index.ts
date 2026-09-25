@@ -567,6 +567,9 @@ type MissionRunnerHandle = {
 };
 const missionRunners = new Map<string, MissionRunnerHandle>();
 const pendingMissionReplans = new Map<string, { message: string; attachmentIds: string[]; sourceMessageId: string }>();
+// 交辦決策把某個 stage 標為 noReview（簡單、低風險的多步交付）時，記下它的 missionId；
+// 規劃計畫解析完成後（finishMission）據此結構性剝掉所有 review 步驟，不靠規劃模型自律。
+const noReviewMissions = new Set<string>();
 let workerCounter = 0;
 
 function workerSummary(w: Worker) {
@@ -1012,6 +1015,7 @@ function failMission(mission: DepartmentMission, message: unknown): void {
   mission.completedAt = now;
   activeMissions.delete(mission.id);
   missionActivities.delete(mission.id);
+  noReviewMissions.delete(mission.id); // 規劃前就失敗的 noReview mission 不會走到 finishMission 的清除點，這裡一併清掉避免殘留
   stopMissionRunners(mission.id);
   store.saveDepartmentMission(mission);
   updateDepartmentThreadMission(mission.departmentId, null);
@@ -1297,6 +1301,12 @@ function finishMission(
       completedAt: null,
       formatRepairCount: 0,
     }));
+    // noReview：交辦決策判定這是簡單、低風險的交付——結構性剝掉規劃模型排的所有 review 步驟（不靠它自律）。
+    // review 一定緊接在某個 execute 之後，剝掉後至少仍留一個 execute。接著若只剩單一步驟，下方 synthesize
+    // 的追加條件（steps.length > 1）自然不成立，等於連最後的彙整回合一起省掉。
+    if (noReviewMissions.delete(mission.id)) {
+      mission.steps = mission.steps.filter((step) => step.kind !== "review");
+    }
     // 單步 mission 不再追加獨立的「彙整報告」回合——那一步的輸出本身就是交付物，
     // missionReport 會取最後一步結果當部門報告，省下一整輪重貼所有步驟結果的 LLM 呼叫。
     if (mission.executionMode !== "research" && mission.steps.length > 1) mission.steps.push({
@@ -2236,6 +2246,24 @@ function lastUnfinishedTask(events: RunnerEvent[]): string | null {
   return null;
 }
 
+// 未完成回合的「權威收尾」：一個 worker 已經 idle（runner 不 busy）卻在 history 裡還掛著一個
+// 開著的 turn（有 user_message、後面沒有 turn_end/error）時，補一個中止事件。
+// 這是為了修「電腦還在跑、手機卻顯示工作階段已中止」的顯示 bug：以前完全靠前端在 snapshot 用
+// `!busy && 最後一個 turn 還 running` 自己猜，一旦某條路徑（例如 stop()）把 busy 設成 false 卻沒往
+// history 補 terminal 事件，前端就會誤報中止、而且各裝置狀態不一致。改由 server 在權威來源補齊，
+// 讓所有裝置看到相同且正確的結果。故意「不」走 record()/recordUnsafe()——那會觸發 turn_end/error 的
+// 各種 hook（佇列排空、換腦、成本統計），補一筆收尾不該誤觸發它們；這裡只寫 history＋SQLite＋廣播。
+// idempotent：補完 hasUnfinishedTurn 就為 false，重複呼叫不會再補。
+function reconcileDanglingTurn(worker: Worker): boolean {
+  if (worker.runner.busy || !hasUnfinishedTurn(worker.history)) return false;
+  const event: RunnerEvent = { type: "error", message: t("工作階段已中止；請重新下指令"), at: Date.now() };
+  worker.history.push(event);
+  if (worker.history.length > MAX_HISTORY) worker.history.splice(0, worker.history.length - MAX_HISTORY);
+  if (worker.persistent) store.appendEvent(worker.id, event, MAX_HISTORY);
+  broadcast({ type: "event", workerId: worker.id, event });
+  return true;
+}
+
 function providerLabel(provider: ProviderId): string {
   return provider === "claude" ? "Claude Code" : "Codex";
 }
@@ -2544,6 +2572,9 @@ wss.on("connection", (socket, request) => {
       console.error(`[wss] advanceBossTask failed for task ${task.id}:`, error);
     }
   }
+  // 組 snapshot 前先把「idle 卻還掛著開著 turn」的 worker 權威收尾（見 reconcileDanglingTurn）：
+  // 連上來的裝置會拿到一致狀態，已在線的裝置也會收到廣播同步——修掉「電腦還在跑但手機顯示已中止」。
+  for (const worker of workers.values()) reconcileDanglingTurn(worker);
   const snapshotPayload =
     JSON.stringify({
       type: "snapshot",
@@ -3937,6 +3968,8 @@ function launchDepartmentMission(
     executionProfile?: DepartmentMission["executionProfile"];
     maxAgents?: number;
     maxPlanSteps?: number;
+    directExecute?: boolean;
+    noReview?: boolean;
   } = {},
 ): { mission?: DepartmentMission; error?: string } {
   const now = new Date().toISOString();
@@ -3956,7 +3989,9 @@ function launchDepartmentMission(
     steps: [],
     currentStepIndex: null,
     correctionCount: 0,
-    maxCorrections: options.executionMode === "research" ? 0 : 2,
+    // 依老闆指示不做查證回合（execute→review→correct 的來回是慢的另一主因）：research 本就是 0，
+    // project 也改成 0——只跑一次執行、不再自我 review/修正，換取速度。要恢復查證把 project 調回 2。
+    maxCorrections: 0,
     error: null,
     createdAt: now,
     startedAt: now,
@@ -3986,6 +4021,44 @@ function launchDepartmentMission(
     parentMissionId: mission.parentMissionId,
   });
   broadcastMission(mission, true);
+  // 單步直執行快速道：決策模型把這個 stage 標為 directExecute（單一動作、無需多步規劃與獨立查證，
+  // 例如回答一個問題、寫一個小檔）時，跳過整輪規劃 LLM，本地合成一個 execute 步驟直接開跑。
+  // 複用一般計畫解析後的同一條下游路徑（executing → dispatchMissionStep → completeMissionStep →
+  // completed），只是不呼叫規劃模型、不追加 review／synthesize 步驟。狀態機是寬鬆的：單一 execute
+  // 步驟不會進 reviewing，最後一步完成即 completed，review 契約因沒有 review 步驟而完全不觸發。
+  if (options.directExecute) {
+    mission.planSummary = t("單步直執行：{objective}", { objective: mission.objective });
+    mission.steps = [{
+      id: randomUUID(),
+      title: t("直接執行並交付"),
+      objective: mission.objective,
+      kind: "execute",
+      assigneeWorkerId: mission.bossWorkerId,
+      acceptanceCriteria: mission.acceptanceCriteria,
+      attachmentIds,
+      status: "pending",
+      attempt: 0,
+      result: null,
+      reviewResult: null,
+      startedAt: null,
+      completedAt: null,
+      formatRepairCount: 0,
+    }];
+    mission.currentStepIndex = 0;
+    mission.status = "executing";
+    mission.attentionReason = null;
+    mission.error = null;
+    store.saveDepartmentMission(mission);
+    departmentAudit("mission_started", mission.departmentId, mission.id, {
+      planSummary: mission.planSummary,
+      stepCount: mission.steps.length,
+    });
+    broadcastMission(mission);
+    dispatchMissionStep(mission, 0);
+    return { mission };
+  }
+  // 走一般規劃路徑時，若交辦決策標了 noReview，記下 missionId，等計畫解析完在 finishMission 剝掉 review。
+  if (options.noReview) noReviewMissions.add(mission.id);
   const attachmentMetadata = resolveAttachmentMetadata(attachmentIds);
   const prompt = missionPlanningPrompt({
     missionId: mission.id,
@@ -5028,6 +5101,13 @@ function advanceBossTaskStages(task: BossTask): void {
     taskObjective: task.objective,
     upstream: upstream ? t("\n\n上游部門交付：\n{upstream}", { upstream }) : "",
   }).slice(0, 30_000);
+  // Boss 交辦跑在「既有部門」時，成員的自動核准預設是 "off"，每個唯讀工具（WebSearch/
+  // WebFetch/Read…）都會停下來等老闆點核准，整張交辦被拖到極慢（使用者實際回報）。交辦
+  // 本來就是「授權這支部隊去把事做完」，這裡把參與成員從 off 升到 safe：只自動放行唯讀
+  // 工具，寫檔／危險 Bash 仍照擋。dedicated 專屬部隊建立時已設 full，不受此影響。
+  for (const member of [lead, ...eligibility.members]) {
+    if (member.autoApproveMode === "off") member.autoApproveMode = "safe";
+  }
   const launched = launchDepartmentMission(lead, eligibility.members, objective, next.acceptanceCriteria, {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
@@ -5035,6 +5115,8 @@ function advanceBossTaskStages(task: BossTask): void {
     executionProfile: task.executionProfile,
     maxAgents: task.executionBudget?.maxAgents,
     maxPlanSteps: task.executionBudget?.maxMissionSteps,
+    directExecute: next.directExecute === true,
+    noReview: next.noReview === true,
   });
   if (!launched.mission || launched.error) {
     task.status = "needs_attention";
@@ -5381,12 +5463,12 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
 async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): Promise<void> {
   const workspacePath = justFinished.workspacePath;
   if (state.stepsRemaining <= 0) {
-    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達步數上限，已自動停止。要繼續就再打開開關。"));
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達步數上限，已自動停止。要接著討論或調整，直接在這張交辦回覆即可；要再自動接續就重開開關。"));
     return;
   }
   // 時間上限是「軟上限」：在每張交辦收工的節點檢查，過了截止時刻就停在這個邊界（不會攔腰砍斷進行中的交辦）。
   if (state.deadlineAt && Date.now() >= state.deadlineAt) {
-    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達時間上限，已自動停止。要繼續就再打開開關。"));
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達時間上限，已自動停止。要接著討論或調整，直接在這張交辦回覆即可；要再自動接續就重開開關。"));
     return;
   }
   state.running = true;
@@ -5414,7 +5496,7 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
     }
     if (!decision || decision.action === "stop") {
       const reason = decision?.action === "stop" ? decision.reason : "";
-      disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要再交辦就打開開關或直接下指令。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要接著討論或調整，直接在這張交辦回覆即可（有專屬團隊會由同一隊接手）；要再自動接續就重開開關。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
     }
     // 使用者可能在生成期間關掉了開關——關了就不再推進。
@@ -5543,10 +5625,22 @@ app.post("/api/boss-tasks", async (req, res) => {
   };
   if (!store.saveBossTask(task)) { res.status(500).json({ error: t("無法保存 Boss Task") }); return; }
   broadcastBossTask(task, true);
-  // 「為此交辦開專屬部門」：走直接建部門路徑，跳過決策模型路由（省 token、不卡既有部門）。
-  if (req.body?.dedicatedDepartment) await runDedicatedDepartmentTask(task);
-  else await decideBossTask(task);
+  // 立即回應：探索（決策模型）或建專屬部門都可能跑十幾秒以上，不讓建立端點同步阻塞到前端逾時、看起來像卡住。
+  // 任務已存為 discovering 並廣播；之後每次狀態改變都經 persistBossTask → broadcast 由 WebSocket 推給前端。
   res.status(201).json({ bossTask: bossTaskForDisplay(task) });
+  // 「為此交辦開專屬部門」：走直接建部門路徑，跳過決策模型路由（省 token、不卡既有部門）。背景執行。
+  void (req.body?.dedicatedDepartment ? runDedicatedDepartmentTask(task) : decideBossTask(task))
+    .catch((error) => {
+      // decideBossTask / runDedicatedDepartmentTask 內部已處理常見錯誤並廣播；這裡只兜住未預期的丟出，
+      // 避免任務永遠卡在 discovering。
+      console.error(`[boss-task] 背景探索意外失敗 ${task.id}:`, error);
+      if (task.status === "discovering") {
+        task.status = "needs_attention";
+        task.error = (error as Error).message || t("探索失敗");
+        task.messages.push(bossTaskMessage("system", t("⛔ 探索失敗：{error}", { error: task.error })));
+        persistBossTask(task);
+      }
+    });
 });
 
 app.patch("/api/boss-tasks/:id", (req, res) => {
@@ -7428,6 +7522,7 @@ function cancelMissionForScopedRestart(mission: DepartmentMission): void {
   mission.completedAt = new Date().toISOString();
   store.saveDepartmentMission(mission);
   pendingMissionReplans.delete(mission.id);
+  noReviewMissions.delete(mission.id);
   updateDepartmentThreadMission(mission.departmentId, null);
   departmentAudit("mission_cancelled_for_restart", mission.departmentId, mission.id);
   broadcastMission(mission);

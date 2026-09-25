@@ -502,7 +502,7 @@ export function missionPlanningPrompt(input: {
       maxPlanSteps,
       policy: policyText(),
     },
-  );
+  ) + t("\n\n【驗證步驟的取捨（預設不加 review）】Review 是例外，不是預設，不要為了看起來嚴謹而加。撰寫文件／內容／說明、或建立檔案與資料這類產出，即使跨多個檔案、需依序完成、或要彼此一致，預設都不加獨立 review——由執行者在自己的步驟裡自我檢查即可，一致性也由後續 execute 步驟自己顧。只有「程式邏輯、設定、計算，或其正確性一旦錯了會造成實際故障」的產出，才值得在其 execute 後緊接一個 review（且由不同 NPC 負責）。低風險、機械式、或執行者當場就能自我驗證的步驟一律不加 review：execute 步驟本身已要求自我驗證，多排一個 review 只會拖慢。永遠優先用最少步驟達成目標。");
 }
 
 export function missionStepPrompt(input: {

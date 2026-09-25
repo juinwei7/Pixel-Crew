@@ -1,14 +1,20 @@
-// 場景住客選擇。
-// - 主辦公室（bossRoom=false）：只住常駐夥伴；老闆交辦的臨時部門
-//   （ephemeralKind="dedicated"）是短命工，平常收起來不佔主場景。
-// - 開 BOSS 頁（bossRoom=true）：整間辦公室的人全部留著——常駐部門 + 交辦部隊
-//   一起顯示。之前這裡只留交辦部隊、把其他部門藏起來，使用者一切到 BOSS 就看到
-//   「其他部門 NPC 全消失／場景空白」，那不是想要的行為。開 BOSS 只是把老闆交辦桌
-//   叫出來，不該把任何人趕出場景。
-export function bossRoomWorkers<T extends { ephemeralKind?: string | null }>(
+// 場景「兩間房」的住客選擇：主辦公室住常駐夥伴，BOSS 交辦房住「正在做這張交辦的那群人」。
+// 交辦房的住客 = 老闆交辦的臨時專屬部隊（ephemeralKind="dedicated"）＋目前進行中交辦被
+// 路由到的既有部門成員（bossTaskDepartmentIds）。這樣不論交辦走「開專屬部門」或「路由給
+// 既有部門」，一開 BOSS 都會切到正在做這張交辦的部門，而不是只有 dedicated 才切得過去。
+// 關鍵護欄：交辦房沒人時退回主辦公室——BOSS 頁開著但目前沒有任何進行中交辦成員（交辦剛
+// 送出、專屬部隊還在編制、或交辦已結束解散）的話，絕不能讓場景空成一片「NPC 全消失」。
+export function bossRoomWorkers<T extends { ephemeralKind?: string | null; departmentId?: string | null }>(
   workers: T[],
   bossRoom: boolean,
+  bossTaskDepartmentIds?: ReadonlySet<string>,
 ): T[] {
-  if (bossRoom) return workers;
+  if (bossRoom) {
+    const inBossRoom = workers.filter((worker) =>
+      worker.ephemeralKind === "dedicated" ||
+      (worker.departmentId != null && (bossTaskDepartmentIds?.has(worker.departmentId) ?? false)),
+    );
+    if (inBossRoom.length > 0) return inBossRoom;
+  }
   return workers.filter((worker) => worker.ephemeralKind !== "dedicated");
 }

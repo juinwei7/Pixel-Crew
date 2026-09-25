@@ -44,6 +44,18 @@ const DEFAULT_ENTRY: AdvisorEntry = Object.freeze({
 const entries = new Map<string, AdvisorEntry>();
 const listeners = new Set<() => void>();
 
+// The advisor state is keyed by workspace, but the Boss Desk is opened against
+// whichever NPC/workspace is currently active. A user who starts a generation in
+// workspace A, then switches to a department in workspace B, would otherwise read
+// B's (empty) entry and think the generation vanished — it only reappears after
+// switching back to A. `pinnedWorkspace` records the workspace whose advisor run is
+// in flight (or most recently produced a result), so the Boss Desk can surface that
+// generation regardless of the active workspace, pinned to the workspace that
+// started it (its objective/context belongs to that workspace). A newer run in
+// another workspace overwrites the pin; it is released once the result is created
+// as a task or explicitly dismissed.
+let pinnedWorkspace: string | null = null;
+
 function emit(): void {
   for (const listener of listeners) listener();
 }
@@ -58,6 +70,32 @@ export function subscribeAdvisor(listener: () => void): () => void {
 // that have never run the advisor.
 export function getAdvisorEntry(workspacePath: string): AdvisorEntry {
   return entries.get(workspacePath) ?? DEFAULT_ENTRY;
+}
+
+// The workspace whose advisor generation the Boss Desk should surface regardless
+// of which workspace is active — the pinned one, but ONLY while its entry is still
+// meaningful (running, or holding proposals/a clarifying question/an error). Once
+// that entry is consumed or reset the pin goes inert and callers fall back to the
+// active workspace. Returns a primitive (string | null), so it is a stable snapshot
+// for useSyncExternalStore between emits (getSnapshot stays pure — no mutation).
+export function getActiveAdvisorWorkspace(): string | null {
+  if (!pinnedWorkspace) return null;
+  const entry = entries.get(pinnedWorkspace);
+  if (!entry) return null;
+  const active = entry.loading || entry.proposals.length > 0 || entry.question != null || entry.error != null;
+  return active ? pinnedWorkspace : null;
+}
+
+// Release the pin (revert the Boss Desk to the active workspace). `clearEntry`
+// additionally wipes the workspace's advisor state — used by the explicit "use the
+// current workspace instead" dismiss so the stale proposals disappear; a plain
+// release (after a task is created from the result) leaves the entry intact so
+// returning to that workspace still shows what was generated there.
+export function releaseAdvisorPin(workspacePath: string, clearEntry = false): void {
+  let changed = false;
+  if (pinnedWorkspace === workspacePath) { pinnedWorkspace = null; changed = true; }
+  if (clearEntry && entries.has(workspacePath)) { entries.set(workspacePath, DEFAULT_ENTRY); changed = true; }
+  if (changed) emit();
 }
 
 function update(workspacePath: string, patch: Partial<AdvisorEntry>): void {
@@ -101,6 +139,9 @@ export async function runAdvisor(workspacePath: string, options: RunAdvisorOptio
   const proactive = Boolean(options.proactive);
   // proactive（主動建議）不需要念頭；一般模式仍要有念頭。已在跑就別重入。
   if ((!idea && !proactive) || entry.loading) return;
+  // Pin the Boss Desk to this workspace so the generation stays visible after the
+  // user switches to an NPC in another workspace (a newer run elsewhere re-pins).
+  pinnedWorkspace = workspacePath;
   update(workspacePath, { loading: true, error: null, proposals: [], question: null, domain: null, startedAt: performance.now(), resume: { proactive, provider: options.provider, model: options.model } });
   try {
     const data = await apiRequest<{ result: AdvisorResult }>("/api/advisor/propose", {

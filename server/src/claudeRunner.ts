@@ -410,7 +410,12 @@ export class ClaudeSession implements AgentSession {
       const allowed = [
         ...(this.executionProfile === "read_only_query"
           ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
-          : this.getAllowedTools()),
+          // 一般檔位也把唯讀內建工具（Read/Glob/Grep/WebSearch/WebFetch）放進 --allowedTools：
+          // 在 allowedTools 內的工具，CLI 會直接執行、完全不呼叫核准橋，省掉每個唯讀工具呼叫的
+          // MCP stdio + localhost HTTP 往返與兩個 approval 事件（就是任務日誌一直冒「等待核准→
+          // 核准已允許」的來源）。這些工具本就是唯讀（toolPolicy），放行無副作用；寫檔／Bash
+          // 等仍走核准橋，照舊受 autoApproveMode 管控。
+          : [...readOnlyBuiltinToolNames(), ...this.getAllowedTools()]),
         "mcp__pixel_crew_approval__approval_prompt",
       ];
       if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));

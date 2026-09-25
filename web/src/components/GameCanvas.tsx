@@ -96,12 +96,12 @@ export function radialMenuDirection(x: number, width: number): "left" | "right" 
 // 穩定的空集合預設值：避免每次 render 都 new Set() 造成參照改變、白白觸發下游重算。
 const EMPTY_ROUNDTABLE_IDS: ReadonlySet<string> = new Set();
 
-function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false): VisualWorker[] {
+function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds?: ReadonlySet<string>): VisualWorker[] {
   const departmentById = new Map(departments.map((department) => [department.id, department]));
-  // 主辦公室平常只住常駐夥伴，短命的交辦部隊（ephemeralKind="dedicated"）收起來；
-  // 一開 BOSS 頁則整間辦公室全員顯示（常駐部門 + 交辦部隊），不再把其他部門藏掉
-  // 害場景看起來空白（bossRoomFilter.ts）。
-  const roomWorkers = bossRoomWorkers(workers, bossRoom);
+  // 兩間房：主辦公室（原本的房間）只住常駐夥伴；BOSS 交辦房住「正在做這張交辦的那群人」
+  // ——dedicated 專屬部隊＋進行中交辦被路由到的既有部門（bossTaskDepartmentIds）。開著
+  // BOSS 頁時場景切到交辦房，關掉就回主辦公室；交辦房沒人時退回主辦公室避免空白（bossRoomFilter.ts）。
+  const roomWorkers = bossRoomWorkers(workers, bossRoom, bossTaskDepartmentIds);
   return groupWorkersByWorkspace(roomWorkers).flatMap((worker) => {
     const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
     const collaboration = collaborations.find((task) =>
@@ -210,8 +210,10 @@ type Props = {
   missions?: DepartmentMission[];
   departments?: Department[];
   roundtableIds?: ReadonlySet<string>;
-  /** true＝顯示「BOSS 交辦房」（只有老闆交辦的臨時部門）；false＝主辦公室（常駐夥伴）。 */
+  /** true＝顯示「BOSS 交辦房」（正在做這張交辦的部門）；false＝主辦公室（常駐夥伴）。 */
   bossRoom?: boolean;
+  /** 進行中交辦實際在跑的部門 id：交辦房會顯示這些部門的成員（含被路由的既有部門），不只 dedicated。 */
+  bossTaskDepartmentIds?: ReadonlySet<string>;
   /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
   swapThresholdTokens?: number;
   /** 點擊作戰室會議桌時觸發（App 用它開作戰室模式並聚焦輸入框）。 */
@@ -237,7 +239,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -302,6 +304,8 @@ export function GameCanvas({
   latestDepartments.current = departments;
   const latestBossRoom = useRef(bossRoom);
   latestBossRoom.current = bossRoom;
+  const latestBossTaskDepartmentIds = useRef(bossTaskDepartmentIds);
+  latestBossTaskDepartmentIds.current = bossTaskDepartmentIds;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const milestoneRef = useRef(0);
@@ -471,7 +475,7 @@ export function GameCanvas({
     });
 
     function pushWorkers() {
-      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current));
+      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current, latestBossTaskDepartmentIds.current));
     }
 
     return () => {
@@ -484,8 +488,8 @@ export function GameCanvas({
 
   useEffect(() => {
     latest.current = { workers, activeId };
-    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom));
-  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom]);
+    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds));
+  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds]);
 
 
   useEffect(() => {

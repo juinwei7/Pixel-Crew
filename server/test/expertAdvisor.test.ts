@@ -54,6 +54,21 @@ test("proactive mode with no domain signal demands genuinely different fields, n
   assert.doesNotMatch(focused, /GENUINELY DIFFERENT field/);
 });
 
+test("proactive mode refuses to treat the workspace folder NAME as a domain signal", () => {
+  // Root cause of the "米線" hijack: a no_tools advisor cannot read folder contents,
+  // so a folder literally named 米線 (whose real contents are quant trading etc.)
+  // made the model propose noodle-shop directions. Proactive mode must explicitly
+  // disown the folder name as a domain anchor while still passing the path through.
+  const prompt = expertAdvisorPrompt({ idea: "", workspacePath: "d:/米線", proactive: true });
+  assert.match(prompt, /Do NOT treat the folder name as a domain signal/i);
+  assert.match(prompt, /noodle shop/i); // the concrete 米線 example is spelled out for the model
+  assert.match(prompt, /weak hint/i);
+  // The proactive intro no longer orders the model to infer a domain FROM the workspace.
+  assert.doesNotMatch(prompt, /Infer a plausible domain\/theme from their workspace context/i);
+  // The path is still handed over (it can be a genuine hint when it's a real descriptor).
+  assert.match(prompt, /Owner workspace: "d:\/米線"/);
+});
+
 test("parses a well-formed proposals block", () => {
   const result = parseAdvisorResult(proposalsBlock([validProposal]));
   assert.ok(result && result.status === "proposals");
