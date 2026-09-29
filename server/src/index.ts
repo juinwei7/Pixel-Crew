@@ -5712,6 +5712,8 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
     return;
   }
   disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉
+  autopilotFired.delete(task.id); // 任務不存在了，觸發標記與接手計數一併回收
+  autopilotResolveAttempts.delete(task.id);
   if (!store.deleteBossTask(task.id)) {
     res.status(500).json({ error: t("無法刪除 Boss Task") });
     return;
@@ -5756,6 +5758,9 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   task.completedAt = null;
   task.status = "discovering";
   task.error = null;
+  // 重新交辦＝新的一輪：清掉上一輪的自動循環觸發標記與接手計數，讓新一輪的終態能正常進 hook。
+  autopilotFired.delete(task.id);
+  autopilotResolveAttempts.delete(task.id);
   task.messages.push(bossTaskMessage("system", t("已清空原本交辦並重新規劃；附件與稽核紀錄已保留。"), [], null, null, timestampAfter(clearedAt)));
   persistBossTask(task);
   await decideBossTask(task);
@@ -5887,6 +5892,9 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     task.stages = [];
     task.finalReport = null;
     task.completedAt = null;
+    // 追問＝新的一輪：清掉上一輪的循環觸發標記與接手計數，新一輪完成時自動循環才會再推進。
+    autopilotFired.delete(task.id);
+    autopilotResolveAttempts.delete(task.id);
     if (hadDedicatedCrew) {
       task.status = "discovering";
       task.error = null;

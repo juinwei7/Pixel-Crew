@@ -183,7 +183,10 @@ export function App() {
     if (!text) return;
     if (!activeId) { notify(t("請先選一個 NPC 當召集人"), "error"); return; }
     if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return; }
+    const hostId = activeId;
     setWarroomRunning(true);
+    // 讓召集人頭上冒「討論中」泡泡（roundtableWorkerIds 的清理 effect 會在它忙過又閒置後自動移除）。
+    setRoundtableWorkerIds((current) => (current.includes(hostId) ? current : [...current, hostId]));
     notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
     try {
       const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
@@ -195,6 +198,9 @@ export function App() {
       setWarroomResult(resp.result);
     } catch (error) {
       notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
+      // 開議失敗：召集人可能從未 busy，清理 effect 等不到「忙過又閒置」，這裡直接摘掉泡泡。
+      setRoundtableWorkerIds((current) => current.filter((id) => id !== hostId));
+      roundtableSeenBusy.current.delete(hostId);
     } finally {
       setWarroomRunning(false);
     }
