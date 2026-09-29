@@ -556,8 +556,15 @@ export function App() {
   }, [autopilotStepInput, autopilotMinutesInput, autopilotAutoResolveInput, toggleAutopilot]);
   // 開 Boss Desk 狀態變動時關掉設定框，避免殘留。
   useEffect(() => { if (!bossAssignmentOpen) setAutopilotConfigOpen(false); }, [bossAssignmentOpen]);
-  // 顯示用的剩餘分鐘（每 30 秒重算一次即可，粗略顯示）。
-  const autopilotMinutesLeft = useMemo(() => (autopilotDeadline ? Math.max(0, Math.round((autopilotDeadline - Date.now()) / 60_000)) : null), [autopilotDeadline, autopilotSteps]);
+  // 顯示用的剩餘分鐘（每 30 秒重算一次，粗略顯示）。沒有計時器的話 Date.now() 不會觸發重算，
+  // 只要沒有新交辦完成，「剩 X 分」會凍結在開啟當下的值。
+  const [autopilotClock, setAutopilotClock] = useState(0);
+  useEffect(() => {
+    if (!autopilotDeadline) return;
+    const timer = setInterval(() => setAutopilotClock((tick) => tick + 1), 30_000);
+    return () => clearInterval(timer);
+  }, [autopilotDeadline]);
+  const autopilotMinutesLeft = useMemo(() => (autopilotDeadline ? Math.max(0, Math.round((autopilotDeadline - Date.now()) / 60_000)) : null), [autopilotDeadline, autopilotSteps, autopilotClock]);
   // In-app stand-in for window.confirm: renders a ConfirmDialog and resolves
   // once the user picks confirm/cancel (or presses Esc, which counts as cancel).
   const confirm = useCallback((message: string, tone: ConfirmTone = "default") => {

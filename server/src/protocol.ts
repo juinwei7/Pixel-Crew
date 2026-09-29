@@ -128,5 +128,8 @@ export type RunnerEvent =
       // servers finish connecting, so it typically excludes their tools.
       builtinTools: string[];
     }
-  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; at?: number }
+  // notice: 純系統通知（換腦冷卻、排程自動繼續…）——只是要顯示在對話裡，並沒有真的送進 runner，
+  // 不會有 turn_end 來收尾。伺服器的「未完成回合」判定與前端的 busy/running 翻轉都必須跳過它，
+  // 否則通知會被誤判成掛著的回合（誤標中止、重啟後被當成 resumeCandidate 的任務原文）。
+  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; notice?: boolean; at?: number }
   | { type: "error"; message: string; at?: number };

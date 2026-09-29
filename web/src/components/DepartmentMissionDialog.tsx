@@ -59,8 +59,10 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
   const [criteria, setCriteria] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [guidance, setGuidance] = useState("");
-  const [reassignWorkerId, setReassignWorkerId] = useState("");
+  // 以 mission.id 為 key：時間軸上可能同時渲染多張 failed/needs_attention 卡片，
+  // 共用單一 state 會讓 A 卡打的補充指示（或選好的 NPC）被送到 B 卡的 mission。
+  const [guidanceByMission, setGuidanceByMission] = useState<Record<string, string>>({});
+  const [reassignByMission, setReassignByMission] = useState<Record<string, string>>({});
   const [threadPayload, setThreadPayload] = useState<DepartmentThreadPayload | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [resetPreview, setResetPreview] = useState<Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }> | null>(null);
@@ -267,16 +269,20 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
         <h4>{t("部門最終報告")}</h4>
         <RichText text={mission.steps.find((step) => step.kind === "synthesize")!.result!} />
       </section>}
-      {(mission.status === "failed" || (mission.status === "needs_attention" && mission.attentionReason !== "plan_approval")) && <div className="mission-card__resolution">
-        <label>{t("補充指示")}<textarea value={guidance} rows={2} maxLength={2000} placeholder={t("告訴部門要補充什麼、接受哪些限制")} onChange={(event) => setGuidance(event.target.value)} /></label>
-        <div>
-          <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry", guidance))}>{mission.status === "failed" ? t("從失敗處恢復") : t("重試目前步驟")}</button>
-          {guidance.trim() && <button type="button" onClick={() => void action(() => onResolve(mission.id, "guide", guidance))}>{t("補充指示並重試")}</button>}
-          {current?.kind === "review" && <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry_execute", guidance))}>{t("退回 Execute")}</button>}
-          {current?.kind === "review" && current.reviewResult && <button type="button" onClick={() => void action(() => onResolve(mission.id, "accept_risk", guidance))}>{t("接受風險繼續")}</button>}
-        </div>
-        {current && <div><select aria-label={t("重新指派 NPC")} value={reassignWorkerId} onChange={(event) => setReassignWorkerId(event.target.value)}><option value="">{t("選擇其他 NPC")}</option>{department.filter((worker) => worker.id !== current.assigneeWorkerId).map((worker) => <option key={worker.id} value={worker.id}>{worker.name}{worker.persona?.role ? ` · ${worker.persona.role}` : ""}</option>)}</select><button type="button" disabled={!reassignWorkerId} onClick={() => void action(() => onResolve(mission.id, "reassign", guidance, reassignWorkerId))}>{t("重新指派")}</button></div>}
-      </div>}
+      {(mission.status === "failed" || (mission.status === "needs_attention" && mission.attentionReason !== "plan_approval")) && (() => {
+        const guidance = guidanceByMission[mission.id] ?? "";
+        const reassignWorkerId = reassignByMission[mission.id] ?? "";
+        return <div className="mission-card__resolution">
+          <label>{t("補充指示")}<textarea value={guidance} rows={2} maxLength={2000} placeholder={t("告訴部門要補充什麼、接受哪些限制")} onChange={(event) => setGuidanceByMission((current) => ({ ...current, [mission.id]: event.target.value }))} /></label>
+          <div>
+            <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry", guidance))}>{mission.status === "failed" ? t("從失敗處恢復") : t("重試目前步驟")}</button>
+            {guidance.trim() && <button type="button" onClick={() => void action(() => onResolve(mission.id, "guide", guidance))}>{t("補充指示並重試")}</button>}
+            {current?.kind === "review" && <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry_execute", guidance))}>{t("退回 Execute")}</button>}
+            {current?.kind === "review" && current.reviewResult && <button type="button" onClick={() => void action(() => onResolve(mission.id, "accept_risk", guidance))}>{t("接受風險繼續")}</button>}
+          </div>
+          {current && <div><select aria-label={t("重新指派 NPC")} value={reassignWorkerId} onChange={(event) => setReassignByMission((current) => ({ ...current, [mission.id]: event.target.value }))}><option value="">{t("選擇其他 NPC")}</option>{department.filter((worker) => worker.id !== current.assigneeWorkerId).map((worker) => <option key={worker.id} value={worker.id}>{worker.name}{worker.persona?.role ? ` · ${worker.persona.role}` : ""}</option>)}</select><button type="button" disabled={!reassignWorkerId} onClick={() => void action(() => onResolve(mission.id, "reassign", guidance, reassignWorkerId))}>{t("重新指派")}</button></div>}
+        </div>;
+      })()}
       <footer>
         {mission.status === "needs_attention" && mission.attentionReason === "plan_approval" && <button type="button" className="collaboration-dialog__primary" onClick={() => void action(() => onApprovePlan(mission.id))}>{t("核准計畫並開始")}</button>}
         {["planning", "executing", "reviewing", "needs_attention"].includes(mission.status) && <button type="button" onClick={() => void action(() => onCancel(mission.id))}>{t("取消 Mission")}</button>}

@@ -180,6 +180,17 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
 
   switch (event.type) {
     case "user_message": {
+      // notice：純系統通知，沒有真的送進 runner、不會有 turn_end 收尾——顯示成已結束的訊息即可，
+      // 不能開一個 running turn 或翻 busy（否則通知會讓 NPC 看起來在忙、之後又被誤標成中止）。
+      if (event.notice) {
+        next.turns.push({
+          key: nextKey(),
+          command: event.text,
+          status: "done",
+          items: [],
+        });
+        break;
+      }
       next.turns.push({
         key: nextKey(),
         command: event.text,
@@ -319,7 +330,17 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       break;
     }
     case "tool_call_result": {
-      const turn = currentTurn();
+      // 工具結果可能晚於 turn_end 到達（其他 delta 事件走 currentOrResumedTurn 就是為此）。
+      // 這裡不用 resume（把已結束的 turn 翻回 running 會再造出「幽靈執行中」），
+      // 改成：沒有進行中的 turn 時，直接在「最後一個已結束的 turn」裡就地更新那張工具卡，
+      // 讓它從永遠轉圈變成完成，不動 turn 狀態與 busy。
+      let turn = currentTurn();
+      if (!turn) {
+        const last = next.turns[next.turns.length - 1];
+        if (last && last.status !== "running" && last.items.some((i) => i.kind === "tool_call" && (i as { id?: string }).id === event.id)) {
+          turn = { ...last, items: [...last.items] };
+        }
+      }
       let completedAgent = false;
       if (turn) {
         const idx = turn.items.findIndex(

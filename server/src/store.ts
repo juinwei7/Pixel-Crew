@@ -95,11 +95,18 @@ function missionFromRow(row: Record<string, unknown>): DepartmentMission {
   };
 }
 
-function bossTaskFromRow(row: Record<string, unknown>): BossTask {
-  const task = jsonValue<BossTask>(row.payload_json, null as unknown as BossTask);
+function bossTaskFromRow(row: Record<string, unknown>): BossTask | null {
+  // payload_json 損毀（斷電截斷、手動改庫、備份還原到一半）時回 null 讓呼叫端跳過這一列——
+  // 以前 fallback 是 null 卻立刻解參考 task.title，一筆壞列就讓啟動時的 listBossTasks 上拋、整台開不了機。
+  const task = jsonValue<BossTask | null>(row.payload_json, null);
+  if (!task || typeof task !== "object") {
+    console.error(`[store] boss_tasks 列 ${String(row.id ?? "?")} 的 payload_json 損毀，已跳過`);
+    return null;
+  }
+  const objective = typeof task.objective === "string" ? task.objective : "";
   return {
     ...task,
-    title: typeof task.title === "string" && task.title.trim() ? task.title.trim().slice(0, 120) : task.objective.slice(0, 120),
+    title: typeof task.title === "string" && task.title.trim() ? task.title.trim().slice(0, 120) : objective.slice(0, 120),
     archivedAt: typeof task.archivedAt === "string"
       ? task.archivedAt
       : row.archived_at == null ? null : String(row.archived_at),
@@ -1553,13 +1560,13 @@ export class LocalStore {
     const rows = workspacePath
       ? this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks WHERE workspace_path = ? ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(workspacePath, bounded)
       : this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(bounded);
-    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow).filter((task): task is BossTask => task !== null);
   }
 
   listBossTasksByStatus(statuses: BossTaskStatus[]): BossTask[] {
     const placeholders = statuses.map(() => "?").join(", ");
     const rows = this.db.prepare(`SELECT payload_json FROM boss_tasks WHERE status IN (${placeholders})`).all(...statuses);
-    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow).filter((task): task is BossTask => task !== null);
   }
 
   listRunningBossTasks(): BossTask[] {

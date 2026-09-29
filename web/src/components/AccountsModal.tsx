@@ -311,7 +311,7 @@ export function AccountsModal({
                   <>
                     <button type="button" className="mcp-modal__login" onClick={() => void loginOauth(account.id)}>{t("瀏覽器登入")}</button>
                     {account.provider === "codex" && (
-                      <button type="button" className="mcp-modal__login" onClick={() => setApiKeyOpenFor(apiKeyOpenFor === account.id ? null : account.id)}>{t("API Key 登入")}</button>
+                      <button type="button" className="mcp-modal__login" onClick={() => { setApiKeyDraft(""); setApiKeyOpenFor(apiKeyOpenFor === account.id ? null : account.id); }}>{t("API Key 登入")}</button>
                     )}
                   </>
                 )}

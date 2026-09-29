@@ -551,7 +551,9 @@ export function GameCanvas({
     );
   }
 
-  const allVisual = visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds);
+  // 必須與上方 setWorkers 用同一組參數（含 bossRoom 過濾）——否則 BOSS 房裡場景精靈與
+  // DOM 覆蓋層（名牌/泡泡/工作視窗）取到不同的 worker 集合，兩邊對不上。
+  const allVisual = visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds);
   const workersById = new Map(workers.map((worker) => [worker.id, worker]));
 
   return (

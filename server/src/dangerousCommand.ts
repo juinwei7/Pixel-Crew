@@ -34,6 +34,12 @@ const DOWNLOAD_THEN_EXECUTE = /\b(curl|wget)\b[\s\S]*?(?:\||&&|;|\n)\s*(sudo\s+)
 const STOP_PROCESS_FORCE = /\bStop-Process\b[^|&;\n]*-Force\b/i;
 const TASKKILL_FORCE = /\btaskkill\b[^|&;\n]*\/F\b/i;
 const ENUMERATE_THEN_KILL = /\b(Get-CimInstance|Get-WmiObject|Get-Process)\b[\s\S]*?\bStop-Process\b/i;
+// Windows 的 rm -rf 對等指令：清單有 Unix 的 rm/mkfs 卻漏了這些，等於主平台（Windows）防線失效。
+// format 要求後面直接接磁碟代號，避免誤中常見的 --format 旗標（lookbehind 擋掉 `-format`）。
+const REMOVE_ITEM_DESTRUCTIVE = /\bRemove-Item\b[^|&;\n]*(-Recurse\b|-Force\b)/i;
+const RD_RECURSIVE = /\b(rd|rmdir)\b[^|&;\n]*\/s\b/i;
+const DEL_FORCED = /\b(del|erase)\b[^|&;\n]*\/(f|s|q)\b/i;
+const FORMAT_DRIVE = /(?<!-)\bformat(\.com)?\s+[a-z]:(\s|$)/i;
 
 const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: RM_RECURSIVE_OR_FORCE, reason: "遞迴或強制刪除（rm -r / -f）" },

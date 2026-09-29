@@ -680,11 +680,15 @@ export async function createScene(
       const seen = new Set<string>();
       let permanentIndex = 0;
       let temporaryIndex = 0;
+      // 會議桌座位要跨「常駐（作戰室成員）／臨時（子代理）」兩類共用一條序號——兩類各自從 0
+      // 起算的話，兩邊的 0 號都會坐到 MEETING_SEATS[0]，精靈完全疊在同一格。
+      let meetingIndex = 0;
       for (const w of list) {
         const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
+        const spotIndex = w.character.station === "meeting" ? meetingIndex++ : workerIndex;
         seen.add(w.id);
         let entry = entries.get(w.id);
-        const desiredSpot = standSpot(w.character.station, workerIndex, w.id);
+        const desiredSpot = standSpot(w.character.station, spotIndex, w.id);
         if (!entry) {
           const person = new Person(w.colorIndex);
           person.container.eventMode = "static";

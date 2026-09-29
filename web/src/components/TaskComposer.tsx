@@ -103,6 +103,27 @@ export function TaskComposer({
   const [awaitingVideoSend, setAwaitingVideoSend] = useState(false);
   // 解析中的影片檔名：一放進來就先冒一個「解析中」佔位晶片(閃爍)，解析完換成正式影片晶片。
   const [processingVideoNames, setProcessingVideoNames] = useState<string[]>([]);
+  // 影片解析可並行（先丟一支、解析中再丟第二支/貼連結）：用計數器管 videoProcessing、
+  // 晶片按名稱增減——否則先完成的那批 finally 會把旗標整個關掉＋清光所有晶片，
+  // awaitingVideoSend 的自動送出會在第二支還沒解析完時就開火，影格與字幕全漏。
+  const videoJobsRef = useRef(0);
+  const beginVideoJob = (names: string[]) => {
+    videoJobsRef.current += 1;
+    setVideoProcessing(true);
+    setProcessingVideoNames((current) => [...current, ...names]);
+  };
+  const endVideoJob = (names: string[]) => {
+    videoJobsRef.current = Math.max(0, videoJobsRef.current - 1);
+    if (videoJobsRef.current === 0) setVideoProcessing(false);
+    setProcessingVideoNames((current) => {
+      const remove = [...names];
+      return current.filter((name) => {
+        const index = remove.indexOf(name);
+        if (index >= 0) { remove.splice(index, 1); return false; }
+        return true;
+      });
+    });
+  };
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
     switchingSession, restoringExtras, extrasSaved, persistenceWarning, ownerRef, updateCachedSession,
@@ -247,8 +268,8 @@ export function TaskComposer({
   // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
   // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
   async function processVideos(videoFiles: File[], owner: string) {
-    setVideoProcessing(true);
-    setProcessingVideoNames(videoFiles.map((file) => file.name));
+    const jobNames = videoFiles.map((file) => file.name);
+    beginVideoJob(jobNames);
     try {
     for (const file of videoFiles) {
       if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
@@ -267,8 +288,7 @@ export function TaskComposer({
       }
     }
     } finally {
-      setVideoProcessing(false);
-      setProcessingVideoNames([]);
+      endVideoJob(jobNames);
     }
   }
 
@@ -277,8 +297,7 @@ export function TaskComposer({
   async function processVideoLink(url: string) {
     const owner = ownerRef.current;
     const label = t("連結影片");
-    setVideoProcessing(true);
-    setProcessingVideoNames([label]);
+    beginVideoJob([label]);
     try {
       const response = await fetch("/api/video/from-link", {
         method: "POST",
@@ -294,8 +313,7 @@ export function TaskComposer({
     } catch (linkError) {
       setError(linkError instanceof Error ? linkError.message : t("影片下載失敗"));
     } finally {
-      setVideoProcessing(false);
-      setProcessingVideoNames([]);
+      endVideoJob([label]);
     }
   }
 

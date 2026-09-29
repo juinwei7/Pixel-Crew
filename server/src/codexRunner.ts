@@ -682,7 +682,13 @@ export class CodexSession implements AgentSession {
 
   private cancelApprovals(): void {
     for (const [id, pending] of this.approvals) {
-      this.sendRpcResult(pending.rpcId, { decision: "cancel" });
+      // item/permissions/requestApproval 的回覆形狀不同（見 resolveApproval）：拒絕要走 JSON-RPC error，
+      // 回 {decision:"cancel"} 會被 app-server 反序列化拒絕、該請求等同未應答。
+      if (pending.method === "item/permissions/requestApproval") {
+        this.sendRpcError(pending.rpcId, -32000, "User declined permissions");
+      } else {
+        this.sendRpcResult(pending.rpcId, { decision: "cancel" });
+      }
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
     }
     this.approvals.clear();

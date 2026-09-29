@@ -570,6 +570,8 @@ const pendingMissionReplans = new Map<string, { message: string; attachmentIds: 
 // 交辦決策把某個 stage 標為 noReview（簡單、低風險的多步交付）時，記下它的 missionId；
 // 規劃計畫解析完成後（finishMission）據此結構性剝掉所有 review 步驟，不靠規劃模型自律。
 const noReviewMissions = new Set<string>();
+// 換腦完成、交接摘要還沒送進新 session 的 worker：佇列排空要先讓路（摘要必須是新 session 的第一則）。
+const pendingSwapSummaries = new Set<string>();
 let workerCounter = 0;
 
 function workerSummary(w: Worker) {
@@ -1606,13 +1608,13 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
   }
   if (decision.action === "disable") {
     brainSwapDisabled.add(worker.id);
-    record(worker, { type: "user_message", text: decision.message });
+    record(worker, { type: "user_message", text: decision.message, notice: true });
     return;
   }
   if (decision.action === "cooldown") {
     if (decision.message) {
       brainSwapCooldownNoted.add(worker.id);
-      record(worker, { type: "user_message", text: decision.message });
+      record(worker, { type: "user_message", text: decision.message, notice: true });
     }
     return;
   }
@@ -1638,14 +1640,29 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     brainSwapCooldownNoted.delete(worker.id);
     brainSwapOverflowStreak.delete(worker.id); // 全新 session＝重新起算連續超標
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
-    setTimeout(() => {
-      if (worker.runner.busy) return;
+    // 交接摘要必須是新 session 收到的第一則訊息。掛 pending 旗標讓 drainWorkerQueue 先讓路
+    //（同一個 turn_end 已排了 drain，不擋的話排隊訊息會搶先送進零上下文的新 session、摘要被 busy 丟棄）；
+    // 若使用者搶先發話（busy），不再直接放棄，改為重試等它回合結束，重試耗盡才把摘要留在紀錄裡讓人手動接。
+    pendingSwapSummaries.add(worker.id);
+    let swapSendAttempts = 0;
+    const trySendSummary = () => {
+      if (!workers.has(worker.id)) { pendingSwapSummaries.delete(worker.id); return; }
+      if (worker.runner.busy) {
+        swapSendAttempts += 1;
+        if (swapSendAttempts < 150) { setTimeout(trySendSummary, 2_000); return; }
+        pendingSwapSummaries.delete(worker.id);
+        record(worker, { type: "user_message", notice: true, text: t("🧠 自動換腦完成，但新工作階段持續忙碌，交接摘要未能自動送入。摘要保留如下，可貼給 NPC 手動接手：\n\n{summary}", { summary }) });
+        scheduleQueueDrain(worker);
+        return;
+      }
+      pendingSwapSummaries.delete(worker.id);
       record(worker, { type: "user_message", text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
       try {
         worker.runner.send(t("（系統自動換腦）你前一個工作階段的 context 已滿。以下是它留下的交接摘要，請讀完後簡短回覆「已接手」，之後依摘要繼續服務：\n\n{summary}", { summary }), [], []);
         broadcast({ type: "worker_status", workerId: worker.id, busy: true });
       } catch { /* 送不進去就留著摘要在紀錄裡，使用者可手動接 */ }
-    }, 300);
+    };
+    setTimeout(trySendSummary, 300);
     return;
   }
 
@@ -1714,7 +1731,7 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
   const existing = limitResumeTimers.get(worker.id);
   if (existing) clearTimeout(existing);
   const fireLabel = new Date(fireAt).toTimeString().slice(0, 5);
-  record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }) });
+  record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }), notice: true });
   const timer = setTimeout(() => {
     limitResumeTimers.delete(worker.id);
     // 累積清單不在守門前銷毀：worker 沒了才清，其餘早退情形（功能關閉／使用者接手）保留，
@@ -2231,9 +2248,11 @@ function capabilitiesSnapshot(): Record<string, Record<ProviderId, ReturnType<Ca
 
 function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
   for (let index = events.length - 1; index >= 0; index--) {
-    const type = events[index].type;
-    if (type === "turn_end" || type === "error") return false;
-    if (type === "user_message") return true;
+    const event = events[index];
+    if (event.type === "turn_end" || event.type === "error") return false;
+    // notice 型 user_message 是純系統通知，沒有真的送進 runner、不會有 turn_end 收尾——
+    // 不能當成「開著的回合」，否則冷卻/排程通知會被誤判成未完成回合。
+    if (event.type === "user_message" && !event.notice) return true;
   }
   return false;
 }
@@ -2241,7 +2260,8 @@ function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
 function lastUnfinishedTask(events: RunnerEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
-    if (event.type === "user_message") return event.text.trim().slice(0, 12_000) || null;
+    // 跳過 notice：它是系統通知不是任務原文，拿去當 resumeCandidate 會把「🧠 冷卻通知」重新送給 NPC。
+    if (event.type === "user_message" && !event.notice) return event.text.trim().slice(0, 12_000) || null;
   }
   return null;
 }
@@ -4915,6 +4935,10 @@ async function decideBossTask(task: BossTask, allowCreateDepartment = true): Pro
     if (!decision || (decision.status === "clarification" && clarificationBudget.remaining === 0)) {
       throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
     }
+    // 探索是背景長流程（LLM 最長 150s×2）：期間老闆可能已取消或刪除這張交辦，而手上是舊快照。
+    // 套用決策前重讀權威狀態，已終結就直接放手——否則已取消的交辦會被蓋回 ready 並真的派工復活。
+    const current = store.getBossTask(task.id);
+    if (!current || current.status === "cancelled" || current.status === "failed") return;
     task.error = null;
     if (decision.status === "clarification") {
       task.status = "needs_input";
@@ -5147,6 +5171,11 @@ async function finalizeBossTaskWithAcceptance(task: BossTask): Promise<void> {
   } catch (error) {
     console.error(`[boss-task] acceptance verification failed for task ${task.id}:`, error);
   }
+  // LLM 驗收可跑上兩分鐘：期間老闆可能已取消或刪除這張交辦（cancel 端點對 synthesizing 放行，
+  // 且 store 每次讀取回新物件——手上這份是舊快照）。收尾前重讀權威狀態，已終結就不覆寫，
+  // 否則取消會被靜默蓋回 completed、autopilotHook 還會再開下一張循環交辦。
+  const current = store.getBossTask(task.id);
+  if (!current || current.status !== "synthesizing") return;
   task.status = "completed";
   task.error = null;
   task.completedAt = new Date().toISOString();
@@ -5159,7 +5188,10 @@ async function finalizeBossTaskWithAcceptance(task: BossTask): Promise<void> {
 }
 
 function advanceBossTasksForMission(missionId: string): void {
-  for (const task of store.listRunningBossTasks()) {
+  // 也要掃 needs_attention：boss task 因部門 Mission 卡住而標成 needs_attention 後，老闆若從
+  // Mission 面板解卡（resolve/retry），mission 恢復與完成時的通知進來，只掃 running 會漏掉它，
+  // task 就永遠停在 needs_attention 不推進（advanceBossTaskStages 會把恢復中的 stage 撥回 running）。
+  for (const task of store.listBossTasksByStatus(["running", "needs_attention"])) {
     if (task.stages.some((stage) => stage.missionId === missionId)) advanceBossTask(task);
   }
 }
@@ -5300,18 +5332,30 @@ function autopilotHook(task: BossTask): void {
   if (task.status !== "completed") {
     // 開了「自動接手」的卡住（needs_attention）：先讓決策模型試著解卡，次數護欄內
     // 不停循環；失敗／取消或次數用盡照舊停下等人。
-    if (state.autoResolve && task.status === "needs_attention" && !autopilotResolving) {
+    if (state.autoResolve && task.status === "needs_attention") {
+      if (autopilotResolving) {
+        // 另一件自動接手正在進行（可能是別的 workspace 的）：比照 needs_input 分支把觸發權
+        // 還回去等下一個事件，不能直接把這條循環關掉——它根本還沒嘗試過。
+        autopilotFired.delete(task.id);
+        return;
+      }
       const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
       if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
         void autoResolveBossTask(task, attempts);
         return;
       }
     }
+    autopilotResolveAttempts.delete(task.id); // 循環要停了，這張的接手計數不再需要
     disableAutopilotWithNote(task, t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
     return;
   }
   autopilotResolveAttempts.delete(task.id);
-  if (state.running || autopilotAdvancing) return;
+  if (state.running || autopilotAdvancing) {
+    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去，讓之後的事件能重新進來，
+    // 否則這張 completed 永遠留在 autopilotFired、這條循環無聲熄火。
+    autopilotFired.delete(task.id);
+    return;
+  }
   void advanceAutopilot(task, state);
 }
 
@@ -6247,6 +6291,7 @@ app.post("/api/missions/:id/cancel", (req, res) => {
   mission.completedAt = new Date().toISOString();
   store.saveDepartmentMission(mission);
   pendingMissionReplans.delete(mission.id);
+  noReviewMissions.delete(mission.id);
   updateDepartmentThreadMission(mission.departmentId, null);
   departmentAudit("mission_cancelled", mission.departmentId, mission.id);
   broadcastMission(mission);
@@ -7167,8 +7212,9 @@ async function runConsult(dept: Department, lead: Worker, question: string): Pro
     };
   });
   const digest = composeConsultDigest(question, replies, skipped);
-  // 隊長可能正在跟使用者講話：等它這回合結束再送，回報才不會被丟掉
-  if (workers.get(lead.id)?.runner.busy) await awaitWorkerTurn(lead.id, 120_000);
+  // 隊長可能正在跟使用者講話：等它這回合結束再送，回報才不會被丟掉。
+  // awaitWorkerTurn 回傳 { wait, cancel }，必須 await 其 .wait（await 物件本身會立刻 resolve、根本沒等）。
+  if (workers.get(lead.id)?.runner.busy) await awaitWorkerTurn(lead.id, 120_000).wait;
   postToHost(lead.id, digest);
 }
 
@@ -7204,6 +7250,8 @@ function workerAcceptsUserSend(worker: Worker): boolean {
 
 // worker 空閒時把佇列最前面一則送出。預算超標就留著（下次再試），不丟。
 function drainWorkerQueue(worker: Worker): void {
+  // 換腦交接摘要還沒送進新 session：先讓路，摘要送達後會再排 drain（見 trySendSummary）。
+  if (pendingSwapSummaries.has(worker.id)) return;
   if (!workerAcceptsUserSend(worker)) return;
   const budget = getExtras(worker.id).dailyBudgetUsd;
   if (budget != null && todayCostUsd(worker.id) >= budget) return;
@@ -8615,6 +8663,23 @@ for (const savedWorker of store.loadWorkers(MAX_HISTORY)
 }
 if (workers.size === 0 && config.targetRepoConfigured) {
   createWorker(undefined, undefined, "claude", config.targetRepoPath, undefined, null, null, { warmup: true });
+}
+
+// 重啟和解：進行中的 Mission/協作是純記憶體驅動（missionRunners/activeCollaborations 開機為空、
+// 事件不會再來），從 SQLite 還原成 planning/executing/reviewing 的 Mission 若不處理會變殭屍——
+// 永遠顯示執行中、被指派者恆 busy、同 workspace 全員 409、也沒有任何端點能解（/resolve 只收
+// needs_attention/failed）。開機時統一打成 needs_attention，老闆可重試/取消，自動接手也有機會處理。
+for (const mission of [...activeMissions.values()]) {
+  if (mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing" || mission.status === "discussing") {
+    pauseMission(mission, t("伺服器重啟，進行中的步驟已中斷；請重試或取消"), "step_failed");
+  }
+}
+// 進行中的協作同理：開機不還原 runner，資料庫裡 running/returning 的協作永遠收不了尾，直接標失敗。
+for (const collaborationTask of store.listActiveCollaborationTasks()) {
+  collaborationTask.status = "failed";
+  collaborationTask.error = t("伺服器重啟，協作已中斷；請重新發起");
+  collaborationTask.completedAt = new Date().toISOString();
+  store.saveCollaborationTask(collaborationTask);
 }
 
 const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ workspacePath, provider, revision }) => {

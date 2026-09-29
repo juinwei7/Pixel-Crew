@@ -52,7 +52,7 @@ export function pollPhaseForVoiceStatus(status: VoiceStatusResponse): VoiceInput
 const MAX_RECORDING_MS = 120_000;
 const MODEL_POLL_MS = 700;
 
-export function useVoiceInput(): {
+export function useVoiceInput(onAutoTranscript?: (text: string) => void): {
   phase: VoiceInputPhase;
   error: string | null;
   elapsedMs: number;
@@ -71,6 +71,9 @@ export function useVoiceInput(): {
   const [model, setModel] = useState<VoiceModelState | null>(null);
   const [engineInstaller, setEngineInstaller] = useState<VoiceEngineInstallState | null>(null);
 
+  // 錄滿上限自動停止時把轉寫結果交給消費端（與手動停止同一條路）；用 ref 避免計時器閉包吃到舊值。
+  const onAutoTranscriptRef = useRef(onAutoTranscript);
+  onAutoTranscriptRef.current = onAutoTranscript;
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -248,7 +251,13 @@ export function useVoiceInput(): {
       elapsedTimerRef.current = setInterval(() => {
         const elapsed = Date.now() - recordingStartedAtRef.current;
         setElapsedMs(elapsed);
-        if (elapsed >= MAX_RECORDING_MS) void stopAndTranscribe();
+        // 自動停止不能丟棄轉寫結果：這裡沒有人在 await，轉出的文字要主動交給消費端，
+        // 否則使用者錄滿上限後音訊有送轉寫、文字卻永遠進不了輸入框。
+        if (elapsed >= MAX_RECORDING_MS) {
+          void stopAndTranscribe().then((text) => {
+            if (text) onAutoTranscriptRef.current?.(text);
+          });
+        }
       }, 200);
       setPhase("recording");
     } catch (cause) {

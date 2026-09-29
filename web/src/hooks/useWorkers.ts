@@ -317,7 +317,9 @@ export function useWorkers() {
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
               data.worker.autoApproveMode,
-            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null },
+            // emptyWorker 沒有這幾個欄位的參數位，必須跟 snapshot 分支一樣手動回填——漏掉 ephemeralKind
+            // 會讓作戰室成員坐不上會議桌、專屬部隊被當常駐工排進主辦公室（直到重連拿 snapshot 才修正）。
+            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null },
           }));
           setWorkspacePaths((current) =>
             current.includes(data.worker.workspacePath)
@@ -367,7 +369,9 @@ export function useWorkers() {
                   data.worker.handoff ?? null,
                   data.worker.autoApproveMode,
                 );
-            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null };
+            // reset/換 provider 走 emptyWorker 重建時，跟 worker_added 一樣要回填 ephemeralKind 與
+            // resumeCandidate——否則 dedicated/warroom NPC 收到 reset 會瞬移回主辦公室、resume 卡片消失。
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>

@@ -180,8 +180,19 @@ export function parseWarroomResult(raw: string): WarRoomResult | null {
             const item = entry as Record<string, unknown>;
             const type = ["line", "bar", "donut"].includes(String(item.type)) ? item.type as WarRoomChart["type"] : null;
             const title = collaborationText(item.title, 80);
-            const rawLabels = Array.isArray(item.labels) ? item.labels.map((l) => collaborationText(l, 24)) : [];
-            const rawValues = Array.isArray(item.values) ? item.values.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+            // labels/values 必須「成對」保留或丟棄：values 單獨 filter 掉非數值（模型常吐 "N/A"、"12%"）
+            // 會讓後面的數值整段左移對到錯的標籤。逐格配對，任一邊無效就整格丟。
+            const pairLabels = Array.isArray(item.labels) ? item.labels : [];
+            const pairValues = Array.isArray(item.values) ? item.values : [];
+            const rawLabels: string[] = [];
+            const rawValues: number[] = [];
+            for (let i = 0; i < Math.min(pairLabels.length, pairValues.length); i++) {
+              const label = collaborationText(pairLabels[i], 24);
+              const value = Number(pairValues[i]);
+              if (!label || !Number.isFinite(value)) continue;
+              rawLabels.push(label);
+              rawValues.push(value);
+            }
             const n = Math.min(rawLabels.length, rawValues.length, 24);
             if (!type || !title || n < 2) return []; // 少於 2 點畫不成圖，直接略過
             const unit = collaborationText(item.unit, 16);
