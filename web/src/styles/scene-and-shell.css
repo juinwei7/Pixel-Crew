@@ -374,7 +374,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 176px;
+  max-width: 184px;
   opacity: 0;
   pointer-events: none;
   will-change: transform;
@@ -382,12 +382,12 @@ body {
 .npc-tooltrail__row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 8px 1px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  gap: 6px;
+  padding: 2px 9px 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
-  background: rgba(5, 10, 20, 0.74);
-  color: #c4d3e4;
+  background: rgba(6, 11, 22, 0.72);
+  color: #b9c7da;
   font-family: var(--mono);
   font-size: 9px;
   font-weight: 600;
@@ -397,29 +397,35 @@ body {
   transform-origin: left center;
   animation: tooltrailIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.npc-tooltrail__text { overflow: hidden; text-overflow: ellipsis; }
-.npc-tooltrail__dot {
+.npc-tooltrail__ico {
   flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--trail-accent, #8aa0b8);
+  display: block;
+  color: #93a6bd;
 }
-.npc-tooltrail__row--done { opacity: 0.5; }
-.npc-tooltrail__row--done .npc-tooltrail__dot { opacity: 0.65; }
-.npc-tooltrail__row--cur {
+.npc-tooltrail__text { overflow: hidden; text-overflow: ellipsis; }
+/* 軌跡前幾步：淡下去打底 */
+.npc-tooltrail__row:not(.is-active) { opacity: 0.55; }
+/* 當前步：低調呼吸高亮——無彩色條，只用微亮邊框＋柔和陰影脈動 */
+.npc-tooltrail__row.is-active {
+  opacity: 1;
   color: #eaf3ff;
-  background: rgba(8, 16, 30, 0.9);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+  background: rgba(10, 18, 32, 0.9);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  animation: tooltrailIn 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+             trailBreathe 1.9s ease-in-out infinite 0.28s;
 }
-.npc-tooltrail__row--cur .npc-tooltrail__dot {
-  box-shadow: 0 0 6px var(--trail-accent, #8aa0b8);
-  animation: hudPulse 1.2s ease-in-out infinite;
-}
+.npc-tooltrail__row.is-active .npc-tooltrail__ico { color: #cfe0f5; }
+/* 待命：整張卡收成灰淡一行，保留「剛剛做的事」脈絡但不搶眼 */
+.npc-tooltrail--idle .npc-tooltrail__row { opacity: 0.42; filter: grayscale(0.35); }
 
 @keyframes tooltrailIn {
   from { opacity: 0; transform: translateY(6px) scale(0.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes trailBreathe {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+  50%      { box-shadow: 0 2px 12px rgba(120, 160, 255, 0.22); }
 }
 
 .npc-identity-card {

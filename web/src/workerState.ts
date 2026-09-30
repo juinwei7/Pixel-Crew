@@ -27,9 +27,13 @@ export function friendlyToolSpeech(name: string, input: unknown): string {
   if (n === "grep") { const p = str(o.pattern); return p ? t("搜尋：{p}", { p: p.slice(0, 40) }) : t("搜尋程式碼"); }
   if (n === "glob") { const p = str(o.pattern); return p ? t("找檔案：{p}", { p: p.slice(0, 40) }) : t("找檔案"); }
   if (n === "task" || n.includes("agent")) return t("派發子任務…");
-  if (n === "todowrite" || n === "todoread") return t("整理待辦清單…");
+  if (n === "todowrite" || n === "todoread" || n.startsWith("task")) return t("整理任務清單…");
+  if (n === "websearch") return t("上網搜尋");
+  if (n === "skill") { const s = str(o.command ?? o.skill); return s ? t("啟用技能：{s}", { s: s.slice(0, 24) }) : t("啟用技能…"); }
+  if (n === "schedulewakeup" || n === "croncreate" || n === "cronlist" || n === "crondelete") return t("排定排程…");
+  if (n === "sendmessage" || n === "pushnotification") return t("傳訊給隊員…");
   if (n.includes("__")) return t("呼叫 {tool}…", { tool: shortToolName(name) });
-  return t("使用 {tool}…", { tool: shortToolName(name) });
+  return t("使用工具…");
 }
 
 // 從 WebSearch/WebFetch(及 firecrawl 等)的工具輸入撈出查詢字或網址，給工作小窗抓真實截圖用。

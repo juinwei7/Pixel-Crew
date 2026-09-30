@@ -14,9 +14,22 @@ import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
 import { t } from "../i18n";
+
+// 活動卡每列前的小圖示：依工具所屬站點給一個線性 icon（走 Icon.tsx、吃 currentColor、
+// 跨平台一致），取代原本的彩色圓點——杜絕洋紅 accent 條。
+const TRAIL_ICON: Partial<Record<StationKey, IconName>> = {
+  terminal: "gear",
+  code: "code",
+  web: "globe",
+  books: "file",
+  check: "check",
+  board: "board",
+  meeting: "speech",
+  desk: "wrench",
+};
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
@@ -706,32 +719,33 @@ export function GameCanvas({
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
             </div>
-            {!w.temporary && w.busy && (() => {
-              // 頭下即時工具流：讀「最後一回合」的工具序列，取最近 3 步——最後一個(running)高亮＋呼吸，
-              // 前面幾步變灰打底成軌跡。資料與對話泡同源(friendlyToolSpeech)，純顯示、server 零改動。
+            {!w.temporary && (() => {
+              // 頭下活動卡：讀「最後一回合」的工具序列。忙碌→秀最近 3 步、末步低調呼吸高亮；
+              // 待命→收合成一行「剛剛做的事」灰淡停留(保留脈絡，不再一停就消失)。每列前給乾淨圖示，
+              // 不再吐英文工具原名、不再有彩色 accent 條。資料與對話泡同源、純顯示、server 零改動。
               const turns = workersById.get(w.selectId)?.turns;
-              const items = turns && turns.length ? turns[turns.length - 1].items : null;
-              if (!items) return null;
-              const tools = items.filter((it): it is ToolCallItem => it.kind === "tool_call").slice(-3);
-              if (tools.length === 0) return null;
+              const lastTurn = turns && turns.length ? turns[turns.length - 1] : null;
+              if (!lastTurn) return null;
+              const allTools = lastTurn.items.filter((it): it is ToolCallItem => it.kind === "tool_call");
+              if (allTools.length === 0) return null;
+              const running = w.busy && lastTurn.status === "running";
+              const tools = running ? allTools.slice(-3) : allTools.slice(-1);
               return (
                 <div
                   ref={(el) => {
                     if (el) trailRefs.current.set(w.id, el);
                     else trailRefs.current.delete(w.id);
                   }}
-                  className="npc-tooltrail"
+                  className={`npc-tooltrail${running ? "" : " npc-tooltrail--idle"}`}
                 >
-                  {tools.map((tc) => {
-                    const accent = STATION_THEME[stationForTool(tc.name, tc.input)]?.accent ?? "#8aa0b8";
-                    const running = tc.status === "running";
+                  {tools.map((tc, i) => {
+                    const isActive = running && i === tools.length - 1 && tc.status === "running";
                     return (
                       <div
                         key={tc.key}
-                        className={`npc-tooltrail__row${running ? " npc-tooltrail__row--cur" : " npc-tooltrail__row--done"}`}
-                        style={{ "--trail-accent": accent } as CSSProperties}
+                        className={`npc-tooltrail__row${isActive ? " is-active" : ""}`}
                       >
-                        <span className="npc-tooltrail__dot" aria-hidden="true" />
+                        <Icon name={TRAIL_ICON[stationForTool(tc.name, tc.input)] ?? "wrench"} size={10} className="npc-tooltrail__ico" />
                         <span className="npc-tooltrail__text">{stripMarkdown(friendlyToolSpeech(tc.name, tc.input))}</span>
                       </div>
                     );
