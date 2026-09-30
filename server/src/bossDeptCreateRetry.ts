@@ -21,14 +21,18 @@ const POLICY: BackoffPolicy = {
 /** 失敗點路徑：重試時各走回自己原本的入口，不互相冒充。 */
 export type DeptCreateRetryKind = "dedicated" | "follow_up" | "decide";
 
+/** 寫進 task.stall.kind 的結構化停滯標記：引擎依此認領，不 parse 人類可讀文案。
+ * 「dept_create:」命名空間讓本引擎與 bossUsageRetry（usage:*）結構上不可能互搶。 */
+export type DeptCreateStallKind = `dept_create:${DeptCreateRetryKind}`;
+
+export function deptCreateStallKind(kind: DeptCreateRetryKind): DeptCreateStallKind {
+  return `dept_create:${kind}`;
+}
+
 type DeptCreateRetryPayload = {
   kind: DeptCreateRetryKind;
   /** kind="follow_up" 時要重跑的追問文字；其他 kind 為 null。 */
   followUp: string | null;
-  /** 登記當下寫進 task.error 的失敗文案——之後若 task.error 變了（例如重試成功後
-   * 改因派工被擋卡住、或換成用量受限），代表別的停滯型態接手，這筆登記作廢；
-   * 否則會對「已經建好部門」的交辦再建一支重複的專屬部門（交互自審發現）。 */
-  error: string;
 };
 
 export type DeptCreateRetryEntry = DeptCreateRetryPayload & {
@@ -49,8 +53,8 @@ export class DeptCreateRetryTracker {
    * 失敗立刻重打只會連環燒 token。已登記者（自動重試又失敗、或使用者手動回覆又失敗）
    * 依已重試次數退避，不重置次數；kind／followUp 以最新一次失敗為準。
    */
-  note(taskId: string, kind: DeptCreateRetryKind, followUp: string | null, error: string, now: number): void {
-    this.inner.note(taskId, { kind, followUp, error }, now);
+  note(taskId: string, kind: DeptCreateRetryKind, followUp: string | null, now: number): void {
+    this.inner.note(taskId, { kind, followUp }, now);
   }
 
   get(taskId: string): DeptCreateRetryEntry | null {
@@ -100,15 +104,17 @@ export type DeptCreateRetryAction =
 export function deptCreateRetryAction(
   tracker: DeptCreateRetryTracker,
   taskId: string,
-  view: { status: string; taskError: string | null; workspaceFree: boolean; providerReady: boolean; inFlight: boolean },
+  view: { status: string; stallKind: string | null; workspaceFree: boolean; providerReady: boolean; inFlight: boolean },
   now: number,
 ): DeptCreateRetryAction {
   const entry = tracker.get(taskId);
   if (!entry) return { kind: "drop" };
   if (view.status !== "needs_attention") return { kind: "drop" };
-  // task.error 已換人（例如重試成功後改因派工被擋、或換成用量受限）——這筆登記作廢，
-  // 避免對已經建好部門的交辦再建一支重複部門、或與其他引擎互踩。
-  if (view.taskError !== entry.error) return { kind: "drop" };
+  // 結構化認領：task.stall.kind 不是本登記的標記（例如重試成功後改因派工被擋、換成
+  // 用量受限、或任何路徑改寫 task.error 讓中央護欄清掉 stall）——這筆登記作廢，避免
+  // 對已經建好部門的交辦再建一支重複部門、或與其他引擎互踩。不比對人類可讀文案，
+  // 失敗訊息任意改寫、換語系都不影響認領。
+  if (view.stallKind !== deptCreateStallKind(entry.kind)) return { kind: "drop" };
   if (view.inFlight) return { kind: "wait" };
   if (tracker.exhausted(taskId)) return { kind: "exhausted" };
   if (!tracker.shouldRetry(taskId, now)) return { kind: "wait" };

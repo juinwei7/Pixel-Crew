@@ -23,10 +23,16 @@ const POLICY: BackoffPolicy = {
 /** 失敗點路徑：恢復後各走回自己原本的入口（追問路徑不做 usage 前置檢查，故無此 kind）。 */
 export type UsageRetryKind = "dedicated" | "decide";
 
+/** 寫進 task.stall.kind 的結構化停滯標記：引擎依此認領，不 parse 人類可讀文案。
+ * 「usage:」命名空間讓本引擎與 bossDeptCreateRetry（dept_create:*）結構上不可能互搶。 */
+export type UsageStallKind = `usage:${UsageRetryKind}`;
+
+export function usageStallKind(kind: UsageRetryKind): UsageStallKind {
+  return `usage:${kind}`;
+}
+
 type UsageRetryPayload = {
   kind: UsageRetryKind;
-  /** 登記當下寫進 task.error 的受限文案——之後若 task.error 變了，代表別的失敗接手，這筆作廢。 */
-  blockedError: string;
 };
 
 export type UsageRetryEntry = UsageRetryPayload & {
@@ -41,8 +47,8 @@ export function usageRetryBackoffMs(probes: number): number {
 export class UsageRetryTracker {
   private readonly inner = new BackoffRetryTracker<UsageRetryPayload>(POLICY);
 
-  note(taskId: string, kind: UsageRetryKind, blockedError: string, now: number): void {
-    this.inner.note(taskId, { kind, blockedError }, now);
+  note(taskId: string, kind: UsageRetryKind, now: number): void {
+    this.inner.note(taskId, { kind }, now);
   }
 
   get(taskId: string): UsageRetryEntry | null {
@@ -77,7 +83,7 @@ export class UsageRetryTracker {
 }
 
 export type UsageRetryAction =
-  | { kind: "drop" } // 不再追蹤：交辦消失／已推進／別的失敗接手（error 變了）
+  | { kind: "drop" } // 不再追蹤：交辦消失／已推進／別的失敗接手（stall 標記換人或被清）
   | { kind: "wait" } // 保留追蹤，這輪不動：退避中或上一輪探測還在跑
   | { kind: "exhausted" } // 探測次數用盡仍受限：呼叫端發降級訊息（明確回報主人）並除名
   | { kind: "probe"; probe: number; entry: UsageRetryEntry }; // 發動探測：呼叫端查即時用量，恢復才重跑原入口
@@ -89,15 +95,16 @@ export type UsageRetryAction =
 export function usageRetryAction(
   tracker: UsageRetryTracker,
   taskId: string,
-  view: { status: string; taskError: string | null; inFlight: boolean },
+  view: { status: string; stallKind: string | null; inFlight: boolean },
   now: number,
 ): UsageRetryAction {
   const entry = tracker.get(taskId);
   if (!entry) return { kind: "drop" };
   if (view.status !== "needs_attention") return { kind: "drop" };
-  // task.error 已換人（例如恢復重跑後換成建立失敗、改由 bossDeptCreateRetry 追蹤）——
-  // 這筆登記作廢，避免兩套引擎對同一張交辦互踩。
-  if (view.taskError !== entry.blockedError) return { kind: "drop" };
+  // 結構化認領：task.stall.kind 不是本登記的標記（例如恢復重跑後換成建立失敗、改由
+  // bossDeptCreateRetry 追蹤，或任何路徑改寫 task.error 讓中央護欄清掉 stall）——這筆
+  // 登記作廢，兩套引擎不互踩。不比對人類可讀文案，受限訊息改寫、換語系都不影響認領。
+  if (view.stallKind !== usageStallKind(entry.kind)) return { kind: "drop" };
   if (view.inFlight) return { kind: "wait" };
   if (tracker.exhausted(taskId)) return { kind: "exhausted" };
   if (!tracker.shouldProbe(taskId, now)) return { kind: "wait" };

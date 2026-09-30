@@ -1,5 +1,7 @@
 import type { ProviderId } from "./providers/types.js";
 import type { AssignmentDecisionCandidate } from "./assignmentDecision.js";
+import type { DeptCreateStallKind } from "./bossDeptCreateRetry.js";
+import type { UsageStallKind } from "./bossUsageRetry.js";
 import { t } from "./i18n.js";
 import { executionBudgetFor, type ExecutionBudget, type ExecutionProfile } from "./executionBudget.js";
 
@@ -48,6 +50,27 @@ export type BossTaskStage = {
   noReview?: boolean;
 };
 
+// 結構化停滯標記（2026-09-30 結構化改造）：task.error 是給人看的文案，stall 是給自動
+// 重試引擎認領用的機器欄位——引擎只認 kind，不 parse 文案，失敗訊息改寫／換語系都不會
+// 讓認領漂移；跟著 payload_json 一起落地，重啟後也認得回入口。error 欄位存「標記寫入
+// 當下的 task.error 快照」，只給 reconcileBossTaskStall 偵測「error 被別的失敗路徑改寫」
+// 用（快照與 task.error 同物同存，對文案改寫、語系切換皆免疫），引擎端不得比對它。
+export type BossTaskStallKind = DeptCreateStallKind | UsageStallKind;
+export type BossTaskStall = { kind: BossTaskStallKind; error: string };
+
+/**
+ * stall 標記的中央護欄——persistBossTask 每次落地前呼叫：任務離開 needs_attention、或
+ * 任何寫入點把 task.error 換掉（快照不再吻合）就回 null 清掉標記。護欄放在落地咽喉，
+ * 三十多個 error 寫入點（含未來新增的）不必各自記得清 stall，殭屍認領結構上不可能留下。
+ */
+export function reconcileBossTaskStall(task: Pick<BossTask, "status" | "error"> & { stall?: BossTaskStall | null }): BossTaskStall | null {
+  const stall = task.stall ?? null;
+  if (!stall) return null;
+  if (task.status !== "needs_attention") return null;
+  if (task.error !== stall.error) return null;
+  return stall;
+}
+
 export type BossTask = {
   id: string;
   title: string;
@@ -69,6 +92,8 @@ export type BossTask = {
   stages: BossTaskStage[];
   finalReport: string | null;
   error: string | null;
+  /** 見 BossTaskStall；選填是為了相容既有 payload_json 舊列（缺欄視同 null）。 */
+  stall?: BossTaskStall | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;

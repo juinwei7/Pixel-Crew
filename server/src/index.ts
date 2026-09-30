@@ -176,6 +176,7 @@ import {
   parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
+  reconcileBossTaskStall,
   type BossTask,
   type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
@@ -213,11 +214,13 @@ import {
   DeptCreateRetryTracker,
   DEPT_CREATE_RETRY_MAX_ATTEMPTS,
   deptCreateRetryAction,
+  deptCreateStallKind,
 } from "./bossDeptCreateRetry.js";
 import {
   UsageRetryTracker,
   USAGE_RETRY_MAX_PROBES,
   usageRetryAction,
+  usageStallKind,
 } from "./bossUsageRetry.js";
 import { BackoffRetryTracker } from "./backoffRetry.js";
 import {
@@ -4747,6 +4750,9 @@ function bossTaskCandidates(): AssignmentDecisionCandidate[] {
 }
 
 function persistBossTask(task: BossTask, created = false): void {
+  // stall 標記的中央護欄：所有 boss task 變更都經本函式落地，任務推進或 error 被任何
+  // 寫入點改寫時在這裡統一清掉結構化停滯標記——散落各處的 error 寫入點不必各自維護。
+  task.stall = reconcileBossTaskStall(task);
   task.updatedAt = new Date().toISOString();
   store.saveBossTask(task);
   broadcastBossTask(task, created);
@@ -4866,10 +4872,9 @@ function ephemeralCleanupHook(task: BossTask): void {
 // in-flight 既有 bossTaskFinalizing 可判，這裡只補探索側。
 const bossTaskDiscoveryWork = new BossTaskWorkCounter();
 
-// 專屬部門建立失敗的三個入口各自的錯誤文案。抽成具名常數是為了重啟後的追蹤重建：
-// 重試追蹤器是記憶體態、dedicated 旗標又不落地，開機只能靠比對 task.error 認出
-// 「這張是建立失敗卡住的」以及該走回哪個入口重試（卡點盤點 P1-3）。文案跟著當時
-// 語系存進 task.error，重啟後語系若切換會比對不到——只是退回等人工，不會誤動作。
+// 專屬部門建立失敗的三個入口各自的錯誤文案。純粹是給人看的共用文案——入口識別已改用
+// task.stall.kind 結構化標記（引擎認領與開機重建都認它，不 parse 文案），這裡改寫措辭
+// 或換語系都不影響自動重試（2026-09-30 結構化改造，拔掉文案認領的漂移病根）。
 const deptCreateFailureError = {
   dedicated: () => t("無法自動建立專屬臨時部門（可能此工作區正在執行其他 Mission，或團隊規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。"),
   follow_up: () => t("無法為追問重建專屬部門（可能此工作區正在執行其他 Mission）；可稍後再試。"),
@@ -4895,9 +4900,10 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
     const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.status = "needs_attention";
     task.error = blockedError;
+    task.stall = { kind: usageStallKind("dedicated"), error: blockedError };
     task.messages.push(bossTaskMessage("system", blockedError));
     // 登記恢復探測：用量視窗重置後自動接手重跑本路徑，不用等人回覆（卡點盤點 P1-5）。
-    bossUsageRetry.note(task.id, "dedicated", blockedError, Date.now());
+    bossUsageRetry.note(task.id, "dedicated", Date.now());
     persistBossTask(task);
     return;
   }
@@ -4921,9 +4927,10 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
     const failure = deptCreateFailureError.dedicated();
     task.status = "needs_attention";
     task.error = failure;
+    task.stall = { kind: deptCreateStallKind("dedicated"), error: failure };
     task.messages.push(bossTaskMessage("system", failure));
     // 登記自動重試：工作區空出（阻塞 Mission 結束）後由掃描重走本路徑，不用等人回覆（P1-3）。
-    bossDeptCreateRetry.note(task.id, "dedicated", null, failure, Date.now());
+    bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4982,9 +4989,10 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
       const failure = deptCreateFailureError.follow_up();
       task.status = "needs_attention";
       task.error = failure;
+      task.stall = { kind: deptCreateStallKind("follow_up"), error: failure };
       task.messages.push(bossTaskMessage("system", failure));
       // 帶上追問文字登記，重試時走回同一條追問路徑（P1-3）。
-      bossDeptCreateRetry.note(task.id, "follow_up", followUp, failure, Date.now());
+      bossDeptCreateRetry.note(task.id, "follow_up", followUp, Date.now());
       persistBossTask(task);
       return;
     }
@@ -5034,9 +5042,10 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
     const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.status = "needs_attention";
     task.error = blockedError;
+    task.stall = { kind: usageStallKind("decide"), error: blockedError };
     task.messages.push(bossTaskMessage("system", blockedError));
     // 登記恢復探測：用量視窗重置後自動接手重跑 decide，不用等人回覆（卡點盤點 P1-5）。
-    bossUsageRetry.note(task.id, "decide", blockedError, Date.now());
+    bossUsageRetry.note(task.id, "decide", Date.now());
     persistBossTask(task);
     return;
   }
@@ -5091,9 +5100,10 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
         const failure = deptCreateFailureError.decide();
         task.status = "needs_attention";
         task.error = failure;
+        task.stall = { kind: deptCreateStallKind("decide"), error: failure };
         task.messages.push(bossTaskMessage("system", failure));
         // 登記自動重試：重走整條 decide（部門版圖可能已變，讓決策模型重新路由）（P1-3）。
-        bossDeptCreateRetry.note(task.id, "decide", null, failure, Date.now());
+        bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
         persistBossTask(task);
         return;
       }
@@ -5401,7 +5411,7 @@ function sweepFailedDeptCreation(): void {
     const task = store.getBossTask(id);
     const action = deptCreateRetryAction(bossDeptCreateRetry, id, {
       status: task?.status ?? "missing",
-      taskError: task?.error ?? null,
+      stallKind: task?.stall?.kind ?? null,
       workspaceFree: task ? !workspaceMission(task.workspacePath) : false,
       providerReady: task ? providerReady(task.decisionProvider) : false,
       inFlight: bossDeptCreateRetryInFlight.has(id),
@@ -5438,8 +5448,8 @@ function sweepFailedDeptCreation(): void {
 // usageBlockReason 擋下任務判斷後，usage 視窗重置（整點／5h）也沒有任何人重試。
 // 這裡對登記過的受限交辦定期探測即時用量，usageBlockReason 歸空（明確依據，不猜
 // 時間）才走回原入口重跑；探測退避、次數上限與作廢決策在 bossUsageRetry.ts。
-// 追蹤器是記憶體態且兩個入口共用同一段受限文案，重啟後認不回入口——不做開機重建，
-// 重啟後維持既有行為（needs_attention 等人回覆），不會誤動作。
+// 不做開機重建（設計留白）：task.stall.kind 落地後結構上已認得回入口，但本輪維持
+// 既有語義——重啟後 needs_attention 等人回覆，不會誤動作。
 const bossUsageRetry = new UsageRetryTracker();
 const bossUsageRetryInFlight = new Set<string>();
 
@@ -5449,7 +5459,7 @@ function sweepUsageBlockedBossTasks(): void {
     const task = store.getBossTask(id);
     const action = usageRetryAction(bossUsageRetry, id, {
       status: task?.status ?? "missing",
-      taskError: task?.error ?? null,
+      stallKind: task?.stall?.kind ?? null,
       inFlight: bossUsageRetryInFlight.has(id),
     }, now);
     if (action.kind === "wait") continue;
@@ -5471,7 +5481,7 @@ function sweepUsageBlockedBossTasks(): void {
         // persist 與重跑都對這份重讀物件做（掃描開頭的 task 是探測前的舊快照，直接整列
         // persist 會蓋掉探測期間新寫入的訊息——交互自審補上）。
         const current = store.getBossTask(id);
-        if (!current || current.status !== "needs_attention" || current.error !== action.entry.blockedError) {
+        if (!current || current.status !== "needs_attention" || current.stall?.kind !== usageStallKind(action.entry.kind)) {
           bossUsageRetry.resolve(id);
           return;
         }
@@ -5479,7 +5489,7 @@ function sweepUsageBlockedBossTasks(): void {
         persistBossTask(current);
         await (action.entry.kind === "dedicated" ? runDedicatedDepartmentTask(current) : decideBossTask(current));
         // 成功（ready/running）就除名；又失敗則入口已依新失敗型態重新登記（usage 再受限→
-        // 本追蹤器；建立失敗→bossDeptCreateRetry），舊登記 error 不符會在下一輪掃描 drop。
+        // 本追蹤器；建立失敗→bossDeptCreateRetry），stall 標記換人的舊登記下一輪掃描 drop。
         const after = store.getBossTask(id);
         if (after && after.status !== "needs_attention") bossUsageRetry.resolve(id);
       } catch (error) {
@@ -9515,10 +9525,11 @@ server.listen(config.port, config.host, () => {
   // 開機時從現存交辦重建登記並立掃一次，主管此刻閒著就直接重派，忙著就交給雙掃描接手。
   for (const task of store.listBossTasksByStatus(["needs_attention"])) {
     if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
-    // 建立失敗的追蹤器同樣是記憶體態——靠 task.error 文案認回入口重建登記（次數歸零，
-    // 重啟視同重新開始）。追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
-    else if (task.error === deptCreateFailureError.dedicated()) bossDeptCreateRetry.note(task.id, "dedicated", null, task.error, Date.now());
-    else if (task.error === deptCreateFailureError.decide()) bossDeptCreateRetry.note(task.id, "decide", null, task.error, Date.now());
+    // 建立失敗的追蹤器同樣是記憶體態——靠落地的 task.stall.kind 結構化標記認回入口重建
+    // 登記（次數歸零，重啟視同重新開始），不比對文案，重啟前後改寫失敗訊息或切換語系
+    // 都不影響。追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
+    else if (task.stall?.kind === deptCreateStallKind("dedicated")) bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
+    else if (task.stall?.kind === deptCreateStallKind("decide")) bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
   }
   if (bossDispatchRetry.size > 0) {
     try { sweepStalledBossDispatch(); } catch (error) {
