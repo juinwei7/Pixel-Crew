@@ -1623,12 +1623,35 @@ summary:focus-visible,
 .npc-workwindow--term .npc-workwindow__body,
 .npc-workwindow--code .npc-workwindow__body { font-family: var(--mono, monospace); color: #bfe6cf; }
 /* 終端機小窗多行模式：加寬加高、最近幾條指令像真 shell 滾動，舊行變暗、當前行帶閃爍游標 */
-.npc-workwindow--term { width: 276px; }
-.npc-workwindow--term .npc-workwindow__body--lines {
-  max-height: 102px; font-size: 10.5px; line-height: 1.55;
-  /* 極淡掃描線＝一點 CRT 終端機味，不影響可讀性 */
-  background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(255, 255, 255, 0.025) 2px 3px);
+.npc-workwindow--term {
+  width: 276px;
+  border-color: rgba(88, 240, 138, 0.55);
+  background: rgba(6, 11, 18, 0.96);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(88, 240, 138, 0.08), 0 0 22px rgba(88, 240, 138, 0.12);
 }
+/* 深色標題列（像真終端機），不再用整條刺眼的螢光綠底 */
+.npc-workwindow--term .npc-workwindow__bar {
+  background: linear-gradient(180deg, #101a2a 0%, #0a1120 100%);
+  color: #83f0ac;
+  border-bottom: 1px solid rgba(88, 240, 138, 0.2);
+}
+.npc-workwindow--term .npc-workwindow__title { letter-spacing: 0.6px; text-shadow: 0 0 8px rgba(88, 240, 138, 0.35); }
+/* 標題列右側那顆點＝會發光的「執行中」綠燈 */
+.npc-workwindow--term .npc-workwindow__dot {
+  background: #58f08a;
+  box-shadow: 0 0 6px #58f08a, 0 0 2px #eafff2 inset;
+  animation: ww-live 1.6s ease-in-out infinite;
+}
+.npc-workwindow--term .npc-workwindow__meta {
+  color: #8fe6b0; background: rgba(88, 240, 138, 0.12);
+}
+.npc-workwindow--term .npc-workwindow__body--lines {
+  max-height: 102px; font-size: 10.5px; line-height: 1.6; padding: 8px 10px;
+  color: #c7ecd4;
+  /* 極淡掃描線＝一點 CRT 終端機味，不影響可讀性 */
+  background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(88, 240, 138, 0.03) 2px 3px);
+}
+@keyframes ww-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 /* 歷史行漸進式淡出：越舊越暗，視線自然落在當前行 */
 .npc-workwindow__line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.3; }
 .npc-workwindow__line:nth-last-child(4) { opacity: 0.38; }

@@ -14,22 +14,9 @@ import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
 import { t } from "../i18n";
-
-// 活動卡每列前的小圖示：依工具所屬站點給一個線性 icon（走 Icon.tsx、吃 currentColor、
-// 跨平台一致），取代原本的彩色圓點——杜絕洋紅 accent 條。
-const TRAIL_ICON: Partial<Record<StationKey, IconName>> = {
-  terminal: "gear",
-  code: "code",
-  web: "globe",
-  books: "file",
-  check: "check",
-  board: "board",
-  meeting: "speech",
-  desk: "wrench",
-};
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
-import { Icon, type IconName } from "./Icon";
+import { Icon } from "./Icon";
 
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
@@ -259,8 +246,6 @@ export function GameCanvas({
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
-  // 頭下即時工具流面板：跟名牌一起用螢幕座標定位，浮在名牌正下方。
-  const trailRefs = useRef(new Map<string, HTMLDivElement>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
   const menuAnchorRefs = useRef(new Map<string, HTMLDivElement>());
   const approvalRefs = useRef(new Map<string, HTMLDivElement>());
@@ -355,13 +340,6 @@ export function GameCanvas({
             // department sign above the head completely clear of DOM chrome.
             nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale}px)`;
             nameplate.style.opacity = String(pos.opacity);
-          }
-          // 工具流面板貼在名牌正下方——用名牌實際高度當偏移，名牌換行(協作/部門工作)時自動跟著下移。
-          const trail = trailRefs.current.get(pos.id);
-          if (trail) {
-            const nameH = nameplate?.offsetHeight ?? 18;
-            trail.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale + nameH + 3}px)`;
-            trail.style.opacity = String(pos.opacity);
           }
           const identity = identityRefs.current.get(pos.id);
           if (identity) {
@@ -719,41 +697,6 @@ export function GameCanvas({
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
             </div>
-            {!w.temporary && (w.busy || hoveredId === w.id) && (() => {
-              // 頭下活動卡：只在「正在工作」時常駐顯示（有活動才有卡，整個辦公室保持乾淨）；
-              // 閒置的 NPC 平時收起，滑鼠移上去才收合成一行「剛剛做的事」供查看。忙碌→秀最近 3 步、
-              // 末步低調呼吸高亮。每列前給乾淨線性圖示，不吐英文工具原名、不用彩色 accent 條。
-              // 資料與對話泡同源、純顯示、server 零改動。
-              const turns = workersById.get(w.selectId)?.turns;
-              const lastTurn = turns && turns.length ? turns[turns.length - 1] : null;
-              if (!lastTurn) return null;
-              const allTools = lastTurn.items.filter((it): it is ToolCallItem => it.kind === "tool_call");
-              if (allTools.length === 0) return null;
-              const running = w.busy && lastTurn.status === "running";
-              const tools = running ? allTools.slice(-3) : allTools.slice(-1);
-              return (
-                <div
-                  ref={(el) => {
-                    if (el) trailRefs.current.set(w.id, el);
-                    else trailRefs.current.delete(w.id);
-                  }}
-                  className={`npc-tooltrail${running ? "" : " npc-tooltrail--idle"}`}
-                >
-                  {tools.map((tc, i) => {
-                    const isActive = running && i === tools.length - 1 && tc.status === "running";
-                    return (
-                      <div
-                        key={tc.key}
-                        className={`npc-tooltrail__row${isActive ? " is-active" : ""}`}
-                      >
-                        <Icon name={TRAIL_ICON[stationForTool(tc.name, tc.input)] ?? "wrench"} size={10} className="npc-tooltrail__ico" />
-                        <span className="npc-tooltrail__text">{stripMarkdown(friendlyToolSpeech(tc.name, tc.input))}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
             <div
               ref={(el) => {
                 if (el) bubbleRefs.current.set(w.id, el);

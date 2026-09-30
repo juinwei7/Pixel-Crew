@@ -16,8 +16,9 @@ export function friendlyToolSpeech(name: string, input: unknown): string {
   const base = (p: unknown) => { const s = str(p); const parts = s.split(/[\\/]/); return parts[parts.length - 1] || s; };
   if (n === "bash" || n === "powershell" || n === "pwsh") {
     let c = str(o.command).replace(/\s+/g, " ").trim();
-    // 短短的顯示額度要留給真正的指令：去掉開頭的切目錄前綴、把長路徑縮成 …\最後兩段
-    c = c.replace(/^(?:Set-Location|Push-Location|cd)\s+(?:"[^"]*"|'[^']*'|[^\s;]+)\s*;\s*/i, "");
+    // 短短的顯示額度要留給真正的指令：去掉開頭的切目錄前綴（; 或 && 分隔皆可，可能連續多層），
+    // 把長路徑縮成 …\最後兩段。例：cd "…" && node "…\x.mjs" → node "…\x.mjs"
+    c = c.replace(/^(?:(?:Set-Location|Push-Location|cd)\s+(?:"[^"]*"|'[^']*'|[^\s;&]+)\s*(?:;|&&)\s*)+/i, "");
     c = c.replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"';|]+/g, (m) => { const parts = m.split(/[\\/]/); return parts.length > 2 ? `…\\${parts.slice(-2).join("\\")}` : m; });
     return c ? t("執行指令：{cmd}", { cmd: c.slice(0, 60) }) : t("執行指令");
   }
