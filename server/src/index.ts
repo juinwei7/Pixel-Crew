@@ -210,6 +210,11 @@ import {
   runnableNextStage,
 } from "./bossDispatchRetry.js";
 import {
+  DeptCreateRetryTracker,
+  DEPT_CREATE_RETRY_MAX_ATTEMPTS,
+  deptCreateRetryAction,
+} from "./bossDeptCreateRetry.js";
+import {
   BossTaskWorkCounter,
   restartBlockedByActiveWork,
   synthesizingZombieAction,
@@ -4839,6 +4844,16 @@ function ephemeralCleanupHook(task: BossTask): void {
 // in-flight 既有 bossTaskFinalizing 可判，這裡只補探索側。
 const bossTaskDiscoveryWork = new BossTaskWorkCounter();
 
+// 專屬部門建立失敗的三個入口各自的錯誤文案。抽成具名常數是為了重啟後的追蹤重建：
+// 重試追蹤器是記憶體態、dedicated 旗標又不落地，開機只能靠比對 task.error 認出
+// 「這張是建立失敗卡住的」以及該走回哪個入口重試（卡點盤點 P1-3）。文案跟著當時
+// 語系存進 task.error，重啟後語系若切換會比對不到——只是退回等人工，不會誤動作。
+const deptCreateFailureError = {
+  dedicated: () => t("無法自動建立專屬臨時部門（可能此工作區正在執行其他 Mission，或團隊規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。"),
+  follow_up: () => t("無法為追問重建專屬部門（可能此工作區正在執行其他 Mission）；可稍後再試。"),
+  decide: () => t("無法自動建立專屬部門（可能此工作區正在執行、人數已滿或規劃失敗），請手動建立部門後再交辦。"),
+} as const;
+
 // 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
 // 專屬新部門，掛一個單一 stage，直接開跑（討論[目前無]＋規劃＋執行）。不呼叫決策模型、
 // 不重跑、不會卡到既有部門。省下整條管線最大的那顆 prompt（決策模型讀全部門目錄）。
@@ -4871,8 +4886,10 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
   });
   if (!department) {
     task.status = "needs_attention";
-    task.error = t("無法自動建立專屬臨時部門（可能此工作區正在執行其他 Mission，或團隊規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。");
+    task.error = deptCreateFailureError.dedicated();
     task.messages.push(bossTaskMessage("system", task.error));
+    // 登記自動重試：工作區空出（阻塞 Mission 結束）後由掃描重走本路徑，不用等人回覆（P1-3）。
+    bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4923,8 +4940,10 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
     });
     if (!department) {
       task.status = "needs_attention";
-      task.error = t("無法為追問重建專屬部門（可能此工作區正在執行其他 Mission）；可稍後再試。");
+      task.error = deptCreateFailureError.follow_up();
       task.messages.push(bossTaskMessage("system", task.error));
+      // 帶上追問文字登記，重試時走回同一條追問路徑（P1-3）。
+      bossDeptCreateRetry.note(task.id, "follow_up", followUp, Date.now());
       persistBossTask(task);
       return;
     }
@@ -5026,8 +5045,10 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
       });
       if (!department) {
         task.status = "needs_attention";
-        task.error = t("無法自動建立專屬部門（可能此工作區正在執行、人數已滿或規劃失敗），請手動建立部門後再交辦。");
+        task.error = deptCreateFailureError.decide();
         task.messages.push(bossTaskMessage("system", task.error));
+        // 登記自動重試：重走整條 decide（部門版圖可能已變，讓決策模型重新路由）（P1-3）。
+        bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
         persistBossTask(task);
         return;
       }
@@ -5295,10 +5316,58 @@ function sweepStalledBossDispatch(): void {
   }
 }
 
+// ── 專屬部門建立失敗自動重試（卡點盤點 P1-3）──────────────────────────────
+// createDepartmentForObjective 回 null（最常見：工作區正在跑別的 Mission）後，阻塞
+// 的 Mission 結束也沒有任何人重試建部門，交辦停在 needs_attention 只能等老闆回覆。
+// 這裡對登記過的失敗交辦在 turn_end 與定期掃描時檢查工作區是否空出，空出才依原入口
+// 重試；指數退避、次數上限與降級決策在 bossDeptCreateRetry.ts。
+const bossDeptCreateRetry = new DeptCreateRetryTracker();
+// 重試本體是長流程（規劃 LLM 最長 90s）而退避最短 15s——in-flight 期間掃描一律 wait，
+// 擋住對同一張的重疊發動。
+const bossDeptCreateRetryInFlight = new Set<string>();
+
+function sweepFailedDeptCreation(): void {
+  const now = Date.now();
+  for (const id of bossDeptCreateRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    const action = deptCreateRetryAction(bossDeptCreateRetry, id, {
+      status: task?.status ?? "missing",
+      workspaceFree: task ? !workspaceMission(task.workspacePath) : false,
+      providerReady: task ? providerReady(task.decisionProvider) : false,
+      inFlight: bossDeptCreateRetryInFlight.has(id),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !task) { bossDeptCreateRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：明確回報主人，不靜默吞掉。除名後使用者回覆交辦仍可手動重試（會重新登記）。
+      bossDeptCreateRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("⛔ 已自動重試 {max} 次仍無法建立專屬部門。請回覆這張交辦重新嘗試、手動建立部門後再交辦，或關掉「專屬部門」改用既有部門路由。", { max: DEPT_CREATE_RETRY_MAX_ATTEMPTS })));
+      persistBossTask(task);
+      continue;
+    }
+    task.messages.push(bossTaskMessage("system", t("🔁 自動重試建立專屬部門（第 {n}/{max} 次）…", { n: action.attempt, max: DEPT_CREATE_RETRY_MAX_ATTEMPTS })));
+    persistBossTask(task);
+    bossDeptCreateRetryInFlight.add(id);
+    const rerun = action.entry.kind === "dedicated"
+      ? runDedicatedDepartmentTask(task)
+      : action.entry.kind === "follow_up"
+        ? runDedicatedFollowUp(task, action.entry.followUp ?? task.objective, null)
+        : decideBossTask(task);
+    void rerun
+      .catch((error) => console.error("[dept-create-retry] 自動重試失敗:", error))
+      .finally(() => {
+        bossDeptCreateRetryInFlight.delete(id);
+        // 成功（ready/running）就除名；又失敗則入口已重新 note()，留給下一輪退避後再試。
+        const after = store.getBossTask(id);
+        if (after && after.status !== "needs_attention") bossDeptCreateRetry.resolve(id);
+      });
+  }
+}
+
 function bossDispatchRetryHook(event: RunnerEvent): void {
   if (event.type !== "turn_end") return;
-  if (bossDispatchRetry.size === 0) return;
-  sweepStalledBossDispatch();
+  if (bossDispatchRetry.size > 0) sweepStalledBossDispatch();
+  if (bossDeptCreateRetry.size > 0) sweepFailedDeptCreation();
 }
 
 function advanceBossTasksForMission(missionId: string): void {
@@ -9048,8 +9117,13 @@ usageRefreshTimer.unref();
 // 派工卡住自動重派的保底掃描：主要靠 turn_end 即時觸發，但主管轉閒置不一定伴隨
 // turn_end（例如協作/交接結束、Mission 收尾），定期掃補上這些空窗。無登記時零成本。
 const bossDispatchRetrySweepTimer = setInterval(() => {
-  if (bossDispatchRetry.size === 0) return;
-  try { sweepStalledBossDispatch(); } catch (error) { console.error("[boss-dispatch-retry] 定期掃描失敗:", error); }
+  if (bossDispatchRetry.size > 0) {
+    try { sweepStalledBossDispatch(); } catch (error) { console.error("[boss-dispatch-retry] 定期掃描失敗:", error); }
+  }
+  // 建立失敗重試同用這班定期掃：阻塞 Mission 結束不一定伴隨 turn_end（收尾路徑多），保底補上。
+  if (bossDeptCreateRetry.size > 0) {
+    try { sweepFailedDeptCreation(); } catch (error) { console.error("[dept-create-retry] 定期掃描失敗:", error); }
+  }
 }, 15_000);
 bossDispatchRetrySweepTimer.unref();
 
@@ -9244,10 +9318,19 @@ server.listen(config.port, config.host, () => {
   // 開機時從現存交辦重建登記並立掃一次，主管此刻閒著就直接重派，忙著就交給雙掃描接手。
   for (const task of store.listBossTasksByStatus(["needs_attention"])) {
     if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
+    // 建立失敗的追蹤器同樣是記憶體態——靠 task.error 文案認回入口重建登記（次數歸零，
+    // 重啟視同重新開始）。追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
+    else if (task.error === deptCreateFailureError.dedicated()) bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
+    else if (task.error === deptCreateFailureError.decide()) bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
   }
   if (bossDispatchRetry.size > 0) {
     try { sweepStalledBossDispatch(); } catch (error) {
       console.error("[boss-dispatch-retry] 開機重建掃描失敗:", error);
+    }
+  }
+  if (bossDeptCreateRetry.size > 0) {
+    try { sweepFailedDeptCreation(); } catch (error) {
+      console.error("[dept-create-retry] 開機重建掃描失敗:", error);
     }
   }
   // 遠端存取自動啟動：設定開著就在開機時把轉接站拉起來，重開機後手機不用等人手動開。

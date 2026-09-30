@@ -222,6 +222,8 @@ export const enServerA: Record<string, string> = {
   "{department} 暫時無法開始：{error}": "{department} can't start right now: {error}",
   "⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。": "⏯️ {department} is free again — auto-redispatching (attempt {n}/{max}).",
   "自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。": "Auto-redispatch hit its {max}-attempt limit; reply to this task to try again.",
+  "🔁 自動重試建立專屬部門（第 {n}/{max} 次）…": "🔁 Auto-retrying dedicated department creation (attempt {n}/{max})…",
+  "⛔ 已自動重試 {max} 次仍無法建立專屬部門。請回覆這張交辦重新嘗試、手動建立部門後再交辦，或關掉「專屬部門」改用既有部門路由。": "⛔ Auto-retry failed to create a dedicated department after {max} attempts. Reply to this task to try again, create a department manually and reassign, or turn off \"dedicated department\" and route to an existing one.",
   "{objective}\n\nBoss Task：{taskObjective}{upstream}": "{objective}\n\nBoss Task: {taskObjective}{upstream}",
   "\n\n上游部門交付：\n{upstream}": "\n\nUpstream department deliverable:\n{upstream}",
   "無法啟動 {department}": "Could not start {department}",
