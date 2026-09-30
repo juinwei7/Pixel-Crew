@@ -9728,6 +9728,19 @@ server.listen(config.port, config.host, () => {
       console.error("[dept-create-retry] 開機重建掃描失敗:", error);
     }
   }
+  // 開機自癒：武裝中的個人自動循環（載入時已從 store 復原）在重啟後不會有 turn_end 來觸發
+  // 下一步，只靠 15s 保底掃會慢半拍——冷安裝重啟後「沒第一時間接回」的元兇。開機延遲幾秒
+  // （等 runner 暖機、前端重連）主動補掃一次，讓武裝循環第一時間接回，而不是乾等第一個 tick。
+  if (workerAutopilotByWorker.size > 0) {
+    const armed = workerAutopilotByWorker.size;
+    const bootResume = setTimeout(() => {
+      try {
+        console.log(`[worker-autopilot] 開機補掃：${armed} 個武裝循環，重啟後立即接回`);
+        sweepWorkerAutopilot();
+      } catch (error) { console.error("[worker-autopilot] 開機補掃失敗:", error); }
+    }, 5_000);
+    bootResume.unref();
+  }
   // 遠端存取自動啟動：設定開著就在開機時把轉接站拉起來，重開機後手機不用等人手動開。
   if (appSettings.get().remoteAccessAutoStart) {
     void startTsproxyRelay().then((outcome) => {
