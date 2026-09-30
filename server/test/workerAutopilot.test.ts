@@ -155,6 +155,20 @@ test("prompt demands ladder judgment, progress self-check, and a retro on stop/f
   assert.match(prompt, /"rung":/);
 });
 
+test("prompt frames the decider as an expert coach who diagnoses before directing", () => {
+  const prompt = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 3,
+  });
+  assert.match(prompt, /veteran expert/);
+  assert.match(prompt, /COACH like an expert/);
+  assert.match(prompt, /expert diagnosis/);
+  assert.match(prompt, /concrete standard to hit/);
+});
+
 test("prompt carries over previous loops' retros, newest first; none → no block", () => {
   const withRetros = workerAutopilotNextPrompt({
     workerName: "總管小揮",
