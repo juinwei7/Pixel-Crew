@@ -10,6 +10,7 @@ import {
   explainWorkerAutopilotFailure,
   normalizeWorkerAutopilotStates,
   parseWorkerAutopilotDecision,
+  stripWorkerAutopilotPrefix,
   workerAutopilotNextPrompt,
 } from "../src/workerAutopilot.js";
 
@@ -49,6 +50,41 @@ test("prompt carries worker identity, recent turns, and follow-through-then-stop
   assert.doesNotMatch(prompt, /PREFER CONTINUING/);
   assert.match(prompt, /steps remaining after this one: 3/i);
   assert.match(prompt, /<worker_autopilot_next>/);
+});
+
+test("prompt keeps drafts out of outbox; final step demands a wrap-up report", () => {
+  const midway = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 2,
+  });
+  assert.match(midway, /never tell the NPC to put work-in-progress into outbox\//);
+  assert.doesNotMatch(midway, /FINAL STEP/);
+
+  const last = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 0,
+  });
+  assert.match(last, /FINAL STEP: this is the loop's last step/);
+  assert.match(last, /wrap-up report for the owner/);
+});
+
+test("stripWorkerAutopilotPrefix removes copied 🔁 prefixes (repeated, both paren styles) and keeps the rest", () => {
+  assert.equal(stripWorkerAutopilotPrefix("🔁（自動循環·剩 2 步）🔁（剩 2 步）收尾報告"), "收尾報告");
+  assert.equal(stripWorkerAutopilotPrefix("🔁(auto loop · 3 left) do the thing"), "do the thing");
+  assert.equal(stripWorkerAutopilotPrefix("直接開工，不帶前綴"), "直接開工，不帶前綴");
+  // 前綴只剝開頭——內文提到 🔁 不受影響。
+  assert.equal(stripWorkerAutopilotPrefix("檢查 🔁（剩 1 步）字樣是否重複"), "檢查 🔁（剩 1 步）字樣是否重複");
+
+  const parsed = parseWorkerAutopilotDecision(
+    `<worker_autopilot_next>{"action":"continue","instruction":"🔁（自動循環·剩 4 步）驗證輸出","reason":"接續"}</worker_autopilot_next>`,
+  );
+  assert.deepEqual(parsed, { action: "continue", instruction: "驗證輸出", reason: "接續" });
 });
 
 test("proactive prompt lowers the STOP bar and allows beyond-thread work", () => {

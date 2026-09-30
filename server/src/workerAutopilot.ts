@@ -44,6 +44,12 @@ function bounded(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+// 決策模型常從「近期回合」抄走我們自己加的「🔁（自動循環·剩 N 步）」前綴，送出時模板又會
+// 再加一次造成前綴重複兩次——送出前把指示開頭的所有 🔁（…）／🔁(…) 前綴剝掉。
+export function stripWorkerAutopilotPrefix(instruction: string): string {
+  return instruction.replace(/^(?:\s*🔁\s*(?:（[^（）]*）|\([^()]*\)))+\s*/u, "").trim();
+}
+
 // 組「下一步該對這位 NPC 說什麼」的決策 prompt。
 export function workerAutopilotNextPrompt(input: {
   workerName: string;
@@ -84,6 +90,7 @@ Rules:
 - Propose exactly ONE next instruction, or STOP.
 ${scopeRule}
 - This NPC only sees its own conversation — scope the instruction to what it can do alone in its workspace, in one turn.
+- Working files: drafts and intermediate files stay in the workspace — never tell the NPC to put work-in-progress into outbox/. Only a finished, final deliverable (typically at the loop's last step) goes into outbox/.${input.stepsRemaining <= 0 ? `\n- FINAL STEP: this is the loop's last step. The instruction MUST tell the NPC to wrap up — close out the current thread (no new work that cannot finish in this one turn) and end its reply with a short wrap-up report for the owner: current status, what got done during this loop, what remains, and any risks.` : ""}
 - Write the instruction in the same language the owner has been using with this NPC (Traditional Chinese unless the recent turns clearly show otherwise).
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
 
@@ -123,7 +130,7 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
   }
-  const instruction = bounded(value.instruction, 4_000);
+  const instruction = stripWorkerAutopilotPrefix(bounded(value.instruction, 4_000));
   // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
   if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced." } };
   return { ok: true, decision: { action: "continue", instruction, reason } };
