@@ -213,6 +213,7 @@ import {
 import {
   DeptCreateRetryTracker,
   DEPT_CREATE_RETRY_MAX_ATTEMPTS,
+  bootRebuildKind,
   deptCreateRetryAction,
   deptCreateStallKind,
 } from "./bossDeptCreateRetry.js";
@@ -9527,9 +9528,22 @@ server.listen(config.port, config.host, () => {
     if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
     // 建立失敗的追蹤器同樣是記憶體態——靠落地的 task.stall.kind 結構化標記認回入口重建
     // 登記（次數歸零，重啟視同重新開始），不比對文案，重啟前後改寫失敗訊息或切換語系
-    // 都不影響。追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
-    else if (task.stall?.kind === deptCreateStallKind("dedicated")) bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
-    else if (task.stall?.kind === deptCreateStallKind("decide")) bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
+    // 都不影響。stall 缺欄的舊版落地資料走 bootRebuildKind 的升級橋（文案僅在此對舊列
+    // 盡力比對一次），認回後回填 stall 標記落地——下次重啟就走結構化路徑，不再碰文案。
+    // 追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
+    else {
+      const rebuilt = bootRebuildKind(task.stall?.kind ?? null, task.error, {
+        dedicated: deptCreateFailureError.dedicated(),
+        decide: deptCreateFailureError.decide(),
+      });
+      if (rebuilt) {
+        if (rebuilt.legacy && task.error !== null) {
+          task.stall = { kind: deptCreateStallKind(rebuilt.kind), error: task.error };
+          persistBossTask(task);
+        }
+        bossDeptCreateRetry.note(task.id, rebuilt.kind, null, Date.now());
+      }
+    }
   }
   if (bossDispatchRetry.size > 0) {
     try { sweepStalledBossDispatch(); } catch (error) {

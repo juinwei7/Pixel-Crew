@@ -29,6 +29,28 @@ export function deptCreateStallKind(kind: DeptCreateRetryKind): DeptCreateStallK
   return `dept_create:${kind}`;
 }
 
+/**
+ * 開機重建：從落地資料認回失敗入口（對抗式自審 6ef0aa0 補洞——升級相容）。
+ * 優先認結構化 stall.kind；stall 缺欄的列是「結構化改造前」的舊版落地資料，升級後
+ * 不能讓當時已卡住的交辦變成無人接手的孤兒——以當年的失敗文案盡力橋接（僅此一處、
+ * 僅對舊列生效的一次性遷移；新寫入一律帶 stall，永遠不會走到文案分支）。橋接不到
+ * （文案已改寫／語系已換）就回 null，維持 needs_attention 等人工，訊息本就含下一步
+ * 指引，不誤動作。帶著別家引擎 stall 標記的列明確回 null，不越界認領。
+ */
+export function bootRebuildKind(
+  stallKind: string | null,
+  taskError: string | null,
+  legacyCopy: { dedicated: string; decide: string },
+): { kind: Exclude<DeptCreateRetryKind, "follow_up">; legacy: boolean } | null {
+  if (stallKind === deptCreateStallKind("dedicated")) return { kind: "dedicated", legacy: false };
+  if (stallKind === deptCreateStallKind("decide")) return { kind: "decide", legacy: false };
+  // follow_up 的追問文字不跨重啟保存、無法安全重放（既有留白）；其他標記屬別的引擎。
+  if (stallKind !== null) return null;
+  if (taskError !== null && taskError === legacyCopy.dedicated) return { kind: "dedicated", legacy: true };
+  if (taskError !== null && taskError === legacyCopy.decide) return { kind: "decide", legacy: true };
+  return null;
+}
+
 type DeptCreateRetryPayload = {
   kind: DeptCreateRetryKind;
   /** kind="follow_up" 時要重跑的追問文字；其他 kind 為 null。 */
