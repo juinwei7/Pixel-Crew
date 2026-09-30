@@ -16,7 +16,11 @@ import {
   stripWorkerAutopilotPrefix,
   workerAutopilotNextPrompt,
   workerAutopilotProgressGuard,
+  workerAutopilotRepairPrompt,
+  workerAutopilotResultSummary,
+  workerAutopilotSweepAction,
   type WorkerAutopilotRetro,
+  type WorkerAutopilotSweepView,
 } from "../src/workerAutopilot.js";
 
 test("clampWorkerAutopilotSteps bounds to [MIN, MAX] and defaults on garbage", () => {
@@ -282,4 +286,88 @@ test("normalizeWorkerAutopilotStates drops garbage rows and clamps survivors", (
   assert.equal(restored.keen.proactive, true);
   assert.deepEqual(normalizeWorkerAutopilotStates(null), {});
   assert.deepEqual(normalizeWorkerAutopilotStates([1, 2]), {});
+});
+
+// ── 頭尾保留摘要（P2-3）──────────────────────────────────────────────────
+
+test("workerAutopilotResultSummary keeps short text verbatim and preserves head+tail of long text", () => {
+  assert.equal(workerAutopilotResultSummary("  短回覆  "), "短回覆");
+  const long = `開頭${"甲".repeat(400)}中段${"乙".repeat(600)}結尾的狀態總結`;
+  const summary = workerAutopilotResultSummary(long);
+  assert.ok(summary.startsWith("開頭"));
+  assert.ok(summary.endsWith("結尾的狀態總結"));
+  assert.match(summary, /（中略 \d+ 字）/);
+  assert.ok(summary.length < long.length);
+});
+
+test("workerAutopilotResultSummary: boundary just under head+tail stays uncut", () => {
+  const text = "x".repeat(200 + 600 + 24);
+  assert.equal(workerAutopilotResultSummary(text), text);
+});
+
+// ── 工作區實況入 prompt（P2-4）───────────────────────────────────────────
+
+test("prompt includes workspace facts and cross-check rule only when provided", () => {
+  const base = { workerName: "阿測", role: null, workspaceLabel: "C:/ws", turns: [], stepsRemaining: 2 };
+  const withFacts = workerAutopilotNextPrompt({
+    ...base,
+    workspaceFacts: { outbox: ["最終報告.md"], recent: ["draft.md", "notes.txt"] },
+  });
+  assert.match(withFacts, /Workspace facts \(server-observed just now/);
+  assert.match(withFacts, /outbox\/ deliverables: 最終報告\.md/);
+  assert.match(withFacts, /recently modified in workspace: draft\.md, notes\.txt/);
+  assert.match(withFacts, /Cross-check the NPC's claims against the workspace facts/);
+  const without = workerAutopilotNextPrompt(base);
+  assert.doesNotMatch(without, /Workspace facts/);
+  assert.doesNotMatch(without, /Cross-check the NPC's claims/);
+  const empty = workerAutopilotNextPrompt({ ...base, workspaceFacts: { outbox: [], recent: [] } });
+  assert.match(empty, /outbox\/ deliverables: \(empty\)/);
+});
+
+// ── 格式修復重問（P3-5）──────────────────────────────────────────────────
+
+test("workerAutopilotRepairPrompt carries the base prompt and the rejection reason", () => {
+  const repaired = workerAutopilotRepairPrompt("BASE PROMPT", "Missing a <worker_autopilot_next> block.");
+  assert.ok(repaired.startsWith("BASE PROMPT"));
+  assert.match(repaired, /rejected: Missing a <worker_autopilot_next> block\./);
+  assert.match(repaired, /ONLY the single marked <worker_autopilot_next> JSON block/);
+});
+
+// ── 保底掃描決策（P1-1／P1-2）────────────────────────────────────────────
+
+function sweepView(overrides: Partial<WorkerAutopilotSweepView>): WorkerAutopilotSweepView {
+  return {
+    present: true,
+    busy: false,
+    queued: false,
+    yielding: false,
+    advancing: false,
+    stepsRemaining: 3,
+    deadlinePassed: false,
+    retry: { registered: false, due: false, exhausted: false },
+    ...overrides,
+  };
+}
+
+test("sweep action: idle armed loop advances; missing worker drops", () => {
+  assert.equal(workerAutopilotSweepAction(sweepView({})), "advance");
+  assert.equal(workerAutopilotSweepAction(sweepView({ present: false })), "drop");
+});
+
+test("sweep action: busy/queued/yielding/advancing always wait — even over step/deadline limits", () => {
+  assert.equal(workerAutopilotSweepAction(sweepView({ busy: true })), "wait");
+  assert.equal(workerAutopilotSweepAction(sweepView({ queued: true })), "wait");
+  assert.equal(workerAutopilotSweepAction(sweepView({ yielding: true })), "wait");
+  assert.equal(workerAutopilotSweepAction(sweepView({ advancing: true })), "wait");
+  // 最後一步還在跑：步數已 0 但 busy——不得提早發「已達上限」搶走 turn_end 的收尾。
+  assert.equal(workerAutopilotSweepAction(sweepView({ busy: true, stepsRemaining: 0 })), "wait");
+  assert.equal(workerAutopilotSweepAction(sweepView({ busy: true, deadlinePassed: true })), "wait");
+});
+
+test("sweep action: idle over limits disables; retry gates by due/exhausted", () => {
+  assert.equal(workerAutopilotSweepAction(sweepView({ stepsRemaining: 0 })), "disable_steps");
+  assert.equal(workerAutopilotSweepAction(sweepView({ deadlinePassed: true })), "disable_deadline");
+  assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: false, exhausted: false } })), "wait");
+  assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: true, exhausted: false } })), "advance");
+  assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: false, exhausted: true } })), "exhausted");
 });

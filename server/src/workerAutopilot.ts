@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { t } from "./i18n.js";
+import type { BackoffPolicy } from "./backoffRetry.js";
 
 /** 個人循環一次最多自動連做幾步——預設刻意小（燒的是單一 NPC 的 session，且視野窄易漂移）。 */
 export const WORKER_AUTOPILOT_DEFAULT_STEPS = 5;
@@ -28,6 +29,25 @@ export function clampWorkerAutopilotMinutes(value: unknown): number | null {
   const n = Math.floor(value);
   if (n <= 0) return null;
   return Math.min(WORKER_AUTOPILOT_MAX_MINUTES, n);
+}
+
+/** 決策模型呼叫失敗的退避重試（一次失敗不熄火——比照 boss 層「失敗即停」修補的語義）。
+ * 30s 起跳、封頂 15 分鐘、上限 10 次；用量受限期間探測不消耗次數（見 index.ts 掃描）。 */
+export const WORKER_AUTOPILOT_RETRY_POLICY: BackoffPolicy = {
+  baseMs: 30_000,
+  capMs: 900_000,
+  maxAttempts: 10,
+};
+
+/**
+ * 回覆摘要「頭尾保留」：NPC 的結論與狀態總結幾乎都在結尾，純 slice(0, n) 會把教練
+ * 最需要看的部分砍掉。超長時保留開頭與結尾、中間以標記省略。
+ */
+export function workerAutopilotResultSummary(text: string, head = 200, tail = 600): string {
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  if (trimmed.length <= head + tail + 24) return trimmed;
+  const omitted = trimmed.length - head - tail;
+  return `${trimmed.slice(0, head)}\n…（中略 ${omitted} 字）…\n${trimmed.slice(-tail)}`;
 }
 
 export type WorkerAutopilotDecision =
@@ -60,12 +80,14 @@ export function workerAutopilotNextPrompt(input: {
   proactive?: boolean;
   /** 前幾輪循環留下的復盤教訓（新的在前）——讓循環之間累積經驗而不是每輪歸零。 */
   retros?: string[];
+  /** server 端剛觀測到的工作區實況（唯讀）——讓教練能對照 NPC 的自述抓落差。 */
+  workspaceFacts?: { outbox: string[]; recent: string[] } | null;
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
     ? turns
         .map((turn, index) => {
-          const result = bounded(turn.result, 700);
+          const result = bounded(turn.result, 900);
           return t("{n}. 指示：{instruction}{result}", {
             n: index + 1,
             instruction: bounded(turn.instruction, 500),
@@ -78,6 +100,18 @@ export function workerAutopilotNextPrompt(input: {
   const retros = (input.retros ?? []).map((note) => bounded(note, 300)).filter(Boolean).slice(0, 8);
   const retroBlock = retros.length
     ? `\n\nLessons carried over from this NPC's previous loops (most recent first):\n${retros.map((note) => `- ${note}`).join("\n")}`
+    : "";
+
+  const facts = input.workspaceFacts;
+  const factList = (names: string[]): string => {
+    const cleaned = names.map((name) => bounded(name, 80)).filter(Boolean).slice(0, 12);
+    return cleaned.length ? cleaned.join(", ") : "(empty)";
+  };
+  const factsBlock = facts
+    ? `\n\nWorkspace facts (server-observed just now, read-only — trust these over the NPC's claims):\n- outbox/ deliverables: ${factList(facts.outbox)}\n- recently modified in workspace: ${factList(facts.recent)}`
+    : "";
+  const factsRule = facts
+    ? `\n- Cross-check the NPC's claims against the workspace facts below: a claimed deliverable missing from outbox/, or files it never mentioned changing, is exactly the kind of mismatch your diagnosis should open with.`
     : "";
 
   const scopeRule = input.proactive
@@ -102,7 +136,7 @@ ${scopeRule}
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
 - LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung.
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
-- Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.
+- Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
@@ -110,7 +144,7 @@ Workspace: ${JSON.stringify(input.workspaceLabel)}
 Loop steps remaining after this one: ${input.stepsRemaining}
 
 Recent turns (oldest first):
-${turnsBlock}${retroBlock}
+${turnsBlock}${retroBlock}${factsBlock}
 
 Return only one marked JSON block, no Markdown fences:
 <worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
@@ -170,6 +204,50 @@ export function workerAutopilotProgressGuard(
     reason: t("下一步與最近的指示重複、說不出實質推進，改為誠實停止"),
     ...(decision.retro ? { retro: decision.retro } : {}),
   };
+}
+
+/** 格式修復重問（一次）：把上一次回覆被拒的具體原因附回去，只再要一次標記 JSON 區塊。 */
+export function workerAutopilotRepairPrompt(basePrompt: string, failure: string): string {
+  return `${basePrompt}
+
+Your previous reply was rejected: ${failure}
+Reply again with ONLY the single marked <worker_autopilot_next> JSON block — no other text before or after it.`;
+}
+
+// ── 保底掃描決策（純函式，index.ts 的 15s 掃與單測共用）──────────────────────
+// turn_end 觸發有結構性空窗：讓路（協作／交接／Mission／換腦）結束不一定伴隨這位 NPC 的
+// turn_end，循環會武裝著卻永遠不再前進——與 bossDispatchRetry 補的是同一型的洞。
+// 順序關鍵：busy/讓路先於步數/時限判斷——最後一步還在跑時步數已是 0，先判步數會提早
+// 發「已達上限」通知搶走 turn_end 收尾的時機。
+export type WorkerAutopilotSweepView = {
+  present: boolean;
+  busy: boolean;
+  queued: boolean;
+  yielding: boolean;
+  advancing: boolean;
+  stepsRemaining: number;
+  deadlinePassed: boolean;
+  retry: { registered: boolean; due: boolean; exhausted: boolean };
+};
+
+export type WorkerAutopilotSweepAction =
+  | "drop" // NPC 已消失：清登記
+  | "wait" // 這輪不動：忙碌／讓路中／決策進行中／退避未到
+  | "disable_steps" // 閒置且步數用盡（正常路徑由 turn_end 收，這是崩潰窗口的兜底）
+  | "disable_deadline" // 閒置且超過時間上限
+  | "exhausted" // 決策重試次數用盡：發降級通知並停止，不可靜默
+  | "advance"; // 補觸發下一步（重試型在呼叫端先過用量探測、不受限才消耗次數）
+
+export function workerAutopilotSweepAction(view: WorkerAutopilotSweepView): WorkerAutopilotSweepAction {
+  if (!view.present) return "drop";
+  if (view.busy || view.queued || view.yielding || view.advancing) return "wait";
+  if (view.stepsRemaining <= 0) return "disable_steps";
+  if (view.deadlinePassed) return "disable_deadline";
+  if (view.retry.registered) {
+    if (view.retry.exhausted) return "exhausted";
+    if (!view.retry.due) return "wait";
+  }
+  return "advance";
 }
 
 export function parseWorkerAutopilotDecision(text: string): WorkerAutopilotDecision | null {

@@ -239,9 +239,14 @@ import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
   appendWorkerAutopilotRetro,
+  explainWorkerAutopilotFailure,
   parseWorkerAutopilotDecision,
   workerAutopilotNextPrompt,
   workerAutopilotProgressGuard,
+  workerAutopilotRepairPrompt,
+  workerAutopilotResultSummary,
+  workerAutopilotSweepAction,
+  WORKER_AUTOPILOT_RETRY_POLICY,
   WorkerAutopilotRetroStore,
   WorkerAutopilotStateStore,
   type PersistedWorkerAutopilotState,
@@ -5970,6 +5975,10 @@ for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
 }
 // 每位 NPC 同時只允許一個「想下一步」在跑（決策 LLM 最長 150s）。
 const workerAutopilotAdvancing = new Set<string>();
+// 決策模型呼叫失敗的退避重試（P1-1）：一次失敗不熄火，登記後由 15s 保底掃接手。
+const workerAutopilotRetry = new BackoffRetryTracker<null>(WORKER_AUTOPILOT_RETRY_POLICY);
+// 重試前的用量探測進行中（防掃描班次重疊發動）。
+const workerAutopilotProbing = new Set<string>();
 
 // 循環復盤記憶：每輪收尾留一行教訓，下輪決策 prompt 帶入（見 workerAutopilot.ts 機制一）。
 const workerAutopilotRetroStore = new WorkerAutopilotRetroStore(config.dataDirectory);
@@ -6002,6 +6011,7 @@ function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number,
     });
   } else {
     workerAutopilotByWorker.delete(worker.id);
+    workerAutopilotRetry.resolve(worker.id);
   }
   persistWorkerAutopilotStates();
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -6009,6 +6019,7 @@ function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number,
 
 function disableWorkerAutopilotWithNote(worker: Worker, note: string): void {
   if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
   persistWorkerAutopilotStates();
   record(worker, { type: "user_message", text: note, notice: true });
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -6023,18 +6034,44 @@ function recentWorkerAutopilotTurns(worker: Worker): WorkerAutopilotTurn[] {
       current = { instruction: event.text.slice(0, 600) };
       turns.push(current);
     } else if (event.type === "turn_end" && current) {
-      current.result = (event.resultText || "").slice(0, 800);
+      // 頭尾保留：結論與狀態總結幾乎都在回覆結尾，純 slice 會把教練最該看的部分砍掉。
+      current.result = workerAutopilotResultSummary(event.resultText || "");
       current = null;
     }
   }
   return turns.slice(-6);
 }
 
+// 工作區實況（唯讀、便宜、不可拋錯）：outbox 成品與最近改動的檔名，給決策教練對照
+// NPC 的自述抓落差（「說交付了但 outbox 是空的」）。任何 IO 失敗都當成沒有實況。
+function collectWorkerWorkspaceFacts(workspacePath: string): { outbox: string[]; recent: string[] } | null {
+  const listByMtime = (dir: string, limit: number): string[] => {
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .slice(0, 200)
+      .map((entry) => {
+        try { return { name: entry.name, mtime: statSync(join(dir, entry.name)).mtimeMs }; }
+        catch { return null; }
+      })
+      .filter((item): item is { name: string; mtime: number } => item !== null)
+      .sort((a, b) => b.mtime - a.mtime);
+    return entries.slice(0, limit).map((item) => item.name);
+  };
+  try {
+    const recent = listByMtime(workspacePath, 10);
+    let outbox: string[] = [];
+    try { outbox = listByMtime(join(workspacePath, "outbox"), 12); } catch { /* 沒有 outbox 目錄＝沒有成品 */ }
+    return { outbox, recent };
+  } catch {
+    return null;
+  }
+}
+
 function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   if (event.type !== "turn_end") return;
   const state = workerAutopilotByWorker.get(worker.id);
   if (!state) return;
-  if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); persistWorkerAutopilotStates(); return; }
+  if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
   if (event.isError) {
     disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
     return;
@@ -6073,13 +6110,36 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       stepsRemaining: state.stepsRemaining - 1,
       proactive: state.proactive,
       retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
+      workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
     });
     let decision;
     try {
       const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+      // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
+      workerAutopilotRetry.resolve(worker.id);
       decision = parseWorkerAutopilotDecision(text);
+      if (!decision) {
+        // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
+        // 靜默收場，一次格式抖動就浪費整輪循環。
+        const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
+        const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
+        decision = parseWorkerAutopilotDecision(repaired);
+        if (!decision) {
+          if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+          disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
+          return;
+        }
+      }
     } catch (error) {
-      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
+      // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
+      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+      const firstFailure = !workerAutopilotRetry.get(worker.id);
+      workerAutopilotRetry.note(worker.id, null, Date.now());
+      if (firstFailure) {
+        record(worker, { type: "user_message", text: t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: (error as Error).message }), notice: true });
+        broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      }
       return;
     }
     // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
@@ -6108,9 +6168,75 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：無法送出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
+    // 階梯可見化：教練每步都判斷「工作站在哪一階」，只進決策不給主人看太可惜。
+    // notice 型訊息只顯示、不進 NPC session、也不進 recentWorkerAutopilotTurns 的回合彙整。
+    if (decision.rung) record(worker, { type: "user_message", text: t("🪜 {rung}", { rung: decision.rung }), notice: true });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   } finally {
     workerAutopilotAdvancing.delete(worker.id);
+  }
+}
+
+// 自動循環保底掃描（P1-2）：turn_end 讓路後（協作／交接／Mission／換腦）那些流程結束
+// 不一定伴隨這位 NPC 的 turn_end，循環會武裝著卻停擺；決策失敗的退避重試（P1-1）也靠
+// 這班掃。決策抽純函式 workerAutopilotSweepAction。無武裝循環時零成本。
+function sweepWorkerAutopilot(): void {
+  const now = Date.now();
+  for (const [workerId, state] of workerAutopilotByWorker) {
+    const worker = workers.get(workerId);
+    const action = workerAutopilotSweepAction({
+      present: !!worker,
+      busy: worker?.runner.busy ?? false,
+      queued: worker ? store.listQueue(workerId).length > 0 : false,
+      yielding: worker
+        ? (handoffInProgress(worker) || collaborationInProgress(workerId) || missionInProgress(workerId)
+          || pendingSwapSummaries.has(workerId) || brainSwapPending.has(workerId))
+        : false,
+      advancing: workerAutopilotAdvancing.has(workerId) || workerAutopilotProbing.has(workerId),
+      stepsRemaining: state.stepsRemaining,
+      deadlinePassed: !!(state.deadlineAt && now >= state.deadlineAt),
+      retry: {
+        registered: !!workerAutopilotRetry.get(workerId),
+        due: workerAutopilotRetry.due(workerId, now),
+        exhausted: workerAutopilotRetry.exhausted(workerId),
+      },
+    });
+    if (action === "wait") continue;
+    if (action === "drop" || !worker) {
+      workerAutopilotByWorker.delete(workerId);
+      workerAutopilotRetry.resolve(workerId);
+      persistWorkerAutopilotStates();
+      continue;
+    }
+    if (action === "disable_steps") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。")); continue; }
+    if (action === "disable_deadline") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。")); continue; }
+    if (action === "exhausted") {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續失敗 {n} 次；處理後可再打開開關。", { n: WORKER_AUTOPILOT_RETRY_POLICY.maxAttempts }));
+      continue;
+    }
+    // advance：失敗重試型先探測用量——受限期間不消耗次數（比照 dept-create 的
+    // 「條件未恢復不花次數」語義）；一般停擺型直接補觸發。
+    if (workerAutopilotRetry.get(workerId)) {
+      workerAutopilotProbing.add(workerId);
+      void (async () => {
+        try {
+          const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+          if (!("error" in runtime)) {
+            const usage = await usageRegistry.refresh(runtime.provider, true);
+            if (usageBlockReason(runtime.provider, usage, runtime.model)) return;
+          }
+          workerAutopilotRetry.begin(workerId, Date.now());
+          const live = workerAutopilotByWorker.get(workerId);
+          if (live && workers.has(workerId)) await advanceWorkerAutopilot(worker, live);
+        } catch (error) {
+          console.error("[worker-autopilot] 重試探測失敗:", error);
+        } finally {
+          workerAutopilotProbing.delete(workerId);
+        }
+      })();
+    } else {
+      void advanceWorkerAutopilot(worker, state);
+    }
   }
 }
 
@@ -9324,6 +9450,10 @@ const bossDispatchRetrySweepTimer = setInterval(() => {
   // provider 登入完成更沒有 turn_end，保底補上。無登記時零成本。
   if (missionStepRetry.size > 0) {
     try { sweepPausedMissionSteps(); } catch (error) { console.error("[mission-step-retry] 定期掃描失敗:", error); }
+  }
+  // 個人自動循環保底掃同班：讓路後停擺補觸發＋決策失敗退避重試。無武裝循環時零成本。
+  if (workerAutopilotByWorker.size > 0) {
+    try { sweepWorkerAutopilot(); } catch (error) { console.error("[worker-autopilot] 定期掃描失敗:", error); }
   }
 }, 15_000);
 bossDispatchRetrySweepTimer.unref();
