@@ -61,6 +61,47 @@ export type WorkerAutopilotTurn = {
   result?: string;
 };
 
+/** 教練決策要的脈絡：近期真實回合＋大局目標＋換腦帶來的背景摘要。 */
+export type WorkerAutopilotContext = {
+  turns: WorkerAutopilotTurn[];
+  originalGoal: string | null;
+  carriedSummary: string | null;
+};
+
+// 從對話歷史組出上面的脈絡（純函式、可單測）。關鍵：
+// ①跳過 notice 通知與 system 系統回合（換腦/交接/續跑）——不把交接摘要誤當工作結果診斷。
+// ②originalGoal＝史上第一個真實(非 system/非 notice)指示＝大局目標，slice(-N) 會砍掉，另外釘住。
+// ③carriedSummary＝最近一次 system 回合的產出裡「夠長的那份」＝換腦交接摘要，當背景脈絡
+//   （跳過「已接手」這種短回覆，避免把它當摘要）。
+type AutopilotHistoryEvent = { type: string; text?: string; notice?: boolean; system?: boolean; resultText?: string };
+export function autopilotContextFromHistory(history: ReadonlyArray<AutopilotHistoryEvent>, maxTurns = 8): WorkerAutopilotContext {
+  const turns: WorkerAutopilotTurn[] = [];
+  let originalGoal: string | null = null;
+  let carriedSummary: string | null = null;
+  let current: WorkerAutopilotTurn | null = null;
+  let inSystemTurn = false;
+  for (const event of history) {
+    if (event.type === "user_message" && !event.notice) {
+      if (event.system) { current = null; inSystemTurn = true; continue; }
+      const text = typeof event.text === "string" ? event.text : "";
+      if (!originalGoal && text) originalGoal = text.slice(0, 800);
+      current = { instruction: text.slice(0, 600) };
+      turns.push(current);
+      inSystemTurn = false;
+    } else if (event.type === "turn_end") {
+      if (inSystemTurn) {
+        const summary = (event.resultText || "").trim();
+        if (summary.length > 200) carriedSummary = summary.slice(0, 1800);
+        inSystemTurn = false;
+      } else if (current) {
+        current.result = workerAutopilotResultSummary(event.resultText || "");
+        current = null;
+      }
+    }
+  }
+  return { turns: turns.slice(-maxTurns), originalGoal, carriedSummary };
+}
+
 function bounded(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
@@ -79,6 +120,10 @@ export function workerAutopilotNextPrompt(input: {
   turns: WorkerAutopilotTurn[];
   stepsRemaining: number;
   proactive?: boolean;
+  /** 史上第一個真實指示＝這位 NPC 的大局目標；slice(-N) 會把它砍掉，釘住讓每步都對準它。 */
+  originalGoal?: string | null;
+  /** 最近一次換腦/交接帶過來的先前工作摘要（背景脈絡，非最新結果，不可拿來當診斷對象）。 */
+  carriedSummary?: string | null;
   /** 前幾輪循環留下的復盤教訓（新的在前）——讓循環之間累積經驗而不是每輪歸零。 */
   retros?: string[];
   /** server 端剛觀測到的工作區實況（唯讀）——讓教練能對照 NPC 的自述抓落差。 */
@@ -122,6 +167,18 @@ export function workerAutopilotNextPrompt(input: {
 
   const openBlock = openRequestsCoachSection(input.openRequests ?? []);
 
+  const goal = bounded(input.originalGoal, 800);
+  const goalBlock = goal
+    ? `\n\nOriginal goal (this NPC's very first real instruction — the big-picture aim every step must still serve; the recent turns are only how far it has got):\n${goal}`
+    : "";
+  const carried = bounded(input.carriedSummary, 1800);
+  const carriedBlock = carried
+    ? `\n\nEarlier-work summary carried over from a context swap / handoff — BACKGROUND ONLY: this is a digest of what happened before the context was swapped, to give you the earlier arc the recent turns no longer show. It is NOT the latest result: never diagnose it, never "continue" it, never treat a "LLM 交接／自動換腦" system line as a work turn.\n${carried}`
+    : "";
+  const carriedRule = carried
+    ? `\n- Earlier-work summary present: use it only as background for the bigger arc. The thing you diagnose and build on is still the latest REAL turn in "Recent turns" — never the carried summary and never a swap/handoff system message.`
+    : "";
+
   const scopeRule = input.proactive
     ? `- First finish or polish the NPC's CURRENT thread of work. Once that thread is genuinely concluded, PROACTIVELY pick the next most valuable thing this NPC can do alone: optimize or refactor what it produced, verify quality and fix weaknesses, extend coverage, research an adjacent topic that clearly serves this NPC's role and workspace, or prepare groundwork for upcoming work. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
 - PREFER CONTINUING. The owner checked "proactive mode": while steps remain, look hard for a genuinely useful next step before considering STOP. STOP only when the next step would need the owner's private data, credentials, an irreversible decision, or spending real money — or when you truly cannot find a next step whose value you can state in one concrete sentence.`
@@ -145,13 +202,14 @@ ${scopeRule}
 - LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung.
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
 - ANCHOR IN THE LATEST REPLY, don't run generic: the "最新回覆（完整據此診斷）" block is the full latest result — read it and make the diagnosis quote or point at something CONCRETE in it (a specific claim, number, file, gap, or contradiction). A diagnosis that could be pasted onto any turn is a failure; if you cannot cite a specific from the latest reply, you have not read it closely enough.
+- KEEP THE BIG PICTURE: read the "Original goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}
 - ASK A GOOD QUESTION INSTEAD OF GUESSING: if genuine progress now hinges on a decision only the owner can make (a direction fork, a preference, missing input/credentials/data, or an irreversible or money-spending action), do NOT plough ahead on an assumption and do NOT stop with a vague "waiting for the owner" — STOP with the "reason" written AS the question: name the specific fork in one line, give 2–3 concrete labelled options (A/B/C) with your recommendation and what each implies, phrased so the owner can decide by replying a single letter or word. Think about how to ask so the owner barely has to type.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
 Workspace: ${JSON.stringify(input.workspaceLabel)}
-Loop steps remaining after this one: ${input.stepsRemaining}
+Loop steps remaining after this one: ${input.stepsRemaining}${goalBlock}${carriedBlock}
 
 Recent turns (oldest first):
 ${turnsBlock}${retroBlock}${factsBlock}${openBlock}

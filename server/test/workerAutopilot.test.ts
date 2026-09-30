@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  autopilotContextFromHistory,
   WORKER_AUTOPILOT_DEFAULT_STEPS,
   WORKER_AUTOPILOT_MAX_MINUTES,
   WORKER_AUTOPILOT_MAX_RETROS,
@@ -370,4 +371,54 @@ test("sweep action: idle over limits disables; retry gates by due/exhausted", ()
   assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: false, exhausted: false } })), "wait");
   assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: true, exhausted: false } })), "advance");
   assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: false, exhausted: true } })), "exhausted");
+});
+
+test("autopilotContextFromHistory：跳過換腦/交接的 system 回合，不誤當工作結果", () => {
+  const ctx = autopilotContextFromHistory([
+    { type: "user_message", text: "原始任務：把終端機做漂亮" },
+    { type: "turn_end", resultText: "已完成終端機美化，改了 CSS。" },
+    // 換腦：系統回合，結果是一大份交接摘要——不可被當成最新工作結果
+    { type: "user_message", system: true, text: "🧠 自動換腦完成：交接摘要已送進全新工作階段" },
+    { type: "turn_end", resultText: "已接手" },
+    { type: "user_message", system: true, text: "start_swap 公告" },
+    { type: "turn_end", resultText: "先前工作摘要：".padEnd(400, "細節") },
+    { type: "user_message", text: "下一步：修 grep 徽章" },
+    { type: "turn_end", resultText: "grep 已顯示查資料。" },
+  ]);
+  // 只有兩個「真實」回合，system 回合完全不進 turns
+  assert.equal(ctx.turns.length, 2);
+  assert.equal(ctx.turns[0].instruction, "原始任務：把終端機做漂亮");
+  assert.equal(ctx.turns[1].instruction, "下一步：修 grep 徽章");
+  assert.ok(!ctx.turns.some((turn) => turn.instruction.includes("換腦") || turn.instruction.includes("start_swap")));
+});
+
+test("autopilotContextFromHistory：抽出原始目標與換腦帶來的先前摘要（跳過『已接手』短回覆）", () => {
+  const longSummary = "先前工作摘要：".padEnd(500, "重點");
+  const ctx = autopilotContextFromHistory([
+    { type: "user_message", text: "大局目標：打造多代理辦公室" },
+    { type: "turn_end", resultText: "起步了。" },
+    { type: "user_message", system: true, text: "start_swap" },
+    { type: "turn_end", resultText: longSummary },
+    { type: "user_message", system: true, text: "🧠 自動換腦完成" },
+    { type: "turn_end", resultText: "已接手" },
+    { type: "user_message", text: "繼續做徽章" },
+    { type: "turn_end", resultText: "徽章完成。" },
+  ]);
+  assert.equal(ctx.originalGoal, "大局目標：打造多代理辦公室");
+  // carriedSummary 取「夠長的那份」摘要，不是後來的「已接手」
+  assert.ok(ctx.carriedSummary && ctx.carriedSummary.startsWith("先前工作摘要："));
+  assert.notEqual(ctx.carriedSummary, "已接手");
+});
+
+test("autopilotContextFromHistory：notice 通知不進回合、沒有換腦時 carriedSummary 為 null", () => {
+  const ctx = autopilotContextFromHistory([
+    { type: "user_message", text: "任務 A" },
+    { type: "turn_end", resultText: "做完 A。" },
+    { type: "user_message", notice: true, text: "⏰ 系統通知（純顯示）" },
+    { type: "user_message", text: "任務 B" },
+    { type: "turn_end", resultText: "做完 B。" },
+  ]);
+  assert.equal(ctx.turns.length, 2);
+  assert.equal(ctx.carriedSummary, null);
+  assert.equal(ctx.originalGoal, "任務 A");
 });

@@ -240,19 +240,19 @@ import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
   appendWorkerAutopilotRetro,
+  autopilotContextFromHistory,
   explainWorkerAutopilotFailure,
   parseWorkerAutopilotDecision,
   workerAutopilotNextPrompt,
   workerAutopilotProgressGuard,
   workerAutopilotRepairPrompt,
-  workerAutopilotResultSummary,
   workerAutopilotSweepAction,
   WORKER_AUTOPILOT_RETRY_POLICY,
   WorkerAutopilotRetroStore,
   WorkerAutopilotStateStore,
   type PersistedWorkerAutopilotState,
+  type WorkerAutopilotContext,
   type WorkerAutopilotRetro,
-  type WorkerAutopilotTurn,
 } from "./workerAutopilot.js";
 import {
   OpenUserRequestStore,
@@ -1728,7 +1728,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
         return;
       }
       pendingSwapSummaries.delete(worker.id);
-      record(worker, { type: "user_message", text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
+      record(worker, { type: "user_message", system: true, text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
       try {
         worker.runner.send(t("（系統自動換腦）你前一個工作階段的 context 已滿。以下是它留下的交接摘要，請讀完後簡短回覆「已接手」，之後依摘要繼續服務：\n\n{summary}", { summary }), [], []);
         broadcast({ type: "worker_status", workerId: worker.id, busy: true });
@@ -1744,7 +1744,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
   setTimeout(() => {
     if (!brainSwapPending.has(worker.id)) return;
     if (worker.runner.busy) { brainSwapPending.delete(worker.id); return; } // 使用者搶先發話，等下個回合再觸發
-    record(worker, { type: "user_message", text: announcement });
+    record(worker, { type: "user_message", system: true, text: announcement });
     try {
       worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。"), [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
@@ -1812,7 +1812,7 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
     if (!appSettings.get().limitResumeEnabled) return;
     if (worker.runner.busy) return; // 已在忙＝使用者或其他機制已接手，成功回合會清掉累積
     const swallowed = limitSwallowedTexts.get(worker.id) ?? [];
-    record(worker, { type: "user_message", text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
+    record(worker, { type: "user_message", system: true, text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
     const prompt = swallowed.length > 0
       ? t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。中斷期間收到的下列指示可能沒有被處理（依先後排序），請逐一檢查、把沒完成的完成並回報：\n{list}", {
           list: swallowed.map((item, index) => `${index + 1}. ${item}`).join("\n"),
@@ -2590,7 +2590,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     worker.handoff = completed;
     if (!persistWorker(worker)) throw new Error(t("無法保存新的 LLM 工作階段"));
     if (!store.saveProviderHandoff(worker.id, completed, summary)) throw new Error(t("無法保存 LLM 交接紀錄"));
-    record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+    record(worker, { type: "user_message", system: true, text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
     record(worker, { type: "text_delta", text: t("{summary}\n\n**接手確認**\n{result}", { summary: summaryMarkdown(summary), result: targetResult.text }) });
     record(worker, { type: "turn_end", resultText: t("{summary}\n\n接手確認：{result}", { summary: summaryMarkdown(summary), result: targetResult.text }), costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -2610,7 +2610,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     persistWorker(worker);
     store.saveProviderHandoff(worker.id, failed, summary);
     if (hasHistory) {
-      record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+      record(worker, { type: "user_message", system: true, text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
       record(worker, { type: "error", message: t("交接失敗，已恢復 {provider}：{error}", { provider: providerLabel(sourceProvider), error: (error as Error).message }) });
     }
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -6066,21 +6066,11 @@ function disableWorkerAutopilotWithNote(worker: Worker, note: string): void {
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
 }
 
-// 從 worker 對話歷史組出「最近幾個回合」的精簡摘要（跳過 notice 型系統通知）。
-function recentWorkerAutopilotTurns(worker: Worker): WorkerAutopilotTurn[] {
-  const turns: WorkerAutopilotTurn[] = [];
-  let current: WorkerAutopilotTurn | null = null;
-  for (const event of worker.history) {
-    if (event.type === "user_message" && !event.notice) {
-      current = { instruction: event.text.slice(0, 600) };
-      turns.push(current);
-    } else if (event.type === "turn_end" && current) {
-      // 頭尾保留：結論與狀態總結幾乎都在回覆結尾，純 slice 會把教練最該看的部分砍掉。
-      current.result = workerAutopilotResultSummary(event.resultText || "");
-      current = null;
-    }
-  }
-  return turns.slice(-6);
+// 從 worker 對話歷史組出教練決策要的脈絡（純邏輯抽到 workerAutopilot.ts 便於單測）：跳過
+// notice 通知與 system 系統回合（換腦/交接/續跑）避免把交接摘要誤當「最新結果」診斷；另抽出
+// originalGoal（大局目標）與 carriedSummary（換腦帶來的先前摘要背景）。
+function recentWorkerAutopilotTurns(worker: Worker): WorkerAutopilotContext {
+  return autopilotContextFromHistory(worker.history);
 }
 
 // 工作區實況（唯讀、便宜、不可拋錯）：outbox 成品與最近改動的檔名，給決策教練對照
@@ -6142,12 +6132,14 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
       return;
     }
-    const turns = recentWorkerAutopilotTurns(worker);
+    const { turns, originalGoal, carriedSummary } = recentWorkerAutopilotTurns(worker);
     const prompt = workerAutopilotNextPrompt({
       workerName: worker.runner.name,
       role: worker.persona?.role || null,
       workspaceLabel: worker.runner.workspacePath,
       turns,
+      originalGoal,
+      carriedSummary,
       stepsRemaining: state.stepsRemaining - 1,
       proactive: state.proactive,
       retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
