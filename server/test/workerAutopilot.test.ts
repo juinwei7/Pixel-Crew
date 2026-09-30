@@ -30,7 +30,7 @@ test("clampWorkerAutopilotMinutes: blank/garbage/≤0 → null, positives floore
   assert.equal(clampWorkerAutopilotMinutes(999999), WORKER_AUTOPILOT_MAX_MINUTES);
 });
 
-test("prompt carries worker identity, recent turns, and strict STOP framing", () => {
+test("prompt carries worker identity, recent turns, and follow-through-then-stop framing", () => {
   const prompt = workerAutopilotNextPrompt({
     workerName: "總管小揮",
     role: "總指揮",
@@ -45,9 +45,25 @@ test("prompt carries worker identity, recent turns, and strict STOP framing", ()
   assert.match(prompt, /總指揮/);
   assert.match(prompt, /整理報告/);
   assert.match(prompt, /已完成初稿/);
-  assert.match(prompt, /STOP readily/);
+  assert.match(prompt, /continue with those FIRST before considering STOP/);
+  assert.doesNotMatch(prompt, /PREFER CONTINUING/);
   assert.match(prompt, /steps remaining after this one: 3/i);
   assert.match(prompt, /<worker_autopilot_next>/);
+});
+
+test("proactive prompt lowers the STOP bar and allows beyond-thread work", () => {
+  const prompt = workerAutopilotNextPrompt({
+    workerName: "探路阿蒐",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 4,
+    proactive: true,
+  });
+  assert.match(prompt, /PREFER CONTINUING/);
+  assert.match(prompt, /PROACTIVELY pick the next most valuable thing/);
+  assert.match(prompt, /research an adjacent topic/);
+  assert.doesNotMatch(prompt, /continue with those FIRST before considering STOP/);
 });
 
 test("parses continue and stop decisions; bounds fields", () => {
@@ -60,6 +76,12 @@ test("parses continue and stop decisions; bounds fields", () => {
     `<worker_autopilot_next>{"action":"stop","reason":"工作已收尾"}</worker_autopilot_next>`,
   );
   assert.deepEqual(stop, { action: "stop", reason: "工作已收尾" });
+
+  // 理由結尾句號要剪掉——會被塞進「…{reason}。」模板，不剪會變「。。」。
+  const trimmed = parseWorkerAutopilotDecision(
+    `<worker_autopilot_next>{"action":"stop","reason":"任務自然結束。"}</worker_autopilot_next>`,
+  );
+  assert.deepEqual(trimmed, { action: "stop", reason: "任務自然結束" });
 });
 
 test("empty instruction degrades to stop; malformed output → null with explanation", () => {
@@ -81,10 +103,13 @@ test("normalizeWorkerAutopilotStates drops garbage rows and clamps survivors", (
     zero: { stepsRemaining: 0, deadlineAt: null },
     junk: "not an object",
     badSteps: { stepsRemaining: "x", deadlineAt: null },
+    keen: { stepsRemaining: 2, deadlineAt: null, proactive: true },
   });
-  assert.deepEqual(Object.keys(restored).sort(), ["good", "tooMany"]);
+  assert.deepEqual(Object.keys(restored).sort(), ["good", "keen", "tooMany"]);
   assert.equal(restored.good.stepsRemaining, 3);
+  assert.equal(restored.good.proactive, false);
   assert.equal(restored.tooMany.stepsRemaining, WORKER_AUTOPILOT_MAX_STEPS);
+  assert.equal(restored.keen.proactive, true);
   assert.deepEqual(normalizeWorkerAutopilotStates(null), {});
   assert.deepEqual(normalizeWorkerAutopilotStates([1, 2]), {});
 });

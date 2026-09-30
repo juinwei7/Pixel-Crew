@@ -209,6 +209,7 @@ export function App() {
   const [workerAutopilotConfigOpen, setWorkerAutopilotConfigOpen] = useState(false);
   const [workerAutopilotStepInput, setWorkerAutopilotStepInput] = useState("5");
   const [workerAutopilotMinutesInput, setWorkerAutopilotMinutesInput] = useState("");
+  const [workerAutopilotProactiveInput, setWorkerAutopilotProactiveInput] = useState(false);
   async function setWorkerAutopilotEnabled(enabled: boolean): Promise<void> {
     if (!activeId) return;
     const body: Record<string, unknown> = { enabled };
@@ -218,6 +219,7 @@ export function App() {
       if (Number.isFinite(rawSteps) && rawSteps > 0) { steps = Math.min(20, rawSteps); body.maxSteps = steps; }
       const minutes = Math.floor(Number(workerAutopilotMinutesInput));
       if (Number.isFinite(minutes) && minutes > 0) body.maxMinutes = minutes;
+      if (workerAutopilotProactiveInput) body.proactive = true;
     }
     try {
       await apiRequest(`/api/workers/${activeId}/autopilot`, { method: "POST", body });
@@ -1582,7 +1584,7 @@ export function App() {
               disabled={Boolean(active?.ephemeralKind)}
               title={t("自動循環：這位 NPC 做完一回合後，由決策模型想下一步、自己接著做；沒有值得做的下一步會誠實停下。再點一下關閉。")}
               onClick={() => { if (active?.autopilot) void setWorkerAutopilotEnabled(false); else setWorkerAutopilotConfigOpen((open) => !open); }}
-            >{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}</button>
+            >{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}{active?.autopilot?.proactive ? t("・主動") : ""}</button>
             {workerAutopilotConfigOpen && !active?.autopilot && <div className="autopilot-config autopilot-config--up" role="dialog" aria-label={t("自動循環設定")}>
               <div className="autopilot-config__row">
                 <label>{t("步數上限")}<input type="number" min={1} max={20} value={workerAutopilotStepInput}
@@ -1593,6 +1595,11 @@ export function App() {
                 <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={workerAutopilotMinutesInput}
                   onChange={(event) => setWorkerAutopilotMinutesInput(event.target.value)} /></label>
                 <small>{t("選填；到點會在該回合收工時停")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label className="autopilot-config__check"><input type="checkbox" checked={workerAutopilotProactiveInput}
+                  onChange={(event) => setWorkerAutopilotProactiveInput(event.target.checked)} />{t("主動模式")}</label>
+                <small>{t("原任務收尾後不停：自己找優化點、驗證品質、延伸研究、預作準備，步數用完才停；需要你本人的資料、權限或不可逆決定仍會停下")}</small>
               </div>
               <div className="autopilot-config__actions">
                 <button type="button" className="autopilot-config__cancel" onClick={() => setWorkerAutopilotConfigOpen(false)}>{t("取消")}</button>

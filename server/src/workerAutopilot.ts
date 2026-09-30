@@ -51,6 +51,7 @@ export function workerAutopilotNextPrompt(input: {
   workspaceLabel: string;
   turns: WorkerAutopilotTurn[];
   stepsRemaining: number;
+  proactive?: boolean;
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
@@ -66,19 +67,24 @@ export function workerAutopilotNextPrompt(input: {
         .join("\n")
     : t("（沒有可用的近期回合——這是自動循環的第一步。）");
 
+  const scopeRule = input.proactive
+    ? `- First finish or polish the NPC's CURRENT thread of work. Once that thread is genuinely concluded, PROACTIVELY pick the next most valuable thing this NPC can do alone: optimize or refactor what it produced, verify quality and fix weaknesses, extend coverage, research an adjacent topic that clearly serves this NPC's role and workspace, or prepare groundwork for upcoming work. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
+- PREFER CONTINUING. The owner checked "proactive mode": while steps remain, look hard for a genuinely useful next step before considering STOP. STOP only when the next step would need the owner's private data, credentials, an irreversible decision, or spending real money — or when you truly cannot find a next step whose value you can state in one concrete sentence.`
+    : `- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
+- If the current thread clearly has remaining parts, or obvious immediate follow-ups (finishing a started deliverable, fixing a found problem, verifying fresh output), continue with those FIRST before considering STOP. STOP when the thread has reached a natural conclusion, when the next step needs the owner's input/decision/data, or when the work would be speculative busywork. A good STOP beats a filler step — but do not stop while clearly valuable follow-through remains.`;
+
   return `Worker Autopilot · Single-NPC Self-Continuation
 
-You are the chief of staff watching over ONE worker NPC. The owner turned ON this NPC's personal loop: after each of its turns finishes, you decide the single next instruction to send back to the SAME NPC so it keeps making genuine progress on its current thread of work — or you stop the loop.
+You are the chief of staff watching over ONE worker NPC. The owner turned ON this NPC's personal loop: after each of its turns finishes, you decide the single next instruction to send back to the SAME NPC so it keeps making genuine progress — or you stop the loop.
 
 This is NOT the department pipeline: no new departments, no missions, no other NPCs. Just the next message to this one NPC.
 
 Rules:
 - Do not use tools, files, shell, MCP, web, or background agents. Reason only from the context below.
 - Propose exactly ONE next instruction, or STOP.
-- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
+${scopeRule}
 - This NPC only sees its own conversation — scope the instruction to what it can do alone in its workspace, in one turn.
 - Write the instruction in the same language the owner has been using with this NPC (Traditional Chinese unless the recent turns clearly show otherwise).
-- STOP readily. This loop has a narrow view, so the bar for continuing is HIGH: if the thread has reached a natural conclusion, if the next step needs the owner's input/decision/data, if the work would be speculative or low-value, or if you are unsure — STOP. A good STOP always beats a filler step.
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
@@ -109,7 +115,8 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
     return { ok: false, reason: "The <worker_autopilot_next> content must be a single JSON object." };
   }
   const value = raw as Record<string, unknown>;
-  const reason = bounded(value.reason, 500);
+  // 去掉結尾句號——理由會被塞進「…{reason}。」模板，不修剪會出現「。。」。
+  const reason = bounded(value.reason, 500).replace(/[。．.\s]+$/u, "");
   if (value.action === "stop") {
     return { ok: true, decision: { action: "stop", reason } };
   }
@@ -136,6 +143,8 @@ export function explainWorkerAutopilotFailure(text: string): string | null {
 export type PersistedWorkerAutopilotState = {
   stepsRemaining: number;
   deadlineAt: number | null;
+  /** 主動模式：原任務收尾後仍主動找優化／延伸研究，STOP 門檻大幅調低。 */
+  proactive: boolean;
 };
 
 /** 逐條驗證還原內容：steps 夾回合法範圍、deadline 非數字一律 null、壞條目整條丟棄。 */
@@ -152,6 +161,7 @@ export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, Per
     out[key] = {
       stepsRemaining: clampWorkerAutopilotSteps(entry.stepsRemaining),
       deadlineAt,
+      proactive: entry.proactive === true,
     };
   }
   return out;
