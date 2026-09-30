@@ -3,15 +3,20 @@ import test from "node:test";
 import {
   WORKER_AUTOPILOT_DEFAULT_STEPS,
   WORKER_AUTOPILOT_MAX_MINUTES,
+  WORKER_AUTOPILOT_MAX_RETROS,
   WORKER_AUTOPILOT_MAX_STEPS,
   WORKER_AUTOPILOT_MIN_STEPS,
+  appendWorkerAutopilotRetro,
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
   explainWorkerAutopilotFailure,
+  normalizeWorkerAutopilotRetros,
   normalizeWorkerAutopilotStates,
   parseWorkerAutopilotDecision,
   stripWorkerAutopilotPrefix,
   workerAutopilotNextPrompt,
+  workerAutopilotProgressGuard,
+  type WorkerAutopilotRetro,
 } from "../src/workerAutopilot.js";
 
 test("clampWorkerAutopilotSteps bounds to [MIN, MAX] and defaults on garbage", () => {
@@ -130,6 +135,121 @@ test("empty instruction degrades to stop; malformed output → null with explana
   assert.match(explainWorkerAutopilotFailure("no block") ?? "", /Missing a <worker_autopilot_next>/);
   assert.match(explainWorkerAutopilotFailure(`<worker_autopilot_next>{bad}</worker_autopilot_next>`) ?? "", /did not parse/);
   assert.match(explainWorkerAutopilotFailure(`<worker_autopilot_next>{"action":"dance"}</worker_autopilot_next>`) ?? "", /"action" must be exactly/);
+});
+
+// ── 進化循環三機制 ──────────────────────────────────────────────────────────
+
+test("prompt demands ladder judgment, progress self-check, and a retro on stop/final", () => {
+  const prompt = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 3,
+  });
+  assert.match(prompt, /LADDER, not laps/);
+  assert.match(prompt, /ONE RUNG HIGHER/);
+  assert.match(prompt, /Progress self-check/);
+  assert.match(prompt, /STOP honestly/);
+  assert.match(prompt, /include "retro"/);
+  assert.match(prompt, /"rung":/);
+});
+
+test("prompt carries over previous loops' retros, newest first; none → no block", () => {
+  const withRetros = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 2,
+    retros: ["先驗證再擴充比較省步數", "拆太細會浪費收尾步"],
+  });
+  assert.match(withRetros, /Lessons carried over from this NPC's previous loops/);
+  assert.match(withRetros, /- 先驗證再擴充比較省步數\n- 拆太細會浪費收尾步/);
+
+  const without = workerAutopilotNextPrompt({
+    workerName: "總管小揮",
+    role: null,
+    workspaceLabel: "d:/測試",
+    turns: [],
+    stepsRemaining: 2,
+  });
+  assert.doesNotMatch(without, /Lessons carried over/);
+});
+
+test("parser keeps rung and retro when present, omits them when blank", () => {
+  const cont = parseWorkerAutopilotDecision(
+    `<worker_autopilot_next>{"action":"continue","instruction":"補回歸測試","reason":"驗證修復","rung":"已修好但未驗證","retro":"  "}</worker_autopilot_next>`,
+  );
+  assert.deepEqual(cont, { action: "continue", instruction: "補回歸測試", reason: "驗證修復", rung: "已修好但未驗證" });
+
+  const stop = parseWorkerAutopilotDecision(
+    `<worker_autopilot_next>{"action":"stop","reason":"已收尾","retro":"下輪先盤點輸入再開工"}</worker_autopilot_next>`,
+  );
+  assert.deepEqual(stop, { action: "stop", reason: "已收尾", retro: "下輪先盤點輸入再開工" });
+});
+
+test("progress guard: instruction repeating a recent turn converts to honest stop, retro survives", () => {
+  const turns = [
+    { instruction: "🔁（自動循環·剩 3 步）整理測試報告", result: "已整理" },
+    { instruction: "檢查漏網案例" },
+  ];
+  const repeat = workerAutopilotProgressGuard(
+    { action: "continue", instruction: "整理測試報告", reason: "繼續", retro: "教訓一則" },
+    turns,
+  );
+  assert.equal(repeat.action, "stop");
+  assert.match(repeat.reason, /誠實停止/);
+  assert.equal((repeat as { retro?: string }).retro, "教訓一則");
+
+  // 空白差異／前綴殘留也算重複——比對前先剝前綴、摺疊空白。
+  const fuzzy = workerAutopilotProgressGuard(
+    { action: "continue", instruction: "🔁（剩 2 步）檢查  漏網案例", reason: "再看一次" },
+    turns,
+  );
+  assert.equal(fuzzy.action, "stop");
+
+  const fresh = workerAutopilotProgressGuard(
+    { action: "continue", instruction: "把漏網案例修掉並補測試", reason: "往上一階" },
+    turns,
+  );
+  assert.equal(fresh.action, "continue");
+
+  const stop = workerAutopilotProgressGuard({ action: "stop", reason: "收尾" }, turns);
+  assert.deepEqual(stop, { action: "stop", reason: "收尾" });
+});
+
+test("normalizeWorkerAutopilotRetros drops garbage and caps per worker", () => {
+  const many = Array.from({ length: WORKER_AUTOPILOT_MAX_RETROS + 5 }, (_, i) => ({ at: i, note: `教訓 ${i}` }));
+  const restored = normalizeWorkerAutopilotRetros({
+    good: [{ at: 1, note: "先驗證再擴充" }, { at: "x", note: "壞 at 仍保留內容" }],
+    blank: [{ at: 2, note: "  " }],
+    junk: "not a list",
+    overflow: many,
+  });
+  assert.deepEqual(Object.keys(restored).sort(), ["good", "overflow"]);
+  assert.deepEqual(restored.good.map((r) => r.note), ["先驗證再擴充", "壞 at 仍保留內容"]);
+  assert.equal(restored.good[1].at, 0);
+  assert.equal(restored.overflow.length, WORKER_AUTOPILOT_MAX_RETROS);
+  assert.equal(restored.overflow[restored.overflow.length - 1].note, `教訓 ${WORKER_AUTOPILOT_MAX_RETROS + 4}`);
+  assert.deepEqual(normalizeWorkerAutopilotRetros(null), {});
+  assert.deepEqual(normalizeWorkerAutopilotRetros([1]), {});
+});
+
+test("appendWorkerAutopilotRetro skips blanks and consecutive duplicates, caps at MAX", () => {
+  const retros: Record<string, WorkerAutopilotRetro[]> = {};
+  assert.equal(appendWorkerAutopilotRetro(retros, "w1", "  ", 1), false);
+  assert.equal(appendWorkerAutopilotRetro(retros, "w1", undefined, 1), false);
+  assert.equal(appendWorkerAutopilotRetro(retros, "w1", "先驗證再擴充", 1), true);
+  assert.equal(appendWorkerAutopilotRetro(retros, "w1", "先驗證再擴充", 2), false); // 連續重複不洗版
+  assert.equal(appendWorkerAutopilotRetro(retros, "w1", "拆太細浪費步數", 3), true);
+  assert.deepEqual(retros.w1.map((r) => r.note), ["先驗證再擴充", "拆太細浪費步數"]);
+
+  for (let i = 0; i < WORKER_AUTOPILOT_MAX_RETROS + 3; i++) {
+    appendWorkerAutopilotRetro(retros, "w2", `教訓 ${i}`, i);
+  }
+  assert.equal(retros.w2.length, WORKER_AUTOPILOT_MAX_RETROS);
+  assert.equal(retros.w2[retros.w2.length - 1].note, `教訓 ${WORKER_AUTOPILOT_MAX_RETROS + 2}`);
 });
 
 test("normalizeWorkerAutopilotStates drops garbage rows and clamps survivors", () => {

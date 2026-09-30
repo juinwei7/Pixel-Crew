@@ -212,10 +212,14 @@ import {
 import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
+  appendWorkerAutopilotRetro,
   parseWorkerAutopilotDecision,
   workerAutopilotNextPrompt,
+  workerAutopilotProgressGuard,
+  WorkerAutopilotRetroStore,
   WorkerAutopilotStateStore,
   type PersistedWorkerAutopilotState,
+  type WorkerAutopilotRetro,
   type WorkerAutopilotTurn,
 } from "./workerAutopilot.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
@@ -5664,6 +5668,16 @@ for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
 // 每位 NPC 同時只允許一個「想下一步」在跑（決策 LLM 最長 150s）。
 const workerAutopilotAdvancing = new Set<string>();
 
+// 循環復盤記憶：每輪收尾留一行教訓，下輪決策 prompt 帶入（見 workerAutopilot.ts 機制一）。
+const workerAutopilotRetroStore = new WorkerAutopilotRetroStore(config.dataDirectory);
+const workerAutopilotRetros: Record<string, WorkerAutopilotRetro[]> = workerAutopilotRetroStore.load();
+
+function saveWorkerAutopilotRetro(workerId: string, note: string | undefined): void {
+  if (appendWorkerAutopilotRetro(workerAutopilotRetros, workerId, note, Date.now())) {
+    workerAutopilotRetroStore.save(workerAutopilotRetros);
+  }
+}
+
 function persistWorkerAutopilotStates(): void {
   const snapshot: Record<string, PersistedWorkerAutopilotState> = {};
   for (const [key, state] of workerAutopilotByWorker) snapshot[key] = { ...state };
@@ -5747,13 +5761,15 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
       return;
     }
+    const turns = recentWorkerAutopilotTurns(worker);
     const prompt = workerAutopilotNextPrompt({
       workerName: worker.runner.name,
       role: worker.persona?.role || null,
       workspaceLabel: worker.runner.workspacePath,
-      turns: recentWorkerAutopilotTurns(worker),
+      turns,
       stepsRemaining: state.stepsRemaining - 1,
       proactive: state.proactive,
+      retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
     });
     let decision;
     try {
@@ -5766,7 +5782,10 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
     const live = workerAutopilotByWorker.get(worker.id);
     if (!live || !workers.has(worker.id)) return;
+    // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
+    if (decision) decision = workerAutopilotProgressGuard(decision, turns);
     if (!decision || decision.action === "stop") {
+      if (decision?.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
       const reason = decision?.action === "stop" ? decision.reason : "";
       disableWorkerAutopilotWithNote(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
@@ -5775,6 +5794,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
     live.stepsRemaining -= 1;
     persistWorkerAutopilotStates();
+    // 最後一步的決策帶著整輪復盤——存起來讓下一輪循環從這裡往上爬（機制一）。
+    if (live.stepsRemaining <= 0 && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
     const text = t("🔁（自動循環·剩 {n} 步）{instruction}", { n: live.stepsRemaining, instruction: decision.instruction });
     record(worker, { type: "user_message", text });
     try {
@@ -7027,6 +7048,7 @@ app.delete("/api/workers/:id", async (req, res) => {
   deleteExtras(worker.id);
   clearWorkerHookState(worker.id);
   if (workerAutopilotByWorker.delete(worker.id)) persistWorkerAutopilotStates(); // NPC 沒了，個人循環狀態一併回收
+  if (workerAutopilotRetros[worker.id]) { delete workerAutopilotRetros[worker.id]; workerAutopilotRetroStore.save(workerAutopilotRetros); }
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });

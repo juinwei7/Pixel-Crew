@@ -348,6 +348,7 @@ export const enServerC: Record<string, string> = {
   "🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。": "🅿️ Autopilot finished normally{reason}. Switch it back on or give an instruction to continue.",
   "⛔ 自動循環已停止：無法送出下一步（{error}）。": "⛔ Autopilot stopped: could not send the next step ({error}).",
   "🔁（自動循環·剩 {n} 步）{instruction}": "🔁 (autopilot · {n} steps left) {instruction}",
+  "下一步與最近的指示重複、說不出實質推進，改為誠實停止": "the next step repeated a recent instruction with no real progress to name, so it stopped honestly",
   "{n}. 指示：{instruction}{result}": "{n}. Instruction: {instruction}{result}",
   "\n   回覆摘要：{result}": "\n   Reply summary: {result}",
   "（沒有可用的近期回合——這是自動循環的第一步。）": "(No recent turns available — this is the loop's first step.)",

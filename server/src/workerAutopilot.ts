@@ -31,8 +31,8 @@ export function clampWorkerAutopilotMinutes(value: unknown): number | null {
 }
 
 export type WorkerAutopilotDecision =
-  | { action: "continue"; instruction: string; reason: string }
-  | { action: "stop"; reason: string };
+  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string }
+  | { action: "stop"; reason: string; retro?: string };
 
 /** 最近回合的精簡摘要：instruction＝當時送給 NPC 的話，result＝它回覆的截斷片段。 */
 export type WorkerAutopilotTurn = {
@@ -58,6 +58,8 @@ export function workerAutopilotNextPrompt(input: {
   turns: WorkerAutopilotTurn[];
   stepsRemaining: number;
   proactive?: boolean;
+  /** 前幾輪循環留下的復盤教訓（新的在前）——讓循環之間累積經驗而不是每輪歸零。 */
+  retros?: string[];
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
@@ -72,6 +74,11 @@ export function workerAutopilotNextPrompt(input: {
         })
         .join("\n")
     : t("（沒有可用的近期回合——這是自動循環的第一步。）");
+
+  const retros = (input.retros ?? []).map((note) => bounded(note, 300)).filter(Boolean).slice(0, 8);
+  const retroBlock = retros.length
+    ? `\n\nLessons carried over from this NPC's previous loops (most recent first):\n${retros.map((note) => `- ${note}`).join("\n")}`
+    : "";
 
   const scopeRule = input.proactive
     ? `- First finish or polish the NPC's CURRENT thread of work. Once that thread is genuinely concluded, PROACTIVELY pick the next most valuable thing this NPC can do alone: optimize or refactor what it produced, verify quality and fix weaknesses, extend coverage, research an adjacent topic that clearly serves this NPC's role and workspace, or prepare groundwork for upcoming work. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
@@ -93,18 +100,21 @@ ${scopeRule}
 - Working files: drafts and intermediate files stay in the workspace — never tell the NPC to put work-in-progress into outbox/. Only a finished, final deliverable (typically at the loop's last step) goes into outbox/.${input.stepsRemaining <= 0 ? `\n- FINAL STEP: this is the loop's last step. The instruction MUST tell the NPC to wrap up — close out the current thread (no new work that cannot finish in this one turn) and end its reply with a short wrap-up report for the owner: current status, what got done during this loop, what remains, and any risks.` : ""}
 - Write the instruction in the same language the owner has been using with this NPC (Traditional Chinese unless the recent turns clearly show otherwise).
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
+- LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung.
+- Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.
+- Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
 Workspace: ${JSON.stringify(input.workspaceLabel)}
 Loop steps remaining after this one: ${input.stepsRemaining}
 
 Recent turns (oldest first):
-${turnsBlock}
+${turnsBlock}${retroBlock}
 
 Return only one marked JSON block, no Markdown fences:
-<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: why this is the right next step"}</worker_autopilot_next>
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
 or
-<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right"}</worker_autopilot_next>`;
+<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>`;
 }
 
 type WorkerAutopilotParse =
@@ -124,16 +134,41 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   const value = raw as Record<string, unknown>;
   // 去掉結尾句號——理由會被塞進「…{reason}。」模板，不修剪會出現「。。」。
   const reason = bounded(value.reason, 500).replace(/[。．.\s]+$/u, "");
+  const retro = bounded(value.retro, 500);
   if (value.action === "stop") {
-    return { ok: true, decision: { action: "stop", reason } };
+    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}) } };
   }
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
   }
   const instruction = stripWorkerAutopilotPrefix(bounded(value.instruction, 4_000));
   // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
-  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced." } };
-  return { ok: true, decision: { action: "continue", instruction, reason } };
+  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}) } };
+  const rung = bounded(value.rung, 300);
+  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}) } };
+}
+
+// ── 進步護欄（機制三的程式面）──────────────────────────────────────────────
+// 決策模型若給出「跟最近幾步實質相同」的指示，代表它答不出還能推進什麼——prompt 已要求
+// 這種情況換策略或誠實停止，這裡再結構性兜底：同層重複一律轉成 stop，不燒 NPC 的步數。
+// 只做比對用的正規化：剝前綴、去掉所有空白（中文指示常見全半形空白差異）、統一小寫。
+function normalizedInstruction(text: string): string {
+  return stripWorkerAutopilotPrefix(text).replace(/\s+/gu, "").toLowerCase();
+}
+
+export function workerAutopilotProgressGuard(
+  decision: WorkerAutopilotDecision,
+  turns: WorkerAutopilotTurn[],
+): WorkerAutopilotDecision {
+  if (decision.action !== "continue") return decision;
+  const next = normalizedInstruction(decision.instruction);
+  const repeated = turns.slice(-3).some((turn) => normalizedInstruction(turn.instruction) === next);
+  if (!repeated) return decision;
+  return {
+    action: "stop",
+    reason: t("下一步與最近的指示重複、說不出實質推進，改為誠實停止"),
+    ...(decision.retro ? { retro: decision.retro } : {}),
+  };
 }
 
 export function parseWorkerAutopilotDecision(text: string): WorkerAutopilotDecision | null {
@@ -172,6 +207,72 @@ export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, Per
     };
   }
   return out;
+}
+
+// ── 循環復盤記憶（機制一）────────────────────────────────────────────────
+// 每輪循環收尾（STOP 或最後一步）時決策模型留下一行教訓，跨輪持久化、下輪決策 prompt 帶入，
+// 讓循環之間累積經驗（進化），而不是每輪從零開始（重複）。
+export const WORKER_AUTOPILOT_MAX_RETROS = 12;
+
+export type WorkerAutopilotRetro = { at: number; note: string };
+
+export function normalizeWorkerAutopilotRetros(raw: unknown): Record<string, WorkerAutopilotRetro[]> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, WorkerAutopilotRetro[]> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || !Array.isArray(value)) continue;
+    const list: WorkerAutopilotRetro[] = [];
+    for (const item of value) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const entry = item as Record<string, unknown>;
+      const note = bounded(entry.note, 500);
+      if (!note) continue;
+      const at = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : 0;
+      list.push({ at, note });
+    }
+    if (list.length) out[key] = list.slice(-WORKER_AUTOPILOT_MAX_RETROS);
+  }
+  return out;
+}
+
+/** 附加一則復盤：空白略過、跟最近一則相同略過（防重複洗版）、超過上限丟最舊。回傳是否有寫入。 */
+export function appendWorkerAutopilotRetro(
+  retros: Record<string, WorkerAutopilotRetro[]>,
+  workerId: string,
+  note: unknown,
+  at: number,
+): boolean {
+  const text = bounded(note, 500);
+  if (!text) return false;
+  const list = retros[workerId] ?? [];
+  if (list.length && list[list.length - 1].note === text) return false;
+  list.push({ at, note: text });
+  retros[workerId] = list.slice(-WORKER_AUTOPILOT_MAX_RETROS);
+  return true;
+}
+
+export class WorkerAutopilotRetroStore {
+  private readonly file: string;
+
+  constructor(dataDir: string) {
+    this.file = path.join(dataDir, "worker-autopilot-retros.json");
+  }
+
+  load(): Record<string, WorkerAutopilotRetro[]> {
+    try {
+      return normalizeWorkerAutopilotRetros(JSON.parse(fs.readFileSync(this.file, "utf8")));
+    } catch {
+      return {}; // 檔案不存在或壞掉 → 當成沒有歷史復盤
+    }
+  }
+
+  save(retros: Record<string, WorkerAutopilotRetro[]>): void {
+    try {
+      fs.writeFileSync(this.file, JSON.stringify(retros, null, 2));
+    } catch (error) {
+      console.error("[worker-autopilot] 無法保存循環復盤:", error);
+    }
+  }
 }
 
 export class WorkerAutopilotStateStore {
