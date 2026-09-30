@@ -205,6 +205,20 @@ export function App() {
       setWarroomRunning(false);
     }
   }
+  // 個人循環開關：開＝這位 NPC 做完一回合後由決策模型想下一步、自己接著做（server 端 workerAutopilot）。
+  async function toggleWorkerAutopilot(): Promise<void> {
+    if (!activeId) return;
+    const current = workers[activeId]?.autopilot;
+    try {
+      await apiRequest(`/api/workers/${activeId}/autopilot`, {
+        method: "POST",
+        body: current ? { enabled: false } : { enabled: true },
+      });
+      notify(current ? t("個人循環已關閉") : t("個人循環已開啟：NPC 會自己想下一步接著做，最多 5 步、沒有值得做的會自動停"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("個人循環切換失敗"), "error");
+    }
+  }
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [avatarWorkerId, setAvatarWorkerId] = useState<string | null>(null);
   const [handoffTarget, setHandoffTarget] = useState<ProviderId | null>(null);
@@ -1552,6 +1566,14 @@ export function App() {
               <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("歷史")}</button>
             </div>}
           </div>
+          <button
+            type="button"
+            className={`composer-roundtable-toggle composer-roundtable-toggle--autopilot${active?.autopilot ? " is-active" : ""}`}
+            aria-pressed={Boolean(active?.autopilot)}
+            disabled={Boolean(active?.ephemeralKind)}
+            title={t("個人循環：這位 NPC 做完一回合後，由決策模型想下一步、自己接著做；最多 5 步，沒有值得做的下一步會誠實停下。再點一下關閉。")}
+            onClick={() => void toggleWorkerAutopilot()}
+          >{t("個人循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}</button>
           {stancesOpen && <div className="warroom-stances-panel">
             <header><strong>{t("自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea

@@ -1,0 +1,182 @@
+// 個人自動循環（worker autopilot）—— 單一 NPC 做完一回合後，讓決策模型看「這位 NPC 最近
+// 在做什麼」自己決定下一句指示，送回給同一位 NPC 繼續做，形成個人層級的循環。
+//
+// 與 BOSS 層 autopilot（autopilot.ts）的分工：BOSS 層循環「開下一張交辦」走完整部門管線，
+// 這裡只是「對同一位 NPC 說下一句話」——不開 mission、不路由部門、成本輕一個數量級。
+// 視野也窄一個數量級，所以 STOP 判準比 BOSS 層更嚴：寧可早停，不做灌水工作。
+//
+// 這裡只放純函式（prompt 組裝、輸出解析、護欄 clamp、持久化正規化）；實際的模型呼叫、
+// turn_end hook 與讓路判斷在 index.ts（沿用 autopilot.ts 的 determinism split，方便單測）。
+import fs from "node:fs";
+import path from "node:path";
+import { t } from "./i18n.js";
+
+/** 個人循環一次最多自動連做幾步——預設刻意小（燒的是單一 NPC 的 session，且視野窄易漂移）。 */
+export const WORKER_AUTOPILOT_DEFAULT_STEPS = 5;
+export const WORKER_AUTOPILOT_MIN_STEPS = 1;
+export const WORKER_AUTOPILOT_MAX_STEPS = 20;
+/** 選填時間上限（分鐘），防呆封頂 24 小時。 */
+export const WORKER_AUTOPILOT_MAX_MINUTES = 1440;
+
+export function clampWorkerAutopilotSteps(value: unknown): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : WORKER_AUTOPILOT_DEFAULT_STEPS;
+  return Math.min(WORKER_AUTOPILOT_MAX_STEPS, Math.max(WORKER_AUTOPILOT_MIN_STEPS, n));
+}
+
+export function clampWorkerAutopilotMinutes(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const n = Math.floor(value);
+  if (n <= 0) return null;
+  return Math.min(WORKER_AUTOPILOT_MAX_MINUTES, n);
+}
+
+export type WorkerAutopilotDecision =
+  | { action: "continue"; instruction: string; reason: string }
+  | { action: "stop"; reason: string };
+
+/** 最近回合的精簡摘要：instruction＝當時送給 NPC 的話，result＝它回覆的截斷片段。 */
+export type WorkerAutopilotTurn = {
+  instruction: string;
+  result?: string;
+};
+
+function bounded(value: unknown, max: number): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+// 組「下一步該對這位 NPC 說什麼」的決策 prompt。
+export function workerAutopilotNextPrompt(input: {
+  workerName: string;
+  role: string | null;
+  workspaceLabel: string;
+  turns: WorkerAutopilotTurn[];
+  stepsRemaining: number;
+}): string {
+  const turns = input.turns.slice(-6);
+  const turnsBlock = turns.length
+    ? turns
+        .map((turn, index) => {
+          const result = bounded(turn.result, 700);
+          return t("{n}. 指示：{instruction}{result}", {
+            n: index + 1,
+            instruction: bounded(turn.instruction, 500),
+            result: result ? t("\n   回覆摘要：{result}", { result }) : "",
+          });
+        })
+        .join("\n")
+    : t("（沒有可用的近期回合——這是個人循環的第一步。）");
+
+  return `Worker Autopilot · Single-NPC Self-Continuation
+
+You are the chief of staff watching over ONE worker NPC. The owner turned ON this NPC's personal loop: after each of its turns finishes, you decide the single next instruction to send back to the SAME NPC so it keeps making genuine progress on its current thread of work — or you stop the loop.
+
+This is NOT the department pipeline: no new departments, no missions, no other NPCs. Just the next message to this one NPC.
+
+Rules:
+- Do not use tools, files, shell, MCP, web, or background agents. Reason only from the context below.
+- Propose exactly ONE next instruction, or STOP.
+- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
+- This NPC only sees its own conversation — scope the instruction to what it can do alone in its workspace, in one turn.
+- Write the instruction in the same language the owner has been using with this NPC (Traditional Chinese unless the recent turns clearly show otherwise).
+- STOP readily. This loop has a narrow view, so the bar for continuing is HIGH: if the thread has reached a natural conclusion, if the next step needs the owner's input/decision/data, if the work would be speculative or low-value, or if you are unsure — STOP. A good STOP always beats a filler step.
+- Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
+
+Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
+Workspace: ${JSON.stringify(input.workspaceLabel)}
+Loop steps remaining after this one: ${input.stepsRemaining}
+
+Recent turns (oldest first):
+${turnsBlock}
+
+Return only one marked JSON block, no Markdown fences:
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: why this is the right next step"}</worker_autopilot_next>
+or
+<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right"}</worker_autopilot_next>`;
+}
+
+type WorkerAutopilotParse =
+  | { ok: true; decision: WorkerAutopilotDecision }
+  | { ok: false; reason: string };
+
+function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
+  const match = text.match(/<worker_autopilot_next>\s*([\s\S]*?)\s*<\/worker_autopilot_next>/i);
+  if (!match) return { ok: false, reason: "Missing a <worker_autopilot_next>...</worker_autopilot_next> block." };
+  let raw: unknown;
+  try { raw = JSON.parse(match[1]); } catch (cause) {
+    return { ok: false, reason: `The JSON inside <worker_autopilot_next> did not parse: ${(cause as Error).message}.` };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, reason: "The <worker_autopilot_next> content must be a single JSON object." };
+  }
+  const value = raw as Record<string, unknown>;
+  const reason = bounded(value.reason, 500);
+  if (value.action === "stop") {
+    return { ok: true, decision: { action: "stop", reason } };
+  }
+  if (value.action !== "continue") {
+    return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
+  }
+  const instruction = bounded(value.instruction, 4_000);
+  // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
+  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced." } };
+  return { ok: true, decision: { action: "continue", instruction, reason } };
+}
+
+export function parseWorkerAutopilotDecision(text: string): WorkerAutopilotDecision | null {
+  const result = evaluateWorkerAutopilotDecision(text);
+  return result.ok ? result.decision : null;
+}
+
+export function explainWorkerAutopilotFailure(text: string): string | null {
+  const result = evaluateWorkerAutopilotDecision(text);
+  return result.ok ? null : result.reason;
+}
+
+// ── 重啟持久化（比照 autopilotState.ts 的檔案式 JSON，key 是 workerId）─────────
+export type PersistedWorkerAutopilotState = {
+  stepsRemaining: number;
+  deadlineAt: number | null;
+};
+
+/** 逐條驗證還原內容：steps 夾回合法範圍、deadline 非數字一律 null、壞條目整條丟棄。 */
+export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, PersistedWorkerAutopilotState> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, PersistedWorkerAutopilotState> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || typeof key !== "string" || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Record<string, unknown>;
+    if (typeof entry.stepsRemaining !== "number" || !Number.isFinite(entry.stepsRemaining) || entry.stepsRemaining < 1) continue;
+    const deadlineAt = typeof entry.deadlineAt === "number" && Number.isFinite(entry.deadlineAt)
+      ? Math.min(entry.deadlineAt, Date.now() + WORKER_AUTOPILOT_MAX_MINUTES * 60_000)
+      : null;
+    out[key] = {
+      stepsRemaining: clampWorkerAutopilotSteps(entry.stepsRemaining),
+      deadlineAt,
+    };
+  }
+  return out;
+}
+
+export class WorkerAutopilotStateStore {
+  private readonly file: string;
+
+  constructor(dataDir: string) {
+    this.file = path.join(dataDir, "worker-autopilot-state.json");
+  }
+
+  load(): Record<string, PersistedWorkerAutopilotState> {
+    try {
+      return normalizeWorkerAutopilotStates(JSON.parse(fs.readFileSync(this.file, "utf8")));
+    } catch {
+      return {}; // 檔案不存在或壞掉 → 當成全關
+    }
+  }
+
+  save(states: Record<string, PersistedWorkerAutopilotState>): void {
+    try {
+      fs.writeFileSync(this.file, JSON.stringify(states, null, 2));
+    } catch (error) {
+      console.error("[worker-autopilot] 無法保存個人循環狀態:", error);
+    }
+  }
+}

@@ -202,6 +202,15 @@ import {
   parseAutopilotResolveDecision,
 } from "./autopilotResolve.js";
 import { AutopilotStateStore } from "./autopilotState.js";
+import {
+  clampWorkerAutopilotMinutes,
+  clampWorkerAutopilotSteps,
+  parseWorkerAutopilotDecision,
+  workerAutopilotNextPrompt,
+  WorkerAutopilotStateStore,
+  type PersistedWorkerAutopilotState,
+  type WorkerAutopilotTurn,
+} from "./workerAutopilot.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
 import {
   boundedDepartmentContext,
@@ -601,6 +610,7 @@ function workerSummary(w: Worker) {
     handoff: w.handoff,
     resumeCandidate: w.resumeCandidate,
     ephemeralKind: w.ephemeralKind,
+    autopilot: workerAutopilotSnapshot(w.id),
     collaborationIds,
     missionIds,
   };
@@ -1549,6 +1559,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   warroomRecordHook(worker, event);
   brainSwapHook(worker, event);
   limitResumeHook(worker, event);
+  workerAutopilotHook(worker, event);
 }
 
 function todayCostUsd(workerId: string): number {
@@ -5585,6 +5596,170 @@ app.post("/api/autopilot", (req, res) => {
   res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
 });
 
+// ===== 個人自動循環（worker autopilot）======================================
+// 單一 NPC 做完一回合後，決策模型看它最近在做什麼、決定下一句指示送回給它，形成個人循環。
+// 與 BOSS 層循環的分工見 workerAutopilot.ts。開關按 workerId 記，檔案式 JSON 持久化。
+const workerAutopilotByWorker = new Map<string, { stepsRemaining: number; deadlineAt: number | null }>();
+const workerAutopilotStateStore = new WorkerAutopilotStateStore(config.dataDirectory);
+for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
+  workerAutopilotByWorker.set(key, { ...state });
+}
+// 每位 NPC 同時只允許一個「想下一步」在跑（決策 LLM 最長 150s）。
+const workerAutopilotAdvancing = new Set<string>();
+
+function persistWorkerAutopilotStates(): void {
+  const snapshot: Record<string, PersistedWorkerAutopilotState> = {};
+  for (const [key, state] of workerAutopilotByWorker) snapshot[key] = { ...state };
+  workerAutopilotStateStore.save(snapshot);
+}
+
+function workerAutopilotSnapshot(workerId: string): { stepsRemaining: number; deadlineAt: number | null } | null {
+  const state = workerAutopilotByWorker.get(workerId);
+  return state ? { stepsRemaining: state.stepsRemaining, deadlineAt: state.deadlineAt } : null;
+}
+
+function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number, maxMinutes?: number): void {
+  if (enabled) {
+    const minutes = clampWorkerAutopilotMinutes(maxMinutes);
+    workerAutopilotByWorker.set(worker.id, {
+      stepsRemaining: clampWorkerAutopilotSteps(maxSteps),
+      deadlineAt: minutes ? Date.now() + minutes * 60_000 : null,
+    });
+  } else {
+    workerAutopilotByWorker.delete(worker.id);
+  }
+  persistWorkerAutopilotStates();
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+function disableWorkerAutopilotWithNote(worker: Worker, note: string): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  persistWorkerAutopilotStates();
+  record(worker, { type: "user_message", text: note, notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 從 worker 對話歷史組出「最近幾個回合」的精簡摘要（跳過 notice 型系統通知）。
+function recentWorkerAutopilotTurns(worker: Worker): WorkerAutopilotTurn[] {
+  const turns: WorkerAutopilotTurn[] = [];
+  let current: WorkerAutopilotTurn | null = null;
+  for (const event of worker.history) {
+    if (event.type === "user_message" && !event.notice) {
+      current = { instruction: event.text.slice(0, 600) };
+      turns.push(current);
+    } else if (event.type === "turn_end" && current) {
+      current.result = (event.resultText || "").slice(0, 800);
+      current = null;
+    }
+  }
+  return turns.slice(-6);
+}
+
+function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
+  if (event.type !== "turn_end") return;
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (!state) return;
+  if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); persistWorkerAutopilotStates(); return; }
+  if (event.isError) {
+    disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
+    return;
+  }
+  if (state.stepsRemaining <= 0) {
+    disableWorkerAutopilotWithNote(worker, t("✅ 個人循環已達步數上限，自動停止。要繼續就再打開開關。"));
+    return;
+  }
+  if (state.deadlineAt && Date.now() >= state.deadlineAt) {
+    disableWorkerAutopilotWithNote(worker, t("✅ 個人循環已達時間上限，自動停止。要繼續就再打開開關。"));
+    return;
+  }
+  // 讓路：交接/協作/Mission 進行中、換腦流程中、或佇列還有排隊訊息時不觸發——
+  // 循環保持武裝，之後的回合結束會再進來。
+  if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) return;
+  if (pendingSwapSummaries.has(worker.id) || brainSwapPending.has(worker.id)) return;
+  if (store.listQueue(worker.id).length > 0) return;
+  if (workerAutopilotAdvancing.has(worker.id)) return;
+  void advanceWorkerAutopilot(worker, state);
+}
+
+async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: number; deadlineAt: number | null }): Promise<void> {
+  workerAutopilotAdvancing.add(worker.id);
+  try {
+    const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+    if ("error" in runtime) {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    const prompt = workerAutopilotNextPrompt({
+      workerName: worker.runner.name,
+      role: worker.persona?.role || null,
+      workspaceLabel: worker.runner.workspacePath,
+      turns: recentWorkerAutopilotTurns(worker),
+      stepsRemaining: state.stepsRemaining - 1,
+    });
+    let decision;
+    try {
+      const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+      decision = parseWorkerAutopilotDecision(text);
+    } catch (error) {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
+    const live = workerAutopilotByWorker.get(worker.id);
+    if (!live || !workers.has(worker.id)) return;
+    if (!decision || decision.action === "stop") {
+      const reason = decision?.action === "stop" ? decision.reason : "";
+      disableWorkerAutopilotWithNote(worker, t("🅿️ 個人循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      return;
+    }
+    // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
+    if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
+    live.stepsRemaining -= 1;
+    persistWorkerAutopilotStates();
+    const text = t("🔁（個人循環·剩 {n} 步）{instruction}", { n: live.stepsRemaining, instruction: decision.instruction });
+    record(worker, { type: "user_message", text });
+    try {
+      worker.runner.send(text, [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch (error) {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：無法送出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  } finally {
+    workerAutopilotAdvancing.delete(worker.id);
+  }
+}
+
+app.get("/api/workers/:id/autopilot", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
+
+app.post("/api/workers/:id/autopilot", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  const enabled = Boolean(req.body?.enabled);
+  if (enabled) {
+    if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開個人循環") }); return; }
+    // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
+    const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+    if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  }
+  const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
+  const maxMinutes = enabled && Number.isFinite(req.body?.maxMinutes) ? Number(req.body.maxMinutes) : undefined;
+  setWorkerAutopilot(worker, enabled, maxSteps, maxMinutes);
+  // 開啟當下 NPC 若閒著：立即想第一步（只靠 turn_end 觸發的話，開了會毫無反應）。
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (enabled && state && !worker.runner.busy && !workerAutopilotAdvancing.has(worker.id)
+    && !handoffInProgress(worker) && !collaborationInProgress(worker.id) && !missionInProgress(worker.id)
+    && !pendingSwapSummaries.has(worker.id) && store.listQueue(worker.id).length === 0) {
+    void advanceWorkerAutopilot(worker, state);
+  }
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
+
 app.get("/api/boss-tasks", (req, res) => {
   const requested = collaborationText(req.query.workspacePath, 1_000);
   let workspacePath: string | undefined;
@@ -6791,6 +6966,7 @@ app.delete("/api/workers/:id", async (req, res) => {
   store.deleteWorker(worker.id);
   deleteExtras(worker.id);
   clearWorkerHookState(worker.id);
+  if (workerAutopilotByWorker.delete(worker.id)) persistWorkerAutopilotStates(); // NPC 沒了，個人循環狀態一併回收
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });

@@ -557,6 +557,8 @@ export type WorkerState = {
       場景據此把作戰室成員拉到會議桌圍坐、把 "dedicated"（老闆交辦臨時部門）圈進
       自己的獨立房間。以前是比對名字的 emoji 字首，現在由 server 明講。 */
   ephemeralKind?: "warroom" | "research" | "dedicated" | null;
+  /** 個人自動循環：有值＝開著（server 端 workerAutopilot），null/undefined＝關。 */
+  autopilot?: { stepsRemaining: number; deadlineAt: number | null } | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

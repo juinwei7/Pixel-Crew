@@ -59,6 +59,7 @@ type ServerMessage =
         handoff: HandoffProgress | null;
         resumeCandidate?: WorkerState["resumeCandidate"];
         ephemeralKind?: WorkerState["ephemeralKind"];
+        autopilot?: WorkerState["autopilot"];
         events: RunnerEvent[];
         queue?: QueuedCommandDto[];
       }>;
@@ -113,6 +114,7 @@ type WorkerSummary = {
   handoff: HandoffProgress | null;
   resumeCandidate?: WorkerState["resumeCandidate"];
   ephemeralKind?: WorkerState["ephemeralKind"];
+  autopilot?: WorkerState["autopilot"];
 };
 
 function defaultAuth(
@@ -275,6 +277,7 @@ export function useWorkers() {
             state.accountId = w.accountId ?? null;
             state.resumeCandidate = w.resumeCandidate ?? null;
             state.ephemeralKind = w.ephemeralKind ?? null;
+            state.autopilot = w.autopilot ?? null;
             state.queue = w.queue ?? [];
             record[w.id] = state;
             ids.push(w.id);
@@ -319,7 +322,7 @@ export function useWorkers() {
               data.worker.autoApproveMode,
             // emptyWorker 沒有這幾個欄位的參數位，必須跟 snapshot 分支一樣手動回填——漏掉 ephemeralKind
             // 會讓作戰室成員坐不上會議桌、專屬部隊被當常駐工排進主辦公室（直到重連拿 snapshot 才修正）。
-            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null },
+            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null },
           }));
           setWorkspacePaths((current) =>
             current.includes(data.worker.workspacePath)
@@ -371,7 +374,7 @@ export function useWorkers() {
                 );
             // reset/換 provider 走 emptyWorker 重建時，跟 worker_added 一樣要回填 ephemeralKind 與
             // resumeCandidate——否則 dedicated/warroom NPC 收到 reset 會瞬移回主辦公室、resume 卡片消失。
-            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null };
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>
