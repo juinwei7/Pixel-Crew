@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { t } from "./i18n.js";
 import type { BackoffPolicy } from "./backoffRetry.js";
+import { openRequestsCoachSection, type OpenUserRequest } from "./openRequests.js";
 
 /** 個人循環一次最多自動連做幾步——預設刻意小（燒的是單一 NPC 的 session，且視野窄易漂移）。 */
 export const WORKER_AUTOPILOT_DEFAULT_STEPS = 5;
@@ -51,8 +52,8 @@ export function workerAutopilotResultSummary(text: string, head = 200, tail = 60
 }
 
 export type WorkerAutopilotDecision =
-  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string }
-  | { action: "stop"; reason: string; retro?: string };
+  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string; resolvedRequestIds?: string[] }
+  | { action: "stop"; reason: string; retro?: string; resolvedRequestIds?: string[] };
 
 /** 最近回合的精簡摘要：instruction＝當時送給 NPC 的話，result＝它回覆的截斷片段。 */
 export type WorkerAutopilotTurn = {
@@ -82,6 +83,8 @@ export function workerAutopilotNextPrompt(input: {
   retros?: string[];
   /** server 端剛觀測到的工作區實況（唯讀）——讓教練能對照 NPC 的自述抓落差。 */
   workspaceFacts?: { outbox: string[]; recent: string[] } | null;
+  /** 使用者未結案請求（真人原文）——優先於自我議程承接，教練處理完才回報結案（見 openRequests.ts）。 */
+  openRequests?: OpenUserRequest[];
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
@@ -114,6 +117,8 @@ export function workerAutopilotNextPrompt(input: {
     ? `\n- Cross-check the NPC's claims against the workspace facts below: a claimed deliverable missing from outbox/, or files it never mentioned changing, is exactly the kind of mismatch your diagnosis should open with.`
     : "";
 
+  const openBlock = openRequestsCoachSection(input.openRequests ?? []);
+
   const scopeRule = input.proactive
     ? `- First finish or polish the NPC's CURRENT thread of work. Once that thread is genuinely concluded, PROACTIVELY pick the next most valuable thing this NPC can do alone: optimize or refactor what it produced, verify quality and fix weaknesses, extend coverage, research an adjacent topic that clearly serves this NPC's role and workspace, or prepare groundwork for upcoming work. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
 - PREFER CONTINUING. The owner checked "proactive mode": while steps remain, look hard for a genuinely useful next step before considering STOP. STOP only when the next step would need the owner's private data, credentials, an irreversible decision, or spending real money — or when you truly cannot find a next step whose value you can state in one concrete sentence.`
@@ -144,12 +149,12 @@ Workspace: ${JSON.stringify(input.workspaceLabel)}
 Loop steps remaining after this one: ${input.stepsRemaining}
 
 Recent turns (oldest first):
-${turnsBlock}${retroBlock}${factsBlock}
+${turnsBlock}${retroBlock}${factsBlock}${openBlock}
 
 Return only one marked JSON block, no Markdown fences:
-<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
 or
-<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>`;
+<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>`;
 }
 
 type WorkerAutopilotParse =
@@ -170,17 +175,22 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   // 去掉結尾句號——理由會被塞進「…{reason}。」模板，不修剪會出現「。。」。
   const reason = bounded(value.reason, 500).replace(/[。．.\s]+$/u, "");
   const retro = bounded(value.retro, 500);
+  // 教練回報「已真正處理完」的使用者請求 id（resolve 語義 (a)）——只收非空字串、上限 20。
+  const resolvedIds = Array.isArray(value.resolvedRequestIds)
+    ? value.resolvedRequestIds.map((id) => bounded(id, 200)).filter(Boolean).slice(0, 20)
+    : [];
+  const resolved = resolvedIds.length ? { resolvedRequestIds: resolvedIds } : {};
   if (value.action === "stop") {
-    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}) } };
+    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}), ...resolved } };
   }
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
   }
   const instruction = stripWorkerAutopilotPrefix(bounded(value.instruction, 4_000));
   // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
-  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}) } };
+  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}), ...resolved } };
   const rung = bounded(value.rung, 300);
-  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}) } };
+  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}), ...resolved } };
 }
 
 // ── 進步護欄（機制三的程式面）──────────────────────────────────────────────
@@ -203,6 +213,7 @@ export function workerAutopilotProgressGuard(
     action: "stop",
     reason: t("下一步與最近的指示重複、說不出實質推進，改為誠實停止"),
     ...(decision.retro ? { retro: decision.retro } : {}),
+    ...(decision.resolvedRequestIds?.length ? { resolvedRequestIds: decision.resolvedRequestIds } : {}),
   };
 }
 

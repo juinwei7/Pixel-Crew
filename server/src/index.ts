@@ -254,6 +254,14 @@ import {
   type WorkerAutopilotRetro,
   type WorkerAutopilotTurn,
 } from "./workerAutopilot.js";
+import {
+  OpenUserRequestStore,
+  appendOpenRequest,
+  listOpenRequests,
+  pruneResolved,
+  resolveOpenRequests,
+  type OpenUserRequest,
+} from "./openRequests.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
 import {
   boundedDepartmentContext,
@@ -2527,7 +2535,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     }
 
     const gitState = await workspaceGitState(workspacePath);
-    const localSummary = buildLocalHandoff(worker.history, gitState);
+    // 未結案使用者請求：從帳本取原文，餵進本機備援＋摘要後權威覆寫，確保逐字跨換腦、不被 LLM 壓縮掉。
+    const openRequestTexts = listOpenRequests(openUserRequests, worker.id).map((entry) => entry.text);
+    const localSummary = buildLocalHandoff(worker.history, gitState, openRequestTexts);
     source = "agent";
     setHandoff(worker, { ...progress, stage: "summarizing", message: t("請 {provider} 整理工作大綱", { provider: providerLabel(sourceProvider) }), source: null });
     const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
@@ -2545,6 +2555,8 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       sourceState = result.state;
       summary = parseHandoffSummary(result.text);
       if (!summary) throw new Error(t("來源 LLM 沒有回傳有效的交接格式"));
+      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）。
+      summary.openUserRequests = openRequestTexts;
     } catch (error) {
       source = "local_fallback";
       summary = localSummary;
@@ -5995,6 +6007,30 @@ function saveWorkerAutopilotRetro(workerId: string, note: string | undefined): v
   }
 }
 
+// 未結案使用者請求帳本：真人臨時請求落地，在教練 prompt 與換腦交接兩處原文注入，防被循環議程
+// 或摘要壓縮蒸發（見 openRequests.ts）。只收真人非 notice 訊息——自動循環自己在 6168 也用
+// 非 notice user_message 送指示，所以只在真人入口（drainWorkerQueue／/message）落帳。
+const openUserRequestStore = new OpenUserRequestStore(config.dataDirectory);
+const openUserRequests: Record<string, OpenUserRequest[]> = openUserRequestStore.load();
+
+function captureOpenUserRequest(worker: Worker, text: string): void {
+  // 記所有真人請求，不論有沒有開循環——「做一半換腦就忘」在互動對話同樣會發生（甚至更常，
+  // 因為互動對話最容易被 context 撐滿觸發換腦）。上限 12 筆 open、超額最舊自動降級（見
+  // openRequests.ts），一般閒聊也不會無限堆積；教練回報結案或人工確認才離開 open 清單。
+  if (appendOpenRequest(openUserRequests, worker.id, text, Date.now(), randomUUID())) {
+    pruneResolved(openUserRequests);
+    openUserRequestStore.save(openUserRequests);
+  }
+}
+
+function resolveCapturedRequests(workerId: string, ids: string[] | undefined): void {
+  if (!ids?.length) return;
+  if (resolveOpenRequests(openUserRequests, workerId, ids, Date.now()) > 0) {
+    pruneResolved(openUserRequests);
+    openUserRequestStore.save(openUserRequests);
+  }
+}
+
 function persistWorkerAutopilotStates(): void {
   const snapshot: Record<string, PersistedWorkerAutopilotState> = {};
   for (const [key, state] of workerAutopilotByWorker) snapshot[key] = { ...state };
@@ -6116,6 +6152,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       proactive: state.proactive,
       retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
       workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
+      openRequests: listOpenRequests(openUserRequests, worker.id),
     });
     let decision;
     try {
@@ -6152,6 +6189,9 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (!live || !workers.has(worker.id)) return;
     // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
     if (decision) decision = workerAutopilotProgressGuard(decision, turns);
+    // 教練回報「已真正處理完」的使用者請求即結案（resolve 語義 (a)）——指的是先前回合已完成的工作，
+    // 與這步是否送出無關，故在此committed decision 一有就結案。
+    if (decision) resolveCapturedRequests(worker.id, decision.resolvedRequestIds);
     if (!decision || decision.action === "stop") {
       if (decision?.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
       const reason = decision?.action === "stop" ? decision.reason : "";
@@ -7971,6 +8011,7 @@ function drainWorkerQueue(worker: Worker): void {
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
   record(worker, { type: "user_message", text });
+  captureOpenUserRequest(worker, text); // 真人佇列訊息（循環武裝時）落帳，防換腦／議程蒸發
   try {
     worker.runner.send(next.message, images, documents);
     limitTurnText.set(worker.id, text);
@@ -8115,7 +8156,9 @@ app.post("/api/workers/:id/message", (req, res) => {
   }
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
-  record(worker, { type: "user_message", text: [message, imageLabels, documentLabels].filter(Boolean).join("\n") });
+  const userText = [message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  record(worker, { type: "user_message", text: userText });
+  captureOpenUserRequest(worker, userText); // 真人直送訊息（循環武裝時）落帳，防換腦／議程蒸發
   try {
     worker.runner.send(message, images, documents);
   } catch (error) {
