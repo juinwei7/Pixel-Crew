@@ -220,6 +220,8 @@ export const enServerA: Record<string, string> = {
   "跨部門計畫沒有可執行的下一階段": "The cross-department plan has no runnable next stage",
   "找不到「{department}」的部門主管": "Could not find the department lead for \"{department}\"",
   "{department} 暫時無法開始：{error}": "{department} can't start right now: {error}",
+  "⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。": "⏯️ {department} is free again — auto-redispatching (attempt {n}/{max}).",
+  "自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。": "Auto-redispatch hit its {max}-attempt limit; reply to this task to try again.",
   "{objective}\n\nBoss Task：{taskObjective}{upstream}": "{objective}\n\nBoss Task: {taskObjective}{upstream}",
   "\n\n上游部門交付：\n{upstream}": "\n\nUpstream department deliverable:\n{upstream}",
   "無法啟動 {department}": "Could not start {department}",

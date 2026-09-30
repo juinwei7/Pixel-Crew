@@ -202,6 +202,7 @@ import {
   parseAutopilotResolveDecision,
 } from "./autopilotResolve.js";
 import { AutopilotStateStore } from "./autopilotState.js";
+import { BossDispatchRetryTracker, BOSS_DISPATCH_RETRY_MAX_ATTEMPTS } from "./bossDispatchRetry.js";
 import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
@@ -1560,6 +1561,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   brainSwapHook(worker, event);
   limitResumeHook(worker, event);
   workerAutopilotHook(worker, event);
+  bossDispatchRetryHook(event);
 }
 
 function todayCostUsd(workerId: string): number {
@@ -5123,6 +5125,8 @@ function advanceBossTaskStages(task: BossTask): void {
     task.status = "needs_attention";
     task.error = t("{department} 暫時無法開始：{error}", { department: next.departmentName, error: eligibility.error || t("部門不可用") });
     task.messages.push(bossTaskMessage("system", task.error));
+    // 登記自動重派：主管轉閒置（turn_end）或定期掃描時會重試，不用等人回覆交辦。
+    bossDispatchRetry.note(task.id, Date.now());
     persistBossTask(task);
     return;
   }
@@ -5196,6 +5200,53 @@ async function finalizeBossTaskWithAcceptance(task: BossTask): Promise<void> {
   // 收尾完成才是真正的終態：此時再觸發自動循環與臨時團隊清理。
   autopilotHook(task);
   ephemeralCleanupHook(task);
+}
+
+// ── 派工卡住自動重派 ───────────────────────────────────────────────────────
+// 派工被 missionDepartmentEligibility 擋下（最常見：部門主管正是對話中的 worker）時，
+// 「回覆交辦」只做立即同步重試，主管沒空就再失敗且沒有任何自癒機制（2026-09-30
+// autoResolve 實測）。這裡在任一 worker 的 turn_end 與定期掃描時，對登記過的卡住
+// 交辦重新檢查 eligibility，通過才重派；次數與冷卻上限在 bossDispatchRetry.ts。
+const bossDispatchRetry = new BossDispatchRetryTracker();
+
+function sweepStalledBossDispatch(): void {
+  const now = Date.now();
+  for (const id of bossDispatchRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    if (!task || task.status !== "needs_attention") { bossDispatchRetry.resolve(id); continue; }
+    // 只救「派工前」的卡住：已有 stage 在跑或 mission 層面要人工決定，都不是這裡的事。
+    if (task.stages.some((stage) => stage.status === "running" || stage.status === "needs_attention")) { bossDispatchRetry.resolve(id); continue; }
+    const completedIds = new Set(task.stages.filter((stage) => stage.status === "completed").map((stage) => stage.id));
+    const next = task.stages.find((stage) => stage.status === "pending" && stage.dependsOn.every((dep) => completedIds.has(dep)));
+    if (!next) { bossDispatchRetry.resolve(id); continue; }
+    const department = departments.get(next.departmentId);
+    const lead = department ? workers.get(department.leadWorkerId) : null;
+    if (!department || !lead) { bossDispatchRetry.resolve(id); continue; } // 部門/主管不見了，自動重派救不了
+    if (bossDispatchRetry.exhausted(id)) {
+      bossDispatchRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。", { max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
+      persistBossTask(task);
+      continue;
+    }
+    if (!bossDispatchRetry.shouldRetry(id, now)) continue; // 冷卻中
+    if (!missionDepartmentEligibility(lead).members) continue; // 部門還沒空出來，留著下次再看
+    const attempt = bossDispatchRetry.beginRetry(id, now);
+    task.messages.push(bossTaskMessage("system", t("⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。", { department: next.departmentName, n: attempt, max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
+    try {
+      advanceBossTask(task);
+    } catch (error) {
+      console.error("[boss-dispatch-retry] 自動重派失敗:", error);
+    }
+    // advanceBossTask 會就地改 status，TS 的控制流縮窄不知道——重新取一次再比對。
+    const afterRetry = store.getBossTask(id);
+    if (afterRetry && afterRetry.status === "running") bossDispatchRetry.resolve(id);
+  }
+}
+
+function bossDispatchRetryHook(event: RunnerEvent): void {
+  if (event.type !== "turn_end") return;
+  if (bossDispatchRetry.size === 0) return;
+  sweepStalledBossDispatch();
 }
 
 function advanceBossTasksForMission(missionId: string): void {
@@ -8917,6 +8968,14 @@ const usageRefreshTimer = setInterval(() => {
   void accountUsageRegistry.refreshAll(true);
 }, 5 * 60_000);
 usageRefreshTimer.unref();
+
+// 派工卡住自動重派的保底掃描：主要靠 turn_end 即時觸發，但主管轉閒置不一定伴隨
+// turn_end（例如協作/交接結束、Mission 收尾），定期掃補上這些空窗。無登記時零成本。
+const bossDispatchRetrySweepTimer = setInterval(() => {
+  if (bossDispatchRetry.size === 0) return;
+  try { sweepStalledBossDispatch(); } catch (error) { console.error("[boss-dispatch-retry] 定期掃描失敗:", error); }
+}, 15_000);
+bossDispatchRetrySweepTimer.unref();
 
 // A Mission/collaboration turn is deliberately kept open while a background
 // "async agent" tool call is outstanding (see applyMissionActivityEvent), but
