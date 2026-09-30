@@ -364,6 +364,64 @@ body {
   animation: hudPulse 1.2s ease-in-out infinite;
 }
 
+/* 頭下即時工具流：影片那種「正在跑的工具序列」——最近幾步堆成藥丸軌跡，
+   最後一列(running)高亮＋站點色呼吸點，新列滑入淡入，收工時整塊隨 NPC 卸載。 */
+.npc-tooltrail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 176px;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+.npc-tooltrail__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  background: rgba(5, 10, 20, 0.74);
+  color: #c4d3e4;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  transform-origin: left center;
+  animation: tooltrailIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.npc-tooltrail__text { overflow: hidden; text-overflow: ellipsis; }
+.npc-tooltrail__dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--trail-accent, #8aa0b8);
+}
+.npc-tooltrail__row--done { opacity: 0.5; }
+.npc-tooltrail__row--done .npc-tooltrail__dot { opacity: 0.65; }
+.npc-tooltrail__row--cur {
+  color: #eaf3ff;
+  background: rgba(8, 16, 30, 0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+}
+.npc-tooltrail__row--cur .npc-tooltrail__dot {
+  box-shadow: 0 0 6px var(--trail-accent, #8aa0b8);
+  animation: hudPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tooltrailIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .npc-identity-card {
   position: absolute;
   z-index: 12;

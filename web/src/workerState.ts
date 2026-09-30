@@ -9,7 +9,7 @@ import { shortToolName, stationForTool } from "./stations";
 import { t } from "./i18n";
 
 // 把工具呼叫美化成好讀的中文短句（帶真實細節），取代直接吐英文工具名。3D/2D 小窗與對話泡共用。
-function friendlyToolSpeech(name: string, input: unknown): string {
+export function friendlyToolSpeech(name: string, input: unknown): string {
   const n = name.toLowerCase();
   const o = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const str = (v: unknown) => (typeof v === "string" ? v : "");

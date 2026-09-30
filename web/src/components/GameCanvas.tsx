@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, WorkerState } from "../types";
+import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
 import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/person";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
@@ -12,6 +12,7 @@ import { stationForTool, type StationKey } from "../stations";
 import { STATION_THEME } from "../stationTheme";
 import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
+import { friendlyToolSpeech } from "../workerState";
 import { t } from "../i18n";
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
@@ -245,6 +246,8 @@ export function GameCanvas({
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
+  // 頭下即時工具流面板：跟名牌一起用螢幕座標定位，浮在名牌正下方。
+  const trailRefs = useRef(new Map<string, HTMLDivElement>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
   const menuAnchorRefs = useRef(new Map<string, HTMLDivElement>());
   const approvalRefs = useRef(new Map<string, HTMLDivElement>());
@@ -339,6 +342,13 @@ export function GameCanvas({
             // department sign above the head completely clear of DOM chrome.
             nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale}px)`;
             nameplate.style.opacity = String(pos.opacity);
+          }
+          // 工具流面板貼在名牌正下方——用名牌實際高度當偏移，名牌換行(協作/部門工作)時自動跟著下移。
+          const trail = trailRefs.current.get(pos.id);
+          if (trail) {
+            const nameH = nameplate?.offsetHeight ?? 18;
+            trail.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale + nameH + 3}px)`;
+            trail.style.opacity = String(pos.opacity);
           }
           const identity = identityRefs.current.get(pos.id);
           if (identity) {
@@ -696,6 +706,39 @@ export function GameCanvas({
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
             </div>
+            {!w.temporary && w.busy && (() => {
+              // 頭下即時工具流：讀「最後一回合」的工具序列，取最近 3 步——最後一個(running)高亮＋呼吸，
+              // 前面幾步變灰打底成軌跡。資料與對話泡同源(friendlyToolSpeech)，純顯示、server 零改動。
+              const turns = workersById.get(w.selectId)?.turns;
+              const items = turns && turns.length ? turns[turns.length - 1].items : null;
+              if (!items) return null;
+              const tools = items.filter((it): it is ToolCallItem => it.kind === "tool_call").slice(-3);
+              if (tools.length === 0) return null;
+              return (
+                <div
+                  ref={(el) => {
+                    if (el) trailRefs.current.set(w.id, el);
+                    else trailRefs.current.delete(w.id);
+                  }}
+                  className="npc-tooltrail"
+                >
+                  {tools.map((tc) => {
+                    const accent = STATION_THEME[stationForTool(tc.name, tc.input)]?.accent ?? "#8aa0b8";
+                    const running = tc.status === "running";
+                    return (
+                      <div
+                        key={tc.key}
+                        className={`npc-tooltrail__row${running ? " npc-tooltrail__row--cur" : " npc-tooltrail__row--done"}`}
+                        style={{ "--trail-accent": accent } as CSSProperties}
+                      >
+                        <span className="npc-tooltrail__dot" aria-hidden="true" />
+                        <span className="npc-tooltrail__text">{stripMarkdown(friendlyToolSpeech(tc.name, tc.input))}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             <div
               ref={(el) => {
                 if (el) bubbleRefs.current.set(w.id, el);
