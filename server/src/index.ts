@@ -215,6 +215,11 @@ import {
   deptCreateRetryAction,
 } from "./bossDeptCreateRetry.js";
 import {
+  UsageRetryTracker,
+  USAGE_RETRY_MAX_PROBES,
+  usageRetryAction,
+} from "./bossUsageRetry.js";
+import {
   BossTaskWorkCounter,
   restartBlockedByActiveWork,
   synthesizingZombieAction,
@@ -4870,9 +4875,12 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
   const usage = await usageRegistry.refresh(task.decisionProvider, true);
   const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
   if (usageError) {
+    const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.status = "needs_attention";
-    task.error = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
-    task.messages.push(bossTaskMessage("system", task.error));
+    task.error = blockedError;
+    task.messages.push(bossTaskMessage("system", blockedError));
+    // 登記恢復探測：用量視窗重置後自動接手重跑本路徑，不用等人回覆（卡點盤點 P1-5）。
+    bossUsageRetry.note(task.id, "dedicated", blockedError, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4990,9 +4998,12 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
   const usage = await usageRegistry.refresh(task.decisionProvider, true);
   const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
   if (usageError) {
+    const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.status = "needs_attention";
-    task.error = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
-    task.messages.push(bossTaskMessage("system", task.error));
+    task.error = blockedError;
+    task.messages.push(bossTaskMessage("system", blockedError));
+    // 登記恢復探測：用量視窗重置後自動接手重跑 decide，不用等人回覆（卡點盤點 P1-5）。
+    bossUsageRetry.note(task.id, "decide", blockedError, Date.now());
     persistBossTask(task);
     return;
   }
@@ -5361,6 +5372,61 @@ function sweepFailedDeptCreation(): void {
         const after = store.getBossTask(id);
         if (after && after.status !== "needs_attention") bossDeptCreateRetry.resolve(id);
       });
+  }
+}
+
+// ── 用量受限恢復探測自動重跑（卡點盤點 P1-5）──────────────────────────────
+// usageBlockReason 擋下任務判斷後，usage 視窗重置（整點／5h）也沒有任何人重試。
+// 這裡對登記過的受限交辦定期探測即時用量，usageBlockReason 歸空（明確依據，不猜
+// 時間）才走回原入口重跑；探測退避、次數上限與作廢決策在 bossUsageRetry.ts。
+// 追蹤器是記憶體態且兩個入口共用同一段受限文案，重啟後認不回入口——不做開機重建，
+// 重啟後維持既有行為（needs_attention 等人回覆），不會誤動作。
+const bossUsageRetry = new UsageRetryTracker();
+const bossUsageRetryInFlight = new Set<string>();
+
+function sweepUsageBlockedBossTasks(): void {
+  const now = Date.now();
+  for (const id of bossUsageRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    const action = usageRetryAction(bossUsageRetry, id, {
+      status: task?.status ?? "missing",
+      taskError: task?.error ?? null,
+      inFlight: bossUsageRetryInFlight.has(id),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !task) { bossUsageRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：明確回報主人後停止自動等待，不靜默。回覆交辦仍可手動續跑（會重新登記）。
+      bossUsageRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("⛔ 已定期探測 {max} 次，用量仍受限，停止自動等待。額度恢復後回覆這張交辦即可續跑。", { max: USAGE_RETRY_MAX_PROBES })));
+      persistBossTask(task);
+      continue;
+    }
+    // probe：查即時用量，恢復才重跑原入口；仍受限就等下一輪（這次探測已計數並退避）。
+    bossUsageRetryInFlight.add(id);
+    void (async () => {
+      try {
+        const usage = await usageRegistry.refresh(task.decisionProvider, true);
+        if (usageBlockReason(task.decisionProvider, usage, task.decisionModel)) return;
+        // 探測期間老闆可能已回覆或取消——重讀權威狀態，登記已作廢就放手。
+        const current = store.getBossTask(id);
+        if (!current || current.status !== "needs_attention" || current.error !== action.entry.blockedError) {
+          bossUsageRetry.resolve(id);
+          return;
+        }
+        task.messages.push(bossTaskMessage("system", t("🔁 {provider} 用量已恢復（第 {n} 次探測），自動接手重跑任務判斷。", { provider: providerLabel(task.decisionProvider), n: action.probe })));
+        persistBossTask(task);
+        await (action.entry.kind === "dedicated" ? runDedicatedDepartmentTask(task) : decideBossTask(task));
+        // 成功（ready/running）就除名；又失敗則入口已依新失敗型態重新登記（usage 再受限→
+        // 本追蹤器；建立失敗→bossDeptCreateRetry），舊登記 error 不符會在下一輪掃描 drop。
+        const after = store.getBossTask(id);
+        if (after && after.status !== "needs_attention") bossUsageRetry.resolve(id);
+      } catch (error) {
+        console.error("[usage-retry] 恢復探測失敗:", error);
+      } finally {
+        bossUsageRetryInFlight.delete(id);
+      }
+    })();
   }
 }
 
@@ -9123,6 +9189,10 @@ const bossDispatchRetrySweepTimer = setInterval(() => {
   // 建立失敗重試同用這班定期掃：阻塞 Mission 結束不一定伴隨 turn_end（收尾路徑多），保底補上。
   if (bossDeptCreateRetry.size > 0) {
     try { sweepFailedDeptCreation(); } catch (error) { console.error("[dept-create-retry] 定期掃描失敗:", error); }
+  }
+  // 用量恢復探測只靠定期掃（恢復與 turn_end 無關；探測退避最短 60s，15s 班次只是上限頻率）。
+  if (bossUsageRetry.size > 0) {
+    try { sweepUsageBlockedBossTasks(); } catch (error) { console.error("[usage-retry] 定期掃描失敗:", error); }
   }
 }, 15_000);
 bossDispatchRetrySweepTimer.unref();

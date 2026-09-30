@@ -4,32 +4,41 @@
 // 交辦停在 needs_attention 只能等老闆回覆。
 //
 // 這裡只放純狀態機（登記／指數退避／次數上限／降級決策），方便單測；實際的
-// 工作區檢查、重試呼叫與 turn_end / 定期掃描掛勾在 index.ts。
+// 工作區檢查、重試呼叫與 turn_end / 定期掃描掛勾在 index.ts。退避引擎內核與
+// bossUsageRetry（P1-5）共用，抽在 backoffRetry.ts。
+import { BackoffRetryTracker, backoffDelayMs, type BackoffPolicy } from "./backoffRetry.js";
+
 export const DEPT_CREATE_RETRY_MAX_ATTEMPTS = 3;
 export const DEPT_CREATE_RETRY_BASE_COOLDOWN_MS = 15_000;
 export const DEPT_CREATE_RETRY_MAX_COOLDOWN_MS = 120_000;
 
+const POLICY: BackoffPolicy = {
+  baseMs: DEPT_CREATE_RETRY_BASE_COOLDOWN_MS,
+  capMs: DEPT_CREATE_RETRY_MAX_COOLDOWN_MS,
+  maxAttempts: DEPT_CREATE_RETRY_MAX_ATTEMPTS,
+};
+
 /** 失敗點路徑：重試時各走回自己原本的入口，不互相冒充。 */
 export type DeptCreateRetryKind = "dedicated" | "follow_up" | "decide";
 
-export type DeptCreateRetryEntry = {
+type DeptCreateRetryPayload = {
   kind: DeptCreateRetryKind;
   /** kind="follow_up" 時要重跑的追問文字；其他 kind 為 null。 */
   followUp: string | null;
+};
+
+export type DeptCreateRetryEntry = DeptCreateRetryPayload & {
   attempts: number;
   notBefore: number;
 };
 
 /** 指數退避：15s → 30s → 60s，封頂 120s。attempts 是「已重試次數」。 */
 export function deptCreateRetryBackoffMs(attempts: number): number {
-  return Math.min(
-    DEPT_CREATE_RETRY_BASE_COOLDOWN_MS * 2 ** Math.max(0, attempts),
-    DEPT_CREATE_RETRY_MAX_COOLDOWN_MS,
-  );
+  return backoffDelayMs(POLICY, attempts);
 }
 
 export class DeptCreateRetryTracker {
-  private readonly entries = new Map<string, DeptCreateRetryEntry>();
+  private readonly inner = new BackoffRetryTracker<DeptCreateRetryPayload>(POLICY);
 
   /**
    * 建立失敗時登記。首次登記也從基本退避起算——建立部門要跑最長 90s 的規劃 LLM，
@@ -37,45 +46,39 @@ export class DeptCreateRetryTracker {
    * 依已重試次數退避，不重置次數；kind／followUp 以最新一次失敗為準。
    */
   note(taskId: string, kind: DeptCreateRetryKind, followUp: string | null, now: number): void {
-    const attempts = this.entries.get(taskId)?.attempts ?? 0;
-    this.entries.set(taskId, { kind, followUp, attempts, notBefore: now + deptCreateRetryBackoffMs(attempts) });
+    this.inner.note(taskId, { kind, followUp }, now);
   }
 
   get(taskId: string): DeptCreateRetryEntry | null {
-    return this.entries.get(taskId) ?? null;
+    const entry = this.inner.get(taskId);
+    return entry ? { ...entry.payload, attempts: entry.attempts, notBefore: entry.notBefore } : null;
   }
 
   /** 是否輪到這張重試：有登記、次數未用盡、退避已過。 */
   shouldRetry(taskId: string, now: number): boolean {
-    const entry = this.entries.get(taskId);
-    return !!entry && entry.attempts < DEPT_CREATE_RETRY_MAX_ATTEMPTS && now >= entry.notBefore;
+    return this.inner.due(taskId, now);
   }
 
   /** 真的發動重試前呼叫：記一次並依新次數設退避，回傳這是第幾次（1 起算）。 */
   beginRetry(taskId: string, now: number): number {
-    const entry = this.entries.get(taskId);
-    if (!entry) return 0;
-    entry.attempts += 1;
-    entry.notBefore = now + deptCreateRetryBackoffMs(entry.attempts);
-    return entry.attempts;
+    return this.inner.begin(taskId, now);
   }
 
   exhausted(taskId: string): boolean {
-    const entry = this.entries.get(taskId);
-    return !!entry && entry.attempts >= DEPT_CREATE_RETRY_MAX_ATTEMPTS;
+    return this.inner.exhausted(taskId);
   }
 
   /** 交辦已推進／終結／被手動接手時移除，停止追蹤。 */
   resolve(taskId: string): void {
-    this.entries.delete(taskId);
+    this.inner.resolve(taskId);
   }
 
   trackedIds(): string[] {
-    return [...this.entries.keys()];
+    return this.inner.trackedIds();
   }
 
   get size(): number {
-    return this.entries.size;
+    return this.inner.size;
   }
 }
 

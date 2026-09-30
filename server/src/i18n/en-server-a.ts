@@ -223,6 +223,8 @@ export const enServerA: Record<string, string> = {
   "⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。": "⏯️ {department} is free again — auto-redispatching (attempt {n}/{max}).",
   "自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。": "Auto-redispatch hit its {max}-attempt limit; reply to this task to try again.",
   "🔁 自動重試建立專屬部門（第 {n}/{max} 次）…": "🔁 Auto-retrying dedicated department creation (attempt {n}/{max})…",
+  "🔁 {provider} 用量已恢復（第 {n} 次探測），自動接手重跑任務判斷。": "🔁 {provider} usage has recovered (probe {n}) — auto-resuming task assessment.",
+  "⛔ 已定期探測 {max} 次，用量仍受限，停止自動等待。額度恢復後回覆這張交辦即可續跑。": "⛔ Usage still limited after {max} periodic probes; stopping the automatic wait. Once quota recovers, reply to this task to resume.",
   "⛔ 已自動重試 {max} 次仍無法建立專屬部門。請回覆這張交辦重新嘗試、手動建立部門後再交辦，或關掉「專屬部門」改用既有部門路由。": "⛔ Auto-retry failed to create a dedicated department after {max} attempts. Reply to this task to try again, create a department manually and reassign, or turn off \"dedicated department\" and route to an existing one.",
   "{objective}\n\nBoss Task：{taskObjective}{upstream}": "{objective}\n\nBoss Task: {taskObjective}{upstream}",
   "\n\n上游部門交付：\n{upstream}": "\n\nUpstream department deliverable:\n{upstream}",
