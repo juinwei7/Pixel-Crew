@@ -15,7 +15,7 @@ export function stationForTool(name: string, input: unknown): StationKey {
 
   if (n === "bash" || n === "powershell" || n === "pwsh") return "terminal";
   if (n === "edit" || n === "write" || n === "notebookedit") return "code";
-  if (n === "read") return "books";
+  if (n === "read" || n === "grep" || n === "glob") return "books";
   if (n === "websearch" || n === "webfetch") return "web";
   if (blob.includes("verify")) return "check";
   if (blob.includes("issue") || blob.includes("task")) return "board";

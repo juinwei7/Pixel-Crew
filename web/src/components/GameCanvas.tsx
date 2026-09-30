@@ -570,9 +570,30 @@ export function GameCanvas({
   const allVisual = visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds);
   const workersById = new Map(workers.map((worker) => [worker.id, worker]));
 
+  // 彙總分流條：畫面上的隊員（排除子代理）一眼看「幾個在忙／幾個需要你／幾個待命」；
+  // 「需要你」可點，一鍵選取＋開第一個等你核准的 NPC 日誌（全域信號，補名牌徽章的個別視角）。
+  const aggVisual = allVisual.filter((w) => !w.temporary);
+  const needIds = aggVisual
+    .map((w) => w.selectId)
+    .filter((id) => { const full = workersById.get(id); return !!full && !!pendingApprovalFor(full); });
+  const aggBusy = aggVisual.filter((w) => w.busy).length;
+  const aggIdle = aggVisual.length - aggBusy;
+
   return (
     <>
       <div className="game-host" ref={hostRef} />
+      {aggVisual.length > 0 && (
+        <div className="npc-aggbar" role="group" aria-label={t("小隊狀態")}>
+          <span className="npc-aggbar__seg"><Icon name="gear" size={11} />{aggBusy} {t("工作中")}</span>
+          {needIds.length > 0 && (
+            <button type="button" className="npc-aggbar__seg npc-aggbar__seg--need" title={t("點我跳到需要你的 NPC")}
+              onClick={() => { const id = needIds[0]; if (id) { onSelect(id); onOpenLog?.(id); } }}>
+              <Icon name="bell" size={11} />{needIds.length} {t("需要你")}
+            </button>
+          )}
+          <span className="npc-aggbar__seg npc-aggbar__seg--idle"><Icon name="moon" size={11} />{aggIdle} {t("待命")}</span>
+        </div>
+      )}
       {view && (
         <div className="canvas-zoom" role="group" aria-label={t("畫面縮放")}>
           <button

@@ -316,6 +316,48 @@ body {
   box-shadow: 0 0 16px rgba(168, 85, 255, 0.12);
 }
 
+/* 彙總分流條：畫面左下角（縮放鈕上方，穩定落在 canvas 區、不撞頁首/側欄）常駐
+   「幾個工作中／需要你／待命」，需要你可點一鍵跳。 */
+.npc-aggbar {
+  position: absolute;
+  bottom: 60px;
+  left: 16px;
+  z-index: 40;
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.npc-aggbar__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(8, 14, 24, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cdd9e8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.npc-aggbar__seg svg { color: #8fb6ff; }
+.npc-aggbar__seg--idle { opacity: 0.72; }
+.npc-aggbar__seg--idle svg { color: #7d8ea3; }
+.npc-aggbar__seg--need {
+  pointer-events: auto;
+  cursor: pointer;
+  color: #ffe0b0;
+  border-color: rgba(255, 180, 90, 0.5);
+  background: rgba(58, 40, 14, 0.85);
+  animation: aggNeedPulse 1.6s ease-in-out infinite;
+}
+.npc-aggbar__seg--need svg { color: #ffb454; }
+@keyframes aggNeedPulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+  50%      { box-shadow: 0 2px 14px rgba(255, 180, 84, 0.42); }
+}
+
 .npc-nameplate {
   position: absolute;
   top: 0;

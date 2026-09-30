@@ -90,11 +90,14 @@ export function workerAutopilotNextPrompt(input: {
   const turnsBlock = turns.length
     ? turns
         .map((turn, index) => {
-          const result = bounded(turn.result, 900);
+          // 最新一則是診斷下一步的主要依據——給它大額度看清實質內容，較舊的僅留脈絡。
+          const isLatest = index === turns.length - 1;
+          const result = bounded(turn.result, isLatest ? 3000 : 600);
+          const label = isLatest ? t("\n   最新回覆（完整據此診斷）：{result}", { result }) : t("\n   回覆摘要：{result}", { result });
           return t("{n}. 指示：{instruction}{result}", {
             n: index + 1,
-            instruction: bounded(turn.instruction, 500),
-            result: result ? t("\n   回覆摘要：{result}", { result }) : "",
+            instruction: bounded(turn.instruction, isLatest ? 800 : 400),
+            result: result ? label : "",
           });
         })
         .join("\n")
@@ -141,6 +144,8 @@ ${scopeRule}
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
 - LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung.
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
+- ANCHOR IN THE LATEST REPLY, don't run generic: the "最新回覆（完整據此診斷）" block is the full latest result — read it and make the diagnosis quote or point at something CONCRETE in it (a specific claim, number, file, gap, or contradiction). A diagnosis that could be pasted onto any turn is a failure; if you cannot cite a specific from the latest reply, you have not read it closely enough.
+- ASK A GOOD QUESTION INSTEAD OF GUESSING: if genuine progress now hinges on a decision only the owner can make (a direction fork, a preference, missing input/credentials/data, or an irreversible or money-spending action), do NOT plough ahead on an assumption and do NOT stop with a vague "waiting for the owner" — STOP with the "reason" written AS the question: name the specific fork in one line, give 2–3 concrete labelled options (A/B/C) with your recommendation and what each implies, phrased so the owner can decide by replying a single letter or word. Think about how to ask so the owner barely has to type.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 
