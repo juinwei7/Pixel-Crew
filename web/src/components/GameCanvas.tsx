@@ -14,9 +14,22 @@ import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
 import { t } from "../i18n";
+
+// 「一眼看出在幹嘛」活動徽章：依當前工具所屬站點給一個線性圖示＋短動詞，整合進名牌內
+// （只在工作中出現、閒置收起）。圖示吃站點主題色做色彩編碼，加速一眼辨識。
+const ACTIVITY_CHIP: Partial<Record<StationKey, { icon: IconName; label: string }>> = {
+  terminal: { icon: "gear", label: "執行指令" },
+  code: { icon: "code", label: "寫程式" },
+  web: { icon: "globe", label: "上網查" },
+  books: { icon: "file", label: "查資料" },
+  check: { icon: "check", label: "驗證中" },
+  board: { icon: "board", label: "整理任務" },
+  meeting: { icon: "speech", label: "討論中" },
+  desk: { icon: "gear", label: "工作中" },
+};
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
@@ -696,6 +709,18 @@ export function GameCanvas({
               {mission && <span className="npc-nameplate__collaboration npc-nameplate__mission" title={mission.objective}>
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
+              {w.busy && !collaboration && !mission && (() => {
+                // 一眼看出在幹嘛：思考中 vs 各站點工作，整合成名牌內一行圖示＋短動詞
+                const thinking = w.character.activity === "thinking";
+                const chip = thinking ? { icon: "brain" as IconName, label: t("思考中") } : (ACTIVITY_CHIP[w.character.station] ?? ACTIVITY_CHIP.desk!);
+                const tint = thinking ? "#9db4d8" : (STATION_THEME[w.character.station]?.accent ?? "#8fb6ff");
+                return (
+                  <span className="npc-nameplate__activity" style={{ "--act": tint } as CSSProperties}>
+                    <Icon name={chip.icon} size={9} className="npc-nameplate__activity-ico" />
+                    <span className="npc-nameplate__activity-label">{thinking ? chip.label : t(chip.label)}</span>
+                  </span>
+                );
+              })()}
             </div>
             <div
               ref={(el) => {

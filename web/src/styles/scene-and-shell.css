@@ -345,6 +345,16 @@ body {
 .npc-nameplate__role { overflow: hidden; flex: 0 1 auto; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
 .npc-nameplate__elapsed { flex: 0 0 auto; margin-left: auto; color: var(--cyan); font-size: 8px; font-weight: 400; opacity: 0.85; }
 .npc-nameplate:has(.npc-nameplate__collaboration) { flex-wrap: wrap; max-width: 184px; }
+/* 「一眼看出在幹嘛」活動徽章：名牌內自成一行，圖示吃站點色做色彩編碼＋短動詞 */
+.npc-nameplate__activity {
+  flex: 1 0 100%;
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 2px;
+  color: #d6e4f6; font-size: 8px; font-weight: 700; letter-spacing: 0.2px;
+}
+.npc-nameplate__activity-ico { flex: 0 0 auto; color: var(--act, #8fb6ff); }
+.npc-nameplate__activity-label { overflow: hidden; text-overflow: ellipsis; }
+.npc-nameplate:has(.npc-nameplate__activity) { flex-wrap: wrap; max-width: 152px; }
 
 .npc-nameplate--active {
   color: #ffffff;
