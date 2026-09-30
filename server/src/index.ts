@@ -9542,6 +9542,9 @@ server.listen(config.port, config.host, () => {
           persistBossTask(task);
         }
         bossDeptCreateRetry.note(task.id, rebuilt.kind, null, Date.now());
+        // 冷安裝當天的驗證線索：認回幾張、走哪條路（結構化 vs 升級橋）只有這裡知道，
+        // 追蹤器是記憶體態、外部觀測不到，不留 log 就無從確認升級橋真的接住了舊列。
+        console.log(`[dept-create-retry] 開機重建認回 ${task.id}（${rebuilt.kind}${rebuilt.legacy ? "，升級橋以舊版文案橋接並回填 stall" : "，結構化 stall 標記"}）`);
       }
     }
   }
