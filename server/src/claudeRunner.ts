@@ -11,6 +11,8 @@ import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProt
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { claudeChildEnv } from "./claudeEnv.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
+import { pathEscapesWorkspace } from "./safeLocalPath.js";
+import { bashRedirectsOutsideWorkspace } from "./bashWriteFence.js";
 import { queryToolPolicy, readOnlyBuiltinToolNames } from "./toolPolicy.js";
 import { t } from "./i18n.js";
 import {
@@ -292,6 +294,40 @@ export class ClaudeSession implements AgentSession {
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("唯讀 NPC 協作不允許需要額外權限的操作") });
+    }
+    // 通道 E 圍欄：結構化寫檔工具（Write/Edit/NotebookEdit）若目標落在 workspace 外，一律拒絕
+    // ——不論核准模式（含 full 自動核准）。重用 pathEscapesWorkspace（邊界語意同 assertSafeLocalPath）。
+    // 涵蓋邊界：Bash 寫檔（cp/重導向）無結構化路徑、invincible 繞過整個橋，兩者不在此圍欄，
+    // 屬防禦縱深而非圍牆（見外傳風險盤點 §八）。outbox 在 workspace 內，不受影響。
+    const writeTarget = ["Write", "Edit", "NotebookEdit"].includes(toolName) && originalInput && typeof originalInput === "object"
+      ? (originalInput as Record<string, unknown>)[toolName === "NotebookEdit" ? "notebook_path" : "file_path"]
+      : undefined;
+    if (typeof writeTarget === "string" && writeTarget && pathEscapesWorkspace(this.workspacePath, writeTarget)) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "file_change",
+        title: t("已擋下寫入工作資料夾外的路徑"),
+        input, command, cwd: this.workspacePath,
+        reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
+        decisions: [], toolName, riskReason: riskReasonFor(command),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
+    }
+    // 通道 E 的 Bash 對稱補強：Bash 沒有結構化路徑，退而擋「寫入型重導向」字面逃逸目標
+    // （echo x > 外部路徑 / >> ../out）。刻意只認字面重導向、不做完整 shell 解析——變數、
+    // 子殼、直譯器、cp/mv/tee 認不出即不擋，屬防禦縱深非圍牆（見外傳風險盤點 §九）。不論核准模式。
+    if (toolName === "Bash" && typeof command === "string" && bashRedirectsOutsideWorkspace(this.workspacePath, command)) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "command",
+        title: t("已擋下寫入工作資料夾外的路徑"),
+        input, command, cwd: this.workspacePath,
+        reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
+        decisions: [], toolName, riskReason: riskReasonFor(command),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
     }
     const mode = this.getAutoApproveMode();
     // 完全自動核准下的 AskUserQuestion：不停下等人（無人值守管線會就此卡死），也不盲目放行

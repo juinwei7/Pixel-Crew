@@ -66,6 +66,8 @@ export const enServerC: Record<string, string> = {
   "唯讀查詢已拒絕 {tool}": "Read-only query rejected {tool}",
   "唯讀協作已拒絕 {tool}": "Read-only collaboration rejected {tool}",
   "唯讀 NPC 協作不允許需要額外權限的操作": "Read-only NPC collaboration doesn't allow actions that need extra permissions",
+  "已擋下寫入工作資料夾外的路徑": "Blocked a write to a path outside the workspace folder",
+  "寫檔目標超出工作資料夾，已阻擋以防資料外洩": "The write target is outside the workspace folder; blocked to prevent data exfiltration",
   "Claude 執行了這個指令": "Claude ran this command",
   "Claude 使用了 {tool}": "Claude used {tool}",
   "允許 Claude 執行這個指令？": "Allow Claude to run this command?",

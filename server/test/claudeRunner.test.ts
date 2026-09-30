@@ -258,6 +258,77 @@ test("Claude defers a global-memory prompt refresh until the next send(), never 
   assert.match(writes[0], /繼續工作/);
 });
 
+test("channel E fence: full auto-approve still denies structured writes that escape the workspace, but allows writes inside it", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-fence-ws-"));
+  try {
+    const events: RunnerEvent[] = [];
+    const session = new ClaudeSession(
+      (event) => events.push(event),
+      ws,
+      () => [],
+      () => "",
+      () => "full", // 完全自動核准：若沒有圍欄，寫到 workspace 外也會被放行
+    );
+    session.busy = true;
+    const token = (session as unknown as { approvalToken: string }).approvalToken;
+
+    // 逃逸的結構化寫入：即使 full 模式，也被圍欄擋下（deny + 外洩理由）。
+    const outsidePath = join(ws, "..", "escape-secret.txt");
+    for (const [tool, key] of [["Write", "file_path"], ["Edit", "file_path"], ["NotebookEdit", "notebook_path"]] as const) {
+      const denied = await session.handleApprovalBridge(token, { tool_name: tool, input: { [key]: outsidePath } });
+      assert.equal(denied.behavior, "deny", `${tool} should be denied`);
+      assert.match((denied as { message: string }).message, /超出工作資料夾/);
+    }
+
+    // 相對 ../ 逃逸同樣擋下。
+    const relDenied = await session.handleApprovalBridge(token, { tool_name: "Write", input: { file_path: "../outside.txt" } });
+    assert.equal(relDenied.behavior, "deny");
+
+    // workspace 內（含 outbox/）的寫入照常放行。
+    const insideOk = await session.handleApprovalBridge(token, { tool_name: "Write", input: { file_path: join(ws, "outbox", "report.md") } });
+    assert.deepEqual(insideOk, { behavior: "allow", updatedInput: { file_path: join(ws, "outbox", "report.md") } });
+
+    session.stop();
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("channel E Bash symmetry: full auto-approve denies a redirection that writes outside the workspace, but allows writes inside it", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-bashfence-ws-"));
+  try {
+    const events: RunnerEvent[] = [];
+    const session = new ClaudeSession(
+      (event) => events.push(event),
+      ws,
+      () => [],
+      () => "",
+      () => "full", // 完全自動核准：若沒有 Bash 圍欄，echo > 外部路徑 會被放行
+    );
+    session.busy = true;
+    const token = (session as unknown as { approvalToken: string }).approvalToken;
+
+    // 逃逸的寫入型重導向：即使 full 模式也被擋下。
+    const outside = join(ws, "..", "leak.txt");
+    const denied = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: `echo secret > ${outside}` } });
+    assert.equal(denied.behavior, "deny", "redirect writing outside the workspace should be denied");
+    assert.match((denied as { message: string }).message, /超出工作資料夾/);
+
+    const relDenied = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "echo x >> ../escape.txt" } });
+    assert.equal(relDenied.behavior, "deny");
+
+    // workspace 內（含 outbox/）的重導向寫入照常放行；純讀取（無寫入重導向）也放行。
+    const insideOk = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "echo done > outbox/report.md" } });
+    assert.equal(insideOk.behavior, "allow", "writing inside outbox/ should still be allowed");
+    const readOk = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "cat notes.md" } });
+    assert.equal(readOk.behavior, "allow");
+
+    session.stop();
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test("builds Claude stream-json image content blocks", () => {
   assert.deepEqual(claudeMessageContent("這是什麼？", [{ name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=" }]), [
     { type: "text", text: "這是什麼？" },

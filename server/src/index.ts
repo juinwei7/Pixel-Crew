@@ -182,6 +182,7 @@ import {
   type BossTaskMessage,
   type BossTaskMessageRole,
 } from "./bossTask.js";
+import { resolveOutboxFile } from "./outboxFile.js";
 import {
   expertAdvisorPrompt,
   ADVISOR_VARIETY_LENSES,
@@ -3762,12 +3763,16 @@ app.get("/api/outbox/file", (req, res) => {
   const workerId = typeof req.query.worker === "string" ? req.query.worker : "";
   const name = typeof req.query.name === "string" ? req.query.name : "";
   const worker = workers.get(workerId);
-  if (!worker || !name || /[\\/]/.test(name) || name.includes("..")) { res.status(400).json({ error: t("無效請求") }); return; }
-  const full = join(worker.runner.workspacePath, "outbox", name);
-  let st: ReturnType<typeof statSync>;
-  try { st = statSync(full); } catch { res.status(404).json({ error: t("檔案不存在") }); return; }
-  if (!st.isFile()) { res.status(404).json({ error: t("檔案不存在") }); return; }
-  if (st.size > 100 * 1024 * 1024) { res.status(413).json({ error: t("檔案過大，請直接到工作區 outbox 資料夾開啟") }); return; }
+  if (!worker) { res.status(400).json({ error: t("無效請求") }); return; }
+  // 守門判定（檔名穿越／symlink／非檔／過大）抽到 resolveOutboxFile，見 outboxFile.ts 與其回歸測試。
+  const resolved = resolveOutboxFile(worker.runner.workspacePath, name);
+  if (!resolved.ok) {
+    const error = resolved.status === 400 ? t("無效請求")
+      : resolved.status === 413 ? t("檔案過大，請直接到工作區 outbox 資料夾開啟")
+      : t("檔案不存在");
+    res.status(resolved.status).json({ error }); return;
+  }
+  const full = resolved.fullPath;
   const ext = name.toLowerCase().split(".").pop() ?? "";
   const inlineTypes: Record<string, string> = {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",

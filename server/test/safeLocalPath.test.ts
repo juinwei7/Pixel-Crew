@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertSafeLocalPath } from "../src/safeLocalPath.js";
+import { assertSafeLocalPath, pathEscapesWorkspace } from "../src/safeLocalPath.js";
 
 test("allows a normal path inside the workspace, including one that doesn't exist yet", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pixel-crew-safepath-"));
@@ -48,4 +48,25 @@ test("rejects a target reached through a symlink, even one that itself resolves 
     rmSync(dir, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
+});
+
+// 通道 E 圍欄的判定核心（零 I/O 同步版）——claudeRunner 核准橋對 Write/Edit/NotebookEdit
+// 用它擋掉寫到 workspace 外的路徑，不論核准模式。此處鎖住純路徑語意；full 模式整合見 claudeRunner.test.ts。
+test("pathEscapesWorkspace flags absolute and relative targets that leave the workspace", () => {
+  const ws = process.platform === "win32" ? "C:\\work\\ws" : "/work/ws";
+  const outsideAbs = process.platform === "win32" ? "C:\\work\\secret.txt" : "/etc/passwd";
+  // 逃逸：外部絕對路徑、../ 穿越、workspace 的兄弟目錄前綴。
+  assert.equal(pathEscapesWorkspace(ws, outsideAbs), true);
+  assert.equal(pathEscapesWorkspace(ws, "../secret.txt"), true);
+  assert.equal(pathEscapesWorkspace(ws, "nested/../../secret.txt"), true);
+  assert.equal(pathEscapesWorkspace(ws, join(ws, "..", "ws-evil", "x.txt")), true);
+});
+
+test("pathEscapesWorkspace allows targets inside the workspace, including outbox/", () => {
+  const ws = process.platform === "win32" ? "C:\\work\\ws" : "/work/ws";
+  assert.equal(pathEscapesWorkspace(ws, join(ws, "report.md")), false);
+  assert.equal(pathEscapesWorkspace(ws, join(ws, "outbox", "final.pdf")), false);
+  assert.equal(pathEscapesWorkspace(ws, "outbox/final.pdf"), false); // workspace 相對路徑
+  assert.equal(pathEscapesWorkspace(ws, "nested/deep/file.txt"), false);
+  assert.equal(pathEscapesWorkspace(ws, ws), false); // workspace 根本身
 });

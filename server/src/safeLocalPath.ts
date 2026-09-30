@@ -28,3 +28,18 @@ export async function assertSafeLocalPath(workspacePath: string, targetPath: str
     }
   }
 }
+
+/**
+ * Synchronous, zero-I/O containment check: does `targetPath` (absolute or
+ * relative to the workspace) resolve to somewhere OUTSIDE the workspace?
+ * Used as a write-fence on NPC file tools where the async lstat walk above is
+ * awkward to inline (the approval bridge callback must stay sync to preserve
+ * its `null` dispatch). Path-normalization only — pairs with channel F's
+ * symlink read-fence rather than replacing the full lstat walk.
+ */
+export function pathEscapesWorkspace(workspacePath: string, targetPath: string): boolean {
+  const workspace = resolve(workspacePath);
+  const target = resolve(workspace, targetPath);
+  const rel = relative(workspace, target);
+  return rel === ".." || rel.startsWith(`..${sep}`);
+}
