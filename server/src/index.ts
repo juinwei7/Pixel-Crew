@@ -4900,6 +4900,17 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
 // 追問「專屬部門」跑完的交辦：不再丟回決策模型亂路由——原隊還活著就直接交回同一隊；
 // 被重啟掃掉就自動重建一支專屬部門接手。追問的目標帶上原交辦當背景，成果可延續。
 async function runDedicatedFollowUp(task: BossTask, followUp: string, liveDepartmentId: string | null): Promise<void> {
+  // 追問期間 task 也掛在 discovering（可能要重建部門、跑規劃 LLM）——一樣要進 in-flight
+  // 計數，否則 /restart 的殭屍判定會把「正在跑的追問」誤當殭屍放行，造成並發互踩（自審發現）。
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await runDedicatedFollowUpInner(task, followUp, liveDepartmentId);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveDepartmentId: string | null): Promise<void> {
   let department = liveDepartmentId ? departments.get(liveDepartmentId) ?? null : null;
   if (!department) {
     task.messages.push(bossTaskMessage("system", t("原專屬部門已解散（伺服器重啟或已清理），正在重建一支專屬部門接手追問…")));

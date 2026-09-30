@@ -55,6 +55,23 @@ test("restartBlockedByActiveWork: 只擋真的有背景在跑的探索/驗收，
   }
 });
 
+test("情境：追問（runDedicatedFollowUp）進行中 /restart 要被擋，結束或重啟蒸發後放行（自審發現的漏洞）", () => {
+  const counter = new BossTaskWorkCounter();
+  const view = () => ({
+    status: "discovering",
+    discoveryInFlight: counter.inFlight("task"),
+    synthesisInFlight: false,
+  });
+  // 追問開跑（狀態 discovering、工作 in-flight）→ 409 擋下，不能讓 restart 與追問互踩。
+  counter.enter("task");
+  assert.equal(restartBlockedByActiveWork(view()), true);
+  // 追問收尾（正常結束或拋出，finally 都會 exit）→ 之後若狀態仍卡 discovering 就是殭屍，放行。
+  counter.exit("task");
+  assert.equal(restartBlockedByActiveWork(view()), false);
+  // 重啟後（計數器是記憶體態，開機為空）→ 同樣放行手動重開。
+  assert.equal(restartBlockedByActiveWork({ status: "discovering", discoveryInFlight: new BossTaskWorkCounter().inFlight("task"), synthesisInFlight: false }), false);
+});
+
 test("BossTaskWorkCounter: 遞迴進出（decideBossTask 降級重決策）不會被內層 exit 誤清", () => {
   const counter = new BossTaskWorkCounter();
   assert.equal(counter.inFlight("t1"), false);
