@@ -719,10 +719,11 @@ export function GameCanvas({
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
             </div>
-            {!w.temporary && (() => {
-              // 頭下活動卡：讀「最後一回合」的工具序列。忙碌→秀最近 3 步、末步低調呼吸高亮；
-              // 待命→收合成一行「剛剛做的事」灰淡停留(保留脈絡，不再一停就消失)。每列前給乾淨圖示，
-              // 不再吐英文工具原名、不再有彩色 accent 條。資料與對話泡同源、純顯示、server 零改動。
+            {!w.temporary && (w.busy || hoveredId === w.id) && (() => {
+              // 頭下活動卡：只在「正在工作」時常駐顯示（有活動才有卡，整個辦公室保持乾淨）；
+              // 閒置的 NPC 平時收起，滑鼠移上去才收合成一行「剛剛做的事」供查看。忙碌→秀最近 3 步、
+              // 末步低調呼吸高亮。每列前給乾淨線性圖示，不吐英文工具原名、不用彩色 accent 條。
+              // 資料與對話泡同源、純顯示、server 零改動。
               const turns = workersById.get(w.selectId)?.turns;
               const lastTurn = turns && turns.length ? turns[turns.length - 1] : null;
               if (!lastTurn) return null;
