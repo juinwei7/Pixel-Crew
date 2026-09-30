@@ -64,7 +64,7 @@ export function workerAutopilotNextPrompt(input: {
           });
         })
         .join("\n")
-    : t("（沒有可用的近期回合——這是個人循環的第一步。）");
+    : t("（沒有可用的近期回合——這是自動循環的第一步。）");
 
   return `Worker Autopilot · Single-NPC Self-Continuation
 

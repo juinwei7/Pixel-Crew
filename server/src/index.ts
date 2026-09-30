@@ -5661,15 +5661,15 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   if (!state) return;
   if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); persistWorkerAutopilotStates(); return; }
   if (event.isError) {
-    disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
+    disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
     return;
   }
   if (state.stepsRemaining <= 0) {
-    disableWorkerAutopilotWithNote(worker, t("✅ 個人循環已達步數上限，自動停止。要繼續就再打開開關。"));
+    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。"));
     return;
   }
   if (state.deadlineAt && Date.now() >= state.deadlineAt) {
-    disableWorkerAutopilotWithNote(worker, t("✅ 個人循環已達時間上限，自動停止。要繼續就再打開開關。"));
+    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。"));
     return;
   }
   // 讓路：交接/協作/Mission 進行中、換腦流程中、或佇列還有排隊訊息時不觸發——
@@ -5686,7 +5686,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
   try {
     const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
     if ("error" in runtime) {
-      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：{error}", { error: runtime.error }));
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
       return;
     }
     const prompt = workerAutopilotNextPrompt({
@@ -5701,7 +5701,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
       decision = parseWorkerAutopilotDecision(text);
     } catch (error) {
-      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
     // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
@@ -5709,20 +5709,20 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (!live || !workers.has(worker.id)) return;
     if (!decision || decision.action === "stop") {
       const reason = decision?.action === "stop" ? decision.reason : "";
-      disableWorkerAutopilotWithNote(worker, t("🅿️ 個人循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      disableWorkerAutopilotWithNote(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
     }
     // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
     if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
     live.stepsRemaining -= 1;
     persistWorkerAutopilotStates();
-    const text = t("🔁（個人循環·剩 {n} 步）{instruction}", { n: live.stepsRemaining, instruction: decision.instruction });
+    const text = t("🔁（自動循環·剩 {n} 步）{instruction}", { n: live.stepsRemaining, instruction: decision.instruction });
     record(worker, { type: "user_message", text });
     try {
       worker.runner.send(text, [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch (error) {
-      disableWorkerAutopilotWithNote(worker, t("⛔ 個人循環已停止：無法送出下一步（{error}）。", { error: (error as Error).message }));
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：無法送出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -5742,7 +5742,7 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
   const enabled = Boolean(req.body?.enabled);
   if (enabled) {
-    if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開個人循環") }); return; }
+    if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開自動循環") }); return; }
     // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
     const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
     if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }

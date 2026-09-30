@@ -205,18 +205,26 @@ export function App() {
       setWarroomRunning(false);
     }
   }
-  // 個人循環開關：開＝這位 NPC 做完一回合後由決策模型想下一步、自己接著做（server 端 workerAutopilot）。
-  async function toggleWorkerAutopilot(): Promise<void> {
+  // 自動循環（單一 NPC）：開＝彈設定框選步數／時間再啟動；關＝一鍵直接關（server 端 workerAutopilot）。
+  const [workerAutopilotConfigOpen, setWorkerAutopilotConfigOpen] = useState(false);
+  const [workerAutopilotStepInput, setWorkerAutopilotStepInput] = useState("5");
+  const [workerAutopilotMinutesInput, setWorkerAutopilotMinutesInput] = useState("");
+  async function setWorkerAutopilotEnabled(enabled: boolean): Promise<void> {
     if (!activeId) return;
-    const current = workers[activeId]?.autopilot;
+    const body: Record<string, unknown> = { enabled };
+    let steps = 5;
+    if (enabled) {
+      const rawSteps = Math.floor(Number(workerAutopilotStepInput));
+      if (Number.isFinite(rawSteps) && rawSteps > 0) { steps = Math.min(20, rawSteps); body.maxSteps = steps; }
+      const minutes = Math.floor(Number(workerAutopilotMinutesInput));
+      if (Number.isFinite(minutes) && minutes > 0) body.maxMinutes = minutes;
+    }
     try {
-      await apiRequest(`/api/workers/${activeId}/autopilot`, {
-        method: "POST",
-        body: current ? { enabled: false } : { enabled: true },
-      });
-      notify(current ? t("個人循環已關閉") : t("個人循環已開啟：NPC 會自己想下一步接著做，最多 5 步、沒有值得做的會自動停"), "info");
+      await apiRequest(`/api/workers/${activeId}/autopilot`, { method: "POST", body });
+      setWorkerAutopilotConfigOpen(false);
+      notify(enabled ? t("自動循環已開啟：NPC 會自己想下一步接著做，最多 {n} 步、沒有值得做的會自動停", { n: steps }) : t("自動循環已關閉"), "info");
     } catch (error) {
-      notify(error instanceof Error ? error.message : t("個人循環切換失敗"), "error");
+      notify(error instanceof Error ? error.message : t("自動循環切換失敗"), "error");
     }
   }
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
@@ -1566,14 +1574,32 @@ export function App() {
               <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("歷史")}</button>
             </div>}
           </div>
-          <button
-            type="button"
-            className={`composer-roundtable-toggle composer-roundtable-toggle--autopilot${active?.autopilot ? " is-active" : ""}`}
-            aria-pressed={Boolean(active?.autopilot)}
-            disabled={Boolean(active?.ephemeralKind)}
-            title={t("個人循環：這位 NPC 做完一回合後，由決策模型想下一步、自己接著做；最多 5 步，沒有值得做的下一步會誠實停下。再點一下關閉。")}
-            onClick={() => void toggleWorkerAutopilot()}
-          >{t("個人循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}</button>
+          <div className="worker-autopilot-control">
+            <button
+              type="button"
+              className={`composer-roundtable-toggle composer-roundtable-toggle--autopilot${active?.autopilot ? " is-active" : ""}`}
+              aria-pressed={Boolean(active?.autopilot)}
+              disabled={Boolean(active?.ephemeralKind)}
+              title={t("自動循環：這位 NPC 做完一回合後，由決策模型想下一步、自己接著做；沒有值得做的下一步會誠實停下。再點一下關閉。")}
+              onClick={() => { if (active?.autopilot) void setWorkerAutopilotEnabled(false); else setWorkerAutopilotConfigOpen((open) => !open); }}
+            >{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}</button>
+            {workerAutopilotConfigOpen && !active?.autopilot && <div className="autopilot-config autopilot-config--up" role="dialog" aria-label={t("自動循環設定")}>
+              <div className="autopilot-config__row">
+                <label>{t("步數上限")}<input type="number" min={1} max={20} value={workerAutopilotStepInput}
+                  onChange={(event) => setWorkerAutopilotStepInput(event.target.value)} /></label>
+                <small>{t("做完一回合算一步，1–20")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={workerAutopilotMinutesInput}
+                  onChange={(event) => setWorkerAutopilotMinutesInput(event.target.value)} /></label>
+                <small>{t("選填；到點會在該回合收工時停")}</small>
+              </div>
+              <div className="autopilot-config__actions">
+                <button type="button" className="autopilot-config__cancel" onClick={() => setWorkerAutopilotConfigOpen(false)}>{t("取消")}</button>
+                <button type="button" className="autopilot-config__start" onClick={() => void setWorkerAutopilotEnabled(true)}>{t("開始")}</button>
+              </div>
+            </div>}
+          </div>
           {stancesOpen && <div className="warroom-stances-panel">
             <header><strong>{t("自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea
