@@ -219,6 +219,13 @@ import {
   USAGE_RETRY_MAX_PROBES,
   usageRetryAction,
 } from "./bossUsageRetry.js";
+import { BackoffRetryTracker } from "./backoffRetry.js";
+import {
+  MISSION_STEP_RETRY_MAX_ATTEMPTS,
+  MISSION_STEP_RETRY_POLICY,
+  missionStepRetryAction,
+  type MissionStepRetryPayload,
+} from "./missionStepRetry.js";
 import {
   BossTaskWorkCounter,
   restartBlockedByActiveWork,
@@ -1103,11 +1110,16 @@ function dispatchMissionStep(
     return;
   }
   if (assignee.runner.busy || handoffInProgress(assignee) || collaborationInProgress(assignee.id)) {
+    // 暫時性卡住（NPC 忙碌／交接／協作中）：登記自動重派，NPC 空出（turn_end／定期掃）就重走本函式，
+    // 不用等人回覆。同函式上方兩種 member_unavailable（NPC 消失／離開部門）是永久性缺人，不登記。
     pauseMission(mission, t("{name} 正在執行其他工作，請稍後重試或重新指派", { name: assignee.runner.name }), "member_unavailable");
+    missionStepRetry.note(mission.id, { stepIndex, assigneeWorkerId: step.assigneeWorkerId, pausedError: mission.error ?? "", priorReview }, Date.now());
     return;
   }
   if (!workerProviderReady(assignee)) {
+    // 同款登記：登入是人工動作，但登入後也沒有任何機制回來重派——由掃描在 provider 恢復時接手。
     pauseMission(mission, t("{provider} 尚未登入，請登入後重試或重新指派", { provider: providerLabel(assignee.runner.provider) }), "member_unavailable");
+    missionStepRetry.note(mission.id, { stepIndex, assigneeWorkerId: step.assigneeWorkerId, pausedError: mission.error ?? "", priorReview }, Date.now());
     return;
   }
   const now = new Date().toISOString();
@@ -5213,7 +5225,9 @@ function advanceBossTaskStages(task: BossTask): void {
   const lead = department ? workers.get(department.leadWorkerId) : null;
   if (!department || !lead) {
     task.status = "needs_attention";
-    task.error = t("找不到「{department}」的部門主管", { department: next.departmentName });
+    // 部門或主管整個消失是永久性缺口（多半是部門被解散／重啟後臨時部門沒還原），自動重試
+    // 救不回來——訊息把下一步說清楚，不讓人對著「找不到主管」乾瞪眼（全庫盤點 C-1）。
+    task.error = t("找不到「{department}」的部門主管；部門可能已解散或重啟後未還原，請按「重新交辦」重新派工，或先重建部門再回覆這張交辦。", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -5450,10 +5464,64 @@ function sweepUsageBlockedBossTasks(): void {
   }
 }
 
+// ── Mission 步驟派工卡住自動重派（needs_attention 全庫盤點續篇 A-1）───────────
+// dispatchMissionStep 遇被指派 NPC 忙碌／provider 未登入而 pauseMission 後，NPC 空出
+// 也沒有任何人重派——bossDispatchRetry 只涵蓋交辦「派工前」的卡住（stage 已
+// needs_attention 的形狀被 isPreDispatchStall 明確排除）。守衛與退避在 missionStepRetry.ts。
+const missionStepRetry = new BackoffRetryTracker<MissionStepRetryPayload<ReturnType<typeof parseCollaborationResult>>>(MISSION_STEP_RETRY_POLICY);
+
+function sweepPausedMissionSteps(): void {
+  const now = Date.now();
+  for (const id of missionStepRetry.trackedIds()) {
+    const mission = activeMissions.get(id) ?? store.getDepartmentMission(id);
+    const payload = missionStepRetry.get(id)?.payload;
+    const step = payload ? mission?.steps[payload.stepIndex] ?? null : null;
+    const assignee = payload ? workers.get(payload.assigneeWorkerId) ?? null : null;
+    const action = missionStepRetryAction(missionStepRetry, id, {
+      status: mission?.status ?? "missing",
+      attentionReason: mission?.attentionReason ?? null,
+      error: mission?.error ?? null,
+      stepStatus: step?.status ?? null,
+      stepAssigneeId: step?.assigneeWorkerId ?? null,
+      assigneePresent: Boolean(assignee),
+      // 與 dispatchMissionStep 的前置檢查同一套條件：不忙、無交接／協作、provider 已登入。
+      assigneeReady: Boolean(assignee && !assignee.runner.busy && !handoffInProgress(assignee) && !collaborationInProgress(assignee.id) && workerProviderReady(assignee)),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !mission) { missionStepRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：更新 mission.error 明確告知後除名，不靜默。人工從 Mission 面板重試／
+      // 重新指派仍可解（若又卡住會重新登記、次數重算）。
+      missionStepRetry.resolve(id);
+      mission.error = t("已自動等待 {max} 次仍派不出「{title}」，請在 Mission 面板重試或重新指派。", { max: MISSION_STEP_RETRY_MAX_ATTEMPTS, title: mission.steps[action.payload.stepIndex]?.title ?? "" });
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      advanceBossTasksForMission(mission.id); // 讓 boss task 上的引用文案同步成最新的 mission.error
+      continue;
+    }
+    // retry：與 applyMissionResolution 的 retry 尾段同款恢復（步驟本就停在 pending，
+    // 只需清 attention 再走一次 dispatchMissionStep；再卡住會在 pause 分支重新登記並退避）。
+    mission.attentionReason = null;
+    mission.error = null;
+    mission.completedAt = null;
+    activeMissions.set(mission.id, mission);
+    store.saveDepartmentMission(mission);
+    broadcastMission(mission);
+    try {
+      dispatchMissionStep(mission, action.payload.stepIndex, action.payload.priorReview);
+    } catch (error) {
+      console.error("[mission-step-retry] 自動重派失敗:", error);
+    }
+    const after = activeMissions.get(id) ?? store.getDepartmentMission(id);
+    if (after && after.status !== "needs_attention") missionStepRetry.resolve(id);
+  }
+}
+
 function bossDispatchRetryHook(event: RunnerEvent): void {
   if (event.type !== "turn_end") return;
   if (bossDispatchRetry.size > 0) sweepStalledBossDispatch();
   if (bossDeptCreateRetry.size > 0) sweepFailedDeptCreation();
+  if (missionStepRetry.size > 0) sweepPausedMissionSteps();
 }
 
 function advanceBossTasksForMission(missionId: string): void {
@@ -9214,6 +9282,11 @@ const bossDispatchRetrySweepTimer = setInterval(() => {
   if (bossUsageRetry.size > 0) {
     try { sweepUsageBlockedBossTasks(); } catch (error) { console.error("[usage-retry] 定期掃描失敗:", error); }
   }
+  // Mission 步驟重派同用這班定期掃：NPC 轉閒置不一定伴隨 turn_end（協作／交接收尾）、
+  // provider 登入完成更沒有 turn_end，保底補上。無登記時零成本。
+  if (missionStepRetry.size > 0) {
+    try { sweepPausedMissionSteps(); } catch (error) { console.error("[mission-step-retry] 定期掃描失敗:", error); }
+  }
 }, 15_000);
 bossDispatchRetrySweepTimer.unref();
 
@@ -9387,6 +9460,12 @@ server.listen(config.port, config.host, () => {
       persistBossTask(task);
       try { advanceBossTask(task); } catch (error) {
         console.error(`[boss-task] 重啟後重新驗收失敗 ${task.id}:`, error);
+        // 剛把狀態打回 running 又推進失敗：不告知就是一張永遠顯示執行中、實際沒人在跑的
+        // 殭屍（全庫盤點 C-2）。誠實轉 needs_attention 並給出可行動的下一步。
+        task.status = "needs_attention";
+        task.error = (error as Error).message || t("重啟後重新驗收失敗");
+        task.messages.push(bossTaskMessage("system", t("⚠️ 重啟後自動重新驗收失敗：{error}；回覆這張交辦或按「重新交辦」再試。", { error: task.error })));
+        persistBossTask(task);
       }
     } else {
       task.status = "needs_attention";
