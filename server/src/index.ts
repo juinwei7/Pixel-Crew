@@ -202,7 +202,13 @@ import {
   parseAutopilotResolveDecision,
 } from "./autopilotResolve.js";
 import { AutopilotStateStore } from "./autopilotState.js";
-import { BossDispatchRetryTracker, BOSS_DISPATCH_RETRY_MAX_ATTEMPTS } from "./bossDispatchRetry.js";
+import {
+  BossDispatchRetryTracker,
+  BOSS_DISPATCH_RETRY_MAX_ATTEMPTS,
+  dispatchRetryAction,
+  isPreDispatchStall,
+  runnableNextStage,
+} from "./bossDispatchRetry.js";
 import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
@@ -5213,25 +5219,25 @@ function sweepStalledBossDispatch(): void {
   const now = Date.now();
   for (const id of bossDispatchRetry.trackedIds()) {
     const task = store.getBossTask(id);
-    if (!task || task.status !== "needs_attention") { bossDispatchRetry.resolve(id); continue; }
-    // 只救「派工前」的卡住：已有 stage 在跑或 mission 層面要人工決定，都不是這裡的事。
-    if (task.stages.some((stage) => stage.status === "running" || stage.status === "needs_attention")) { bossDispatchRetry.resolve(id); continue; }
-    const completedIds = new Set(task.stages.filter((stage) => stage.status === "completed").map((stage) => stage.id));
-    const next = task.stages.find((stage) => stage.status === "pending" && stage.dependsOn.every((dep) => completedIds.has(dep)));
-    if (!next) { bossDispatchRetry.resolve(id); continue; }
-    const department = departments.get(next.departmentId);
+    const next = task ? runnableNextStage(task.stages) : null;
+    const department = next ? departments.get(next.departmentId) : null;
     const lead = department ? workers.get(department.leadWorkerId) : null;
-    if (!department || !lead) { bossDispatchRetry.resolve(id); continue; } // 部門/主管不見了，自動重派救不了
-    if (bossDispatchRetry.exhausted(id)) {
+    const action = dispatchRetryAction(bossDispatchRetry, id, {
+      status: task?.status ?? "missing",
+      stages: task?.stages ?? [],
+      leadPresent: Boolean(lead),
+      leadEligible: Boolean(lead && missionDepartmentEligibility(lead).members),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop") { bossDispatchRetry.resolve(id); continue; }
+    if (!task || !next) { bossDispatchRetry.resolve(id); continue; } // action 是 retry/exhausted 時必有，防衛一下
+    if (action.kind === "exhausted") {
       bossDispatchRetry.resolve(id);
       task.messages.push(bossTaskMessage("system", t("自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。", { max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
       persistBossTask(task);
       continue;
     }
-    if (!bossDispatchRetry.shouldRetry(id, now)) continue; // 冷卻中
-    if (!missionDepartmentEligibility(lead).members) continue; // 部門還沒空出來，留著下次再看
-    const attempt = bossDispatchRetry.beginRetry(id, now);
-    task.messages.push(bossTaskMessage("system", t("⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。", { department: next.departmentName, n: attempt, max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
+    task.messages.push(bossTaskMessage("system", t("⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。", { department: next.departmentName, n: action.attempt, max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
     try {
       advanceBossTask(task);
     } catch (error) {
@@ -9136,6 +9142,16 @@ server.listen(config.port, config.host, () => {
   for (const task of store.listRunningBossTasks()) {
     try { advanceBossTask(task); } catch (error) {
       console.error(`[boss-task] 開機自癒失敗 ${task.id}:`, error);
+    }
+  }
+  // 派工卡住的交辦（needs_attention 且沒有任何 stage 在跑）追蹤器是記憶體態，重啟就掉——
+  // 開機時從現存交辦重建登記並立掃一次，主管此刻閒著就直接重派，忙著就交給雙掃描接手。
+  for (const task of store.listBossTasksByStatus(["needs_attention"])) {
+    if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
+  }
+  if (bossDispatchRetry.size > 0) {
+    try { sweepStalledBossDispatch(); } catch (error) {
+      console.error("[boss-dispatch-retry] 開機重建掃描失敗:", error);
     }
   }
   // 遠端存取自動啟動：設定開著就在開機時把轉接站拉起來，重開機後手機不用等人手動開。

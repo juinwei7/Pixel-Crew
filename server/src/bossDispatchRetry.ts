@@ -56,3 +56,44 @@ export class BossDispatchRetryTracker {
     return this.entries.size;
   }
 }
+
+// ── 掃描決策（純函式，index.ts 的 sweep 與單測共用）─────────────────────────
+
+export type DispatchRetryStageView = { id: string; status: string; dependsOn: string[] };
+
+/** 依賴都完成的下一個 pending stage——與 advanceBossTaskStages 的派工挑選邏輯一致。 */
+export function runnableNextStage<S extends DispatchRetryStageView>(stages: S[]): S | null {
+  const completedIds = new Set(stages.filter((stage) => stage.status === "completed").map((stage) => stage.id));
+  return stages.find((stage) => stage.status === "pending" && stage.dependsOn.every((dep) => completedIds.has(dep))) ?? null;
+}
+
+/** 這張交辦現在是不是「派工前卡住」的形狀（也是重啟後重建追蹤的判定）。 */
+export function isPreDispatchStall(view: { status: string; stages: DispatchRetryStageView[] }): boolean {
+  if (view.status !== "needs_attention") return false;
+  if (view.stages.some((stage) => stage.status === "running" || stage.status === "needs_attention")) return false;
+  return runnableNextStage(view.stages) !== null;
+}
+
+export type DispatchRetryAction =
+  | { kind: "drop" } // 不再追蹤：已派出/終結/形狀不符/主管消失
+  | { kind: "wait" } // 保留追蹤，這輪不動：冷卻中或部門還沒空出來
+  | { kind: "exhausted" } // 次數用盡：呼叫端發提示訊息並除名
+  | { kind: "retry"; attempt: number }; // 發動重派：呼叫端記訊息並 advanceBossTask
+
+/**
+ * 對一張已登記的交辦決定這輪掃描要做什麼。shouldRetry→beginRetry 在同一次同步呼叫內
+ * 完成，turn_end 掃與定期掃不可能對同一張各發動一次（單執行緒＋beginRetry 立即進冷卻）。
+ */
+export function dispatchRetryAction(
+  tracker: BossDispatchRetryTracker,
+  taskId: string,
+  view: { status: string; stages: DispatchRetryStageView[]; leadPresent: boolean; leadEligible: boolean },
+  now: number,
+): DispatchRetryAction {
+  if (!isPreDispatchStall(view)) return { kind: "drop" };
+  if (!view.leadPresent) return { kind: "drop" };
+  if (tracker.exhausted(taskId)) return { kind: "exhausted" };
+  if (!tracker.shouldRetry(taskId, now)) return { kind: "wait" };
+  if (!view.leadEligible) return { kind: "wait" };
+  return { kind: "retry", attempt: tracker.beginRetry(taskId, now) };
+}
