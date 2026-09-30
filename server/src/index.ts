@@ -1101,6 +1101,11 @@ function dispatchMissionStep(
 ): void {
   const step = mission.steps[stepIndex];
   const assignee = step ? workers.get(step.assigneeWorkerId) : null;
+  // 先對位再做前置檢查：pause 發生在檢查階段時（NPC 消失／忙碌／未登入…），人工解卡
+  // （applyMissionResolution 的 retry／reassign）與自動重派讀的都是 currentStepIndex——
+  // 不先更新會指著上一個已完成步，retry 變成重做完成步、reassign 改到錯的步（bd15861
+  // 交互自審 #2 證實，先前行為就有、exhausted 引導訊息把人帶進這條路後危害放大）。
+  if (step) mission.currentStepIndex = stepIndex;
   if (!step || !assignee) {
     pauseMission(mission, t("Mission 指派的 NPC 已不存在，請重新指派"), "member_unavailable");
     return;
@@ -1123,7 +1128,6 @@ function dispatchMissionStep(
     return;
   }
   const now = new Date().toISOString();
-  mission.currentStepIndex = stepIndex;
   mission.status = step.kind === "execute" ? "executing" : "reviewing";
   mission.attentionReason = null;
   mission.error = null;
@@ -2640,6 +2644,7 @@ wss.on("connection", (socket, request) => {
       advanceBossTask(task);
     } catch (error) {
       console.error(`[wss] advanceBossTask failed for task ${task.id}:`, error);
+      quarantineAdvanceFailure(task, error);
     }
   }
   // 組 snapshot 前先把「idle 卻還掛著開著 turn」的 worker 權威收尾（見 reconcileDanglingTurn）：
@@ -5139,6 +5144,28 @@ function advanceBossTask(task: BossTask): void {
   advanceBossTaskStages(task);
   autopilotHook(task);
   ephemeralCleanupHook(task);
+}
+
+// 開機自癒／wss 重連的 advanceBossTask 防 crash-loop catch 原本只 console.error（全庫盤點
+// #19）：交辦停在 ready/running 外觀像執行中、實際永遠沒人推進，也沒有任何訊息。改誠實
+// 轉 needs_attention——一轉就離開 ready/running 掃描名單，不會再被反覆嘗試；若其實是
+// 誤傷（mission 還活著），mission 事件的 advanceBossTasksForMission 也掃 needs_attention，
+// 會自動撥回 running。訊息與上一則相同就不重複 push（重連迴圈／來回翻轉不轟炸）。
+function quarantineAdvanceFailure(task: BossTask, error: unknown): void {
+  try {
+    const detail = (error as Error).message || t("推進交辦時發生未預期錯誤");
+    task.status = "needs_attention";
+    task.error = detail;
+    const warning = collaborationText(t("⚠️ 自動推進這張交辦時發生錯誤：{error}；回覆這張交辦或按「重新交辦」再試。", { error: detail }), 40_000);
+    const last = task.messages[task.messages.length - 1];
+    if (!(last && last.role === "system" && last.text === warning)) {
+      task.messages.push(bossTaskMessage("system", warning));
+    }
+    persistBossTask(task);
+  } catch (persistError) {
+    // 降級寫入自己失敗（壞資料連 persist 都過不了）：回到原行為只留 log，絕不讓收斂邏輯反過來弄掛開機／重連。
+    console.error(`[boss-task] 推進失敗降級寫入也失敗 ${task.id}:`, persistError);
+  }
 }
 
 function advanceBossTaskStages(task: BossTask): void {
@@ -9481,6 +9508,7 @@ server.listen(config.port, config.host, () => {
   for (const task of store.listBossTasksByStatus(["ready", "running"])) {
     try { advanceBossTask(task); } catch (error) {
       console.error(`[boss-task] 開機自癒失敗 ${task.id}:`, error);
+      quarantineAdvanceFailure(task, error);
     }
   }
   // 派工卡住的交辦（needs_attention 且沒有任何 stage 在跑）追蹤器是記憶體態，重啟就掉——

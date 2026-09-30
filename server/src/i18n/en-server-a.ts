@@ -222,6 +222,8 @@ export const enServerA: Record<string, string> = {
   "已自動等待 {max} 次仍派不出「{title}」，請在 Mission 面板重試或重新指派。": "Auto-waited {max} times but still could not dispatch \"{title}\"; retry or reassign it from the Mission panel.",
   "⚠️ 重啟後自動重新驗收失敗：{error}；回覆這張交辦或按「重新交辦」再試。": "⚠️ Automatic re-verification after restart failed: {error}; reply to this task or press \"Re-delegate\" to try again.",
   "重啟後重新驗收失敗": "Re-verification after restart failed",
+  "推進交辦時發生未預期錯誤": "Unexpected error while advancing this task",
+  "⚠️ 自動推進這張交辦時發生錯誤：{error}；回覆這張交辦或按「重新交辦」再試。": "⚠️ An error occurred while auto-advancing this task: {error}; reply to this task or press \"Re-delegate\" to try again.",
   "{department} 暫時無法開始：{error}": "{department} can't start right now: {error}",
   "⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。": "⏯️ {department} is free again — auto-redispatching (attempt {n}/{max}).",
   "自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。": "Auto-redispatch hit its {max}-attempt limit; reply to this task to try again.",
