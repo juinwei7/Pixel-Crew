@@ -4892,12 +4892,21 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
     provider: task.decisionProvider,
     count: task.executionBudget?.maxAgents ?? 3,
   });
+  // 建部門要跑最長 90s 的規劃 LLM：期間老闆可能已取消／刪除這張交辦，手上是舊快照
+  // （decide 路徑既有同款護欄；自動重試讓這條競態更容易踩到——交互自審補上）。
+  // 套用結果前重讀權威狀態，已終結就放手，剛建好的臨時部門一併解散不留孤兒。
+  const liveAfterCreate = store.getBossTask(task.id);
+  if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+    if (department) disbandEphemeralDepartment(department.id);
+    return;
+  }
   if (!department) {
+    const failure = deptCreateFailureError.dedicated();
     task.status = "needs_attention";
-    task.error = deptCreateFailureError.dedicated();
-    task.messages.push(bossTaskMessage("system", task.error));
+    task.error = failure;
+    task.messages.push(bossTaskMessage("system", failure));
     // 登記自動重試：工作區空出（阻塞 Mission 結束）後由掃描重走本路徑，不用等人回覆（P1-3）。
-    bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
+    bossDeptCreateRetry.note(task.id, "dedicated", null, failure, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4946,12 +4955,19 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
       provider: task.decisionProvider,
       count: task.executionBudget?.maxAgents ?? 3,
     });
+    // 與 dedicated 路徑同款取消護欄：重建部門的長流程期間交辦被終結就放手（交互自審補上）。
+    const liveAfterCreate = store.getBossTask(task.id);
+    if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+      if (department) disbandEphemeralDepartment(department.id);
+      return;
+    }
     if (!department) {
+      const failure = deptCreateFailureError.follow_up();
       task.status = "needs_attention";
-      task.error = deptCreateFailureError.follow_up();
-      task.messages.push(bossTaskMessage("system", task.error));
+      task.error = failure;
+      task.messages.push(bossTaskMessage("system", failure));
       // 帶上追問文字登記，重試時走回同一條追問路徑（P1-3）。
-      bossDeptCreateRetry.note(task.id, "follow_up", followUp, Date.now());
+      bossDeptCreateRetry.note(task.id, "follow_up", followUp, failure, Date.now());
       persistBossTask(task);
       return;
     }
@@ -5055,11 +5071,12 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
         count: decision.memberCount,
       });
       if (!department) {
+        const failure = deptCreateFailureError.decide();
         task.status = "needs_attention";
-        task.error = deptCreateFailureError.decide();
-        task.messages.push(bossTaskMessage("system", task.error));
+        task.error = failure;
+        task.messages.push(bossTaskMessage("system", failure));
         // 登記自動重試：重走整條 decide（部門版圖可能已變，讓決策模型重新路由）（P1-3）。
-        bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
+        bossDeptCreateRetry.note(task.id, "decide", null, failure, Date.now());
         persistBossTask(task);
         return;
       }
@@ -5343,6 +5360,7 @@ function sweepFailedDeptCreation(): void {
     const task = store.getBossTask(id);
     const action = deptCreateRetryAction(bossDeptCreateRetry, id, {
       status: task?.status ?? "missing",
+      taskError: task?.error ?? null,
       workspaceFree: task ? !workspaceMission(task.workspacePath) : false,
       providerReady: task ? providerReady(task.decisionProvider) : false,
       inFlight: bossDeptCreateRetryInFlight.has(id),
@@ -5408,15 +5426,17 @@ function sweepUsageBlockedBossTasks(): void {
       try {
         const usage = await usageRegistry.refresh(task.decisionProvider, true);
         if (usageBlockReason(task.decisionProvider, usage, task.decisionModel)) return;
-        // 探測期間老闆可能已回覆或取消——重讀權威狀態，登記已作廢就放手。
+        // 探測期間老闆可能已回覆或取消——重讀權威狀態，登記已作廢就放手。後續的訊息、
+        // persist 與重跑都對這份重讀物件做（掃描開頭的 task 是探測前的舊快照，直接整列
+        // persist 會蓋掉探測期間新寫入的訊息——交互自審補上）。
         const current = store.getBossTask(id);
         if (!current || current.status !== "needs_attention" || current.error !== action.entry.blockedError) {
           bossUsageRetry.resolve(id);
           return;
         }
-        task.messages.push(bossTaskMessage("system", t("🔁 {provider} 用量已恢復（第 {n} 次探測），自動接手重跑任務判斷。", { provider: providerLabel(task.decisionProvider), n: action.probe })));
-        persistBossTask(task);
-        await (action.entry.kind === "dedicated" ? runDedicatedDepartmentTask(task) : decideBossTask(task));
+        current.messages.push(bossTaskMessage("system", t("🔁 {provider} 用量已恢復（第 {n} 次探測），自動接手重跑任務判斷。", { provider: providerLabel(current.decisionProvider), n: action.probe })));
+        persistBossTask(current);
+        await (action.entry.kind === "dedicated" ? runDedicatedDepartmentTask(current) : decideBossTask(current));
         // 成功（ready/running）就除名；又失敗則入口已依新失敗型態重新登記（usage 再受限→
         // 本追蹤器；建立失敗→bossDeptCreateRetry），舊登記 error 不符會在下一輪掃描 drop。
         const after = store.getBossTask(id);
@@ -9390,8 +9410,8 @@ server.listen(config.port, config.host, () => {
     if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
     // 建立失敗的追蹤器同樣是記憶體態——靠 task.error 文案認回入口重建登記（次數歸零，
     // 重啟視同重新開始）。追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
-    else if (task.error === deptCreateFailureError.dedicated()) bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
-    else if (task.error === deptCreateFailureError.decide()) bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
+    else if (task.error === deptCreateFailureError.dedicated()) bossDeptCreateRetry.note(task.id, "dedicated", null, task.error, Date.now());
+    else if (task.error === deptCreateFailureError.decide()) bossDeptCreateRetry.note(task.id, "decide", null, task.error, Date.now());
   }
   if (bossDispatchRetry.size > 0) {
     try { sweepStalledBossDispatch(); } catch (error) {
