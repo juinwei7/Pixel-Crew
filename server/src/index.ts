@@ -210,6 +210,11 @@ import {
   runnableNextStage,
 } from "./bossDispatchRetry.js";
 import {
+  BossTaskWorkCounter,
+  restartBlockedByActiveWork,
+  synthesizingZombieAction,
+} from "./bossTaskReconcile.js";
+import {
   clampWorkerAutopilotMinutes,
   clampWorkerAutopilotSteps,
   appendWorkerAutopilotRetro,
@@ -4829,10 +4834,24 @@ function ephemeralCleanupHook(task: BossTask): void {
   if (task.status === "cancelled") disbandTaskEphemeralDepartments(task);
 }
 
+// 探索 in-flight 追蹤：/restart 只該擋「本程序真的有背景探索在跑」的 discovering，
+// 重啟殭屍（狀態卡著但沒有工作在跑）要放行手動重開（卡點盤點 P0）。synthesizing 的
+// in-flight 既有 bossTaskFinalizing 可判，這裡只補探索側。
+const bossTaskDiscoveryWork = new BossTaskWorkCounter();
+
 // 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
 // 專屬新部門，掛一個單一 stage，直接開跑（討論[目前無]＋規劃＋執行）。不呼叫決策模型、
 // 不重跑、不會卡到既有部門。省下整條管線最大的那顆 prompt（決策模型讀全部門目錄）。
 async function runDedicatedDepartmentTask(task: BossTask): Promise<void> {
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await runDedicatedDepartmentTaskInner(task);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
   const usage = await usageRegistry.refresh(task.decisionProvider, true);
   const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
   if (usageError) {
@@ -4921,6 +4940,15 @@ async function runDedicatedFollowUp(task: BossTask, followUp: string, liveDepart
 }
 
 async function decideBossTask(task: BossTask, allowCreateDepartment = true): Promise<void> {
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await decideBossTaskInner(task, allowCreateDepartment);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true): Promise<void> {
   const candidates = bossTaskCandidates();
   if (candidates.length === 0 && !allowCreateDepartment) {
     task.status = "needs_attention";
@@ -5171,6 +5199,9 @@ function advanceBossTaskStages(task: BossTask): void {
     task.status = "needs_attention";
     task.error = launched.error || t("無法啟動 {department}", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
+    // 與 eligibility 擋下同型的卡住（常見：工作區正在執行其他 Mission）——一樣登記自動重派，
+    // 讓 turn_end／定期掃在條件恢復時重試，不用等人回覆交辦（卡點盤點 P1）。
+    bossDispatchRetry.note(task.id, Date.now());
     persistBossTask(task);
     return;
   }
@@ -5982,7 +6013,13 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   const task = store.getBossTask(req.params.id);
   if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   if (task.archivedAt) { res.status(409).json({ error: t("封存的 Boss Task 不能重新交辦") }); return; }
-  if (task.status === "discovering" || task.status === "synthesizing") { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
+  // 只擋「本程序真的有背景在跑」的探索/驗收；重啟殭屍（狀態卡著但工作已隨重啟蒸發）放行，
+  // 讓手動重開能救——否則 409 連人工都解不了（卡點盤點 P0）。
+  if (restartBlockedByActiveWork({
+    status: task.status,
+    discoveryInFlight: bossTaskDiscoveryWork.inFlight(task.id),
+    synthesisInFlight: bossTaskFinalizing.has(task.id),
+  })) { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
   const restartScope = bossTaskRestartScope(task);
   const preflightError = restartScope.members.length > 0
     ? await scopedRestartPreflightError(restartScope.members, restartScope.activeMissions)
@@ -9158,10 +9195,36 @@ server.listen(config.port, config.host, () => {
   if (config.production && !existsSync(config.webDistPath)) {
     console.warn(`web build not found at ${config.webDistPath}; run npm run build first`);
   }
+  // 重啟殭屍和解（卡點盤點 P0）：discovering（探索）與 synthesizing（驗收核對）都是
+  // 純記憶體 async，重啟後結果永遠不會回來；不處理就永卡該狀態。探索殭屍轉 needs_attention
+  // 引導回覆/重開；驗收殭屍若各部門交付俱在就打回 running 自動重新驗收，否則誠實轉 needs_attention。
+  for (const task of store.listBossTasksByStatus(["discovering"])) {
+    task.status = "needs_attention";
+    task.error = t("伺服器重啟時探索中斷");
+    task.messages.push(bossTaskMessage("system", t("⚠️ 伺服器重啟時探索被中斷；回覆這張交辦或按「重新交辦」即可重新開始。")));
+    persistBossTask(task);
+  }
+  for (const task of store.listBossTasksByStatus(["synthesizing"])) {
+    if (synthesizingZombieAction(task.stages) === "resynthesize") {
+      task.status = "running";
+      task.error = null;
+      task.messages.push(bossTaskMessage("system", t("🔄 伺服器重啟時驗收核對被中斷，已自動重新核對。")));
+      persistBossTask(task);
+      try { advanceBossTask(task); } catch (error) {
+        console.error(`[boss-task] 重啟後重新驗收失敗 ${task.id}:`, error);
+      }
+    } else {
+      task.status = "needs_attention";
+      task.error = t("伺服器重啟時驗收中斷");
+      task.messages.push(bossTaskMessage("system", t("⚠️ 伺服器重啟時驗收被中斷；回覆這張交辦或按「重新交辦」處理。")));
+      persistBossTask(task);
+    }
+  }
   // 開機自癒：重啟時進行中的 boss task 可能指著重啟後已遺失的 mission（臨時部門的
   // mission 不跨重啟保存）。這種幽靈狀態不會再有 mission 事件來推進，開機主動掃一次，
   // 讓 advanceBossTaskStages 的遺失處理把 stage 打回 pending 重新派工或誠實轉 needs_attention。
-  for (const task of store.listRunningBossTasks()) {
+  // ready 一併掃：status 寫成 "ready" 與 advance 之間崩潰的極小窗口（卡點盤點 P3-9），advance 一次就活。
+  for (const task of store.listBossTasksByStatus(["ready", "running"])) {
     try { advanceBossTask(task); } catch (error) {
       console.error(`[boss-task] 開機自癒失敗 ${task.id}:`, error);
     }
