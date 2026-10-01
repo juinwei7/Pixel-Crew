@@ -398,6 +398,28 @@ body {
 .npc-nameplate__activity-label { overflow: hidden; text-overflow: ellipsis; }
 .npc-nameplate:has(.npc-nameplate__activity) { flex-wrap: wrap; max-width: 152px; }
 
+/* 脈絡公事包：名牌內的手提箱，內嵌一條直立填充條＝token 負載（填充高度=ctx%）。
+   逼近換腦門檻才浮現並轉暖→紅；換腦（context 驟降）瞬間播一次「瘦身」脈動，把獨有的換腦機制變成一眼看懂的畫面。 */
+.npc-nameplate__case { flex: 0 0 auto; display: inline-flex; align-items: flex-end; gap: 2px; margin-left: 4px; }
+.npc-nameplate__case-ico { color: var(--case, #8fb6ff); opacity: 0.9; }
+.npc-nameplate__case-track {
+  display: inline-flex; align-items: flex-end;
+  width: 4px; height: 10px; border-radius: 2px;
+  background: rgba(143, 184, 232, 0.18); overflow: hidden;
+}
+.npc-nameplate__case-fill { display: block; width: 100%; background: var(--case, #00e5ff); border-radius: 2px; transition: height .4s ease, background .3s ease; }
+.npc-nameplate__case--ok { --case: #00e5ff; }
+.npc-nameplate__case--warn { --case: #ffb000; }
+.npc-nameplate__case--danger { --case: #ff3355; }
+.npc-nameplate__case--danger .npc-nameplate__case-ico { opacity: 1; filter: drop-shadow(0 0 3px rgba(255, 51, 85, 0.6)); }
+.npc-nameplate__case--swap { --case: #7cf0c8; animation: npc-case-swap 1.4s ease; }
+/* 瘦身脈動：箱子先亮一下放大、填充掉到低點，象徵 context 被壓縮、底盤重置後接手 */
+@keyframes npc-case-swap {
+  0%   { transform: scale(1); filter: none; }
+  18%  { transform: scale(1.35); filter: drop-shadow(0 0 6px rgba(124, 240, 200, 0.85)); }
+  100% { transform: scale(1); filter: none; }
+}
+
 .npc-nameplate--active {
   color: #ffffff;
   opacity: 1;

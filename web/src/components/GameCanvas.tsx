@@ -300,6 +300,29 @@ export function GameCanvas({
     }
   }, [workers]);
 
+  // ── 脈絡公事包：把 token 負載畫成名牌內的手提箱（填充＝佔用），換腦（context 驟降）時播一次「瘦身」脈動。
+  // 純前端、只吃既有 ctxGauge 數據；不動後端與換腦邏輯。整合進名牌實體，刻意不做頭上飄浮卡。
+  const ctxPrevCurrentRef = useRef(new Map<string, number>());
+  const [swapFlashIds, setSwapFlashIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  useEffect(() => {
+    const swapped: string[] = [];
+    for (const w of workers) {
+      const series = w.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number");
+      const gauge = computeCtxGauge(series, swapThresholdTokens);
+      if (!gauge) continue;
+      const prev = ctxPrevCurrentRef.current.get(w.id);
+      // current 從高位驟降三成以上＝發生換腦／compact，context 被壓縮重置到新底盤
+      if (prev != null && gauge.currentTokens < prev * 0.7) swapped.push(w.id);
+      ctxPrevCurrentRef.current.set(w.id, gauge.currentTokens);
+    }
+    if (swapped.length === 0) return;
+    setSwapFlashIds((prev) => { const next = new Set(prev); for (const id of swapped) next.add(id); return next; });
+    // 脈動演完就移除；不綁 effect cleanup，避免 workers 每次更新就把計時器清掉導致脈動卡住不消。
+    setTimeout(() => {
+      setSwapFlashIds((prev) => { const next = new Set(prev); for (const id of swapped) next.delete(id); return next; });
+    }, 1500);
+  }, [workers, swapThresholdTokens]);
+
   // Wall-clock start time per busy worker, purely for the "已執行 Ns" live
   // readout — not persisted, just a local ticking display.
   const turnStartRef = useRef(new Map<string, number>());
@@ -704,6 +727,15 @@ export function GameCanvas({
         const winQuery = w.character.webQuery?.trim() || "";
         const showWindow = !!winTheme;
         const bubbleShown = showWindow ? "" : shown;
+        // 脈絡公事包數據（名牌與 hover 身分卡共用，算一次）：扣掉出生底盤後的「可用量」%。
+        const full = workersById.get(w.selectId);
+        const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
+        const ctxGauge = computeCtxGauge(ctxSeries, swapThresholdTokens);
+        const ctxPct = ctxGauge?.pct ?? null;
+        const ctxLevel = ctxPct === null ? null : ctxPct >= 85 ? "danger" : ctxPct >= 60 ? "warn" : "ok";
+        const swapFlash = swapFlashIds.has(w.id);
+        // 整潔優先：ctx 還低（<50%）就不顯示公事包，逼近換腦門檻才浮現並長高變紅；換腦脈動時強制顯示。
+        const showCase = ctxPct !== null && (ctxPct >= 50 || swapFlash);
         return (
           <Fragment key={w.id}>
             <div
@@ -721,6 +753,19 @@ export function GameCanvas({
             >
               <span className="npc-nameplate__name">{w.name}</span>
               {w.role && <span className="npc-nameplate__role">{w.role}</span>}
+              {showCase && (
+                <span
+                  className={["npc-nameplate__case", `npc-nameplate__case--${swapFlash ? "swap" : ctxLevel}`].join(" ")}
+                  title={swapFlash
+                    ? t("換腦：context 已壓縮、底盤重置，交接摘要帶進新工作階段")
+                    : t("脈絡公事包：context 約 {current}k／換腦門檻 {limit}k（填充＝token 負載）", { current: Math.round((ctxGauge?.currentTokens ?? 0) / 1000), limit: Math.round((swapThresholdTokens ?? SWAP_THRESHOLD_TOKENS) / 1000) })}
+                >
+                  <Icon name="briefcase" size={9} className="npc-nameplate__case-ico" />
+                  <span className="npc-nameplate__case-track">
+                    <span className="npc-nameplate__case-fill" style={{ height: `${swapFlash ? 14 : Math.max(8, ctxPct ?? 0)}%` }} />
+                  </span>
+                </span>
+              )}
               {elapsedSec != null && <span className="npc-nameplate__elapsed">{elapsedSec}s</span>}
               {collaboration && <span className="npc-nameplate__collaboration" title={collaboration.objective}>
                 {collaboration.status === "returning"
@@ -827,18 +872,12 @@ export function GameCanvas({
               </div>
             )}
             {hoveredId === w.id && !w.temporary && menuOpenFor !== w.id && (() => {
-              const full = workersById.get(w.selectId);
+              // full / ctxGauge / ctxPct / ctxLevel 已在 map 本體算過（名牌公事包共用），這裡直接重用。
               const doneTurns = full?.turns.filter((turn) => turn.status !== "running").length ?? 0;
               const totalCost = full?.turns.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0) ?? 0;
               const autoMode = full?.autoApproveMode ?? "off";
               const autoLabel = autoMode === "invincible" ? t("無限制") : autoMode === "full" ? t("完全自動") : autoMode === "safe" ? t("安全自動") : t("手動核准");
               const dept = full?.departmentId ? departments.find((candidate) => candidate.id === full.departmentId) : undefined;
-              // 各回合 contextTokens 序列丟給 ctxGauge：扣掉出生底盤後換算「可用量」，
-              // 條滿 100% = server 換腦門檻（snapshot 帶下來；觸發仍在 server 端，這裡純顯示）。
-              const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
-              const ctxGauge = computeCtxGauge(ctxSeries, swapThresholdTokens);
-              const ctxPct = ctxGauge?.pct ?? null;
-              const ctxLevel = ctxPct === null ? null : ctxPct >= 85 ? "danger" : ctxPct >= 60 ? "warn" : "ok";
               return (
               <div ref={(element) => {
                 if (element) identityRefs.current.set(w.id, element);
