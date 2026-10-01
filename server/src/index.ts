@@ -2456,7 +2456,14 @@ function runDetachedTurn(
       else if (!state) rejectPromise(new Error(t("無法建立 LLM 交接工作階段")));
       else resolvePromise({ text, state, toolCalls: [...toolCalls.values()] });
     };
+    const detachedSpawnStart = Date.now();
+    let firstEventLogged = false;
     runner = detachedRunner(provider, workspacePath, model, initialState, (event) => {
+      // 量測冷啟：spawn 到第一個事件＝CLI 啟動+init 的成本（只對決策用的 no_tools 呼叫落檔，避免噪音）。
+      if (!firstEventLogged && policy.kind === "no_tools") {
+        firstEventLogged = true;
+        appendRuntimeLog(config.dataDirectory, "detached(no_tools) first event", { spawnToFirstMs: Date.now() - detachedSpawnStart, provider });
+      }
       if (event.type === "text_delta") streamedText += event.text;
       else if (event.type === "tool_call_start") {
         if (policy.kind === "no_tools") {
@@ -6148,7 +6155,11 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     });
     let decision;
     try {
+      // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度，供診斷「冷啟 spawn vs 模型推論」。
+      const decisionStart = Date.now();
+      appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, promptChars: prompt.length });
       const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+      appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, ms: Date.now() - decisionStart, replyChars: text.length });
       // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
       workerAutopilotRetry.resolve(worker.id);
       decision = parseWorkerAutopilotDecision(text);
