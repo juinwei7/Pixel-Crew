@@ -209,7 +209,8 @@ export function App() {
   const [workerAutopilotConfigOpen, setWorkerAutopilotConfigOpen] = useState(false);
   const [workerAutopilotStepInput, setWorkerAutopilotStepInput] = useState("5");
   const [workerAutopilotMinutesInput, setWorkerAutopilotMinutesInput] = useState("");
-  const [workerAutopilotProactiveInput, setWorkerAutopilotProactiveInput] = useState(false);
+  // 主動模式預設開：開循環的本意就是「教練持續思考下一步發展」；取消勾選才是「只收尾當前線」。
+  const [workerAutopilotProactiveInput, setWorkerAutopilotProactiveInput] = useState(true);
   async function setWorkerAutopilotEnabled(enabled: boolean): Promise<void> {
     if (!activeId) return;
     const body: Record<string, unknown> = { enabled };
@@ -219,12 +220,16 @@ export function App() {
       if (Number.isFinite(rawSteps) && rawSteps > 0) { steps = Math.min(20, rawSteps); body.maxSteps = steps; }
       const minutes = Math.floor(Number(workerAutopilotMinutesInput));
       if (Number.isFinite(minutes) && minutes > 0) body.maxMinutes = minutes;
-      if (workerAutopilotProactiveInput) body.proactive = true;
+      body.proactive = workerAutopilotProactiveInput;
     }
     try {
       await apiRequest(`/api/workers/${activeId}/autopilot`, { method: "POST", body });
       setWorkerAutopilotConfigOpen(false);
-      notify(enabled ? t("自動循環已開啟：NPC 會自己想下一步接著做，最多 {n} 步、沒有值得做的會自動停", { n: steps }) : t("自動循環已關閉"), "info");
+      notify(enabled
+        ? (workerAutopilotProactiveInput
+          ? t("自動循環已開啟（主動）：教練會持續思考下一步發展、自己接著做，最多 {n} 步；只有需要你拍板/花錢/不可逆時才停下來問你", { n: steps })
+          : t("自動循環已開啟（收尾）：把當前工作做完收尾就停，最多 {n} 步", { n: steps }))
+        : t("自動循環已關閉"), "info");
     } catch (error) {
       notify(error instanceof Error ? error.message : t("自動循環切換失敗"), "error");
     }
@@ -1582,7 +1587,7 @@ export function App() {
               className={`composer-roundtable-toggle composer-roundtable-toggle--autopilot${active?.autopilot ? " is-active" : ""}`}
               aria-pressed={Boolean(active?.autopilot)}
               disabled={Boolean(active?.ephemeralKind)}
-              title={t("自動循環：這位 NPC 做完一回合後，由決策模型想下一步、自己接著做；沒有值得做的下一步會誠實停下。再點一下關閉。")}
+              title={t("自動循環：這位 NPC 做完一回合後，由教練持續思考下一步發展、自己接著做；只有需要你拍板/花錢/不可逆的決定才停下來問你。再點一下關閉。")}
               onClick={() => { if (active?.autopilot) void setWorkerAutopilotEnabled(false); else setWorkerAutopilotConfigOpen((open) => !open); }}
             >{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}{active?.autopilot?.proactive ? t("・主動") : ""}</button>
             {workerAutopilotConfigOpen && !active?.autopilot && <div className="autopilot-config autopilot-config--up" role="dialog" aria-label={t("自動循環設定")}>
@@ -1597,8 +1602,8 @@ export function App() {
                 <small>{t("選填；到點會在該回合收工時停")}</small>
               </div>
               <div className="autopilot-config__row">
-                <label className="autopilot-config__check"><input type="checkbox" checked={workerAutopilotProactiveInput}
-                  onChange={(event) => setWorkerAutopilotProactiveInput(event.target.checked)} />{t("主動模式")}</label>
+                <label className="autopilot-config__check" title={t("勾選＝教練持續思考下一步發展（預設）；取消＝只把當前工作收尾就停")}><input type="checkbox" checked={workerAutopilotProactiveInput}
+                  onChange={(event) => setWorkerAutopilotProactiveInput(event.target.checked)} />{t("主動模式（持續想下一步發展）")}</label>
                 <small>{t("原任務收尾後不停：自己找優化點、驗證品質、延伸研究、預作準備，步數用完才停；需要你本人的資料、權限或不可逆決定仍會停下")}</small>
               </div>
               <div className="autopilot-config__actions">

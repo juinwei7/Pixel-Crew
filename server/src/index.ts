@@ -6310,7 +6310,9 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   }
   const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
   const maxMinutes = enabled && Number.isFinite(req.body?.maxMinutes) ? Number(req.body.maxMinutes) : undefined;
-  const proactive = enabled && req.body?.proactive === true;
+  // 主動模式預設開（owner 回饋：開循環的本意就是「持續思考下一步發展」，不是把當前線收尾就停）。
+  // 非主動（收尾型）改成明確傳 proactive:false 才啟用。
+  const proactive = enabled && req.body?.proactive !== false;
   setWorkerAutopilot(worker, enabled, maxSteps, maxMinutes, proactive);
   // 開啟當下 NPC 若閒著：立即想第一步（只靠 turn_end 觸發的話，開了會毫無反應）。
   const state = workerAutopilotByWorker.get(worker.id);
