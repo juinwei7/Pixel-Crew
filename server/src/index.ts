@@ -266,6 +266,9 @@ import {
   type WorkerAutopilotDecision,
   type WorkerAutopilotFinding,
 } from "./workerAutopilot.js";
+import { PendingSelfInstallStore, evaluateBootResolution } from "./selfEvolvePending.js";
+import { planPromoteOnSuccess } from "./selfInstallLifecycle.js";
+import type { PostInstallChecks } from "./selfEvolveInstall.js";
 import {
   OpenUserRequestStore,
   appendOpenRequest,
@@ -9748,8 +9751,51 @@ process.on("unhandledRejection", (reason) => {
   exitAfterShutdown("unhandled rejection", 1);
 });
 
+// 自我進化 · 開機解析自裝結果（Stage 3 跨重啟狀態機的收尾）：上一輪若剛自裝完會留一張 pending
+// marker，重啟後在這裡驗收——我們能跑進 listen callback＝新版起得來＝健康，於是晉升回滾點
+// （rollback := 這次成功的好版，供下次回滾）並清 marker；少見的「起得來但檢查不過」只記錄給 owner
+// （真正「爛到起不來」的回滾由 detached 的 pc-selfinstall 健康輪詢負責，app 自己沒機會跑這段）。
+function resolvePendingSelfInstallOnBoot(): void {
+  try {
+    const dir = config.dataDirectory;
+    const store = new PendingSelfInstallStore(dir);
+    const marker = store.read();
+    if (!marker) return;
+    const installedExe = join(dir, "app", "Pixel Crew.exe");
+    const stagedExe = join(dir, "coldinstall", "Pixel Crew.exe");
+    const rollbackExe = join(dir, "coldinstall", "Pixel Crew.rollback.exe");
+    let installedMtime = 0;
+    try { installedMtime = statSync(installedExe).mtimeMs; } catch { /* 取不到＝當沒換到 */ }
+    let logTail = "";
+    try { logTail = readFileSync(join(dir, "logs", "self-install.log"), "utf8").slice(-4000); } catch { /* 沒 log */ }
+    const checks: PostInstallChecks = {
+      exeFresh: installedMtime > marker.prevExeMtimeMs,
+      swappedOk: /SWAPPED OK|HEALTHY OK/.test(logTail),
+      distHasNewCode: true, // 正在執行的就是新碼
+      apiOk: true,          // 已進入 listen callback＝API 起得來
+      healthOk: true,
+    };
+    const res = evaluateBootResolution(marker, checks);
+    if (res.action === "confirm_ok") {
+      try {
+        for (const op of planPromoteOnSuccess({ staged: stagedExe, rollback: rollbackExe })) copyFileSync(op.from, op.to);
+        appendRuntimeLog(dir, "self-install confirmed healthy; promoted rollback point", { prevMtime: marker.prevExeMtimeMs, installedMtime });
+      } catch (error) {
+        appendRuntimeLog(dir, "self-install promote failed", { error: (error as Error).message });
+      }
+      store.clear();
+    } else if (res.action === "rollback") {
+      appendRuntimeLog(dir, "self-install boot checks failed; detached installer owns won't-boot rollback", { failed: res.result.failed });
+      store.clear();
+    }
+  } catch (error) {
+    try { appendRuntimeLog(config.dataDirectory, "resolvePendingSelfInstallOnBoot error", { error: (error as Error).message }); } catch { /* best-effort */ }
+  }
+}
+
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
+  resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
   console.log(`local database: ${config.dbPath}`);
