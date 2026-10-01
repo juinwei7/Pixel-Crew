@@ -11,7 +11,7 @@ import { PreparedTokenStore } from "./preparedTokens.js";
 import cors, { type CorsOptions } from "cors";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
@@ -267,7 +267,8 @@ import {
   type WorkerAutopilotFinding,
 } from "./workerAutopilot.js";
 import { PendingSelfInstallStore, evaluateBootResolution } from "./selfEvolvePending.js";
-import { planPromoteOnSuccess } from "./selfInstallLifecycle.js";
+import { planPromoteOnSuccess, checkRollbackReady } from "./selfInstallLifecycle.js";
+import { classifySelfChange, describeSelfChangeBlock } from "./selfEvolveSafety.js";
 import type { PostInstallChecks } from "./selfEvolveInstall.js";
 import {
   OpenUserRequestStore,
@@ -9603,6 +9604,8 @@ const bossDispatchRetrySweepTimer = setInterval(() => {
   if (workerAutopilotByWorker.size > 0) {
     try { sweepWorkerAutopilot(); } catch (error) { console.error("[worker-autopilot] 定期掃描失敗:", error); }
   }
+  // 自我進化全自動觸發（預設關、保守閘門）：開了才動，HEAD 未出貨過且沒人在忙才自裝。
+  try { maybeAutoSelfInstall(); } catch (error) { console.error("[self-install] 自動觸發檢查失敗:", error); }
 }, 15_000);
 bossDispatchRetrySweepTimer.unref();
 
@@ -9792,6 +9795,77 @@ function resolvePendingSelfInstallOnBoot(): void {
     try { appendRuntimeLog(config.dataDirectory, "resolvePendingSelfInstallOnBoot error", { error: (error as Error).message }); } catch { /* best-effort */ }
   }
 }
+
+// 自我進化 · 觸發器（「把改好的新版自己真的裝上去」那隻手）。只做快速閘門(動到剎車→回 owner、
+// 回滾就緒)，重活(build/test/package/打包/stage/發 pc-selfinstall)交 detached 的 pc-selfrebuild.ps1——
+// 它測不過就中止不裝。全自動由 selfInstallAutoEnabled 控制，首次需 owner 看著驗降落傘後才開。
+const SELF_REPO = process.env.PIXEL_CREW_SELF_REPO?.trim() || "";
+function gitOut(repo: string, args: string[]): string {
+  try { return execFileSync("git", args, { cwd: repo, encoding: "utf8", maxBuffer: 20_000_000 }); } catch { return ""; }
+}
+function selfInstallAutoEnabled(): boolean {
+  try { return JSON.parse(readFileSync(join(config.dataDirectory, "self-install-auto.json"), "utf8"))?.enabled === true; } catch { return false; }
+}
+function setSelfInstallAuto(enabled: boolean): void {
+  writeFileSync(join(config.dataDirectory, "self-install-auto.json"), JSON.stringify({ enabled: enabled === true }));
+}
+function lastShippedCommit(): string {
+  try { return String(JSON.parse(readFileSync(join(config.dataDirectory, "self-install-shipped.json"), "utf8"))?.commit || ""); } catch { return ""; }
+}
+function recordShippedCommit(commit: string): void {
+  try { writeFileSync(join(config.dataDirectory, "self-install-shipped.json"), JSON.stringify({ commit })); } catch { /* best-effort */ }
+}
+
+function triggerSelfInstall(reason: string): { outcome: string; detail?: string } {
+  if (!SELF_REPO || !existsSync(SELF_REPO)) return { outcome: "repo_not_configured", detail: "PIXEL_CREW_SELF_REPO 未設定或不存在" };
+  const head = gitOut(SELF_REPO, ["rev-parse", "HEAD"]).trim();
+  // 這次要裝的改動 = 最近一次 commit；動到剎車 → 回 owner，不自裝。
+  const changed = gitOut(SELF_REPO, ["diff", "--name-only", "HEAD~1", "HEAD"]).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const diff = gitOut(SELF_REPO, ["diff", "HEAD~1", "HEAD"]).slice(0, 200_000);
+  const cls = classifySelfChange(changed, diff);
+  if (cls.critical) return { outcome: "needs_owner", detail: describeSelfChangeBlock(cls) };
+  // 回滾就緒快速檢查（深比對交給 pc-selfrebuild 的 hash 複檢）。
+  const stagedExe = join(config.dataDirectory, "coldinstall", "Pixel Crew.exe");
+  const rollbackExe = join(config.dataDirectory, "coldinstall", "Pixel Crew.rollback.exe");
+  const ready = checkRollbackReady({ stagedExists: existsSync(stagedExe), rollbackExists: existsSync(rollbackExe), rollbackSameAsStaged: false });
+  if (!ready.ready) return { outcome: "rollback_not_ready", detail: ready.reason };
+  const rebuild = join(SELF_REPO, "scripts", "windows", "pc-selfrebuild.ps1");
+  if (!existsSync(rebuild)) return { outcome: "rebuild_script_missing" };
+  // detached（WMI）啟動自我重建，才能在它稍後殺掉本 app 時存活。
+  const inner = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${rebuild}" -Repo "${SELF_REPO}" -Reason "${reason.replace(/["'`$]/g, "")}"`;
+  const wmi = `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${inner.replace(/'/g, "''")}' } | Out-Null`;
+  try {
+    spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", wmi], { detached: true, stdio: "ignore" }).unref();
+  } catch (error) {
+    return { outcome: "launch_failed", detail: (error as Error).message };
+  }
+  if (head) recordShippedCommit(head);
+  appendRuntimeLog(config.dataDirectory, "self-install triggered: detached self-rebuild launched", { reason, head, changed: changed.slice(0, 20) });
+  return { outcome: "fired" };
+}
+
+// 保守自動觸發：僅在開關開、HEAD 未出貨過、且沒有 NPC 正在忙（不打斷你）時才動。節奏閘防頻繁重裝。
+function maybeAutoSelfInstall(): void {
+  if (!selfInstallAutoEnabled() || !SELF_REPO) return;
+  const head = gitOut(SELF_REPO, ["rev-parse", "HEAD"]).trim();
+  if (!head || head === lastShippedCommit()) return;
+  for (const w of workers.values()) { if (w.runner.busy) return; } // 有人在忙就不重啟
+  const r = triggerSelfInstall("auto");
+  appendRuntimeLog(config.dataDirectory, "maybeAutoSelfInstall", { outcome: r.outcome, detail: r.detail });
+}
+
+// 手動觸發（首次驗降落傘、owner 想立刻出貨時用）。
+app.post("/api/self-install/trigger", (req, res) => {
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : "manual";
+  const result = triggerSelfInstall(reason);
+  res.json(result);
+});
+// 全自動開關（預設關；首次看著驗過降落傘後再開）。
+app.get("/api/self-install/auto", (_req, res) => { res.json({ enabled: selfInstallAutoEnabled(), repoConfigured: !!SELF_REPO }); });
+app.post("/api/self-install/auto", (req, res) => {
+  setSelfInstallAuto(Boolean(req.body?.enabled));
+  res.json({ enabled: selfInstallAutoEnabled() });
+});
 
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
