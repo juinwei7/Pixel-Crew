@@ -422,3 +422,51 @@ test("autopilotContextFromHistory：notice 通知不進回合、沒有換腦時 
   assert.equal(ctx.carriedSummary, null);
   assert.equal(ctx.originalGoal, "任務 A");
 });
+
+// ── 循環三病回歸鎖（owner 抱怨：換腦誤讀/不讀前文/不會問；行為乾跑已驗，這裡鎖契約防悄悄復發） ──
+
+test("prompt 契約：卡到 owner 拍板時必須把停止理由寫成標號選項的好問題（一字可答）", () => {
+  for (const proactive of [true, false]) {
+    const prompt = workerAutopilotNextPrompt({
+      workerName: "總管小揮", role: null, workspaceLabel: "d:/測試", turns: [], stepsRemaining: 2, proactive,
+    });
+    assert.match(prompt, /ASK A GOOD QUESTION INSTEAD OF GUESSING/);
+    assert.match(prompt, /STOP with the "reason" written AS the question/);
+    assert.match(prompt, /2–3 concrete labelled options \(A\/B\/C\) with your recommendation/);
+    assert.match(prompt, /replying a single letter or word/);
+  }
+});
+
+test("prompt 契約：原始目標與換腦帶來的摘要被釘住，且摘要明令只當背景不可診斷", () => {
+  const prompt = workerAutopilotNextPrompt({
+    workerName: "總管小揮", role: null, workspaceLabel: "d:/測試",
+    turns: [{ instruction: "下一步", result: "最新結果" }], stepsRemaining: 2,
+    originalGoal: "大局目標：打造多代理辦公室",
+    carriedSummary: "先前工作摘要：已完成終端機美化與活動徽章",
+  });
+  assert.match(prompt, /Original goal .*very first real instruction/);
+  assert.match(prompt, /大局目標：打造多代理辦公室/);
+  assert.match(prompt, /KEEP THE BIG PICTURE/);
+  assert.match(prompt, /BACKGROUND ONLY/);
+  assert.match(prompt, /never diagnose it/);
+  assert.match(prompt, /先前工作摘要：已完成終端機美化與活動徽章/);
+  // 沒帶背景時不得出現空區塊與 carried 規則（KEEP THE BIG PICTURE 規則行無條件存在，
+  // 反向斷言只釘條件式區塊的專屬字樣）
+  const bare = workerAutopilotNextPrompt({ workerName: "總管小揮", role: null, workspaceLabel: "d:/測試", turns: [], stepsRemaining: 2 });
+  assert.doesNotMatch(bare, /very first real instruction/);
+  assert.doesNotMatch(bare, /BACKGROUND ONLY/);
+});
+
+test("解析契約：真實乾跑的 STOP 好問題回覆（A/B 標號＋一字可答）能被正式解析器吃下且理由完整保留", () => {
+  // 逐字取自 3a7e096 補驗 v2 的實際模型輸出（情境2：報告已產出、只剩等拍板）。
+  const realReply = `<worker_autopilot_next>{"action":"stop","reason":"接回延遲走向需要您拍板（報告已在 outbox《冷安裝接回-AB決策報告.md》，回一個字母即可）：A＝接受現狀 ~50s，立即收尾結案，零風險（小揮與我的共同建議）；B＝重構為輕量直連 API 拚秒級接回，可達 <5s 但需改架構、有回歸風險且多花數天。請回 A 或 B。","resolvedRequestIds":[],"retro":"便宜優化（換模型、warmup、補掃）全試完才定讞根因是決策 CLI turn 的本質成本——先量測再動手省了彎路；但 sonnet 實測反而更慢提醒：換模型≠必然提速，任何假設都要帶計時數據驗證。"}</worker_autopilot_next>`;
+  const decision = parseWorkerAutopilotDecision(realReply);
+  assert.ok(decision && decision.action === "stop");
+  // 行為特徵：標號選項、推薦、一字可答（不逐字釘模型全文）
+  assert.match(decision.reason, /A＝/);
+  assert.match(decision.reason, /B＝/);
+  assert.match(decision.reason, /共同建議|建議/);
+  assert.match(decision.reason, /回一個字母即可/);
+  assert.match(decision.reason, /請回 A 或 B/);
+  assert.ok("retro" in decision && decision.retro && decision.retro.length > 10);
+});
