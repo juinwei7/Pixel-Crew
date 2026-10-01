@@ -6153,13 +6153,21 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
       openRequests: listOpenRequests(openUserRequests, worker.id),
     });
+    // 接回延遲的大頭是「想下一步」的決策推論——若 NPC 用 Opus，這通結構化判斷會花數十秒。
+    // 改用較快的 sonnet 把它砍到秒級；NPC 實際工作仍用自己的模型，產出品質不受影響。找不到 sonnet 就沿用。
+    let decisionModel = runtime.model;
+    if (runtime.provider === "claude") {
+      const fast = claudeCapabilitiesFor(worker.runner.workspacePath).getState().models
+        .map((candidate) => candidate.id).filter(Boolean).find((id) => /sonnet/i.test(id));
+      if (fast) decisionModel = fast;
+    }
     let decision;
     try {
-      // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度，供診斷「冷啟 spawn vs 模型推論」。
+      // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
       const decisionStart = Date.now();
-      appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, promptChars: prompt.length });
-      const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, ms: Date.now() - decisionStart, replyChars: text.length });
+      appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, model: decisionModel, promptChars: prompt.length });
+      const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+      appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, model: decisionModel, ms: Date.now() - decisionStart, replyChars: text.length });
       // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
       workerAutopilotRetry.resolve(worker.id);
       decision = parseWorkerAutopilotDecision(text);
@@ -6167,7 +6175,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
         // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
         // 靜默收場，一次格式抖動就浪費整輪循環。
         const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
-        const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, runtime.model, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
+        const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
         decision = parseWorkerAutopilotDecision(repaired);
         if (!decision) {
           if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
