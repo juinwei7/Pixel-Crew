@@ -6,6 +6,7 @@ import {
   BRAIN_SWAP_MIN_TURNS,
   BRAIN_SWAP_THRESHOLD_TOKENS,
   decideBrainSwap,
+  splitHandoffLesson,
   type BrainSwapObservation,
 } from "../src/brainSwap.js";
 import type { RunnerEvent } from "../src/protocol.js";
@@ -184,4 +185,40 @@ test("enough turns and an expired cooldown start a swap with the announcement te
 test("a never-swapped worker with enough turns starts a swap at the threshold", () => {
   const decision = decideBrainSwap(observation({ lastSwapAt: null, sessionTurns: 10 }));
   assert.equal(decision.action, "start_swap");
+});
+
+test("splitHandoffLesson: no marker → whole text is the summary, lesson null", () => {
+  assert.deepEqual(splitHandoffLesson("  只有交接摘要本體  "), { summary: "只有交接摘要本體", lesson: null });
+});
+
+test("splitHandoffLesson: marker splits summary from the one-line lesson", () => {
+  const text = "交接摘要本體\n第二段\n---LESSON---\n出 outbox 前先做來源覆蓋矩陣";
+  assert.deepEqual(splitHandoffLesson(text), {
+    summary: "交接摘要本體\n第二段",
+    lesson: "出 outbox 前先做來源覆蓋矩陣",
+  });
+});
+
+test("splitHandoffLesson: only the first line after the marker becomes the lesson", () => {
+  const text = "摘要\n---LESSON---\n第一條心法\n不該被收進去的第二行";
+  assert.deepEqual(splitHandoffLesson(text), { summary: "摘要", lesson: "第一條心法" });
+});
+
+test("splitHandoffLesson tolerates marker whitespace and extra dashes", () => {
+  const text = "摘要\n----  LESSON  ----\n心法";
+  assert.deepEqual(splitHandoffLesson(text), { summary: "摘要", lesson: "心法" });
+});
+
+test("splitHandoffLesson: empty lesson body falls back to whole text as summary", () => {
+  const text = "摘要\n---LESSON---\n   ";
+  const result = splitHandoffLesson(text);
+  assert.equal(result.lesson, null);
+  assert.equal(result.summary, text.trim()); // 活命優先：寧可不學也不殘缺
+});
+
+test("splitHandoffLesson: lesson-only output keeps the whole text as summary (never ship an empty handoff)", () => {
+  const text = "---LESSON---\n只有心法沒有摘要";
+  const result = splitHandoffLesson(text);
+  assert.equal(result.lesson, null);
+  assert.equal(result.summary, text.trim());
 });

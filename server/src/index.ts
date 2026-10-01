@@ -87,6 +87,7 @@ import {
   type PersonaTemplate,
 } from "./persona.js";
 import {
+  addLesson,
   addMemoryNote,
   composeMemorySection,
   composeOutboxSection,
@@ -275,7 +276,7 @@ import {
 import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
 import { localDay } from "./dayReport.js";
-import { decideBrainSwap, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
+import { decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
@@ -1691,9 +1692,17 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     return;
   }
   if (decision.action === "complete_swap") {
-    // 摘要回合結束 → 執行換腦
+    // 摘要回合結束 → 執行換腦。先把 NPC 夾帶的「一句可複用心法」切出來沉澱進 Playbook：
+    // 換腦＝學習事件，每換一次腦這顆 NPC 就多學一條做事慣例（複利）。切不出來就只換腦、不學，
+    // 餵進新 session 的永遠是乾淨的交接摘要本體（splitHandoffLesson 保證活命優先於學習）。
     brainSwapPending.delete(worker.id);
-    const summary = decision.summary;
+    const { summary, lesson } = splitHandoffLesson(decision.summary);
+    if (lesson) {
+      const stored = addLesson(worker.id, lesson);
+      if (stored.ok) {
+        record(worker, { type: "user_message", system: true, text: t("🧠 換腦蒸餾出一條做事心法，已沉澱進長期記憶：{lesson}", { lesson: stored.lesson }) });
+      }
+    }
     const provider = worker.runner.provider;
     const workspacePath = worker.runner.workspacePath;
     const model = worker.runner.getModel() ?? undefined;
@@ -1746,7 +1755,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     if (worker.runner.busy) { brainSwapPending.delete(worker.id); return; } // 使用者搶先發話，等下個回合再觸發
     record(worker, { type: "user_message", system: true, text: announcement });
     try {
-      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。"), [], []);
+      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。\n\n摘要寫完後，若這段工作讓你學到一條「下次換了腦也值得記得、可複用」的做事慣例或踩雷教訓，在最後另起一行用底下格式補一句（沒有就整段省略，別硬湊）：\n---LESSON---\n<一句話、動作導向、不含本次任務細節的可複用心法>"), [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch {
       brainSwapPending.delete(worker.id);

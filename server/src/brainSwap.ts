@@ -103,3 +103,25 @@ export function decideBrainSwap(input: BrainSwapObservation): BrainSwapDecision 
     message: t("🧠 context 已達 {kb}k/200k，啟動自動換腦——先請 NPC 寫交接摘要", { kb: Math.round(event.contextTokens / 1000) }),
   };
 }
+
+/** 換腦摘要裡夾帶的「可複用心法」區塊分隔線：`---LESSON---`（允許三個以上連字號、前後空白）。 */
+const LESSON_MARKER = /\n?-{3,}\s*LESSON\s*-{3,}\s*\n?/i;
+
+/**
+ * 把 NPC 交接回合的輸出拆成「餵進新 session 的交接摘要」與「沉澱進 Playbook 的一句心法」。
+ * 純函式，便於單測。規則：
+ * - 沒有 ---LESSON--- 分隔線 → 整段都是摘要，心法為 null（相容舊行為）。
+ * - 有分隔線 → 線前為摘要，線後第一行非空白文字為心法（其餘行丟棄，避免塞爆記憶）。
+ * - 分隔線後沒有實際內容，或拆完摘要變空白（NPC 只吐了心法）→ 退回「整段當摘要、心法 null」，
+ *   寧可不學一條，也絕不讓交接摘要殘缺——活命永遠優先於學習。
+ */
+export function splitHandoffLesson(text: string): { summary: string; lesson: string | null } {
+  const full = text.trim();
+  const idx = full.search(LESSON_MARKER);
+  if (idx === -1) return { summary: full, lesson: null };
+  const summary = full.slice(0, idx).trim();
+  const after = full.slice(idx).replace(LESSON_MARKER, "").trim();
+  const lesson = after ? after.split("\n")[0]!.trim() : "";
+  if (!summary || !lesson) return { summary: full, lesson: null };
+  return { summary, lesson };
+}
