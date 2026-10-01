@@ -246,14 +246,25 @@ import {
   parseWorkerAutopilotDecision,
   workerAutopilotNextPrompt,
   workerAutopilotProgressGuard,
+  workerAutopilotPlanProgressGuard,
   workerAutopilotRepairPrompt,
   workerAutopilotSweepAction,
+  workerAutopilotExplorePrompt,
+  parseExplorationFindings,
+  isWorkerAutopilotPlanEmpty,
+  mergeWorkerAutopilotPlan,
+  seedWorkerAutopilotPlan,
   WORKER_AUTOPILOT_RETRY_POLICY,
+  WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP,
   WorkerAutopilotRetroStore,
   WorkerAutopilotStateStore,
+  WorkerAutopilotPlanStore,
   type PersistedWorkerAutopilotState,
   type WorkerAutopilotContext,
   type WorkerAutopilotRetro,
+  type WorkerAutopilotPlan,
+  type WorkerAutopilotDecision,
+  type WorkerAutopilotFinding,
 } from "./workerAutopilot.js";
 import {
   OpenUserRequestStore,
@@ -2437,7 +2448,7 @@ function detachedRunner(
 type DetachedTurnPolicy =
   | { kind: "normal" }
   | { kind: "no_tools" }
-  | { kind: "read_only_query"; allowedTools: string[] };
+  | { kind: "read_only_query"; allowedTools: string[]; allowSafeShell?: boolean };
 
 function runDetachedTurn(
   provider: ProviderId,
@@ -2486,7 +2497,15 @@ function runDetachedTurn(
           return;
         }
         if (policy.kind === "read_only_query") {
-          const decision = queryToolPolicy(event.name, allowedQueryTools);
+          // 次級擋刀（縱深防禦）：runner 的核准橋是權威判定，這裡用同一把尺複判——Bash 帶出指令內容
+          // 交 autoApprovalPolicy（allowSafeShell 時），確保安全 Bash 不被這層誤殺、危險 Bash 雙重擋下。
+          const command = event.name === "Bash" && event.input && typeof event.input === "object"
+            ? (event.input as Record<string, unknown>).command
+            : undefined;
+          const decision = queryToolPolicy(event.name, allowedQueryTools, {
+            allowSafeShell: policy.allowSafeShell === true,
+            command: typeof command === "string" ? command : undefined,
+          });
           if (!decision.allowed) {
             finish(new Error(t("唯讀查詢已拒絕 {name}：{reason}", { name: event.name, reason: decision.reason })));
             return;
@@ -2512,7 +2531,7 @@ function runDetachedTurn(
     timer = setTimeout(() => finish(new Error(t("LLM 交接逾時"))), timeoutMs);
     try {
       runner.send(prompt, [], [], policy.kind === "read_only_query"
-        ? { executionProfile: "read_only_query", queryAllowedTools: policy.allowedTools }
+        ? { executionProfile: "read_only_query", queryAllowedTools: policy.allowedTools, queryAllowSafeShell: policy.allowSafeShell === true }
         : undefined);
     } catch (error) {
       finish(error as Error);
@@ -6029,6 +6048,16 @@ function saveWorkerAutopilotRetro(workerId: string, note: string | undefined): v
   }
 }
 
+// 活的計畫（支柱 A · 增量 1）：跨回合演進的單一事實來源（目標→假設→已試→待試→卡點），
+// 取代「每回合從近幾回合重推下一步」的貪心單步。檔案式 JSON 持久化、key=workerId（見 workerAutopilot.ts）。
+const workerAutopilotPlanStore = new WorkerAutopilotPlanStore(config.dataDirectory);
+const workerAutopilotPlans: Record<string, WorkerAutopilotPlan> = workerAutopilotPlanStore.load();
+
+function saveWorkerAutopilotPlan(workerId: string, plan: WorkerAutopilotPlan): void {
+  workerAutopilotPlans[workerId] = plan;
+  workerAutopilotPlanStore.save(workerAutopilotPlans);
+}
+
 // 未結案使用者請求帳本：真人臨時請求落地，在教練 prompt 與換腦交接兩處原文注入，防被循環議程
 // 或摘要壓縮蒸發（見 openRequests.ts）。只收真人非 notice 訊息——自動循環自己在 6168 也用
 // 非 notice user_message 送指示，所以只在真人入口（drainWorkerQueue／/message）落帳。
@@ -6155,68 +6184,112 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       return;
     }
     const { turns, originalGoal, carriedSummary } = recentWorkerAutopilotTurns(worker);
-    const prompt = workerAutopilotNextPrompt({
-      workerName: worker.runner.name,
-      role: worker.persona?.role || null,
-      workspaceLabel: worker.runner.workspacePath,
-      turns,
-      originalGoal,
-      carriedSummary,
-      stepsRemaining: state.stepsRemaining - 1,
-      proactive: state.proactive,
-      retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
-      workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
-      openRequests: listOpenRequests(openUserRequests, worker.id),
-    });
+    // 活計畫（支柱 A）：載入既有計畫；空則用大局目標＋過往教訓種入一份（吃掉既有狀態、不並存）。
+    let plan = workerAutopilotPlans[worker.id];
+    if (!plan || isWorkerAutopilotPlanEmpty(plan)) {
+      plan = seedWorkerAutopilotPlan(originalGoal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse());
+    }
     // 決策沿用 resolveDecisionRuntime 選的模型。實測（874d990）換成 sonnet 不但沒加速、反而更慢
     // （85s vs opus 48s）——證明接回延遲的大頭是「決策走完整 CLI turn＋大量 extended thinking」的
     // 本質成本，與模型無關，故不再做模型替換（避免回歸）。真正要秒級需改走輕量決策路徑，屬較大工程。
     const decisionModel = runtime.model;
-    let decision;
-    try {
-      // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
-      const decisionStart = Date.now();
-      appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, model: decisionModel, promptChars: prompt.length });
-      const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, model: decisionModel, ms: Date.now() - decisionStart, replyChars: text.length });
-      // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
-      workerAutopilotRetry.resolve(worker.id);
-      decision = parseWorkerAutopilotDecision(text);
-      if (!decision) {
-        // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
-        // 靜默收場，一次格式抖動就浪費整輪循環。
-        const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
-        const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
-        decision = parseWorkerAutopilotDecision(repaired);
+    let decision: WorkerAutopilotDecision | null = null;
+    // 兩段式決策（支柱 B）：決策 →（需要查證就 explore → 真的查 → 結構化回灌 → 再決策），
+    // 每步最多探索 WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP 次，用盡就逼它用現有資訊 continue/stop。
+    const findingsThisStep: WorkerAutopilotFinding[] = [];
+    let exploreRounds = 0;
+    for (;;) {
+      const canExplore = exploreRounds < WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP;
+      const prompt = workerAutopilotNextPrompt({
+        workerName: worker.runner.name,
+        role: worker.persona?.role || null,
+        workspaceLabel: worker.runner.workspacePath,
+        turns,
+        originalGoal,
+        carriedSummary,
+        stepsRemaining: state.stepsRemaining - 1,
+        proactive: state.proactive,
+        retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
+        workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
+        openRequests: listOpenRequests(openUserRequests, worker.id),
+        plan,
+        canExplore,
+        explorationFindings: findingsThisStep,
+      });
+      try {
+        // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
+        const decisionStart = Date.now();
+        appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, model: decisionModel, promptChars: prompt.length, exploreRounds });
+        const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+        appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, model: decisionModel, ms: Date.now() - decisionStart, replyChars: text.length });
+        // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
+        workerAutopilotRetry.resolve(worker.id);
+        decision = parseWorkerAutopilotDecision(text);
         if (!decision) {
-          if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
-          disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
-          return;
+          // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
+          // 靜默收場，一次格式抖動就浪費整輪循環。
+          const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
+          const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
+          decision = parseWorkerAutopilotDecision(repaired);
+          if (!decision) {
+            if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+            disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
+            return;
+          }
         }
+      } catch (error) {
+        // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
+        // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
+        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        const firstFailure = !workerAutopilotRetry.get(worker.id);
+        workerAutopilotRetry.note(worker.id, null, Date.now());
+        if (firstFailure) {
+          record(worker, { type: "user_message", text: t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: (error as Error).message }), notice: true });
+          broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+        }
+        return;
       }
-    } catch (error) {
-      // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
-      // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
+      // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
       if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
-      const firstFailure = !workerAutopilotRetry.get(worker.id);
-      workerAutopilotRetry.note(worker.id, null, Date.now());
-      if (firstFailure) {
-        record(worker, { type: "user_message", text: t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: (error as Error).message }), notice: true });
-        broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      // 活計畫（支柱 A）：把教練回傳的更新後計畫併回並落盤（探索輪與定稿輪都併，跨回合不歸零）。
+      if (decision.planUpdate !== undefined) {
+        plan = mergeWorkerAutopilotPlan(plan, decision.planUpdate, plan.updatedRound + 1).plan;
+        saveWorkerAutopilotPlan(worker.id, plan);
       }
-      return;
+      if (decision.action !== "explore") break;
+      // 支柱 B 第二段：真的去查——唯讀查詢回合（WebSearch/WebFetch 真上網＋Read/Grep 讀檔＋
+      // allowSafeShell 跑唯讀安全指令如 npm test/tsc），危險指令由 queryToolPolicy+通道 E 擋死。
+      exploreRounds += 1;
+      record(worker, { type: "user_message", text: t("🔎 查證：{query}", { query: decision.query }), notice: true });
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      let finding: WorkerAutopilotFinding;
+      try {
+        const exploreText = (await runDetachedTurn(
+          runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null,
+          workerAutopilotExplorePrompt({ workerName: worker.runner.name, workspaceLabel: worker.runner.workspacePath, query: decision.query, originalGoal }),
+          150_000,
+          { kind: "read_only_query", allowedTools: [], allowSafeShell: true },
+        )).text;
+        finding = parseExplorationFindings(exploreText, decision.query);
+      } catch (error) {
+        // 探索失敗不熄火：記一條 low 信心「查不到」，讓決策照樣用現有資訊決定，不整輪浪費。
+        finding = { query: decision.query, summary: t("（探索失敗：{error}）", { error: (error as Error).message }), confidence: "low", sources: [] };
+      }
+      findingsThisStep.push(finding);
+      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
     }
-    // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
     const live = workerAutopilotByWorker.get(worker.id);
     if (!live || !workers.has(worker.id)) return;
     // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
     if (decision) decision = workerAutopilotProgressGuard(decision, turns);
+    // 計畫感知護欄（支柱 A 結構面）：用完整 tried 清單抓長程繞圈——第 N 回合又提早已試過的做法即停。
+    if (decision) decision = workerAutopilotPlanProgressGuard(decision, plan);
     // 教練回報「已真正處理完」的使用者請求即結案（resolve 語義 (a)）——指的是先前回合已完成的工作，
     // 與這步是否送出無關，故在此committed decision 一有就結案。
-    if (decision) resolveCapturedRequests(worker.id, decision.resolvedRequestIds);
-    if (!decision || decision.action === "stop") {
-      if (decision?.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
-      const reason = decision?.action === "stop" ? decision.reason : "";
+    if (decision && decision.action !== "explore") resolveCapturedRequests(worker.id, decision.resolvedRequestIds);
+    if (!decision || decision.action !== "continue") {
+      if (decision && decision.action === "stop" && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
+      const reason = decision && decision.action === "stop" ? decision.reason : "";
       disableWorkerAutopilotWithNote(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
     }

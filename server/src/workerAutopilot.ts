@@ -52,8 +52,21 @@ export function workerAutopilotResultSummary(text: string, head = 200, tail = 60
 }
 
 export type WorkerAutopilotDecision =
-  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string; resolvedRequestIds?: string[] }
-  | { action: "stop"; reason: string; retro?: string; resolvedRequestIds?: string[] };
+  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown }
+  | { action: "explore"; query: string; reason: string; planUpdate?: unknown }
+  | { action: "stop"; reason: string; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown };
+
+/** 支柱 B · 探索：決策每一步最多先查幾次再定稿——花錢/延遲防呆，用盡就逼它用現有資訊決定。 */
+export const WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP = 2;
+
+export type WorkerAutopilotExploreConfidence = "high" | "medium" | "low";
+/** 探索回合的結構化回報：查了什麼、查到什麼、幾分把握、出處——回灌計畫、也防「有自信的盲猜」。 */
+export type WorkerAutopilotFinding = {
+  query: string;
+  summary: string;
+  confidence: WorkerAutopilotExploreConfidence;
+  sources: string[];
+};
 
 /** 最近回合的精簡摘要：instruction＝當時送給 NPC 的話，result＝它回覆的截斷片段。 */
 export type WorkerAutopilotTurn = {
@@ -130,6 +143,12 @@ export function workerAutopilotNextPrompt(input: {
   workspaceFacts?: { outbox: string[]; recent: string[] } | null;
   /** 使用者未結案請求（真人原文）——優先於自我議程承接，教練處理完才回報結案（見 openRequests.ts）。 */
   openRequests?: OpenUserRequest[];
+  /** 當前活計畫（支柱 A）——決策每回合要讀它、更新它，並在 JSON 的 "plan" 欄回傳更新後的計畫。 */
+  plan?: WorkerAutopilotPlan | null;
+  /** 支柱 B：這步還能不能發探索（未超出每步上限）。true 才在 schema 提供 explore 動作。 */
+  canExplore?: boolean;
+  /** 本步已做過的探索結果（真的查回來的真相）——注入決策，讓定稿基於實情而非猜測。 */
+  explorationFindings?: WorkerAutopilotFinding[];
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
@@ -167,6 +186,21 @@ export function workerAutopilotNextPrompt(input: {
 
   const openBlock = openRequestsCoachSection(input.openRequests ?? []);
 
+  const findings = (input.explorationFindings ?? []).slice(0, WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP + 1);
+  const findingsBlock = findings.length
+    ? `\n\nExploration done THIS step (real investigation results — decide from these, not from guesses; weigh each by its confidence and sources):\n${findings
+        .map((f) => `  - Q: ${bounded(f.query, 300)}\n    Found (${f.confidence}): ${bounded(f.summary, 600)}\n    Sources: ${f.sources.map((s) => bounded(s, 120)).filter(Boolean).slice(0, 5).join(", ") || "(none given — treat as low confidence)"}`)
+        .join("\n")}`
+    : "";
+  const exploreRule = input.canExplore
+    ? `\n- EXPLORE BEFORE GUESSING (you have real tools this loop): when a good next step depends on CURRENT REALITY you do not actually know — a fact, live web info, what a file/test actually says, whether something still works — do NOT guess from memory. Return action "explore" with a precise "query" of exactly what to find out; a read-only investigator will really check (web / read files / run read-only commands like tests) and report back, then you decide for real. Explore only what genuinely blocks a good decision — not what you can already answer, and not as a stalling tactic.`
+    : (findings.length
+      ? `\n- EXPLORATION BUDGET FOR THIS STEP IS USED UP: decide now (continue or stop) using the exploration results above plus the plan — do NOT ask to explore again this step.`
+      : "");
+
+  const planBlock = input.plan ? workerAutopilotPlanBlock(input.plan) : "";
+  const planRule = `\n- MAINTAIN THE LIVING PLAN: the "Living plan" block (below, when shown) is the single evolving source of truth across rounds — it already folds in the original goal and past lessons, so do NOT keep a second mental plan. Read it, then return an UPDATED plan in the "plan" field of your JSON: fold what the LATEST turn established into "tried" (with its outcome), confirm or refute "hypotheses", re-rank "toTry", and refresh "blockers". Never re-list something already in "tried" as a fresh "toTry" — that is exactly the circling to avoid. If no plan block is shown yet, create the initial plan from the original goal. Keep every list tight: a working plan, not a transcript.`;
+
   const goal = bounded(input.originalGoal, 800);
   const goalBlock = goal
     ? `\n\nOriginal goal (this NPC's very first real instruction — the big-picture aim every step must still serve; the recent turns are only how far it has got):\n${goal}`
@@ -180,9 +214,11 @@ export function workerAutopilotNextPrompt(input: {
     : "";
 
   const scopeRule = input.proactive
-    ? `- GOAL-ANCHORED, not keep-busy: the owner turned on proactive mode to keep the project ADVANCING TOWARD ITS GOAL and arriving at a clear final decision — NOT to generate motion. Every step must measurably move the ORIGINAL GOAL (see its block) forward: deepen, verify-ONCE, harden, or conclude the thing the owner actually wants. Drifting to an adjacent/tangential topic, or re-doing / re-verifying something already shipped or already verified, is busywork — forbidden.
-- DONE → hand the owner ONE simple decision, don't manufacture more work: if the current objective has landed (workspace facts show the deliverable exists, or recent turns show it verified) AND the only genuinely valuable moves left need the owner (a direction choice, a decision, private data, money, or an action that touches the owner's live system such as a cold install), then STOP — and write the "reason" as ONE clean decision the owner can answer in a single word (the ASK A GOOD QUESTION form). Do NOT keep the loop alive by polishing, re-verifying, or drifting just because steps remain. A clean STOP that teees up the owner's decision IS progress, and is exactly what "leave me a simple final decision" means.
-- Continue ONLY while you can name, in one sentence, a concrete next step that moves the ORIGINAL GOAL closer AND that the NPC can finish alone this turn without the owner. If you cannot, STOP — never spend remaining steps on filler, tangents, or re-verification of done work.`
+    ? `- GOAL-ANCHORED, not keep-busy: the owner turned on proactive mode to keep the project ADVANCING TOWARD ITS GOAL and arriving at a clear final decision — NOT to generate motion. Every step must measurably move the ORIGINAL GOAL (see its block) forward: deepen, verify-ONCE, harden, or conclude the thing the owner actually wants. Drifting to an adjacent/tangential GOAL, or re-doing / re-verifying something already shipped or already verified, is busywork — forbidden.
+- DIFFERENT ANGLE, SAME GOAL — act as the owner's second brain: changing the GOAL is drift and is forbidden, but changing the APPROACH is exactly what you should do when the obvious path stalls. If the recent turns show the work going in circles — repeating a move, re-reading the same material, re-stating the same plan, or stuck on one blocked approach — do NOT loop that same path again and do NOT stop prematurely. Pick a genuinely DIFFERENT angle on the SAME original goal: a new entry point, a different method, a smaller decomposable sub-step, another source or line of attack. Real forward motion from a fresh angle is the whole point — laps and premature stops are both failures.
+- KEEP EVOLVING — producing the deliverable is NOT "done": this loop exists to make the work AND its own understanding climb, not to reach a finish line and stop. When the current objective lands, that is a trigger to find the next GENUINELY HIGHER rung that still serves the original goal — deepen it, harden it against real failure modes, verify it against reality, generalize it, or leverage it toward the bigger aim. Evolution means verifiable upward progress (new capability, deeper understanding, higher leverage); it is NOT lateral polishing, NOT re-verifying work already verified, NOT drifting to another goal — those stay forbidden. If you genuinely cannot find a higher rung reachable this turn, that is a real stop (see below), not a reason to manufacture filler.
+- DECIDE FOR THE OWNER whatever you can get right by thinking + investigating: you are the owner's second brain, not an assistant who raises a hand at every fork. If a fork can be settled by reasoning it through or by investigating (explore, or the NPC reading / searching / testing), then DECIDE it and continue — do NOT bounce an answerable question back to the owner. Which approach, which version, how to structure, resolving an ambiguity, picking between two paths: these are yours to settle.
+- STOP only for what you genuinely cannot settle alone — and even then, stop WELL: (a) information or a preference that ONLY the owner holds and no investigation can recover (their private data, a credential, a taste only in their head); or (b) an action that spends money, is irreversible, or sends something outward (deploy, external send, deletion). For these, first do ALL the thinking and investigating, THEN stop with the "reason" written as a concrete recommendation the owner can confirm in one word — never a bare "waiting for you". Everything else: keep climbing, do not stop merely because the first approach got hard.`
     : `- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
 - If the current thread clearly has remaining parts, or obvious immediate follow-ups (finishing a started deliverable, fixing a found problem, verifying fresh output), continue with those FIRST before considering STOP. STOP when the thread has reached a natural conclusion, when the next step needs the owner's input/decision/data, or when the work would be speculative busywork. A good STOP beats a filler step — but do not stop while clearly valuable follow-through remains.`;
 
@@ -203,23 +239,25 @@ ${scopeRule}
 - LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung.
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
 - ANCHOR IN THE LATEST REPLY, don't run generic: the "最新回覆（完整據此診斷）" block is the full latest result — read it and make the diagnosis quote or point at something CONCRETE in it (a specific claim, number, file, gap, or contradiction). A diagnosis that could be pasted onto any turn is a failure; if you cannot cite a specific from the latest reply, you have not read it closely enough.
-- KEEP THE BIG PICTURE: read the "Original goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}
-- ASK A GOOD QUESTION INSTEAD OF GUESSING: if genuine progress now hinges on a decision only the owner can make (a direction fork, a preference, missing input/credentials/data, or an irreversible or money-spending action), do NOT plough ahead on an assumption and do NOT stop with a vague "waiting for the owner" — STOP with the "reason" written AS the question: name the specific fork in one line, give 2–3 concrete labelled options (A/B/C) with your recommendation and what each implies, phrased so the owner can decide by replying a single letter or word. Think about how to ask so the owner barely has to type.
-- NEVER PRESUME CONSENT: treat an action as authorized only if the OWNER'S OWN words (in the recent turns) say so. A past "yes / A / 好" answered one specific earlier question — do not stretch it to authorize a different action (especially anything that restarts or reinstalls the owner's live system). If authorization is unclear, that is itself a reason to STOP and ask — not to proceed on an assumption.
+- KEEP THE BIG PICTURE: read the "Original goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}${planRule}${exploreRule}
+- ASK ONLY WHAT YOU TRULY CANNOT SETTLE — and ask it well: do NOT stop for a fork you could resolve by thinking or investigating; decide that yourself and keep going. Stop for the owner only when progress needs (a) data/a preference only the owner holds that no investigation can recover, or (b) a money / irreversible / outward action. When you do stop for one of these, write the "reason" AS a prepared recommendation: name the fork in one line, give your recommended option (plus 1–2 alternatives) with what each implies, phrased so the owner confirms in a single letter or word. Think about how to ask so the owner barely has to type.
+- NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS: you ARE authorized to decide and act on the owner's behalf for anything reversible you can get right by thinking or investigating — that is the job. But an action that spends money, cannot be undone, or sends something outward (deploy, cold-install, external send, deletion) needs the owner's OWN words — a past "yes / 好" to one thing does not authorize a different money/irreversible action. For those, stop with a prepared recommendation rather than proceeding on an assumption.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
 Workspace: ${JSON.stringify(input.workspaceLabel)}
-Loop steps remaining after this one: ${input.stepsRemaining}${goalBlock}${carriedBlock}
+Loop steps remaining after this one: ${input.stepsRemaining}${goalBlock}${carriedBlock}${planBlock}${findingsBlock}
 
 Recent turns (oldest first):
 ${turnsBlock}${retroBlock}${factsBlock}${openBlock}
 
-Return only one marked JSON block, no Markdown fences:
-<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
+Return only one marked JSON block, no Markdown fences. The "plan" field is the UPDATED living plan (single source of truth) — always include it, on both continue and stop:
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","plan":{"goal":"root anchor — keep stable","hypotheses":["open questions / bets"],"tried":[{"text":"what has been done","outcome":"result or lesson"}],"toTry":[{"text":"next candidate","need":"capability e.g. 讀碼/上網/跑測試/某專長"}],"blockers":["stuck points"]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
 or
-<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>`;
+<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","plan":{"goal":"root anchor","hypotheses":[],"tried":[{"text":"...","outcome":"..."}],"toTry":[],"blockers":[]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>${input.canExplore ? `
+or (when you must check current reality before deciding well):
+<worker_autopilot_next>{"action":"explore","query":"precisely what to find out — a question a read-only investigator can answer with web search, reading files, or running read-only commands","reason":"one line: why this fact blocks a good decision right now","plan":{"goal":"root anchor","hypotheses":[],"tried":[],"toTry":[],"blockers":[]}}</worker_autopilot_next>` : ""}`;
 }
 
 type WorkerAutopilotParse =
@@ -245,17 +283,25 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
     ? value.resolvedRequestIds.map((id) => bounded(id, 200)).filter(Boolean).slice(0, 20)
     : [];
   const resolved = resolvedIds.length ? { resolvedRequestIds: resolvedIds } : {};
+  // 活計畫（支柱 A）：原樣帶出模型回傳的 plan（物件才收），交由呼叫端用 mergeWorkerAutopilotPlan 正規化落盤。
+  const planUpdate = value.plan && typeof value.plan === "object" && !Array.isArray(value.plan) ? { planUpdate: value.plan } : {};
+  if (value.action === "explore") {
+    // 支柱 B：需要先查證才能好好決定。沒給具體查詢內容的 explore 不可執行——退回安全停止。
+    const query = bounded(value.query, 500);
+    if (query) return { ok: true, decision: { action: "explore", query, reason, ...planUpdate } };
+    return { ok: true, decision: { action: "stop", reason: reason || "Exploration requested without a concrete query.", ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
+  }
   if (value.action === "stop") {
-    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}), ...resolved } };
+    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   }
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
   }
   const instruction = stripWorkerAutopilotPrefix(bounded(value.instruction, 4_000));
   // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
-  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}), ...resolved } };
+  if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   const rung = bounded(value.rung, 300);
-  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}), ...resolved } };
+  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
 }
 
 // ── 進步護欄（機制三的程式面）──────────────────────────────────────────────
@@ -280,6 +326,58 @@ export function workerAutopilotProgressGuard(
     ...(decision.retro ? { retro: decision.retro } : {}),
     ...(decision.resolvedRequestIds?.length ? { resolvedRequestIds: decision.resolvedRequestIds } : {}),
   };
+}
+
+// ── 支柱 B · 探索回合（兩段式的第二段：真的去查）────────────────────────────
+// 這個 prompt 跑在 read_only_query + allowSafeShell 回合：可真的上網（WebSearch/WebFetch）、
+// 讀檔（Read/Grep/Glob）、跑唯讀安全指令（npm test/tsc/git status…）。它只「查」不「做」，
+// 查完回結構化 findings 回灌決策。刻意要求標信心度與出處——防「查到半截證據的有自信盲猜」。
+export function workerAutopilotExplorePrompt(input: {
+  workerName: string;
+  workspaceLabel: string;
+  query: string;
+  originalGoal?: string | null;
+}): string {
+  const goal = bounded(input.originalGoal, 600);
+  return `Autopilot Exploration · read-only investigator
+
+You are a read-only investigator helping an autopilot coach decide the next step for NPC ${JSON.stringify(input.workerName)} (workspace ${JSON.stringify(input.workspaceLabel)}).${goal ? `\nThe overall goal being pursued: ${goal}` : ""}
+
+Investigate ONLY this question and report what is actually true right now:
+${bounded(input.query, 500)}
+
+You may ONLY read reality, never change it: web search / fetch, read files, grep/glob, and read-only shell (e.g. running tests, "git status/diff/log", "ls", "cat", "tsc"). You cannot and must not write files, send anything out, install, or run destructive commands — those are blocked.
+
+Rules:
+- Actually check. Use the tools; do not answer from memory. If a web fact, prefer a real search; if a code fact, actually read the file or run the read-only command.
+- Report only what you verified. Separate what you found from what you could not determine.
+- Be honest about confidence and cite where each finding came from (URL, file path, or command). Partial/weak evidence must be marked low confidence — a half-answer presented as certain is worse than "could not determine".
+
+Return only one marked JSON block, no Markdown fences:
+<exploration_findings>{"summary":"what is actually true, concise — the answer the coach needs","confidence":"high | medium | low","sources":["url / file path / command you actually used"]}</exploration_findings>`;
+}
+
+function clampConfidence(value: unknown): WorkerAutopilotExploreConfidence {
+  return value === "high" || value === "low" ? value : "medium";
+}
+
+/** 解析探索回合的結構化回報；解析不出就回 low 信心、摘要取原文片段——絕不把失敗當成高信心事實。 */
+export function parseExplorationFindings(text: string, query: string): WorkerAutopilotFinding {
+  const q = bounded(query, 500);
+  const match = text.match(/<exploration_findings>\s*([\s\S]*?)\s*<\/exploration_findings>/i);
+  if (match) {
+    try {
+      const raw = JSON.parse(match[1]) as Record<string, unknown>;
+      const sources = Array.isArray(raw.sources)
+        ? raw.sources.map((s) => bounded(s, 200)).filter(Boolean).slice(0, 8)
+        : [];
+      const summary = bounded(raw.summary, 1200);
+      if (summary) return { query: q, summary, confidence: clampConfidence(raw.confidence), sources };
+    } catch { /* 落到下面的降級 */ }
+  }
+  // 沒有合規區塊：降級為 low 信心、取回覆片段當摘要（寧可標低信心，也不要假裝查到了）。
+  const fallback = workerAutopilotResultSummary(text, 150, 450);
+  return { query: q, summary: fallback || t("（探索未回傳可用結果）"), confidence: "low", sources: [] };
 }
 
 /** 格式修復重問（一次）：把上一次回覆被拒的具體原因附回去，只再要一次標記 JSON 區塊。 */
@@ -450,6 +548,219 @@ export class WorkerAutopilotStateStore {
       fs.writeFileSync(this.file, JSON.stringify(states, null, 2));
     } catch (error) {
       console.error("[worker-autopilot] 無法保存個人循環狀態:", error);
+    }
+  }
+}
+
+// ── 活的計畫（支柱 A · 增量 1）────────────────────────────────────────────
+// 把「每回合從近幾回合重推一個下一步」的貪心單步，換成一份跨回合演進的路線圖：
+// 目標→假設→已試→待試→卡點。它是「單一事實來源」——goal 當根錨、retro/lessons 灌進
+// 已試、不另起爐灶並存（並存必漂移，見記憶裡 d5525f4 誤合併那類風險）。
+// 增量 1 只做「計畫會演進＋結構性抓長程繞圈」，決策層仍不探索（那是增量 2 的支柱 B）。
+export const WORKER_AUTOPILOT_PLAN_LIMITS = {
+  goal: 800,
+  hypotheses: { count: 8, len: 220 },
+  tried: { count: 24, text: 220, outcome: 220 },
+  toTry: { count: 12, text: 220, need: 60 },
+  blockers: { count: 8, len: 220 },
+} as const;
+
+/** 已試項：做過什麼（text）＋結果/教訓（outcome）。決策憑這份「全部試過的」避免重撞同一牆。 */
+export type WorkerAutopilotTried = { text: string; outcome: string };
+/** 待試項：下一步候選（text）＋需要什麼能力（need，未來支柱 D 派工可直接讀，現在零成本先備好）。 */
+export type WorkerAutopilotToTry = { text: string; need?: string };
+
+export type WorkerAutopilotPlan = {
+  goal: string;
+  hypotheses: string[];
+  tried: WorkerAutopilotTried[];
+  toTry: WorkerAutopilotToTry[];
+  blockers: string[];
+  /** 最後更新於第幾回合——讓驗收能逐回合 diff「這回合改了什麼」。 */
+  updatedRound: number;
+};
+
+function boundedList(raw: unknown, count: number, map: (item: unknown) => string | null): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const v = map(item);
+    if (v) out.push(v);
+    if (out.length >= count) break;
+  }
+  return out;
+}
+
+/** 逐欄驗證＋封頂的計畫正規化：壞欄位當空、超量截斷、去重，壞輸入回傳空計畫（可序列化、可 diff）。 */
+export function normalizeWorkerAutopilotPlan(raw: unknown): WorkerAutopilotPlan {
+  const empty: WorkerAutopilotPlan = { goal: "", hypotheses: [], tried: [], toTry: [], blockers: [], updatedRound: 0 };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return empty;
+  const r = raw as Record<string, unknown>;
+  const L = WORKER_AUTOPILOT_PLAN_LIMITS;
+
+  const hypotheses = dedupe(boundedList(r.hypotheses, L.hypotheses.count, (x) => bounded(x, L.hypotheses.len) || null));
+  const blockers = dedupe(boundedList(r.blockers, L.blockers.count, (x) => bounded(x, L.blockers.len) || null));
+
+  const tried: WorkerAutopilotTried[] = [];
+  if (Array.isArray(r.tried)) {
+    for (const item of r.tried) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const e = item as Record<string, unknown>;
+      const text = bounded(e.text, L.tried.text);
+      if (!text) continue;
+      if (tried.some((t) => normalizedInstruction(t.text) === normalizedInstruction(text))) continue;
+      tried.push({ text, outcome: bounded(e.outcome, L.tried.outcome) });
+      if (tried.length >= L.tried.count) break;
+    }
+  }
+
+  const toTry: WorkerAutopilotToTry[] = [];
+  if (Array.isArray(r.toTry)) {
+    for (const item of r.toTry) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const e = item as Record<string, unknown>;
+      const text = bounded(e.text, L.toTry.text);
+      if (!text) continue;
+      if (toTry.some((t) => normalizedInstruction(t.text) === normalizedInstruction(text))) continue;
+      const need = bounded(e.need, L.toTry.need);
+      toTry.push(need ? { text, need } : { text });
+      if (toTry.length >= L.toTry.count) break;
+    }
+  }
+
+  const updatedRound = typeof r.updatedRound === "number" && Number.isFinite(r.updatedRound) && r.updatedRound >= 0
+    ? Math.floor(r.updatedRound)
+    : 0;
+
+  return { goal: bounded(r.goal, L.goal), hypotheses, tried, toTry, blockers, updatedRound };
+}
+
+function dedupe(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of list) {
+    const key = normalizedInstruction(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+/** 計畫是否實質為空（沒目標也沒任何欄位內容）——用來決定要不要種入初始計畫。 */
+export function isWorkerAutopilotPlanEmpty(plan: WorkerAutopilotPlan): boolean {
+  return !plan.goal && !plan.hypotheses.length && !plan.tried.length && !plan.toTry.length && !plan.blockers.length;
+}
+
+/**
+ * 種入初始計畫＝把既有的 goal 與 retro 教訓映射進五欄，而非另開一份並存狀態：
+ * originalGoal→goal（根錨）、retros→tried（已試的教訓，新的在前）。這落實「單一事實來源」。
+ */
+export function seedWorkerAutopilotPlan(originalGoal: string | null, retros: string[]): WorkerAutopilotPlan {
+  const L = WORKER_AUTOPILOT_PLAN_LIMITS;
+  const tried: WorkerAutopilotTried[] = [];
+  for (const note of retros) {
+    const text = bounded(note, L.tried.text);
+    if (!text) continue;
+    if (tried.some((t) => normalizedInstruction(t.text) === normalizedInstruction(text))) continue;
+    tried.push({ text, outcome: "" });
+    if (tried.length >= L.tried.count) break;
+  }
+  return normalizeWorkerAutopilotPlan({ goal: bounded(originalGoal, L.goal), tried, updatedRound: 0 });
+}
+
+/**
+ * 套用決策模型回傳的「更新後計畫」：以模型回傳為準正規化，但守住兩條防呆——
+ * ①goal 根錨不被改空（模型漏填就保留舊 goal，防漂移）②updatedRound 單調遞增到本回合。
+ * 回傳 {plan, changed}，changed＝與舊計畫是否有實質差異（驗收用：探索/回合有沒有真的改計畫）。
+ */
+export function mergeWorkerAutopilotPlan(
+  previous: WorkerAutopilotPlan,
+  update: unknown,
+  round: number,
+): { plan: WorkerAutopilotPlan; changed: boolean } {
+  const next = normalizeWorkerAutopilotPlan(update);
+  if (!next.goal && previous.goal) next.goal = previous.goal; // 根錨不被改空
+  next.updatedRound = Math.max(previous.updatedRound, Number.isFinite(round) && round >= 0 ? Math.floor(round) : previous.updatedRound);
+  const changed = !samePlanContent(previous, next);
+  return { plan: next, changed };
+}
+
+function samePlanContent(a: WorkerAutopilotPlan, b: WorkerAutopilotPlan): boolean {
+  const norm = (p: WorkerAutopilotPlan) => JSON.stringify({
+    goal: p.goal,
+    hypotheses: p.hypotheses,
+    tried: p.tried,
+    toTry: p.toTry,
+    blockers: p.blockers,
+  });
+  return norm(a) === norm(b);
+}
+
+/** 把計畫渲染進決策 prompt 的區塊（空計畫回空字串，由 prompt 端指示「先建計畫」）。 */
+export function workerAutopilotPlanBlock(plan: WorkerAutopilotPlan): string {
+  if (isWorkerAutopilotPlanEmpty(plan)) return "";
+  const line = (s: string) => `  - ${s}`;
+  const parts: string[] = [];
+  if (plan.goal) parts.push(`Goal (root anchor): ${plan.goal}`);
+  if (plan.hypotheses.length) parts.push(`Hypotheses (open questions / bets):\n${plan.hypotheses.map(line).join("\n")}`);
+  if (plan.tried.length) parts.push(`Tried (do NOT re-attempt these — this is the full memory of what has been done):\n${plan.tried.map((t) => line(t.outcome ? `${t.text} → ${t.outcome}` : t.text)).join("\n")}`);
+  if (plan.toTry.length) parts.push(`To try (ranked next candidates):\n${plan.toTry.map((t) => line(t.need ? `${t.text} [needs: ${t.need}]` : t.text)).join("\n")}`);
+  if (plan.blockers.length) parts.push(`Blockers (stuck points):\n${plan.blockers.map(line).join("\n")}`);
+  return `\n\nLiving plan (the single evolving source of truth — updated every round; "Tried" is the complete long-range memory, not just the last few turns):\n${parts.join("\n")}`;
+}
+
+/**
+ * 計畫感知進度護欄（支柱 A 的結構面，補強既有 workerAutopilotProgressGuard 的盲點）：
+ * 舊護欄只比對最近 3 回合的指示，抓不到「第 1 回合試過、漂移幾回合後第 6 回合又提同一招」的長程繞圈。
+ * 這裡用計畫的完整 tried 清單比對——提議的下一步若等同某個已試項，即長程繞圈，改為誠實停止。
+ * 守命優先：計畫為空（還沒建）時不介入，交給既有護欄與 prompt。
+ */
+export function workerAutopilotPlanProgressGuard(
+  decision: WorkerAutopilotDecision,
+  plan: WorkerAutopilotPlan,
+): WorkerAutopilotDecision {
+  if (decision.action !== "continue") return decision;
+  if (!plan.tried.length) return decision;
+  const next = normalizedInstruction(decision.instruction);
+  const circled = plan.tried.some((t) => normalizedInstruction(t.text) === next);
+  if (!circled) return decision;
+  return {
+    action: "stop",
+    reason: t("下一步等同計畫中已試過的做法（長程繞圈），改為誠實停止——該換角度或交回决定"),
+    ...(decision.retro ? { retro: decision.retro } : {}),
+    ...(decision.resolvedRequestIds?.length ? { resolvedRequestIds: decision.resolvedRequestIds } : {}),
+  };
+}
+
+export class WorkerAutopilotPlanStore {
+  private readonly file: string;
+
+  constructor(dataDir: string) {
+    this.file = path.join(dataDir, "worker-autopilot-plans.json");
+  }
+
+  load(): Record<string, WorkerAutopilotPlan> {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      const out: Record<string, WorkerAutopilotPlan> = {};
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!key) continue;
+        const plan = normalizeWorkerAutopilotPlan(value);
+        if (!isWorkerAutopilotPlanEmpty(plan)) out[key] = plan;
+      }
+      return out;
+    } catch {
+      return {}; // 檔案不存在或壞掉 → 當成沒有計畫
+    }
+  }
+
+  save(plans: Record<string, WorkerAutopilotPlan>): void {
+    try {
+      fs.writeFileSync(this.file, JSON.stringify(plans, null, 2));
+    } catch (error) {
+      console.error("[worker-autopilot] 無法保存個人循環計畫:", error);
     }
   }
 }

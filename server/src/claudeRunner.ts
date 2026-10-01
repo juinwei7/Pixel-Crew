@@ -91,6 +91,7 @@ export class ClaudeSession implements AgentSession {
   private model: string | undefined;
   private executionProfile: ExecutionProfile = "normal";
   private queryAllowedTools = new Set<string>();
+  private queryAllowSafeShell = false;
   private mcpReloadPending = false;
   private promptRefreshPending = false;
   private spawnedProfile: ExecutionProfile | null = null;
@@ -196,13 +197,16 @@ export class ClaudeSession implements AgentSession {
     }
     const nextProfile = options.executionProfile ?? "normal";
     const nextQueryAllowedTools = new Set(options.queryAllowedTools ?? []);
+    const nextQueryAllowSafeShell = options.queryAllowSafeShell === true;
     const queryToolsChanged = nextProfile === "read_only_query" && (
       this.queryAllowedTools.size !== nextQueryAllowedTools.size
       || [...nextQueryAllowedTools].some((tool) => !this.queryAllowedTools.has(tool))
+      || this.queryAllowSafeShell !== nextQueryAllowSafeShell
     );
     if (this.child && (this.spawnedProfile !== nextProfile || queryToolsChanged)) this.stop();
     this.executionProfile = nextProfile;
     this.queryAllowedTools = nextQueryAllowedTools;
+    this.queryAllowSafeShell = nextQueryAllowSafeShell;
     // 保留原始輸入，供「resume 對話遺失時自動重跑一次」使用（見 ensureChild 的 fail）。
     this.lastUserSend = { text, images, documents, options };
     const files = this.stageInputDocuments(documents);
@@ -261,7 +265,7 @@ export class ClaudeSession implements AgentSession {
       ? truncateCommand((originalInput as Record<string, unknown>).command)
       : undefined;
     if (this.executionProfile === "read_only_query") {
-      const policy = queryToolPolicy(toolName, this.queryAllowedTools);
+      const policy = queryToolPolicy(toolName, this.queryAllowedTools, { allowSafeShell: this.queryAllowSafeShell, command });
       const id = randomUUID();
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null,

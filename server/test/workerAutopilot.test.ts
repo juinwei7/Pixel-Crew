@@ -97,7 +97,7 @@ test("stripWorkerAutopilotPrefix removes copied 🔁 prefixes (repeated, both pa
   assert.deepEqual(parsed, { action: "continue", instruction: "驗證輸出", reason: "接續" });
 });
 
-test("proactive prompt 是目標錨定、做完就停交決定（非「硬找活」）", () => {
+test("proactive prompt 是進化導向＋替 owner 決定（非「做完就停」也非「硬找活」）", () => {
   const prompt = workerAutopilotNextPrompt({
     workerName: "探路阿蒐",
     role: null,
@@ -107,8 +107,14 @@ test("proactive prompt 是目標錨定、做完就停交決定（非「硬找活
     proactive: true,
   });
   assert.match(prompt, /GOAL-ANCHORED, not keep-busy/);
-  assert.match(prompt, /DONE → hand the owner ONE simple decision/);
-  assert.match(prompt, /Continue ONLY while you can name/);
+  // 進化導向：做出來不算「完成」、要往更高一階爬
+  assert.match(prompt, /KEEP EVOLVING — producing the deliverable is NOT "done"/);
+  // 替 owner 決定：能靠想＋查得出的自己拍，不丟回去
+  assert.match(prompt, /DECIDE FOR THE OWNER whatever you can get right/);
+  // STOP 收斂到只剩兩類（owner 獨有資料 / 花錢不可逆）
+  assert.match(prompt, /STOP only for what you genuinely cannot settle alone/);
+  // 舊的「做完就停」字樣已移除
+  assert.doesNotMatch(prompt, /DONE → hand the owner ONE simple decision/);
   // 找活引擎字樣已移除；非 proactive 專屬句也不在
   assert.doesNotMatch(prompt, /PREFER CONTINUING/);
   assert.doesNotMatch(prompt, /research an adjacent topic/);
@@ -433,10 +439,10 @@ test("prompt 契約：卡到 owner 拍板時必須把停止理由寫成標號選
     const prompt = workerAutopilotNextPrompt({
       workerName: "總管小揮", role: null, workspaceLabel: "d:/測試", turns: [], stepsRemaining: 2, proactive,
     });
-    assert.match(prompt, /ASK A GOOD QUESTION INSTEAD OF GUESSING/);
-    assert.match(prompt, /STOP with the "reason" written AS the question/);
-    assert.match(prompt, /2–3 concrete labelled options \(A\/B\/C\) with your recommendation/);
-    assert.match(prompt, /replying a single letter or word/);
+    assert.match(prompt, /ASK ONLY WHAT YOU TRULY CANNOT SETTLE/);
+    assert.match(prompt, /write the "reason" AS a prepared recommendation/);
+    assert.match(prompt, /recommended option \(plus 1–2 alternatives\)/);
+    assert.match(prompt, /confirms in a single letter or word/);
   }
 });
 
@@ -476,7 +482,7 @@ test("解析契約：真實乾跑的 STOP 好問題回覆（A/B 標號＋一字�
 
 // ── 循環邏輯校正鎖（owner：讓項目進步/離目標更近/最後留簡單決定，別硬找活、別假設同意） ──
 
-test("prompt 契約(proactive)：目標錨定＋做完就停交決定，禁止硬找活/重做已驗，且不得假設同意", () => {
+test("prompt 契約(proactive)：進化導向＋替 owner 決定，STOP 只剩兩類且花錢/不可逆仍不假設同意", () => {
   const p = workerAutopilotNextPrompt({
     workerName: "總管小揮", role: null, workspaceLabel: "d:/測試",
     turns: [{ instruction: "上一步", result: "已完成並驗證" }], stepsRemaining: 3, proactive: true,
@@ -484,19 +490,37 @@ test("prompt 契約(proactive)：目標錨定＋做完就停交決定，禁止�
   });
   assert.match(p, /GOAL-ANCHORED, not keep-busy/);
   assert.match(p, /re-doing \/ re-verifying something already shipped or already verified, is busywork/);
-  assert.match(p, /DONE → hand the owner ONE simple decision/);
-  assert.match(p, /A clean STOP that teees up the owner's decision IS progress/);
-  assert.match(p, /NEVER PRESUME CONSENT/);
-  assert.match(p, /restarts or reinstalls the owner's live system/);
-  // 舊的「PREFER CONTINUING／research an adjacent topic」找活引擎已移除
+  // 進化導向：做出來不算完成、替 owner 決定、STOP 收斂兩類
+  assert.match(p, /KEEP EVOLVING — producing the deliverable is NOT "done"/);
+  assert.match(p, /DECIDE FOR THE OWNER whatever you can get right/);
+  assert.match(p, /STOP only for what you genuinely cannot settle alone/);
+  // 花錢/不可逆仍要 owner 本人授權（保護 owner，不被「替你決定」沖掉）
+  assert.match(p, /NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS/);
+  assert.match(p, /spends money, cannot be undone, or sends something outward/);
+  // 舊「做完就停」與找活引擎字樣都已移除
+  assert.doesNotMatch(p, /DONE → hand the owner ONE simple decision/);
   assert.doesNotMatch(p, /PREFER CONTINUING/);
   assert.doesNotMatch(p, /research an adjacent topic/);
+});
+
+test("prompt 契約(proactive)：卡住要換角度推進、不繞圈不早停（第二個大腦）", () => {
+  const p = workerAutopilotNextPrompt({
+    workerName: "總管小揮", role: null, workspaceLabel: "d:/測試",
+    turns: [{ instruction: "上一步", result: "卡在同一條路" }], stepsRemaining: 3, proactive: true,
+    originalGoal: "大局目標",
+  });
+  // 換目標＝漂移(禁)，換角度＝卡住時就該做(要)
+  assert.match(p, /DIFFERENT ANGLE, SAME GOAL/);
+  assert.match(p, /changing the APPROACH is exactly what you should do when the obvious path stalls/);
+  assert.match(p, /going in circles/);
+  assert.match(p, /do NOT stop prematurely/);
+  assert.match(p, /do not stop merely because the first approach got hard/);
 });
 
 test("prompt 契約(非 proactive 也有不假設同意的守則)", () => {
   const p = workerAutopilotNextPrompt({
     workerName: "總管小揮", role: null, workspaceLabel: "d:/測試", turns: [], stepsRemaining: 2, proactive: false,
   });
-  assert.match(p, /NEVER PRESUME CONSENT/);
-  assert.match(p, /ASK A GOOD QUESTION INSTEAD OF GUESSING/);
+  assert.match(p, /NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS/);
+  assert.match(p, /ASK ONLY WHAT YOU TRULY CANNOT SETTLE/);
 });

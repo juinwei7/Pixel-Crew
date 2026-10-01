@@ -17,6 +17,8 @@ export type ExecutionProfile = "normal" | "read_only_collaboration" | "read_only
 export type SendOptions = {
   executionProfile?: ExecutionProfile;
   queryAllowedTools?: string[];
+  /** read_only_query 時額外放行「唯讀安全 Bash」（npm test/tsc/ls…），危險指令仍擋（支柱 B 探索）。 */
+  queryAllowSafeShell?: boolean;
 };
 
 export interface AgentSession {
