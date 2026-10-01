@@ -230,6 +230,8 @@ type Props = {
   bossTaskDepartmentIds?: ReadonlySet<string>;
   /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
   swapThresholdTokens?: number;
+  /** complete_swap 發出的換腦事件：learned 只在心法真的落盤時為 true。用來在名牌內誠實閃「＋1 心法」。 */
+  brainSwapEvent?: { workerId: string; learned: boolean; lesson: string | null; seq: number } | null;
   /** 點擊作戰室會議桌時觸發（App 用它開作戰室模式並聚焦輸入框）。 */
   onMeetingTableClick?(): void;
   /** Tap on empty office floor — App uses it to dismiss the task log. */
@@ -253,7 +255,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -322,6 +324,20 @@ export function GameCanvas({
       setSwapFlashIds((prev) => { const next = new Set(prev); for (const id of swapped) next.delete(id); return next; });
     }, 1500);
   }, [workers, swapThresholdTokens]);
+
+  // 「學到心法」誠實閃現：只吃後端 complete_swap 事件、且 learned（心法真的落盤）才閃「＋1 心法」。
+  // 被去重擋下或走活命分支時 learned=false → 不閃（畫面只會有上面那個中性的壓縮脈動）。
+  const [learnedFlash, setLearnedFlash] = useState<{ id: string; lesson: string | null } | null>(null);
+  const lastSwapSeqRef = useRef(0);
+  useEffect(() => {
+    if (!brainSwapEvent || brainSwapEvent.seq === lastSwapSeqRef.current) return;
+    lastSwapSeqRef.current = brainSwapEvent.seq;
+    if (!brainSwapEvent.learned) return; // 誠實門檻：沒真的學到就不宣稱學到
+    const id = brainSwapEvent.workerId;
+    const lesson = brainSwapEvent.lesson;
+    setLearnedFlash({ id, lesson });
+    setTimeout(() => setLearnedFlash((cur) => (cur && cur.id === id ? null : cur)), 4200);
+  }, [brainSwapEvent]);
 
   // Wall-clock start time per busy worker, purely for the "已執行 Ns" live
   // readout — not persisted, just a local ticking display.
@@ -787,6 +803,12 @@ export function GameCanvas({
                   </span>
                 );
               })()}
+              {learnedFlash?.id === w.id && (
+                <span className="npc-nameplate__learned" title={learnedFlash.lesson ?? undefined}>
+                  <Icon name="brain" size={9} className="npc-nameplate__learned-ico" />
+                  <span className="npc-nameplate__learned-label">{t("＋1 心法")}</span>
+                </span>
+              )}
             </div>
             <div
               ref={(el) => {

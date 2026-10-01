@@ -70,6 +70,7 @@ type ServerMessage =
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
   | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
+  | { type: "brain_swapped"; workerId: string; learned: boolean; lesson: string | null }
   | { type: "queue_updated"; workerId: string; queue: QueuedCommandDto[] }
   | { type: "collaboration_created" | "collaboration_updated"; collaboration: CollaborationTask }
   | { type: "mission_created" | "mission_updated"; mission: DepartmentMission }
@@ -143,6 +144,8 @@ export function useWorkers() {
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
   const [globalMemoryEvent, setGlobalMemoryEvent] = useState<{ notes: GlobalMemoryNoteDto[]; seq: number } | null>(null);
   const [muxLayoutEvent, setMuxLayoutEvent] = useState<{ layout: string; version: number; seq: number } | null>(null);
+  // 換腦事件（complete_swap 發出）：learned 只在心法真的落盤時為 true；seq 讓 UI 認得出同一顆重複換腦。
+  const [brainSwapEvent, setBrainSwapEvent] = useState<{ workerId: string; learned: boolean; lesson: string | null; seq: number } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -453,6 +456,10 @@ export function useWorkers() {
         }
         case "global_memory_updated": {
           setGlobalMemoryEvent((prev) => ({ notes: data.notes, seq: (prev?.seq ?? 0) + 1 }));
+          break;
+        }
+        case "brain_swapped": {
+          setBrainSwapEvent((prev) => ({ workerId: data.workerId, learned: data.learned, lesson: data.lesson, seq: (prev?.seq ?? 0) + 1 }));
           break;
         }
         case "terminal_mux_layout": {
@@ -1387,6 +1394,7 @@ export function useWorkers() {
     mcpLoginResult,
     globalMemoryEvent,
     muxLayoutEvent,
+    brainSwapEvent,
     activeId,
     setActiveId,
     targetRepoPath,

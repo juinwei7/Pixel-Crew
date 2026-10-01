@@ -420,6 +420,25 @@ body {
   100% { transform: scale(1); filter: none; }
 }
 
+/* 「＋1 心法」誠實閃現：換腦真的蒸餾出一條心法並落盤時，名牌內自成一行亮一下綠徽章再淡出。
+   A 的靈魂賣點——換腦不只是活下來，而且學到了東西。整合進名牌實體，非頭上飄浮卡。 */
+.npc-nameplate__learned {
+  flex: 1 0 100%;
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 2px;
+  color: #8ff0cf; font-size: 8px; font-weight: 700; letter-spacing: 0.2px;
+  animation: npc-learned-flash 4.2s ease forwards;
+}
+.npc-nameplate__learned-ico { flex: 0 0 auto; color: #7cf0c8; }
+.npc-nameplate__learned-label { overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 6px rgba(124, 240, 200, 0.6); }
+.npc-nameplate:has(.npc-nameplate__learned) { flex-wrap: wrap; max-width: 152px; }
+@keyframes npc-learned-flash {
+  0%   { opacity: 0; transform: translateY(2px) scale(0.92); }
+  12%  { opacity: 1; transform: translateY(0) scale(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .npc-nameplate--active {
   color: #ffffff;
   opacity: 1;

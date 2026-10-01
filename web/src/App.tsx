@@ -87,7 +87,7 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, brainSwapEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
     prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
@@ -1204,6 +1204,7 @@ export function App() {
         bossRoom={bossAssignmentOpen || active?.ephemeralKind === "dedicated" || selectedDepartmentIsBossCrew}
         bossTaskDepartmentIds={bossTaskDepartmentIds}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
+        brainSwapEvent={brainSwapEvent}
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
           setComposerFocusRequest((request) => request + 1);

@@ -1697,12 +1697,18 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     // 餵進新 session 的永遠是乾淨的交接摘要本體（splitHandoffLesson 保證活命優先於學習）。
     brainSwapPending.delete(worker.id);
     const { summary, lesson } = splitHandoffLesson(decision.summary);
+    // 誠實訊號：learnedLesson 只有在心法「真的落盤」時才非 null——被去重擋下
+    // 或走「只換腦不學」活命分支（lesson 為 null）都維持 null，前端據此決定要不要閃「＋1 心法」。
+    let learnedLesson: string | null = null;
     if (lesson) {
       const stored = addLesson(worker.id, lesson);
       if (stored.ok) {
+        learnedLesson = stored.lesson;
         record(worker, { type: "user_message", system: true, text: t("🧠 換腦蒸餾出一條做事心法，已沉澱進長期記憶：{lesson}", { lesson: stored.lesson }) });
       }
     }
+    // 只在 complete_swap 路徑發這個事件，不污染其他流程；前端拿 learned 決定閃現內容。
+    broadcast({ type: "brain_swapped", workerId: worker.id, learned: learnedLesson != null, lesson: learnedLesson });
     const provider = worker.runner.provider;
     const workspacePath = worker.runner.workspacePath;
     const model = worker.runner.getModel() ?? undefined;
