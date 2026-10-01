@@ -6153,14 +6153,10 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
       workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
       openRequests: listOpenRequests(openUserRequests, worker.id),
     });
-    // 接回延遲的大頭是「想下一步」的決策推論——若 NPC 用 Opus，這通結構化判斷會花數十秒。
-    // 改用較快的 sonnet 把它砍到秒級；NPC 實際工作仍用自己的模型，產出品質不受影響。找不到 sonnet 就沿用。
-    let decisionModel = runtime.model;
-    if (runtime.provider === "claude") {
-      const fast = claudeCapabilitiesFor(worker.runner.workspacePath).getState().models
-        .map((candidate) => candidate.id).filter(Boolean).find((id) => /sonnet/i.test(id));
-      if (fast) decisionModel = fast;
-    }
+    // 決策沿用 resolveDecisionRuntime 選的模型。實測（874d990）換成 sonnet 不但沒加速、反而更慢
+    // （85s vs opus 48s）——證明接回延遲的大頭是「決策走完整 CLI turn＋大量 extended thinking」的
+    // 本質成本，與模型無關，故不再做模型替換（避免回歸）。真正要秒級需改走輕量決策路徑，屬較大工程。
+    const decisionModel = runtime.model;
     let decision;
     try {
       // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
