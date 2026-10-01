@@ -9729,16 +9729,28 @@ server.listen(config.port, config.host, () => {
     }
   }
   // 開機自癒：武裝中的個人自動循環（載入時已從 store 復原）在重啟後不會有 turn_end 來觸發
-  // 下一步，只靠 15s 保底掃會慢半拍——冷安裝重啟後「沒第一時間接回」的元兇。開機延遲幾秒
-  // （等 runner 暖機、前端重連）主動補掃一次，讓武裝循環第一時間接回，而不是乾等第一個 tick。
+  // 下一步，只靠 15s 保底掃會慢半拍——冷安裝重啟後「沒第一時間接回」的元兇。
+  // 實測（b993031 驗證紀錄）發現真正的延遲是「接回時那通決策模型呼叫」在冷重啟後偏慢，而非
+  // sweep 節奏；所以這裡做三件事把接回盡量提前：①開機就先 warmup 武裝 worker 的 runner（CLI
+  // 與決策並行暖機）②延遲縮到 2s 讓決策呼叫盡早開始（省掉乾等第一個 15s tick 的時間）③用
+  // appendRuntimeLog 落檔（console.log 會被 stdout block-buffer 吃掉，驗不到），記下開機補掃
+  // 真的在開機時跑過、掃了幾個循環，供冷安裝後對時間戳驗證。
   if (workerAutopilotByWorker.size > 0) {
     const armed = workerAutopilotByWorker.size;
+    for (const workerId of workerAutopilotByWorker.keys()) {
+      const worker = workers.get(workerId);
+      if (worker && !worker.runner.busy && providerReady(worker.runner.provider)) {
+        try { worker.runner.warmup(); } catch { /* 暖機失敗不擋開機，sweep 會再補 */ }
+      }
+    }
     const bootResume = setTimeout(() => {
       try {
-        console.log(`[worker-autopilot] 開機補掃：${armed} 個武裝循環，重啟後立即接回`);
+        appendRuntimeLog(config.dataDirectory, `worker-autopilot boot resume sweep: ${armed} armed loop(s)`);
         sweepWorkerAutopilot();
-      } catch (error) { console.error("[worker-autopilot] 開機補掃失敗:", error); }
-    }, 5_000);
+      } catch (error) {
+        appendRuntimeLog(config.dataDirectory, "worker-autopilot boot resume sweep failed", (error as Error).message);
+      }
+    }, 2_000);
     bootResume.unref();
   }
   // 遠端存取自動啟動：設定開著就在開機時把轉接站拉起來，重開機後手機不用等人手動開。
