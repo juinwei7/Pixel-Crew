@@ -13,7 +13,7 @@ $stagedExe    = Join-Path $root 'coldinstall\Pixel Crew.exe'
 $rollbackExe  = Join-Path $root 'coldinstall\Pixel Crew.rollback.exe'
 $installedExe = Join-Path $root 'app\Pixel Crew.exe'
 $healthUrl    = 'http://127.0.0.1:8787/'
-$healthTimeoutSec = 150
+$healthTimeoutSec = 60
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 function Log($m){ Add-Content -LiteralPath $log -Value ("{0} {1}" -f (Get-Date -Format o), $m) }
 

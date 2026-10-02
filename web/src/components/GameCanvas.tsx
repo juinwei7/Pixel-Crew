@@ -89,6 +89,12 @@ function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
   return last?.items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending") ?? null;
 }
 
+// 未回答的「循環問你」：自動循環停下時標成 autopilotAsk 的通知回合會是末尾那筆——owner 一旦發話
+// 就會再疊上新回合，所以「最後一筆仍是 ask」即等於還沒回。用來把這位 NPC 算進分流條的「需要你」。
+function unansweredAutopilotAsk(worker: WorkerState): boolean {
+  return worker.turns[worker.turns.length - 1]?.autopilotAsk === true;
+}
+
 export function groupWorkersByWorkspace(workers: WorkerState[]): WorkerState[] {
   const groups = new Map<string, WorkerState[]>();
   for (const worker of workers) {
@@ -614,7 +620,7 @@ export function GameCanvas({
   const aggVisual = allVisual.filter((w) => !w.temporary);
   const needIds = aggVisual
     .map((w) => w.selectId)
-    .filter((id) => { const full = workersById.get(id); return !!full && !!pendingApprovalFor(full); });
+    .filter((id) => { const full = workersById.get(id); return !!full && (!!pendingApprovalFor(full) || unansweredAutopilotAsk(full)); });
   const aggBusy = aggVisual.filter((w) => w.busy).length;
   const aggIdle = aggVisual.length - aggBusy;
 

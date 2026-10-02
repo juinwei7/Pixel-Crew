@@ -133,5 +133,5 @@ export type RunnerEvent =
   // 否則通知會被誤判成掛著的回合（誤標中止、重啟後被當成 resumeCandidate 的任務原文）。
   // system:true＝系統自動產生、非真人也非教練指示的訊息（換腦/LLM 交接/用量續跑等）。仍照常
   // 顯示與驅動回合，但自動循環的教練「近期回合」彙整必須跳過它——否則會把交接摘要誤當工作結果診斷。
-  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; notice?: boolean; system?: boolean; at?: number }
+  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; notice?: boolean; system?: boolean; at?: number; autopilotAsk?: boolean; askOptions?: string[] }
   | { type: "error"; message: string; at?: number };

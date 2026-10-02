@@ -193,6 +193,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
           command: event.text,
           status: "done",
           items: [],
+          ...(event.autopilotAsk ? { autopilotAsk: true, askOptions: event.askOptions ?? [] } : {}),
         });
         break;
       }
@@ -202,6 +203,9 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         departmentFollowUpMissionId: event.departmentFollowUpMissionId,
         status: "running",
         items: [],
+        // 帶上 system 旗標讓日誌 feed 能把換腦等系統訊息濾掉（見 QuestLog），不影響既有的
+        // busy/回合驅動行為（protocol 註解：system 訊息仍照常顯示與驅動回合）。
+        ...(event.system ? { system: true } : {}),
       });
       next.busy = true;
       next.openTextKey = null;

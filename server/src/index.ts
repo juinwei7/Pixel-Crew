@@ -251,6 +251,7 @@ import {
   workerAutopilotSweepAction,
   workerAutopilotExplorePrompt,
   parseExplorationFindings,
+  parseAutopilotAskOptions,
   isWorkerAutopilotPlanEmpty,
   mergeWorkerAutopilotPlan,
   seedWorkerAutopilotPlan,
@@ -632,6 +633,12 @@ const activeMissions = new Map<string, DepartmentMission>(
   store.listReservedDepartmentMissions().map((mission) => [mission.id, mission]),
 );
 const missionActivities = new Map<string, MissionActivity>();
+// 個別 worker（含 BOSS）的背景 Agent 追蹤：一個 NPC 在某回合用 Agent 工具開了背景代理
+// （run_in_background）後，自己的 turn 會先 turn_end（busy 翻 false），但背景代理還在跑。
+// 若只看 runner.busy，BOSS 旁會誤顯「待命」。沿用 Mission 那套 applyMissionActivityEvent：
+// 背景 Agent 跨 turn_end 不清、只在收到非 async 的收尾結果／error 或逾時才銷號。這裡的偏誤
+// 刻意倒向「寧可多顯一下執行中」——owner 只嫌過它誤顯待命，從不嫌它顯執行中。
+const workerActivities = new Map<string, MissionActivity>();
 // How long a Mission/collaboration turn may stay open waiting for a
 // background "async agent" tool call's closing event before it's treated as
 // stuck. See the missionActivityTimeoutSweep below.
@@ -663,7 +670,7 @@ function workerSummary(w: Worker) {
     id: w.id,
     name: w.runner.name,
     model: w.runner.getModel() ?? null,
-    busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy,
+    busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy || workerHasBackgroundAgents(w.id),
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
     avatarKind: w.avatarKind,
@@ -685,6 +692,25 @@ function workerSummary(w: Worker) {
 
 function handoffInProgress(worker: Worker): boolean {
   return Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
+}
+
+// 這個 worker 目前是否還掛著跑不停的背景 Agent（見 workerActivities / workerAsyncAgentHook）。
+function workerHasBackgroundAgents(workerId: string): boolean {
+  return (workerActivities.get(workerId)?.openAgentIds.length ?? 0) > 0;
+}
+
+// 把每個 RunnerEvent 餵進這顆 worker 的背景 Agent 追蹤。開了背景代理→turn_end 不清；收到非 async
+// 收尾結果／error 或逾時才銷號。只有在「有無背景 Agent」的布林邊界真的翻轉時才廣播 worker_updated，
+// 讓前端的 busy（含 BOSS 旁狀態）即時跟著亮／滅，又不會每個事件都洗一次廣播。
+function workerAsyncAgentHook(worker: Worker, event: RunnerEvent): void {
+  const before = workerHasBackgroundAgents(worker.id);
+  const current = workerActivities.get(worker.id) ?? createMissionActivity();
+  const { activity } = applyMissionActivityEvent(current, event);
+  if (activity.openAgentIds.length > 0) workerActivities.set(worker.id, activity);
+  else workerActivities.delete(worker.id);
+  if (before !== (activity.openAgentIds.length > 0)) {
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  }
 }
 
 function collaborationInProgress(workerId: string): boolean {
@@ -1631,6 +1657,9 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   }
   const collaborationTerminal = collaborationEventIsTerminal(worker, event);
   broadcast({ type: "event", workerId: worker.id, event });
+  // 必須排在 event 廣播「之後」：turn_end 事件會讓前端把 busy 翻 false，這裡若還有背景 Agent
+  // 就緊接著補一發 worker_updated(busy=true) 把它蓋回來，BOSS 旁才不會在背景代理還在跑時顯待命。
+  workerAsyncAgentHook(worker, event);
   if ((event.type === "turn_end" || event.type === "error") && collaborationTerminal) finishCollaboration(worker, event);
   warroomRecordHook(worker, event);
   brainSwapHook(worker, event);
@@ -6113,11 +6142,41 @@ function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number,
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
 }
 
-function disableWorkerAutopilotWithNote(worker: Worker, note: string): void {
+function disableWorkerAutopilotWithNote(worker: Worker, note: string, ask?: { options: string[] }): void {
   if (!workerAutopilotByWorker.delete(worker.id)) return;
   workerAutopilotRetry.resolve(worker.id);
   persistWorkerAutopilotStates();
-  record(worker, { type: "user_message", text: note, notice: true });
+  // ask 非空＝循環停下來是要 owner 決定(非單純做完/出錯)。標成 autopilotAsk 讓 UI 渲染醒目「循環問你」卡、
+  // askOptions 給一鍵回答按鈕。owner 之後對這位 NPC 發話即視為已回答(UI 由訊息流自行判定，不需額外 server 狀態)。
+  record(worker, { type: "user_message", text: note, notice: true, ...(ask ? { autopilotAsk: true, askOptions: ask.options } : {}) });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 循環撞到步數／時間上限而停時用：除了貼停止註記，再補送一個「收尾交接」回合，讓 NPC 主動給擁有者
+// 一份看得懂的結案（做了什麼／結論／下一步／怎麼接續）。這條在拿掉「剩 N 步」倒數後尤其重要——否則
+// NPC 不知道是最後一步、不會自己總結，循環就這樣停在半空，擁有者回頭看不懂也不知怎麼接。
+function concludeWorkerAutopilotWithHandoff(worker: Worker, note: string, ask?: { options: string[] }): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  // ask 非空＝教練停下來是要你拍板：停止註記照樣標成「循環問你」卡＋一鍵選項；下面的四段收尾仍照送，
+  // 讓你同時有「做了什麼的完整回顧」與「一鍵回答的決定」。
+  record(worker, { type: "user_message", text: note, notice: true, ...(ask ? { autopilotAsk: true, askOptions: ask.options } : {}) });
+  // 只有 NPC 當下閒著、provider 就緒、且沒有在交接/協作/Mission/換腦/排隊時，才補送收尾回合。
+  // 送不出就只留停止註記，不硬塞（寧可少一份交接，也不要卡住或拋錯）。
+  const canHandoff = !worker.runner.busy && workerProviderReady(worker)
+    && !handoffInProgress(worker) && !collaborationInProgress(worker.id) && !missionInProgress(worker.id)
+    && !pendingSwapSummaries.has(worker.id) && !brainSwapPending.has(worker.id)
+    && store.listQueue(worker.id).length === 0;
+  if (canHandoff) {
+    const handoff = t("🏁 自動循環在此結束，請只做一件事：給擁有者一份看得懂的收尾交接，寫完就停、不要再開始任何新工作或新測試。用四段寫清楚：① 這段循環實際做了什麼（具體、可核對，不要只說「驗了幾支」要講結論）② 現在的結論／狀態 ③ 建議的下一步 ④ 擁有者要怎麼接續（直接回什麼一句話、或怎麼重開循環）。");
+    // system:true＝系統產生、非真人目標：若之後重開循環，別把這句交接指令誤當成原始大局目標。
+    record(worker, { type: "user_message", text: handoff, system: true });
+    try {
+      worker.runner.send(handoff, [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch { /* 送不出就算了，停止註記已經在了 */ }
+  }
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
 }
 
@@ -6163,11 +6222,11 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
     return;
   }
   if (state.stepsRemaining <= 0) {
-    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。"));
+    concludeWorkerAutopilotWithHandoff(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。"));
     return;
   }
   if (state.deadlineAt && Date.now() >= state.deadlineAt) {
-    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。"));
+    concludeWorkerAutopilotWithHandoff(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。"));
     return;
   }
   // 讓路：交接/協作/Mission 進行中、換腦流程中、或佇列還有排隊訊息時不觸發——
@@ -6294,7 +6353,11 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (!decision || decision.action !== "continue") {
       if (decision && decision.action === "stop" && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
       const reason = decision && decision.action === "stop" ? decision.reason : "";
-      disableWorkerAutopilotWithNote(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      // reason 非空＝循環把一個決定交還你(ASK 型停)；標成「循環問你」並附可一鍵回答的選項。
+      const ask = reason ? { options: parseAutopilotAskOptions(reason) } : undefined;
+      // 教練判定做完而停＝正常停：和撞上限一樣補一份四段收尾交接（看得懂＋怎麼接），
+      // 有待拍板的決定時停止註記照樣帶一鍵選項卡。只有「出錯停」才不補交接。
+      concludeWorkerAutopilotWithHandoff(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }), ask);
       return;
     }
     // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
@@ -6303,7 +6366,9 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     persistWorkerAutopilotStates();
     // 最後一步的決策帶著整輪復盤——存起來讓下一輪循環從這裡往上爬（機制一）。
     if (live.stepsRemaining <= 0 && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
-    const text = t("🔁（自動循環·剩 {n} 步）{instruction}", { n: live.stepsRemaining, instruction: decision.instruction });
+    // 刻意不把「剩 N 步」寫進給 NPC 的指令：讓 NPC 看到倒數會誘發「交券效應」——快沒步數時提早草草
+    // 收尾、為了在上限前交東西而非真推進。步數只留在引擎內部當安全界限；NPC 靠教練判斷真完成才停。
+    const text = t("🔁（自動循環）{instruction}", { instruction: decision.instruction });
     record(worker, { type: "user_message", text });
     try {
       worker.runner.send(text, [], []);
@@ -9632,6 +9697,14 @@ const missionActivityTimeoutSweep = setInterval(() => {
   for (const [taskId, activity] of collaborationActivities) {
     if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
     timeoutCollaboration(taskId);
+  }
+  // 逾時保底：某顆 worker 的背景 Agent 超過上限還沒回報收尾（CLI 的收尾事件是經驗性的、不保證
+  // 一定到），就銷號並補廣播 worker_updated，讓 BOSS 旁的「執行中」不會卡死回不到待命。
+  for (const [workerId, activity] of workerActivities) {
+    if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
+    workerActivities.delete(workerId);
+    const worker = workers.get(workerId);
+    if (worker) broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   }
 }, 60_000);
 

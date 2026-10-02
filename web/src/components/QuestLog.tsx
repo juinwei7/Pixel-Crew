@@ -391,6 +391,40 @@ function statusChip(status: Turn["status"], waitingForApproval: boolean) {
   return <span className="turn-chip turn-chip--done">{t("完成")}</span>;
 }
 
+// 自動循環停下來要你拍板時的醒目問題卡：把停止理由原文攤開，並從 askOptions 生出
+// 一鍵回答按鈕（點了就把那個字母直接發回給這位 NPC，等同你親口回覆）。沒有選項時
+// 只顯示理由＋「直接回覆即可」提示，不硬湊假按鈕。
+const AUTOPILOT_ASK_PREFIX = /^[🅿️✅⛔\s]+/u;
+function AutopilotAskCard({ turn, onAnswer }: { turn: Turn; onAnswer?: (text: string, workerId?: string) => void }) {
+  const [answered, setAnswered] = useState<string | null>(null);
+  const options = turn.askOptions ?? [];
+  const body = turn.command.replace(AUTOPILOT_ASK_PREFIX, "").trim() || turn.command;
+  return (
+    <div className="autopilot-ask" role="group" aria-label={t("循環問你")}>
+      <div className="autopilot-ask__head"><span className="autopilot-ask__badge">❓ {t("循環問你")}</span></div>
+      <p className="autopilot-ask__body"><RichText text={body} /></p>
+      {options.length > 0 && onAnswer && (
+        <div className="autopilot-ask__options">
+          {options.map((label) => (
+            <button
+              key={label}
+              type="button"
+              className={`autopilot-ask__option ${answered === label ? "answered" : ""}`}
+              disabled={answered !== null}
+              onClick={() => { setAnswered(label); onAnswer(label, turn.workerId); }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {answered
+        ? <p className="autopilot-ask__done">{t("已回覆「{label}」", { label: answered })}</p>
+        : options.length === 0 && <p className="autopilot-ask__hint">{t("在下面直接回覆就能接續。")}</p>}
+    </div>
+  );
+}
+
 // Memoised so a streaming turn only re-renders its own card. The reducer keeps
 // referential identity for every finished turn (only the running turn gets a
 // fresh object per event), so the shallow prop compare skips the entire history
@@ -398,13 +432,26 @@ function statusChip(status: Turn["status"], waitingForApproval: boolean) {
 // trees per streamed token, which reads as scroll jank/jitter on mobile.
 // onPin takes the turn key (not a per-turn closure) so its reference stays
 // stable across renders and doesn't defeat the memo.
-const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(turnKey: string): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null> }) {
+const COACH_PREFIX = "🔁";
+const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove, onAnswerAutopilot }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(turnKey: string): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; onAnswerAutopilot?: (text: string, workerId?: string) => void }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const open = focusMode || (expanded ?? (isLatest || turn.status === "running" || turn.status === "error"));
   const waitingForApproval = turn.items.some((item) => item.kind === "approval" && item.status === "pending");
 
+  // 「循環問你」通知回合：整張換成醒目問題卡，不走一般任務卡（它沒有 items，攤成任務卡只會是空殼）。
+  if (turn.autopilotAsk) {
+    return (
+      <div id={focusMode ? focusTurnId(turn.key) : searchTurnId(turn.key)} className="turn-card turn-card--ask">
+        <AutopilotAskCard turn={turn} onAnswer={onAnswerAutopilot} />
+      </div>
+    );
+  }
+
+  // 教練自動下的下一步（🔁 開頭）：收斂成一條細長活動列，不佔整張任務卡的視覺重量。
+  const isCoach = turn.command.startsWith(COACH_PREFIX);
+
   return (
-    <div id={focusMode ? focusTurnId(turn.key) : searchTurnId(turn.key)} className={`turn-card turn-card--${turn.status}`}>
+    <div id={focusMode ? focusTurnId(turn.key) : searchTurnId(turn.key)} className={`turn-card turn-card--${turn.status}${isCoach ? " turn-card--coach" : ""}`}>
       <div className="turn-card__head">
         {focusMode ? <div className="turn-card__toggle turn-card__toggle--reader">
           <span className="turn-card__cmd"><HighlightedText text={turn.command} query={highlight} /></span>
@@ -437,7 +484,7 @@ function navStatus(turn: Turn): string {
   return t("完成");
 }
 
-export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, studioRail, studioRailCollapsed = true, missionActivity }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; studioRail?: ReactNode; studioRailCollapsed?: boolean; missionActivity?: ReactNode }) {
+export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, onAnswerAutopilot, studioRail, studioRailCollapsed = true, missionActivity }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; onAnswerAutopilot?: (text: string, workerId?: string) => void; studioRail?: ReactNode; studioRailCollapsed?: boolean; missionActivity?: ReactNode }) {
   const logRef = useRef<HTMLDivElement>(null);
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -475,7 +522,10 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
   const needle = searchQuery.trim().toLowerCase();
-  const matchingTurns = needle ? turns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : turns;
+  // 系統訊息（換腦冷卻／蒸餾心法／換腦完成等）不是真工作活動，從日誌 feed 濾掉——否則一次
+  // 換腦產生的數則系統卡會把「保留最近」視窗洗版，把真正的工作回合擠出畫面（owner 回報）。
+  const feedTurns = turns.filter((turn) => !turn.system);
+  const matchingTurns = needle ? feedTurns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : feedTurns;
   const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const visibleTurns = focusMode
     ? matchingTurns.filter((turn) => turn.status === "running" || readableTurns.includes(turn))
@@ -573,7 +623,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         </button>
       )}
       {renderedTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} />
+        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} onAnswerAutopilot={onAnswerAutopilot} />
       ))}
       {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
         const el = logRef.current;

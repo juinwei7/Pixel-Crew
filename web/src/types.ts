@@ -99,6 +99,17 @@ export type Turn = {
   costUsd?: number;
   durationMs?: number;
   contextTokens?: number;
+  // 自動循環停下來要 owner 拍板的「循環問你」通知回合：autopilotAsk 讓日誌渲染醒目問題卡，
+  // askOptions 是從停止理由抽出的 A/B/C／甲乙丙丁 一鍵回答選項（可能為空＝只有敘述沒有選項）。
+  autopilotAsk?: boolean;
+  askOptions?: string[];
+  // 跨 NPC 檢視（全部搜尋）才會帶：這筆回合屬於哪位 NPC。一鍵回答要發回「發問的那位」而不是
+  // 當前選取的 NPC，否則在全部搜尋裡回答會誤送到別人。單一 NPC 日誌裡不帶＝沿用當前 NPC。
+  workerId?: string;
+  // system:true＝系統自動產生的訊息（換腦冷卻／蒸餾心法／換腦完成等），不是真工作活動。
+  // 日誌 feed 要濾掉它們，否則一次換腦產生的三四則系統卡會把「保留最近」的視窗洗版、
+  // 把真正的工作回合擠出畫面（owner 回報：換腦訊息蓋過最近的真活動）。
+  system?: boolean;
 };
 
 export type UpdateInfo = {

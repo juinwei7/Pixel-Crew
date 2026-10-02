@@ -325,7 +325,8 @@ export function App() {
       .map((worker) => {
         const lastTurn = worker.turns[worker.turns.length - 1];
         const subAgents = (lastTurn?.items ?? []).flatMap((item) => {
-          if (item.kind !== "tool_call" || item.name !== "Task" || item.status !== "running") return [];
+          // 子代理工具在新版叫 "Agent"（舊版 "Task"），兩個都認，否則 busy 期間列不出「哪些子代理在跑」。
+          if (item.kind !== "tool_call" || !/(^|__)(agent|task)$/i.test(item.name) || item.status !== "running") return [];
           const input = (item.input ?? {}) as { subagent_type?: string; description?: string };
           const type = input.subagent_type?.trim();
           const desc = input.description?.trim();
@@ -447,6 +448,8 @@ export function App() {
       ...turn,
       key: `${worker.id}:${turn.key}`,
       command: `${worker.name} · ${turn.command}`,
+      // 跨 NPC 檢視：記住這筆屬於誰，一鍵回答才會發回發問的那位 NPC（而非當前選取的）。
+      workerId: worker.id,
     })));
   }, [active?.turns, taskSearch, taskSearchScope, workerList]);
   // 老闆交辦/部門任務裡，NPC 是被「任務」調去幹活的，執行過程掛在任務上，本來只在
@@ -638,6 +641,14 @@ export function App() {
     const timer = window.setInterval(() => { void check(); }, 3_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [notify, restartPending]);
+
+  // 「循環問你」一鍵回答：把選到的字母當成一句話直接發回給目前這位 NPC（等同你親口回覆）。
+  // 用 useCallback 穩住參考，才不會每次 render 都生新函式而打穿 TurnCard 的 memo（會造成串流卡頓）。
+  const answerAutopilot = useCallback((text: string, workerId?: string) => {
+    const target = workerId ?? activeId;
+    if (!target) return;
+    void send(target, { text, images: [], documents: [] });
+  }, [activeId, send]);
 
   const activateNpc = useCallback((id: string) => {
     const worker = workers[id];
@@ -1497,7 +1508,7 @@ export function App() {
           onAddPane={addFocusPane}
           onRemovePane={removeFocusPane}
           onApprove={resolveTaskApproval}
-        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} missionActivity={workerMissionActivity} />)}
+        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} onAnswerAutopilot={answerAutopilot} missionActivity={workerMissionActivity} />)}
         {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
           focusMode={taskFocusMode}

@@ -1082,6 +1082,26 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .turn-card__head > .copy-button { margin-right: 7px; }
 .turn-text__label, .tool-row__label { display: flex; align-items: center; justify-content: space-between; }
 
+/* 「循環問你」：自動循環停下要你拍板時的醒目問題卡（amber＝需要你）。 */
+.turn-card--ask { border: 0; background: transparent; padding: 0; }
+.autopilot-ask { margin: 10px 14px; padding: 14px 15px; border: 1px solid rgba(255,176,0,.42); border-left: 3px solid #ffb000; border-radius: 11px; background: linear-gradient(135deg, rgba(40,30,8,.5), rgba(14,18,30,.72)); box-shadow: 0 10px 28px rgba(0,0,0,.3), inset 0 0 22px rgba(255,176,0,.04); }
+.autopilot-ask__head { margin-bottom: 8px; }
+.autopilot-ask__badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid rgba(255,176,0,.4); border-radius: 999px; background: rgba(255,176,0,.1); color: #ffcf8a; font: 9px var(--mono); letter-spacing: .14em; }
+.autopilot-ask__body { margin: 0 0 12px; color: #eef3f8; font-size: 13px; line-height: 1.62; }
+.autopilot-ask__body p { margin: 0 0 .5em; }
+.autopilot-ask__options { display: flex; flex-wrap: wrap; gap: 8px; }
+.autopilot-ask__option { min-width: 40px; min-height: 34px; padding: 7px 15px; border: 1px solid rgba(255,176,0,.5); border-radius: 8px; background: rgba(255,176,0,.08); color: #ffcf8a; cursor: pointer; font: 600 14px/1 var(--mono); transition: background .12s, border-color .12s; }
+.autopilot-ask__option:hover:not(:disabled) { background: rgba(255,176,0,.2); border-color: #ffb000; color: #fff4dc; }
+.autopilot-ask__option:disabled { opacity: .4; cursor: default; }
+.autopilot-ask__option.answered { background: #ffb000; border-color: #ffb000; color: #1a1404; opacity: 1; }
+.autopilot-ask__done { margin: 10px 0 0; color: #8fa4b8; font-size: 11px; }
+.autopilot-ask__hint { margin: 0; color: #8fa4b8; font-size: 11px; }
+
+/* 教練自動下的下一步（🔁）：收斂成細長活動列，不佔整張任務卡的視覺重量。 */
+.turn-card--coach { opacity: .78; border-color: rgba(143,184,232,.12); }
+.turn-card--coach .turn-card__toggle { padding-top: 7px; padding-bottom: 7px; }
+.turn-card--coach .turn-card__cmd { font-size: 11px; color: #8fa4b8; }
+
 /* Focus reader: a calm, document-first surface for long AI responses. */
 .focus-controls { position: relative; flex: 0 0 auto; }
 
