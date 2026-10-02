@@ -9831,11 +9831,15 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
   if (!ready.ready) return { outcome: "rollback_not_ready", detail: ready.reason };
   const rebuild = join(SELF_REPO, "scripts", "windows", "pc-selfrebuild.ps1");
   if (!existsSync(rebuild)) return { outcome: "rebuild_script_missing" };
-  // detached（WMI）啟動自我重建，才能在它稍後殺掉本 app 時存活。
-  const inner = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${rebuild}" -Repo "${SELF_REPO}" -Reason "${reason.replace(/["'`$]/g, "")}"`;
-  const wmi = `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${inner.replace(/'/g, "''")}' } | Out-Null`;
+  // 直接 detached spawn powershell -File（參數走陣列，node 會正確逐一加引號）——不要再用
+  // node→powershell -Command→WMI 那層嵌套字串，之前就是它把 -File 的引號跳脫壞掉、什麼都沒跑。
+  // pc-selfrebuild 在 app 還活著時做完 build，再用 WMI 把 pc-selfinstall 完全獨立出去殺 app，故這層 spawn 不需存活到那時。
   try {
-    spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", wmi], { detached: true, stdio: "ignore" }).unref();
+    const child = spawn("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+      "-File", rebuild, "-Repo", SELF_REPO, "-Reason", reason.replace(/[\r\n]/g, " ").slice(0, 120),
+    ], { detached: true, stdio: "ignore" });
+    child.unref();
   } catch (error) {
     return { outcome: "launch_failed", detail: (error as Error).message };
   }
@@ -9869,7 +9873,6 @@ app.post("/api/self-install/auto", (req, res) => {
 
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
-  appendRuntimeLog(config.dataDirectory, "SELF-EVOLVE-DEMO-MARKER-ALPHA: 由自我安裝部署的示範標記");
   resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);

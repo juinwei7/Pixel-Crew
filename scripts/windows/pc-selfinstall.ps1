@@ -1,11 +1,11 @@
-# Pixel Crew 強健自我冷安裝（自我進化引擎用）。
-# 在 pc-coldinstall 的基礎上加「裝後健康輪詢 + 起不來就自動回滾」——處理最壞情況：新版爛到
-# 連起都起不來，app 自己沒機會跑開機回滾，於是由這支 detached 安裝器負責還原上一個好版。
-#
-# 前置（由觸發端保證，見 selfInstallLifecycle.checkRollbackReady）：
-#   coldinstall\Pixel Crew.exe          = 新版安裝器（staged）
-#   coldinstall\Pixel Crew.rollback.exe = 上一個好版安裝器（rollback，且 != staged）
-# 經 WMI Win32_Process.Create detached 啟動，才能在殺掉 app 後存活。
+# Pixel Crew robust self cold-install (for the self-evolve engine; runs detached).
+# Mirrors pc-coldinstall, adds: post-install health polling + auto-rollback if the new build
+# won't come up. Handles the worst case (new build too broken to even start, so the app itself
+# never gets to run its own boot-resolver) by having this detached installer restore the previous good.
+# Preconditions (guaranteed by the caller): coldinstall\Pixel Crew.exe = new (staged),
+# coldinstall\Pixel Crew.rollback.exe = previous good (and != staged).
+# Launched detached (WMI Win32_Process.Create) so it survives killing the app it updates.
+# ASCII-only comments: Windows PowerShell 5.1 misparses UTF-8-no-BOM scripts with CJK text.
 $ErrorActionPreference = 'Continue'
 $root         = Join-Path $env:LOCALAPPDATA 'Pixel Crew'
 $log          = Join-Path $root 'logs\self-install.log'
@@ -65,13 +65,13 @@ $before = $null
 try { $before = (Get-Item -LiteralPath $installedExe -ErrorAction Stop).LastWriteTime } catch {}
 Log "installed mtime before: $before"
 
-# 1) 裝新版
+# 1) install the new version
 Stop-AppProcesses | Out-Null
 Start-Process -FilePath $stagedExe
 Log "launched staged (new): $stagedExe"
 $swapped = Wait-Swapped $before
 
-# 2) 裝後健康輪詢
+# 2) post-install health poll
 $healthy = $false
 if ($swapped) { $healthy = Test-Healthy }
 
@@ -80,7 +80,7 @@ if ($healthy) {
   return
 }
 
-# 3) 不健康（含起不來）→ 自動回滾到上一個好版
+# 3) unhealthy (incl. won't-boot) -> auto rollback to previous good
 Log 'UNHEALTHY -> rolling back to previous good version'
 try {
   Copy-Item -LiteralPath $rollbackExe -Destination $stagedExe -Force
@@ -92,8 +92,7 @@ try { $before2 = (Get-Item -LiteralPath $installedExe -ErrorAction Stop).LastWri
 Stop-AppProcesses | Out-Null
 Start-Process -FilePath $stagedExe
 Log "launched staged (rollback/old): $stagedExe"
-$reswapped = Wait-Swapped $before2
-$rehealthy = $false
-if ($reswapped -ne $null -or $true) { $rehealthy = Test-Healthy }
+Wait-Swapped $before2 | Out-Null
+$rehealthy = Test-Healthy
 if ($rehealthy) { Log '=== rolled back to previous good version; healthy ===' }
 else { Log '=== ROLLBACK FINISHED but health still not confirmed -- owner attention needed ===' }

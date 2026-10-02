@@ -61,7 +61,9 @@ export class PendingSelfInstallStore {
 
   read(): PendingSelfInstall | null {
     try {
-      return normalizePendingSelfInstall(JSON.parse(fs.readFileSync(this.file, "utf8")));
+      // 去掉 UTF-8 BOM：PowerShell 寫的 marker 可能帶 BOM，JSON.parse 遇 BOM 會丟錯。
+      const raw = fs.readFileSync(this.file, "utf8").replace(/^﻿/, "");
+      return normalizePendingSelfInstall(JSON.parse(raw));
     } catch {
       return null;
     }

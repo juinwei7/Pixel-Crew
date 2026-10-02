@@ -1,7 +1,9 @@
-# Pixel Crew 自我重建＋出貨（自我進化引擎的「觸發器」重活部分，detached 執行）。
-# 流程：build → test → package → 打單檔 exe；任一步失敗就中止、不裝（守住「測不過不出貨」）。
-# 全綠才：複製新 exe 到 staged、寫 pending marker、鏈到 pc-selfinstall.ps1（它負責裝＋健康輪詢＋自動回滾）。
-# 前置閘門（critical 判定、回滾就緒）由 server 端 triggerSelfInstall 在啟動本腳本前做掉。
+# Pixel Crew self-rebuild + ship (the heavy half of the self-evolve "trigger"; runs detached).
+# Flow: build -> test -> package -> single-file exe. Abort on any failure (no install unless all green).
+# Only when green: copy new exe to staged, write pending marker, chain to pc-selfinstall.ps1
+# (which installs + health-polls + auto-rolls-back). The critical/rollback-ready gate is done by
+# the server-side triggerSelfInstall before this script is launched.
+# ASCII-only comments on purpose: Windows PowerShell 5.1 misparses UTF-8-no-BOM scripts with CJK text.
 param(
   [Parameter(Mandatory = $true)][string]$Repo,
   [string]$Reason = "self-evolve"
@@ -22,10 +24,10 @@ Log "=== self-rebuild start (repo=$Repo reason=$Reason) ==="
 if (-not (Test-Path -LiteralPath $Repo)) { Log "FATAL: repo not found"; return }
 if (-not (Test-Path -LiteralPath $rollbackExe)) { Log "FATAL: no rollback point; refuse to rebuild"; return }
 
-# 測不過不出貨：任一步非 0 退出碼即中止。
-function Run($label, $exe, $args) {
+# Ship nothing unless every step exits 0.
+function Run($label, $exe, $argList) {
   Log "run: $label"
-  & $exe @args *>> $log
+  & $exe @argList *>> $log
   if ($LASTEXITCODE -ne 0) { Log "FAILED: $label (exit $LASTEXITCODE) -- abort, nothing installed"; return $false }
   return $true
 }
@@ -43,21 +45,26 @@ try {
 $newExe = Join-Path $Repo 'release\windows\x64\Pixel Crew.exe'
 if (-not (Test-Path -LiteralPath $newExe)) { Log "FATAL: built exe missing: $newExe"; return }
 
-# 回滾就緒複檢：新 exe 不可與回滾點相同（否則失敗回不去 = 那個致命坑）。
+# Rollback-ready recheck: the new exe must differ from the rollback point,
+# otherwise a failure could not return to a previous good version.
 $newHash = (Get-FileHash -LiteralPath $newExe -Algorithm SHA256).Hash
 $rbHash  = (Get-FileHash -LiteralPath $rollbackExe -Algorithm SHA256).Hash
 if ($newHash -eq $rbHash) { Log "no-op: new build identical to rollback point; nothing to ship"; return }
 
-# 出貨：stage 新 exe、記 marker、鏈到 pc-selfinstall。
+# Ship: stage the new exe, write the marker, chain to pc-selfinstall.
 $prevMtime = 0
 try { $prevMtime = [int64]((Get-Item -LiteralPath $installedExe).LastWriteTimeUtc - (Get-Date '1970-01-01Z')).TotalMilliseconds } catch {}
 Copy-Item -LiteralPath $newExe -Destination $stagedExe -Force
 Log "staged new exe"
 
 $marker = @{ firedAt = $prevMtime; reason = $Reason; changedFiles = @(); stagedExe = $stagedExe; rollbackExe = $rollbackExe; prevExeMtimeMs = $prevMtime }
-$marker | ConvertTo-Json -Compress | Set-Content -LiteralPath $pendingJson -Encoding UTF8
+# Write UTF-8 WITHOUT BOM: Set-Content -Encoding UTF8 on PS 5.1 prepends a BOM that breaks node's JSON.parse.
+[System.IO.File]::WriteAllText($pendingJson, ($marker | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
 Log "wrote pending marker"
 
 if (-not (Test-Path -LiteralPath $selfInstall)) { Log "FATAL: pc-selfinstall.ps1 missing at $selfInstall"; return }
-Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$selfInstall)
-Log "=== self-rebuild done; handed off to pc-selfinstall ==="
+# Hand off via WMI Win32_Process.Create (fully detached) so pc-selfinstall survives this script exiting
+# AND survives killing the app it is about to swap. Start-Process from a detached process did not launch.
+$siCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $selfInstall + '"'
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $siCmd } | Out-Null
+Log "=== self-rebuild done; handed off to pc-selfinstall (WMI) ==="
