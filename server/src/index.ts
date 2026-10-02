@@ -9839,7 +9839,7 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
     const child = spawn(psExe, [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
       "-File", rebuild, "-Repo", SELF_REPO, "-Reason", reason.replace(/[\r\n]/g, " ").slice(0, 120),
-    ], { detached: true, stdio: "ignore" });
+    ], { detached: true, stdio: "ignore", windowsHide: true });
     child.on("error", (err) => appendRuntimeLog(config.dataDirectory, "self-install launch error", { error: (err as Error).message }));
     child.unref();
   } catch (error) {
