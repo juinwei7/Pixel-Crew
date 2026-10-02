@@ -9758,12 +9758,19 @@ process.on("unhandledRejection", (reason) => {
 // marker，重啟後在這裡驗收——我們能跑進 listen callback＝新版起得來＝健康，於是晉升回滾點
 // （rollback := 這次成功的好版，供下次回滾）並清 marker；少見的「起得來但檢查不過」只記錄給 owner
 // （真正「爛到起不來」的回滾由 detached 的 pc-selfinstall 健康輪詢負責，app 自己沒機會跑這段）。
-function resolvePendingSelfInstallOnBoot(): void {
+async function resolvePendingSelfInstallOnBoot(): Promise<void> {
   try {
     const dir = config.dataDirectory;
     const store = new PendingSelfInstallStore(dir);
     const marker = store.read();
     if (!marker) return;
+    // 降落傘2.0事故的根修：不能把「進得了 listen callback」當健康——壞版(聽錯port)也進得來，
+    // 還會把自己晉升成回滾點(污染)。必須真的打 canonical port 拿到 200 才算健康、才准晉升。
+    let selfHealthOk = false;
+    try {
+      const resp = await fetch(`http://127.0.0.1:${config.port}/`, { signal: AbortSignal.timeout(5000) });
+      selfHealthOk = resp.status === 200;
+    } catch { /* 打不到 8787 ＝ 不健康（例如本進程聽錯 port） */ }
     const installedExe = join(dir, "app", "Pixel Crew.exe");
     const stagedExe = join(dir, "coldinstall", "Pixel Crew.exe");
     const rollbackExe = join(dir, "coldinstall", "Pixel Crew.rollback.exe");
@@ -9774,9 +9781,9 @@ function resolvePendingSelfInstallOnBoot(): void {
     const checks: PostInstallChecks = {
       exeFresh: installedMtime > marker.prevExeMtimeMs,
       swappedOk: /SWAPPED OK|HEALTHY OK/.test(logTail),
-      distHasNewCode: true, // 正在執行的就是新碼
-      apiOk: true,          // 已進入 listen callback＝API 起得來
-      healthOk: true,
+      distHasNewCode: true,        // 正在執行的就是新碼
+      apiOk: selfHealthOk,         // 真的打 canonical port 的結果，不再寫死（根修）
+      healthOk: selfHealthOk,
     };
     const res = evaluateBootResolution(marker, checks);
     if (res.action === "confirm_ok") {
@@ -9890,7 +9897,7 @@ app.post("/api/self-install/auto", (req, res) => {
 
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
-  resolvePendingSelfInstallOnBoot();
+  void resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
   console.log(`local database: ${config.dbPath}`);
