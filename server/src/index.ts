@@ -9831,20 +9831,22 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
   if (!ready.ready) return { outcome: "rollback_not_ready", detail: ready.reason };
   const rebuild = join(SELF_REPO, "scripts", "windows", "pc-selfrebuild.ps1");
   if (!existsSync(rebuild)) return { outcome: "rebuild_script_missing" };
-  // 直接 detached spawn powershell -File（參數走陣列，node 會正確逐一加引號）——不要再用
-  // node→powershell -Command→WMI 那層嵌套字串，之前就是它把 -File 的引號跳脫壞掉、什麼都沒跑。
-  // pc-selfrebuild 在 app 還活著時做完 build，再用 WMI 把 pc-selfinstall 完全獨立出去殺 app，故這層 spawn 不需存活到那時。
+  // 直接 detached spawn powershell -File（參數走陣列，node 正確逐一加引號）。用 powershell 的
+  // 絕對路徑——managed node 的 PATH 不保證含 System32，用相對 "powershell.exe" 會非同步 ENOENT
+  // 靜默失敗（log 寫了 launched 其實沒起程序）。並掛 error 監聽，失敗落檔不再靜默。
+  const psExe = join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   try {
-    const child = spawn("powershell.exe", [
+    const child = spawn(psExe, [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
       "-File", rebuild, "-Repo", SELF_REPO, "-Reason", reason.replace(/[\r\n]/g, " ").slice(0, 120),
     ], { detached: true, stdio: "ignore" });
+    child.on("error", (err) => appendRuntimeLog(config.dataDirectory, "self-install launch error", { error: (err as Error).message }));
     child.unref();
   } catch (error) {
     return { outcome: "launch_failed", detail: (error as Error).message };
   }
   if (head) recordShippedCommit(head);
-  appendRuntimeLog(config.dataDirectory, "self-install triggered: detached self-rebuild launched", { reason, head, changed: changed.slice(0, 20) });
+  appendRuntimeLog(config.dataDirectory, "self-install triggered: detached self-rebuild launched", { reason, head, changed: changed.slice(0, 20), psExe });
   return { outcome: "fired" };
 }
 
