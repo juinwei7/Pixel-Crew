@@ -9869,6 +9869,7 @@ app.post("/api/self-install/auto", (req, res) => {
 
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
+  appendRuntimeLog(config.dataDirectory, "SELF-EVOLVE-DEMO-MARKER-ALPHA: 由自我安裝部署的示範標記");
   resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
