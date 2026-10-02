@@ -9837,7 +9837,9 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
   const psExe = join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const safeReason = reason.replace(/[\r\n"]/g, " ").slice(0, 120);
   const psCmd = `"${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${rebuild}" -Repo "${SELF_REPO}" -Reason "${safeReason}"`;
-  const vbsPath = join(config.dataDirectory, "pc-selfrebuild-launch.vbs");
+  // 寫到無空格路徑（SELF_REPO 有連字號沒空格）：wscript 對含空格的腳本路徑會從空格截斷、
+  // 跳出「…\Pixel 沒有副檔名」錯誤（dataDirectory 是 …\Pixel Crew\ 有空格，故不可用）。
+  const vbsPath = join(SELF_REPO, ".pc-selfrebuild-launch.vbs");
   try {
     // VBS 字串字面以 "" 跳脫內嵌雙引號；視窗樣式 0=隱藏、第三參數 False=不等待。
     writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run "${psCmd.replace(/"/g, '""')}", 0, False\r\n`);

@@ -24,3 +24,4 @@ cloudflared.exe
 # 遠端存取轉接站的啟動 log——每次執行都會重寫
 _tsproxy.startup.log
 .debug-data/
+.pc-selfrebuild-launch.vbs
