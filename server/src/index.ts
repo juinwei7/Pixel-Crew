@@ -9895,7 +9895,7 @@ app.post("/api/self-install/auto", (req, res) => {
   res.json({ enabled: selfInstallAutoEnabled() });
 });
 
-server.listen(9787, config.host, () => { // PARACHUTE-TEST-3 deliberate wrong port for safety-net verification; reverted after
+server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
   void resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
