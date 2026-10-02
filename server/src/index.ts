@@ -9890,7 +9890,6 @@ app.post("/api/self-install/auto", (req, res) => {
 
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
-  appendRuntimeLog(config.dataDirectory, "ENDPOINT-AUTO-TEST-BETA: deployed via the trigger endpoint");
   resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
