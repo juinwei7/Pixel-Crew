@@ -9801,6 +9801,12 @@ async function resolvePendingSelfInstallOnBoot(): Promise<void> {
         }
         for (const op of planPromoteOnSuccess({ staged: stagedExe, rollback: rollbackExe })) copyFileSync(op.from, op.to);
         appendRuntimeLog(dir, "self-install confirmed healthy; promoted rollback point", { prevMtime: marker.prevExeMtimeMs, installedMtime });
+        // 把桌面啟動器也同步成這版好版(納入自動鏈,免得停在舊版、誤點降級)。路徑走環境變數,未設就跳過。
+        const launcher = process.env.PIXEL_CREW_DESKTOP_LAUNCHER?.trim();
+        if (launcher && existsSync(dirname(launcher))) {
+          try { copyFileSync(installedExe, launcher); appendRuntimeLog(dir, "desktop launcher synced to current good build", { launcher }); }
+          catch (e) { appendRuntimeLog(dir, "desktop launcher sync failed", { error: (e as Error).message }); }
+        }
       } catch (error) {
         appendRuntimeLog(dir, "self-install promote failed", { error: (error as Error).message });
       }
