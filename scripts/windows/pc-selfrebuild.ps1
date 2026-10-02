@@ -57,7 +57,7 @@ try { $prevMtime = [int64]((Get-Item -LiteralPath $installedExe).LastWriteTimeUt
 Copy-Item -LiteralPath $newExe -Destination $stagedExe -Force
 Log "staged new exe"
 
-$marker = @{ firedAt = $prevMtime; reason = $Reason; changedFiles = @(); stagedExe = $stagedExe; rollbackExe = $rollbackExe; prevExeMtimeMs = $prevMtime }
+$marker = @{ firedAt = $prevMtime; reason = $Reason; changedFiles = @(); stagedExe = $stagedExe; rollbackExe = $rollbackExe; prevExeMtimeMs = $prevMtime; stagedSha256 = $newHash }
 # Write UTF-8 WITHOUT BOM: Set-Content -Encoding UTF8 on PS 5.1 prepends a BOM that breaks node's JSON.parse.
 [System.IO.File]::WriteAllText($pendingJson, ($marker | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
 Log "wrote pending marker"

@@ -17,6 +17,8 @@ export type PendingSelfInstall = {
   rollbackExe: string;
   /** 裝前現役 exe 的 mtime(ms)，用來判斷 swap 有沒有真的發生。 */
   prevExeMtimeMs: number;
+  /** 新版安裝器的 SHA-256——開機晉升回滾點前驗「staged 還是當初那支新版」，防回滾後誤晉升污染回滾點。 */
+  stagedSha256?: string;
 };
 
 function boundedStr(v: unknown, max: number): string {
@@ -34,7 +36,8 @@ export function normalizePendingSelfInstall(raw: unknown): PendingSelfInstall | 
   const changedFiles = Array.isArray(r.changedFiles)
     ? r.changedFiles.map((f) => boundedStr(f, 1024)).filter(Boolean).slice(0, 200)
     : [];
-  return { firedAt, reason: boundedStr(r.reason, 500), changedFiles, stagedExe, rollbackExe, prevExeMtimeMs };
+  const stagedSha256 = boundedStr(r.stagedSha256, 128);
+  return { firedAt, reason: boundedStr(r.reason, 500), changedFiles, stagedExe, rollbackExe, prevExeMtimeMs, ...(stagedSha256 ? { stagedSha256 } : {}) };
 }
 
 export type BootResolution =

@@ -34,15 +34,17 @@ function Stop-AppProcesses {
   Log 'WARNING: processes still present'; return $false
 }
 
-function Wait-Swapped($before) {
+# Hash-based swap detection: mtime comparison misjudges a rollback (installing the OLDER good
+# build does not "advance" mtime). Installed == expected staged hash is the only reliable signal.
+function Wait-SwappedHash($expectedHash) {
   for ($i = 0; $i -lt 60; $i++) {
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Seconds 3
     try {
-      $after = (Get-Item -LiteralPath $installedExe -ErrorAction Stop).LastWriteTime
-      if ($after -and (-not $before -or $after -gt $before)) { Log "installed mtime after: $after -- SWAPPED OK"; return $after }
+      $h = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256 -ErrorAction Stop).Hash
+      if ($h -eq $expectedHash) { Log "installed hash matches staged -- SWAPPED OK"; return $true }
     } catch {}
   }
-  Log 'WARNING: installed mtime did not advance'; return $null
+  Log 'WARNING: installed hash never matched staged within timeout'; return $false
 }
 
 function Test-Healthy {
@@ -61,15 +63,16 @@ Log '=== self-install start ==='
 if (-not (Test-Path -LiteralPath $stagedExe))   { Log "FATAL: staged missing: $stagedExe"; return }
 if (-not (Test-Path -LiteralPath $rollbackExe)) { Log "FATAL: rollback missing: $rollbackExe -- refuse to install without a rollback point"; return }
 
-$before = $null
-try { $before = (Get-Item -LiteralPath $installedExe -ErrorAction Stop).LastWriteTime } catch {}
-Log "installed mtime before: $before"
+$pendingJson = Join-Path $root 'self-install-pending.json'
+$stagedHash  = (Get-FileHash -LiteralPath $stagedExe -Algorithm SHA256).Hash
+$rollbackHash = (Get-FileHash -LiteralPath $rollbackExe -Algorithm SHA256).Hash
+Log "staged hash: $stagedHash"
 
 # 1) install the new version
 Stop-AppProcesses | Out-Null
 Start-Process -FilePath $stagedExe
 Log "launched staged (new): $stagedExe"
-$swapped = Wait-Swapped $before
+$swapped = Wait-SwappedHash $stagedHash
 
 # 2) post-install health poll
 $healthy = $false
@@ -80,19 +83,22 @@ if ($healthy) {
   return
 }
 
-# 3) unhealthy (incl. won't-boot) -> auto rollback to previous good
+# 3) unhealthy (incl. won't-boot) -> auto rollback to previous good.
+# CRITICAL ORDER: delete the pending marker FIRST. Once we roll back, there is no "awaiting
+# verification" state anymore -- leaving the marker made a later healthy boot "promote" whatever
+# staged then contained (the previous incident polluted the rollback point with the bad build).
 Log 'UNHEALTHY -> rolling back to previous good version'
+try { Remove-Item -LiteralPath $pendingJson -Force -ErrorAction Stop; Log "cleared pending marker (no promote after rollback)" } catch { Log "note: pending marker not found/cleared: $($_.Exception.Message)" }
 try {
   Copy-Item -LiteralPath $rollbackExe -Destination $stagedExe -Force
   Log "restored rollback -> staged"
 } catch { Log "FATAL: could not restore rollback over staged: $($_.Exception.Message)"; return }
 
-$before2 = $null
-try { $before2 = (Get-Item -LiteralPath $installedExe -ErrorAction Stop).LastWriteTime } catch {}
 Stop-AppProcesses | Out-Null
 Start-Process -FilePath $stagedExe
 Log "launched staged (rollback/old): $stagedExe"
-Wait-Swapped $before2 | Out-Null
-$rehealthy = Test-Healthy
+$reswapped = Wait-SwappedHash $rollbackHash
+$rehealthy = $false
+if ($reswapped) { $rehealthy = Test-Healthy }
 if ($rehealthy) { Log '=== rolled back to previous good version; healthy ===' }
 else { Log '=== ROLLBACK FINISHED but health still not confirmed -- owner attention needed ===' }

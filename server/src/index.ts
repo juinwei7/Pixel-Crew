@@ -12,7 +12,7 @@ import cors, { type CorsOptions } from "cors";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { spawn, execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -9781,6 +9781,17 @@ function resolvePendingSelfInstallOnBoot(): void {
     const res = evaluateBootResolution(marker, checks);
     if (res.action === "confirm_ok") {
       try {
+        // Hash 守衛（降落傘事故的直接教訓）：晉升前驗 staged 仍是 marker 記的那支新版。
+        // 回滾會把 staged 覆成舊版——此時若照舊晉升，就把回滾點污染成「不是剛驗過健康的那版」。
+        // pc-selfinstall 回滾路徑已會先刪 marker（第一道防線）；這裡是第二道，兩道都過才晉升。
+        if (marker.stagedSha256) {
+          const stagedHash = createHash("sha256").update(readFileSync(stagedExe)).digest("hex").toUpperCase();
+          if (stagedHash !== marker.stagedSha256.toUpperCase()) {
+            appendRuntimeLog(dir, "self-install promote SKIPPED: staged hash != marker (rollback likely touched staged)", { stagedHash, expected: marker.stagedSha256 });
+            store.clear();
+            return;
+          }
+        }
         for (const op of planPromoteOnSuccess({ staged: stagedExe, rollback: rollbackExe })) copyFileSync(op.from, op.to);
         appendRuntimeLog(dir, "self-install confirmed healthy; promoted rollback point", { prevMtime: marker.prevExeMtimeMs, installedMtime });
       } catch (error) {
