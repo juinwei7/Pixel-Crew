@@ -9831,15 +9831,17 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
   if (!ready.ready) return { outcome: "rollback_not_ready", detail: ready.reason };
   const rebuild = join(SELF_REPO, "scripts", "windows", "pc-selfrebuild.ps1");
   if (!existsSync(rebuild)) return { outcome: "rebuild_script_missing" };
-  // 直接 detached spawn powershell -File（參數走陣列，node 正確逐一加引號）。用 powershell 的
-  // 絕對路徑——managed node 的 PATH 不保證含 System32，用相對 "powershell.exe" 會非同步 ENOENT
-  // 靜默失敗（log 寫了 launched 其實沒起程序）。並掛 error 監聽，失敗落檔不再靜默。
+  // 透過 wscript+vbs 啟動（app 唯一驗證過可動的 detached 啟動模式，見 tsproxy）：managed node 在無
+  // 互動 console 的環境下，直接 detached spawn powershell(console 子系統)起不來；wscript(GUI 子系統)
+  // 可動，再由 vbs 的 WScript.Shell.Run 隱藏視窗叫 powershell(它會替 powershell 正確建 console)。
   const psExe = join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const safeReason = reason.replace(/[\r\n"]/g, " ").slice(0, 120);
+  const psCmd = `"${psExe}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${rebuild}" -Repo "${SELF_REPO}" -Reason "${safeReason}"`;
+  const vbsPath = join(config.dataDirectory, "pc-selfrebuild-launch.vbs");
   try {
-    const child = spawn(psExe, [
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-      "-File", rebuild, "-Repo", SELF_REPO, "-Reason", reason.replace(/[\r\n]/g, " ").slice(0, 120),
-    ], { detached: true, stdio: "ignore", windowsHide: true });
+    // VBS 字串字面以 "" 跳脫內嵌雙引號；視窗樣式 0=隱藏、第三參數 False=不等待。
+    writeFileSync(vbsPath, `CreateObject("WScript.Shell").Run "${psCmd.replace(/"/g, '""')}", 0, False\r\n`);
+    const child = spawn("wscript.exe", [vbsPath], { detached: true, stdio: "ignore", windowsHide: true });
     child.on("error", (err) => appendRuntimeLog(config.dataDirectory, "self-install launch error", { error: (err as Error).message }));
     child.unref();
   } catch (error) {
