@@ -522,16 +522,11 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
   const needle = searchQuery.trim().toLowerCase();
-  // 系統「純橫幅」卡（換腦冷卻／蒸餾心法／換腦完成等純通知）不是真工作活動，從日誌 feed 濾掉——
-  // 否則一次換腦產生的數則橫幅會把「保留最近」視窗洗版，把真正的工作回合擠出畫面（owner 回報）。
-  // 但換腦接手／LLM 交接／用量續跑這類 system 回合本身承載了接手後的真實工作（assistant 回覆、
-  // 工具、後續整段對話都 append 在同一個回合底下）——絕不能連同內容一起藏掉，否則換腦後主窗會整個
-  // 變空白（owner 回報「嗯?」）。判準改成「有無實際產出」：system 回合只要帶 assistant 回覆／工具／
-  // 錯誤就是真工作、要留；完全沒內容的才是純橫幅、才濾。
-  const isSystemBanner = (turn: Turn) => Boolean(turn.system) && !turn.items.some(
-    (item) => item.kind === "assistant_text" || item.kind === "tool_call" || item.kind === "system_error",
-  );
-  const feedTurns = turns.filter((turn) => !isSystemBanner(turn));
+  // 前端不隱藏任何回合（含換腦系統卡）。先前誤以為是「系統卡洗版」而在這裡濾掉 system 回合，反而把
+  // 換腦接手回合連同其承載的真實工作一起藏掉、換腦後主窗變空白（owner 回報）。真正的根因在 server 的
+  // 初始 snapshot：裁切時換腦系統卡吃掉了「最近 N 個真實結果」的名額，把工作結果擠出 snapshot。那個
+  // 根因已在 server snapshotHistory 的 real-turn floor 修掉，前端照實顯示全部回合即可。
+  const feedTurns = turns;
   const matchingTurns = needle ? feedTurns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : feedTurns;
   const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const visibleTurns = focusMode

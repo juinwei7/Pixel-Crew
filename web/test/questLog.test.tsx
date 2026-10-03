@@ -255,10 +255,10 @@ test("an active search bypasses the render cap so an old match still shows and c
   assert.doesNotMatch(html, /顯示更早的任務/);
 });
 
-// 換腦接手回合被標 system:true，但它承載了接手後的所有真實工作（assistant 回覆、工具、後續對話
-// 都 append 在同一個回合）。feed 只該濾掉「純橫幅」system 卡，不能連這種有內容的回合一起藏——
-// 否則換腦後主窗會整個空白（owner 回報「嗯?」的那次迴歸）。
-test("a content-bearing system turn (brain-swap resume) stays visible in the feed", () => {
+// 前端不隱藏任何回合（owner：別隱藏）。換腦接手回合雖標 system:true，仍要照實顯示——它承載了
+// 接手後的所有真實工作（assistant 回覆、工具、後續對話都 append 在同一個回合）。防止換腦卡把真實
+// 結果擠出視窗的工作在 server snapshotHistory，不在前端隱藏（那會讓換腦後主窗空白＝owner 回報「嗯?」）。
+test("system turns (brain-swap cards) are rendered in the feed, never hidden by the frontend", () => {
   const resume: Turn = {
     key: "turn-resume",
     command: "（系統自動換腦）你前一個工作階段的 context 已滿…交接摘要…",
@@ -266,23 +266,29 @@ test("a content-bearing system turn (brain-swap resume) stays visible in the fee
     system: true,
     items: [{ kind: "assistant_text", key: "r1", text: "已接手，繼續服務" }],
   };
-  const html = renderToStaticMarkup(<QuestLog turns={[resume]} />);
-  assert.match(html, /已接手，繼續服務/);
-  assert.doesNotMatch(html, /找不到符合/);
-});
-
-// 反向：完全沒內容的純系統橫幅（蒸餾心法／換腦完成等通知）仍要被濾掉；而且當它是唯一回合時，
-// 空狀態要顯示中性提示，不能顯示「找不到符合『』的任務內容」那條空查詢搜尋訊息。
-test("a content-less system banner is filtered and shows the neutral empty state, not an empty-query search message", () => {
   const banner: Turn = {
     key: "turn-banner",
     command: "🧠 自動換腦完成：交接摘要已送進全新工作階段",
     status: "done",
     system: true,
-    items: [],
+    items: [{ kind: "assistant_text", key: "b1", text: "交接摘要內容" }],
   };
-  const html = renderToStaticMarkup(<QuestLog turns={[banner]} />);
-  assert.doesNotMatch(html, /自動換腦完成/);
+  const html = renderToStaticMarkup(<QuestLog turns={[banner, resume]} />);
+  assert.match(html, /已接手，繼續服務/);
+  assert.match(html, /自動換腦完成/);
+  assert.doesNotMatch(html, /找不到符合/);
+});
+
+// 空查詢守護：有回合但沒有可顯示內容（這裡用閱讀模式＋只有思考、無可讀回覆的回合）且沒有搜尋時，
+// 顯示中性提示，而不是「找不到符合『』的任務內容」那條帶空括號的搜尋無結果訊息（owner 截圖看到的那條）。
+test("an empty visible feed with no search shows a neutral message, not an empty-query search result", () => {
+  const thinkingOnly: Turn = {
+    key: "turn-thinking",
+    command: "思考中的回合",
+    status: "done",
+    items: [{ kind: "thinking", key: "t1", text: "想一下" }],
+  };
+  const html = renderToStaticMarkup(<QuestLog turns={[thinkingOnly]} focusMode searchQuery="" />);
   assert.doesNotMatch(html, /找不到符合「」/);
   assert.match(html, /目前沒有工作內容可顯示/);
 });

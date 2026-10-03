@@ -11,6 +11,15 @@ function turn(command: string, deltas: number): RunnerEvent[] {
   return events;
 }
 
+// 換腦系統卡：system:true 的 user_message（換腦宣告／蒸餾心法／換腦完成那種）。
+function systemCard(command: string): RunnerEvent[] {
+  return [{ type: "user_message", text: command, system: true } as RunnerEvent];
+}
+
+function commandsOf(events: RunnerEvent[]): string[] {
+  return events.filter((e) => e.type === "user_message").map((e) => (e as { text: string }).text);
+}
+
 function hasUserMessage(events: RunnerEvent[]): boolean {
   return events.some((e) => e.type === "user_message");
 }
@@ -49,6 +58,25 @@ test("視窗內有多個小 turn 時，盡量多保留（不只 2 個）", () =>
   const userMsgs = out.filter((e) => e.type === "user_message").length;
   assert.ok(userMsgs > SNAPSHOT_MIN_TURNS, `視窗內應保留多於 ${SNAPSHOT_MIN_TURNS} 個 turn，實際 ${userMsgs}`);
   assert.ok(out.length <= SNAPSHOT_MAX_EVENTS + 30, "大致不超過視窗上限（對齊 turn 邊界容許小幅溢出）");
+});
+
+// 核心回歸（owner 回報「換腦後前面日誌被蓋掉」）：換腦會在最近 2 個真實結果之後連插數張 system
+// 卡。若 floor 把 system 卡也算進「最近 N 個 turn」，重啟後的 snapshot 就只剩換腦卡、使用者真正的
+// 工作結果被擠出。floor 只數非系統 turn，故 2 個真實結果 t1/t2 必須都留在 snapshot 裡。
+test("換腦系統卡不佔真實結果名額：最近 N 個真實工作結果不會被換腦卡擠出 snapshot", () => {
+  const big = Math.floor(SNAPSHOT_MAX_EVENTS * 0.7); // 兩個真實 turn 相加 > 視窗，逼 floor 生效
+  const history = [
+    ...turn("真實結果-1", big),
+    ...turn("真實結果-2", big),
+    ...systemCard("🧠 即將換腦，請寫交接摘要"),
+    ...systemCard("🧠 換腦蒸餾出一條做事心法"),
+    ...systemCard("🧠 自動換腦完成：交接摘要已送進全新工作階段"),
+  ];
+  const out = snapshotHistory(history);
+  const commands = commandsOf(out);
+  assert.ok(commands.includes("真實結果-1"), `最舊的真實結果必須保留，實際：${commands.join(" / ")}`);
+  assert.ok(commands.includes("真實結果-2"), `最新的真實結果必須保留，實際：${commands.join(" / ")}`);
+  assert.equal(out[0].type, "user_message", "切點落在某個 turn 開頭");
 });
 
 test("完全沒有 user_message（只有孤兒事件）時保留尾段、不爆量", () => {
