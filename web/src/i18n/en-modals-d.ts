@@ -121,6 +121,7 @@ export const enModalsD: Record<string, string> = {
   "或貼上完整路徑": "Or paste a full path",
   "找不到相符指令": "No matching commands found",
   "找不到符合「{query}」的任務內容": "No tasks match \"{query}\"",
+  "目前沒有工作內容可顯示。在下面下指令就能開始。": "Nothing to show yet. Give an order below to get started.",
   "技術細節": "Technical Details",
   "拒絕": "Deny",
   "拖曳": "Drag",

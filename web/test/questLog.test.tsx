@@ -254,3 +254,35 @@ test("an active search bypasses the render cap so an old match still shows and c
   assert.match(html, /任務編號-0</);
   assert.doesNotMatch(html, /顯示更早的任務/);
 });
+
+// 換腦接手回合被標 system:true，但它承載了接手後的所有真實工作（assistant 回覆、工具、後續對話
+// 都 append 在同一個回合）。feed 只該濾掉「純橫幅」system 卡，不能連這種有內容的回合一起藏——
+// 否則換腦後主窗會整個空白（owner 回報「嗯?」的那次迴歸）。
+test("a content-bearing system turn (brain-swap resume) stays visible in the feed", () => {
+  const resume: Turn = {
+    key: "turn-resume",
+    command: "（系統自動換腦）你前一個工作階段的 context 已滿…交接摘要…",
+    status: "done",
+    system: true,
+    items: [{ kind: "assistant_text", key: "r1", text: "已接手，繼續服務" }],
+  };
+  const html = renderToStaticMarkup(<QuestLog turns={[resume]} />);
+  assert.match(html, /已接手，繼續服務/);
+  assert.doesNotMatch(html, /找不到符合/);
+});
+
+// 反向：完全沒內容的純系統橫幅（蒸餾心法／換腦完成等通知）仍要被濾掉；而且當它是唯一回合時，
+// 空狀態要顯示中性提示，不能顯示「找不到符合『』的任務內容」那條空查詢搜尋訊息。
+test("a content-less system banner is filtered and shows the neutral empty state, not an empty-query search message", () => {
+  const banner: Turn = {
+    key: "turn-banner",
+    command: "🧠 自動換腦完成：交接摘要已送進全新工作階段",
+    status: "done",
+    system: true,
+    items: [],
+  };
+  const html = renderToStaticMarkup(<QuestLog turns={[banner]} />);
+  assert.doesNotMatch(html, /自動換腦完成/);
+  assert.doesNotMatch(html, /找不到符合「」/);
+  assert.match(html, /目前沒有工作內容可顯示/);
+});

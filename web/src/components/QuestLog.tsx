@@ -522,9 +522,16 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
 
   const pending = turns.flatMap((turn) => turn.items.filter((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending"));
   const needle = searchQuery.trim().toLowerCase();
-  // 系統訊息（換腦冷卻／蒸餾心法／換腦完成等）不是真工作活動，從日誌 feed 濾掉——否則一次
-  // 換腦產生的數則系統卡會把「保留最近」視窗洗版，把真正的工作回合擠出畫面（owner 回報）。
-  const feedTurns = turns.filter((turn) => !turn.system);
+  // 系統「純橫幅」卡（換腦冷卻／蒸餾心法／換腦完成等純通知）不是真工作活動，從日誌 feed 濾掉——
+  // 否則一次換腦產生的數則橫幅會把「保留最近」視窗洗版，把真正的工作回合擠出畫面（owner 回報）。
+  // 但換腦接手／LLM 交接／用量續跑這類 system 回合本身承載了接手後的真實工作（assistant 回覆、
+  // 工具、後續整段對話都 append 在同一個回合底下）——絕不能連同內容一起藏掉，否則換腦後主窗會整個
+  // 變空白（owner 回報「嗯?」）。判準改成「有無實際產出」：system 回合只要帶 assistant 回覆／工具／
+  // 錯誤就是真工作、要留；完全沒內容的才是純橫幅、才濾。
+  const isSystemBanner = (turn: Turn) => Boolean(turn.system) && !turn.items.some(
+    (item) => item.kind === "assistant_text" || item.kind === "tool_call" || item.kind === "system_error",
+  );
+  const feedTurns = turns.filter((turn) => !isSystemBanner(turn));
   const matchingTurns = needle ? feedTurns.filter((turn) => searchableTurnText(turn, focusMode).toLocaleLowerCase().includes(needle)) : feedTurns;
   const readableTurns = matchingTurns.filter((turn) => turn.items.some((item) => item.kind === "assistant_text" || item.kind === "system_error"));
   const visibleTurns = focusMode
@@ -615,7 +622,9 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         </div>
       )}
       {turns.length > 0 && visibleTurns.length === 0 && (
-        <div className="quest-log__no-results">{t("找不到符合「{query}」的任務內容", { query: searchQuery.trim() })}</div>
+        needle
+          ? <div className="quest-log__no-results">{t("找不到符合「{query}」的任務內容", { query: searchQuery.trim() })}</div>
+          : <div className="quest-log__empty">{t("目前沒有工作內容可顯示。在下面下指令就能開始。")}</div>
       )}
       {hiddenOlderCount > 0 && (
         <button type="button" className="quest-log__load-earlier" onClick={() => setRenderLimit((limit) => limit + RENDER_CHUNK)}>
