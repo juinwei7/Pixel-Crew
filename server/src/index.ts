@@ -6346,7 +6346,12 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
         const firstFailure = !workerAutopilotRetry.get(worker.id);
         workerAutopilotRetry.note(worker.id, null, Date.now());
         if (firstFailure) {
-          record(worker, { type: "user_message", text: t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: (error as Error).message }), notice: true });
+          // 登入過期（OAuth refresh 失敗）不是模型壞了——明講要重新登入，免得被誤認成換模型造成的故障。
+          const message = (error as Error).message;
+          const text = /OAuth|authenticat|not logged in|log ?in/i.test(message)
+            ? t("🔑 自動循環：Claude 登入已過期（{error}）。請重新登入這位 NPC 用的帳號；登入恢復後循環會自動重試接續。", { error: message })
+            : t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: message });
+          record(worker, { type: "user_message", text, notice: true });
           broadcast({ type: "worker_updated", worker: workerSummary(worker) });
         }
         return;
