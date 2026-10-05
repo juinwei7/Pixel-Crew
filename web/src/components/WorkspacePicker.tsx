@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AccountWithAuth, ProviderId } from "../types";
 import { roomName } from "../workspace";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
+import { BUILD_DONE_MS, BuildDone, PixelBuild } from "./BuildMoment";
 
 type Props = {
   required?: boolean;
@@ -27,13 +28,30 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
   const [path, setPath] = useState(currentPath);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 錯誤每出現一次 +1：當 key 用，讓同一句錯誤連續出現也會重播抖動。
+  const [errorSeq, setErrorSeq] = useState(0);
+  // 新 NPC 建好：先演「工位已就緒」再關，介面這邊交棒給場景的入場動畫。
+  const [built, setBuilt] = useState(false);
+  const builtTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (builtTimer.current !== null) window.clearTimeout(builtTimer.current); }, []);
   const windows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform);
   const creating = required || mode === "create";
   const title = required ? t("準備開始，想處理什麼？") : creating ? t("新 NPC 要在哪裡工作？") : t("選擇工作位置");
 
   useEffect(() => setPath(currentPath), [currentPath]);
   // ×／Esc 共用同一個關閉入口：首次設定（required）永遠不准關，其餘忙碌中不准關。
-  function closeIfAllowed() { if (!required && !pending) onClose(); }
+  function closeIfAllowed() { if (!required && !pending && !built) onClose(); }
+
+  function fail(message: string) {
+    setError(message);
+    setErrorSeq((seq) => seq + 1);
+  }
+
+  function finish() {
+    if (!creating) { onClose(); return; }
+    setBuilt(true);
+    builtTimer.current = window.setTimeout(onClose, BUILD_DONE_MS);
+  }
 
   async function choose(nextPath: string) {
     const trimmed = nextPath.trim();
@@ -42,8 +60,8 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
     setError(null);
     const nextError = await onSelect(trimmed);
     setPending(false);
-    if (nextError) setError(nextError);
-    else onClose();
+    if (nextError) fail(nextError);
+    else finish();
   }
 
   async function browse() {
@@ -52,7 +70,7 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
     setError(null);
     const result = await onBrowse();
     if (result.error) {
-      setError(result.error);
+      fail(result.error);
       setPending(false);
       return;
     }
@@ -63,21 +81,25 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
     setPath(result.path);
     const nextError = await onSelect(result.path);
     setPending(false);
-    if (nextError) setError(nextError);
-    else onClose();
+    if (nextError) fail(nextError);
+    else finish();
   }
 
   return (
     <Modal
       label={title}
       overlayClassName="workspace-picker"
-      cardClassName="workspace-picker__card"
+      cardClassName={`workspace-picker__card${creating ? " workspace-picker__card--create" : ""}`}
       closeClassName="workspace-picker__close"
       closeLabel={t("關閉")}
       hideClose={required}
       onClose={closeIfAllowed}
     >
+      {built && <BuildDone title={required ? t("工作空間已就緒") : t("工位已就緒")} />}
       <form
+        inert={built ? "" : undefined}
+        aria-hidden={built || undefined}
+        className={built ? "workspace-picker__form workspace-picker__form--built" : "workspace-picker__form"}
         onSubmit={(event) => {
           event.preventDefault();
           void choose(path);
@@ -200,11 +222,11 @@ export function WorkspacePicker({ required = false, mode = "move", currentPath, 
           </div>
         )}
 
-        {error && <div className="workspace-picker__error">{error}</div>}
+        {error && <div key={errorSeq} className="workspace-picker__error pc-shake" role="alert">{error}</div>}
         <div className="workspace-picker__actions">
           {!required && <button type="button" onClick={onClose} disabled={pending}>{t("取消")}</button>}
           <button type="submit" className="workspace-picker__confirm" disabled={pending || !path.trim()}>
-            {pending ? t("請稍候…") : required ? t("用這個位置開始") : creating ? t("在此建立工位") : resetsConversation ? t("搬遷並重設對話") : t("搬到此位置")}
+            {pending && creating ? <PixelBuild label={t("建造工位中…")} /> : pending ? t("請稍候…") : required ? t("用這個位置開始") : creating ? t("在此建立工位") : resetsConversation ? t("搬遷並重設對話") : t("搬到此位置")}
           </button>
         </div>
       </form>

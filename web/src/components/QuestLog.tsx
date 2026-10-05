@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { logContentCount, trackUnseen, type UnseenState } from "../uxMotion";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
 import { extractMarkdownHeadings, RichText } from "./RichText";
@@ -500,6 +501,11 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
   const [renderLimit, setRenderLimit] = useState(RENDER_CHUNK);
   const lastTurn = turns[turns.length - 1];
   const itemCount = lastTurn?.items.length ?? 0;
+  // 捲離底部後又長出來的內容：「↓ 最新內容」改成「↓ N 則新內容」並彈一下，
+  // 知道下面有東西、有多少（計數規則見 uxMotion.trackUnseen）。
+  const unseenRef = useRef<UnseenState | null>(null);
+  unseenRef.current = trackUnseen(unseenRef.current, atBottom, logContentCount(turns));
+  const unseen = unseenRef.current.unseen;
 
   useEffect(() => {
     const el = logRef.current;
@@ -629,11 +635,11 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       {renderedTurns.map((turn, i) => (
         <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} onAnswerAutopilot={onAnswerAutopilot} />
       ))}
-      {!atBottom && <button type="button" className="quest-log__latest" onClick={() => {
+      {!atBottom && <button type="button" className={`quest-log__latest${unseen ? " quest-log__latest--new" : ""}`} data-bump={unseen ? (unseen % 2 ? "a" : "b") : undefined} onClick={() => {
         const el = logRef.current;
         el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
         setAtBottomBoth(true);
-      }}>{t("↓ 最新內容")}</button>}
+      }}>{unseen ? t("↓ {count} 則新內容", { count: unseen }) : t("↓ 最新內容")}</button>}
     </div>
   );
 

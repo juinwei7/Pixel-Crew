@@ -1,0 +1,842 @@
+/* ────────────────────────────────────────────────────────────────────────
+   動態系統：全站共用的時長、曲線、位移 token，加上選單／面板／按鈕的
+   統一進出場。
+
+   原則（照順序取捨）：
+   1. 只動 transform / opacity。位移一律用獨立的 translate / scale / rotate
+      屬性，不碰 transform——很多元件本身就靠 transform 定位（置中的指令列
+      translateX(-50%)、場景每幀寫的名牌座標），動畫寫 transform 會把定位
+      蓋掉。獨立屬性會跟既有 transform 疊加，互不干擾。
+   2. 從觸發點長出來：每個浮層的 transform-origin 指向打開它的那顆按鈕。
+   3. 打開用彈簧收尾、內容列錯開入場；關閉比打開快、不回彈。
+   4. prefers-reduced-motion：同名 @keyframes 在最下面重新定義成純淡入，
+      無限循環的光條一律停掉。
+
+   載入順序在元件樣式之後、responsive.css 之前：同權重時這裡的動態規則
+   勝過元件舊的 transition，手機版型仍由 responsive.css 最後決定。
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── 時長 ─────────────────────────────────────────────────────────── */
+  --dur-press: 70ms;   /* 按下的那一瞬：要比手指快 */
+  --dur-1: 120ms;      /* 關閉、淡出、hover 色彩 */
+  --dur-2: 180ms;      /* 小元件入場（選項、提示） */
+  --dur-3: 260ms;      /* 浮層、選單入場 */
+  --dur-4: 360ms;      /* 面板、dialog 入場 */
+  --dur-spring: 560ms; /* --ease-spring 的完整時長（曲線本身已含回彈與收斂） */
+  --dur-spring-soft: 420ms;
+
+  /* ── 曲線 ─────────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);     /* expo-out：快進、慢收 */
+  --ease-in: cubic-bezier(0.5, 0, 0.75, 0);      /* 離場：慢起、快走 */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* 阻尼彈簧（ζ≈0.62，約 8% 回彈）。linear() 取樣自真實彈簧方程式，
+     不支援 linear() 的瀏覽器會整條宣告失效，退回 ease-out 那條。 */
+  --ease-spring: var(--ease-out);
+  --ease-spring-soft: var(--ease-out);
+
+  /* ── 位移 ─────────────────────────────────────────────────────────── */
+  --rise-1: 4px;   /* 選項列錯開入場 */
+  --rise-2: 8px;   /* 浮層 */
+  --rise-3: 14px;  /* dialog / 面板 */
+  --pop-scale: 0.96;
+  --stagger: 22ms; /* 列與列之間的錯開 */
+
+  /* ── 焦點環 ───────────────────────────────────────────────────────── */
+  --focus-ring-color: rgba(0, 229, 255, 0.72);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, 0.055, 0.186, 0.353, 0.526, 0.685, 0.82, 0.924, 0.999, 1.048, 1.074, 1.083, 1.081, 1.071, 1.057, 1.043, 1.029, 1.018, 1.008, 1.001, 0.997, 0.994, 1);
+    --ease-spring-soft: linear(0, 0.057, 0.186, 0.342, 0.496, 0.633, 0.746, 0.835, 0.901, 0.947, 0.979, 0.998, 1.009, 1.014, 1.015, 1.014, 1.012, 1.01, 1);
+  }
+}
+
+/* ── 共用 keyframes ───────────────────────────────────────────────────
+   to 一律省略＝回到元素本身的值，所以同一組 keyframes 可以套在任何定位
+   方式的元件上。方向用 --m-from-x / --m-from-y 由各浮層自己指定。 */
+@keyframes pc-pop-in {
+  from { opacity: 0; scale: var(--pop-scale); translate: var(--m-from-x, 0) var(--m-from-y, 0); }
+}
+@keyframes pc-pop-out {
+  to { opacity: 0; scale: 0.98; translate: var(--m-from-x, 0) calc(var(--m-from-y, 0px) * 0.5); }
+}
+@keyframes pc-item-in {
+  from { opacity: 0; translate: 0 var(--m-item-y, var(--rise-1)); }
+}
+@keyframes pc-fade-in { from { opacity: 0; } }
+@keyframes pc-fade-out { to { opacity: 0; } }
+@keyframes pc-sheet-in { from { opacity: 0.4; translate: 0 32px; } }
+@keyframes pc-dialog-in {
+  from { opacity: 0; scale: 0.965; translate: 0 var(--rise-3); }
+}
+@keyframes pc-dialog-out {
+  to { opacity: 0; scale: 0.985; translate: 0 6px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   按鈕手感
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* 焦點環：全站唯一的鍵盤焦點樣式在 composer-and-operations.css（!important，
+   刻意蓋過各編輯器自己拿掉的 outline）。這裡只提供它用的 keyframes：環從
+   外面 5px 收到 2px、同時淡入。 */
+@keyframes pc-focus-in {
+  from { outline-offset: 5px; outline-color: transparent; }
+}
+/* 指令面板的搜尋框是整個面板唯一的輸入、游標一直在裡面，外框再畫一圈只是噪音。 */
+.pc-palette__search input:focus-visible { outline: none !important; }
+
+/* 按下微縮、放開彈回。transition 拆成兩段：按下 70ms 立刻縮（手指感覺
+   有接住），放開才走彈簧——:active 一解除，元素就回到上面那條帶回彈的
+   transition。用 scale 屬性而不是 transform，不跟各按鈕自己的 hover 位移
+   互相覆蓋。 */
+.top-bar__capability,
+.top-bar__boss,
+.top-bar__running,
+.top-bar__health,
+.top-bar__update,
+.top-bar__more-menu button,
+.top-bar__more-menu a,
+.health-popover button,
+.ui-mode-switch button,
+.command-composer__attach,
+.command-composer__library,
+.command-composer__submit,
+.command-composer__queue,
+.composer-roundtable-toggle,
+.composer-roundtable-menu button,
+.voice-input__mic,
+.task-log-toolbar button,
+.panel-toggle,
+.autopilot-toggle,
+.autopilot-config button,
+.confirm-dialog__btn,
+.crew-rail button,
+.focus-controls button,
+.npc-approval-bar button,
+.toast,
+.pc-palette__item,
+.command-composer__receipt {
+  transition-property: background, background-color, border-color, color, box-shadow, opacity, transform, scale, translate;
+  transition-duration: var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-spring), var(--dur-2);
+  transition-timing-function: ease, ease, ease, ease, ease, ease, var(--ease-out), var(--ease-spring), var(--ease-out);
+}
+
+:is(
+  .top-bar__capability, .top-bar__boss, .top-bar__running, .top-bar__health, .top-bar__update,
+  .top-bar__more-menu button, .top-bar__more-menu a, .health-popover button, .ui-mode-switch button,
+  .command-composer__attach, .command-composer__library, .command-composer__submit, .command-composer__queue,
+  .composer-roundtable-toggle, .composer-roundtable-menu button, .voice-input__mic, .task-log-toolbar button,
+  .panel-toggle, .autopilot-toggle, .autopilot-config button, .confirm-dialog__btn, .crew-rail button,
+  .focus-controls button, .npc-approval-bar button, .toast, .pc-palette__item, .command-composer__receipt
+):not(:disabled):active {
+  scale: 0.96;
+  transition-duration: var(--dur-press);
+  transition-timing-function: ease-out;
+}
+
+/* 大面積的列（選單項、模型選項）縮 4% 太誇張，只縮 1.5%。 */
+:is(.top-bar__more-menu button, .top-bar__more-menu a, .pc-palette__item, .toast):not(:disabled):active {
+  scale: 0.985;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   浮層 / 選單 / 下拉：從觸發點長出來，內容列錯開入場
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* 往下開、靠右對齊的頂欄浮層：原點在右上角（按鈕所在）。 */
+.top-bar__npc[open] > .top-bar__more-menu,
+.top-bar__more[open] > .top-bar__more-menu,
+.top-bar__running-menu,
+.health-popover,
+.update-popover,
+.focus-controls__panel,
+.autopilot-config:not(.autopilot-config--up) {
+  --m-from-y: calc(var(--rise-2) * -1);
+  transform-origin: top right;
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+}
+
+/* 往上開的指令列浮層：原點在下緣。 */
+.composer-roundtable-menu,
+.autopilot-config--up,
+.warroom-stances-panel,
+.command-queue,
+.command-palette {
+  --m-from-y: var(--rise-2);
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+}
+.composer-roundtable-menu { transform-origin: bottom right; }
+.autopilot-config--up,
+.warroom-stances-panel { transform-origin: bottom left; }
+.command-queue,
+.command-palette { transform-origin: bottom center; }
+
+/* 內容列錯開：第 n 列晚 n × --stagger 進場，最多算到第 14 列——再後面的
+   列等同時進場，長清單不會拖成一條慢慢爬的尾巴。 */
+.top-bar__npc[open] > .top-bar__more-menu > *,
+.top-bar__more[open] > .top-bar__more-menu > *,
+.top-bar__more-menu .top-bar__menu-group > *,
+.top-bar__running-menu > *,
+.health-popover > *,
+.focus-controls__panel > *,
+.composer-roundtable-menu > *,
+.command-palette__items > *,
+.top-bar__model-list > * {
+  animation: pc-item-in var(--dur-3) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger) + 40ms);
+}
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(2) { --i: 1; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(3) { --i: 2; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(4) { --i: 3; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(5) { --i: 4; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(6) { --i: 5; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(7) { --i: 6; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(8) { --i: 7; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(9) { --i: 8; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(10) { --i: 9; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(11) { --i: 10; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(12) { --i: 11; }
+:is(.top-bar__more-menu, .top-bar__menu-group, .top-bar__running-menu, .health-popover, .focus-controls__panel, .composer-roundtable-menu, .command-palette__items, .top-bar__model-list) > :nth-child(n + 13) { --i: 12; }
+/* 群組內的列接在群組本身之後：群組自己是第 k 列，裡面的列再往後排。 */
+.top-bar__more-menu .top-bar__menu-group > * { animation-delay: calc((var(--i, 0) + 6) * var(--stagger) + 40ms); }
+
+/* 模型兩行式清單：在選單裡原地攤開（會推開下方內容，這是原生選單位置的
+   限制），所以清單本身只從上緣往下「展開」——scaleY 從 0.9 起、原點在
+   觸發鈕下緣；選項再錯開落下。 */
+.top-bar__model-list,
+.top-bar__npc[open] > .top-bar__more-menu > .top-bar__model-list {
+  transform-origin: top center;
+  animation: pc-model-list-in var(--dur-3) var(--ease-out) both;
+}
+@keyframes pc-model-list-in {
+  from { opacity: 0; scale: 1 0.9; }
+}
+.top-bar__model-list > * { --m-item-y: -3px; }
+/* 已選中的那一項：勾勾跟著彈簧蓋章落下。 */
+.top-bar__model-option--selected::before {
+  animation: pc-check-stamp var(--dur-spring) var(--ease-spring) both;
+  animation-delay: 120ms;
+}
+@keyframes pc-check-stamp {
+  from { opacity: 0; scale: 1.8; }
+}
+/* 觸發鈕的小三角：展開時翻轉。 */
+.top-bar__model-trigger svg { transition: rotate var(--dur-3) var(--ease-spring-soft); }
+.top-bar__model-trigger[aria-expanded="true"] svg { rotate: 180deg; }
+
+/* NPC 名牌 hover 卡：跟著游標冒出，往上浮 4px。場景每幀寫它的 transform，
+   這裡只動 translate / opacity，不會互搶。 */
+.npc-identity-card {
+  --m-from-y: var(--rise-1);
+  transform-origin: bottom center;
+  animation: pc-pop-in var(--dur-3) var(--ease-out) both;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   任務日誌面板
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* 打開：彈簧滑入；關閉：比打開快、不回彈。transform 是原本就在用的位移
+   （translateX 收到右側外），這裡只換時長與曲線。 */
+.holo-panel {
+  transition:
+    transform var(--dur-spring) var(--ease-spring-soft),
+    opacity var(--dur-2) ease,
+    visibility 0s;
+}
+.holo-panel--closed {
+  transition:
+    transform var(--dur-3) var(--ease-in),
+    opacity var(--dur-3) ease,
+    visibility 0s linear var(--dur-3);
+}
+/* 面板每次打開，標題列與內容各自錯開一拍淡入上浮——面板先到、內容後到。
+   關著的時候把 animation 拿掉，下次打開才會重播。 */
+.holo-panel:not(.holo-panel--closed) > .holo-panel__title {
+  animation: pc-item-in var(--dur-4) var(--ease-out) both;
+  animation-delay: 60ms;
+  --m-item-y: 6px;
+}
+.holo-panel:not(.holo-panel--closed) > .quest-log,
+.holo-panel:not(.holo-panel--closed) > .focus-pane-grid {
+  animation: pc-item-in var(--dur-4) var(--ease-out) both;
+  animation-delay: 110ms;
+  --m-item-y: 10px;
+}
+.holo-panel--closed > * { animation: none; }
+
+/* 任務卡展開：內容從卡片標題下方「拉開」——淡入＋自上而下 8px。 */
+.turn-card__items {
+  animation: pc-item-in var(--dur-3) var(--ease-out) both;
+  --m-item-y: -6px;
+}
+/* 任務卡入場：取代原本 0.18s 的 fadeIn。不對「最後一張」另外加彈簧——新卡
+   進來時前一張就不再是最後一張，animation-name 一變它會整段重播。 */
+.turn-card {
+  animation: pc-item-in var(--dur-3) var(--ease-out) both;
+  --m-item-y: 6px;
+}
+
+/* 執行中的任務卡：上緣一條細掃描光。不是發光框，只有 1px 線上一小段亮點
+   橫向掃過——知道「還在跑」就夠了。 */
+.turn-card--running { position: relative; }
+.turn-card--running::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  width: 32%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.85), transparent);
+  pointer-events: none;
+  animation: pc-scan 1.8s var(--ease-in-out) infinite;
+}
+@keyframes pc-scan {
+  0% { translate: -100% 0; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { translate: 320% 0; opacity: 0; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   送出鈕：起飛 → 打勾 → 回原狀；忙碌中指令列上緣細光條
+   ════════════════════════════════════════════════════════════════════════ */
+
+.command-composer__submit {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.command-composer__submit-label {
+  display: inline-block;
+}
+.command-composer__submit-fx,
+.command-composer__submit-ok {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+}
+.command-composer__submit-fx .ui-icon,
+.command-composer__submit-ok .ui-icon { width: 15px; height: 15px; }
+
+/* 起飛：字先往上收走，紙飛機在中央蹲一下（預備動作）再往右上加速飛出。 */
+.command-composer__submit[data-launch="launch"] .command-composer__submit-label {
+  animation: pc-label-out var(--dur-2) var(--ease-in) forwards;
+}
+.command-composer__submit[data-launch="launch"] .command-composer__submit-fx {
+  animation: pc-plane-takeoff 460ms var(--ease-in-out) forwards;
+}
+/* 機尾的一小段航跡：跟著飛機出現、比飛機更快淡掉。 */
+.command-composer__submit-fx::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, currentColor);
+  opacity: 0;
+  rotate: -33deg;
+  translate: -24px 6px;
+}
+.command-composer__submit[data-launch="launch"] .command-composer__submit-fx::after {
+  animation: pc-plane-trail 460ms ease-out forwards;
+}
+@keyframes pc-label-out {
+  to { opacity: 0; translate: 0 -10px; }
+}
+@keyframes pc-plane-takeoff {
+  0% { opacity: 0; translate: -2px 3px; scale: 0.7; rotate: 0deg; }
+  22% { opacity: 1; translate: -5px 5px; scale: 1; rotate: -6deg; }
+  100% { opacity: 0; translate: 44px -28px; scale: 0.8; rotate: 4deg; }
+}
+@keyframes pc-plane-trail {
+  0%, 25% { opacity: 0; }
+  50% { opacity: 0.55; }
+  100% { opacity: 0; translate: 6px -6px; }
+}
+
+/* 打勾：勾勾用 stroke 畫出來，同時彈簧放大；按鈕邊框短暫轉成「完成」綠。 */
+.command-composer__submit[data-launch="done"] {
+  border-color: rgba(0, 255, 163, 0.62);
+  background: rgba(0, 255, 163, 0.2);
+}
+.command-composer__submit[data-launch="done"] .command-composer__submit-label { opacity: 0; }
+.command-composer__submit[data-launch="done"] .command-composer__submit-ok {
+  opacity: 1;
+  animation: pc-check-pop var(--dur-spring) var(--ease-spring) both;
+}
+.command-composer__submit[data-launch="done"] .command-composer__submit-ok path {
+  stroke-dasharray: 24;
+  animation: pc-check-draw 320ms var(--ease-out) both;
+}
+@keyframes pc-check-pop {
+  from { scale: 0.5; }
+}
+@keyframes pc-check-draw {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+/* 回原狀：字從下面浮回來。 */
+.command-composer__submit[data-launch="settle"] .command-composer__submit-label {
+  animation: pc-label-in var(--dur-3) var(--ease-out) both;
+}
+@keyframes pc-label-in {
+  from { opacity: 0; translate: 0 8px; }
+}
+/* 送出後草稿清空、按鈕會變 disabled（或 NPC 一忙就變成「中止」紅）。動畫
+   播放中維持送出鈕自己的樣子，不然打勾會被 0.35 透明度吃掉、染成紅色。 */
+.command-composer__submit[data-launch]:disabled { opacity: 1; }
+.command-composer__submit[data-launch="launch"],
+.command-composer__submit[data-launch="done"] { color: #80e6bf; }
+
+/* 外部預填（拖到 NPC 身上、指令面板）：輸入框邊框亮一下再退，告訴你「字填
+   進來了、還沒送」。a / b 兩個同內容的 keyframes 交替，連續預填也會重播。 */
+.command-composer[data-prefill="a"] { animation: pc-prefill-a 900ms var(--ease-out); }
+.command-composer[data-prefill="b"] { animation: pc-prefill-b 900ms var(--ease-out); }
+@keyframes pc-prefill-a { from { border-color: rgba(0, 229, 255, 0.9); box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.16), 0 16px 45px rgba(0, 0, 0, 0.3); } }
+@keyframes pc-prefill-b { from { border-color: rgba(0, 229, 255, 0.9); box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.16), 0 16px 45px rgba(0, 0, 0, 0.3); } }
+
+/* 忙碌中：指令列上緣 1px 的細光條，一小段亮點來回掃。跟任務卡的掃描光
+   同一個語彙，看到就知道「這位 NPC 還在跑」。 */
+.command-composer[data-busy="true"]::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 16px;
+  width: 28%;
+  height: 1px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.9), transparent);
+  pointer-events: none;
+  animation: pc-busy-sweep 2.2s var(--ease-in-out) infinite;
+}
+@keyframes pc-busy-sweep {
+  0% { translate: 0 0; opacity: 0; }
+  12% { opacity: 1; }
+  50% { translate: 230% 0; opacity: 1; }
+  62% { opacity: 1; }
+  100% { translate: 0 0; opacity: 0; }
+}
+
+/* ── 「已交給 XXX」回執：送出後出現在指令列右上，點了跳到那位 NPC ── */
+.command-composer__receipt {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: calc(100% + 8px);
+  max-width: min(320px, 70%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 229, 255, 0.26);
+  border-radius: 999px;
+  background: rgba(7, 13, 26, 0.96);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  color: #bfeef8;
+  cursor: pointer;
+  font: 600 11px/1.2 var(--mono);
+  white-space: nowrap;
+  transform-origin: bottom right;
+  --m-from-y: 6px;
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+}
+.command-composer__receipt:hover { border-color: rgba(0, 229, 255, 0.55); color: var(--cyan); }
+.command-composer__receipt[data-leaving="true"] {
+  animation: pc-pop-out var(--dur-1) var(--ease-in) forwards;
+}
+.command-composer__receipt .ui-icon { flex: none; width: 13px; height: 13px; color: var(--cyan); }
+/* 紙飛機圖示跟著場景那架一起「出發」：從左下滑進定位。 */
+.command-composer__receipt-plane { display: inline-grid; animation: pc-receipt-plane 520ms var(--ease-out) both; }
+@keyframes pc-receipt-plane {
+  from { opacity: 0; translate: -8px 6px; }
+}
+.command-composer__receipt strong { overflow: hidden; color: #e8fbff; text-overflow: ellipsis; }
+.command-composer__receipt small { color: #6f8aa6; font-weight: 500; }
+.command-composer__receipt--queued { border-color: rgba(255, 203, 91, 0.3); color: #f0d38c; }
+.command-composer__receipt--queued .ui-icon { color: #ffcb5b; }
+/* 停留時間：底緣一條會縮短的細線，看得出它什麼時候會自己收掉。 */
+.command-composer__receipt::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.35;
+  transform-origin: left center;
+  animation: pc-receipt-timer var(--receipt-ms, 4200ms) linear both;
+}
+@keyframes pc-receipt-timer {
+  to { scale: 0 1; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Toast：進場彈簧落下，離場快速上收
+   ════════════════════════════════════════════════════════════════════════ */
+.toast {
+  --m-from-y: -10px;
+  transform-origin: top center;
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+}
+.toast[data-leaving="true"] {
+  animation: pc-toast-out var(--dur-1) var(--ease-in) forwards;
+  pointer-events: none;
+}
+@keyframes pc-toast-out {
+  to { opacity: 0; scale: 0.97; translate: 0 -6px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   數字滾動：計數改變時舊數字往上滑走、新數字從下面滑進來
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-roll {
+  position: relative;
+  display: inline-grid;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.pc-roll > span { grid-area: 1 / 1; }
+.pc-roll__in { animation: pc-roll-in var(--dur-4) var(--ease-spring-soft) both; }
+.pc-roll__out { animation: pc-roll-out var(--dur-2) var(--ease-in) forwards; }
+.pc-roll--down .pc-roll__in { --roll-from: -100%; }
+.pc-roll--down .pc-roll__out { --roll-to: 100%; }
+@keyframes pc-roll-in { from { opacity: 0; translate: 0 var(--roll-from, 100%); } }
+@keyframes pc-roll-out { to { opacity: 0; translate: 0 var(--roll-to, -100%); } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   NPC 右鍵徑向選單
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* 中心環：選單從 NPC 身上「綻開」的起點。先出現、再讓按鈕沿弧線放射出去。 */
+.npc-radial__hub {
+  position: absolute;
+  top: calc(-14px * var(--npc-zoom, 1));
+  left: calc(-14px * var(--npc-zoom, 1));
+  width: calc(28px * var(--npc-zoom, 1));
+  height: calc(28px * var(--npc-zoom, 1));
+  border: 1px solid rgba(0, 229, 255, 0.42);
+  border-radius: 50%;
+  opacity: 0;
+  scale: 0.2;
+  pointer-events: none;
+  transition: scale var(--dur-spring) var(--ease-spring), opacity var(--dur-2) ease;
+}
+.npc-radial--open .npc-radial__hub { opacity: 1; scale: 1; }
+/* 開場時環往外擴散一次就消失，像聲納「啵」一下。 */
+.npc-radial--open .npc-radial__hub::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(0, 229, 255, 0.5);
+  border-radius: 50%;
+  animation: pc-hub-ping 640ms var(--ease-out) both;
+}
+@keyframes pc-hub-ping {
+  from { opacity: 0.9; scale: 1; }
+  to { opacity: 0; scale: 3.4; }
+}
+
+/* 按鈕沿弧線放射：位移與縮放走彈簧，錯開由 React 寫的 transition-delay 控制。 */
+.npc-radial__item {
+  transition:
+    transform var(--dur-spring) var(--ease-spring),
+    opacity var(--dur-2) ease,
+    scale var(--dur-spring-soft) var(--ease-spring),
+    border-color var(--dur-1) ease,
+    color var(--dur-1) ease,
+    box-shadow var(--dur-1) ease;
+  /* 只有放射（transform）與淡入（opacity）吃錯開延遲；hover 的 scale 不等。 */
+  transition-delay: var(--d, 0ms), var(--d, 0ms), 0ms, 0ms, 0ms, 0ms;
+}
+/* hover：放大＋標籤從下方浮出。scale 是獨立屬性，疊在弧線位移的 transform
+   之上，不會把按鈕拉回中心。 */
+.npc-radial--open .npc-radial__item:hover,
+.npc-radial--open .npc-radial__item:focus-visible,
+.npc-radial--open .npc-radial__item[data-active="true"] {
+  scale: 1.16;
+  transition-delay: 0ms;
+}
+.npc-radial__item[data-active="true"] {
+  border-color: rgba(0, 229, 255, 0.75);
+  color: var(--cyan);
+}
+.npc-radial__item--danger[data-active="true"] { border-color: rgba(255, 46, 136, 0.85); color: #ff2e88; }
+/* 標籤放在弧線「外側」（往左開就在按鈕左邊），不會壓到弧線上的下一顆。 */
+.npc-radial__label {
+  top: 50%;
+  transform: none;
+  transition: opacity var(--dur-1) ease, translate var(--dur-3) var(--ease-out);
+}
+.npc-radial--left .npc-radial__label { left: auto; right: calc(100% + 7px); translate: 5px -50%; }
+.npc-radial--right .npc-radial__label { left: calc(100% + 7px); translate: -5px -50%; }
+.npc-radial__item:hover .npc-radial__label,
+.npc-radial__item:focus-visible .npc-radial__label,
+.npc-radial__item[data-active="true"] .npc-radial__label { translate: 0 -50%; opacity: 1; }
+/* 選到之後：被點的那顆脈衝一下，其餘收回中心，然後才執行動作。 */
+.npc-radial--closing .npc-radial__item {
+  opacity: 0;
+  transform: translate(0, 0) scale(0.4);
+  transition: transform var(--dur-2) var(--ease-in), opacity var(--dur-1) ease;
+  transition-delay: 0ms;
+}
+.npc-radial--closing .npc-radial__item[data-chosen="true"] {
+  opacity: 1;
+  transform: translate(calc(var(--tx) * var(--npc-zoom, 1)), calc(var(--ty) * var(--npc-zoom, 1))) scale(1);
+  scale: 1.28;
+  transition: scale var(--dur-2) var(--ease-out), opacity var(--dur-2) ease var(--dur-1);
+}
+.npc-radial--closing .npc-radial__hub { opacity: 0; scale: 0.4; transition-duration: var(--dur-2); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Ctrl+K 指令面板
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-palette {
+  position: fixed;
+  z-index: 28000;
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding: calc(var(--safe-t) + 12vh) var(--sp-3) var(--sp-3);
+  background: rgba(3, 6, 14, 0.58);
+  animation: pc-fade-in var(--dur-2) ease both;
+}
+.pc-palette[data-closing="true"] { animation: pc-fade-out var(--dur-1) ease forwards; }
+.pc-palette__panel {
+  position: relative;
+  width: min(620px, 100%);
+  max-height: calc(var(--vh) - 16vh - var(--safe-t) - var(--sp-3));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(0, 229, 255, 0.24);
+  border-radius: 14px;
+  background: #0a1120;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+  transform-origin: top center;
+  --m-from-y: -10px;
+  animation: pc-pop-in var(--dur-spring) var(--ease-spring) both;
+}
+.pc-palette[data-closing="true"] .pc-palette__panel { animation: pc-pop-out var(--dur-1) var(--ease-in) forwards; }
+.pc-palette__search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(143, 184, 232, 0.1);
+}
+.pc-palette__search > .ui-icon { flex: none; color: #5d7290; }
+.pc-palette__search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 50px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
+  outline: none;
+}
+.pc-palette__search input::placeholder { color: #4f6280; }
+.pc-palette kbd {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid rgba(143, 184, 232, 0.18);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #7d90aa;
+  font: 600 9.5px/1.4 var(--mono);
+}
+.pc-palette__list {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  scroll-padding: 34px 0 8px;
+}
+/* 選取指示：一塊在列與列之間「滑動」的底色，而不是每列各自亮起——鍵盤
+   上下移動時看得出是同一個游標在走。 */
+.pc-palette__cursor {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 6px;
+  right: 6px;
+  border-radius: 8px;
+  background: rgba(0, 229, 255, 0.085);
+  box-shadow: inset 2px 0 0 var(--cyan);
+  pointer-events: none;
+  transition: translate var(--dur-3) var(--ease-spring-soft), height var(--dur-2) var(--ease-out);
+}
+.pc-palette__group {
+  position: relative;
+  z-index: 1;
+  padding: 10px 10px 5px;
+  color: #556a88;
+  font: 700 9px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.pc-palette__item {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #b7c9df;
+  cursor: pointer;
+  font: 13px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
+  text-align: left;
+  animation: pc-item-in var(--dur-3) var(--ease-out) both;
+  animation-delay: calc(min(var(--i, 0), 10) * 16ms + 60ms);
+}
+.pc-palette__item[aria-selected="true"] { color: #eafcff; }
+.pc-palette__item > .ui-icon { justify-self: center; color: #6b81a0; transition: color var(--dur-1) ease; }
+.pc-palette__item[aria-selected="true"] > .ui-icon { color: var(--cyan); }
+.pc-palette__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-palette__label mark { background: none; color: var(--cyan); font-weight: 700; }
+.pc-palette__label small { margin-left: 8px; color: #5d7290; font: 11px var(--mono); }
+.pc-palette__meta { display: inline-flex; align-items: center; gap: 8px; color: #5d7290; font: 10px var(--mono); }
+.pc-palette__dot { width: 6px; height: 6px; border-radius: 50%; background: #3a4a63; }
+.pc-palette__dot--busy { background: var(--cyan); }
+.pc-palette__dot--approval { background: var(--warn); }
+.pc-palette__dot--error { background: var(--err); }
+.pc-palette__enter { opacity: 0; translate: -4px 0; transition: opacity var(--dur-1) ease, translate var(--dur-2) var(--ease-out); }
+.pc-palette__item[aria-selected="true"] .pc-palette__enter { opacity: 1; translate: 0 0; }
+.pc-palette__empty { padding: 26px 12px; color: #5d7290; font-size: 12px; text-align: center; }
+.pc-palette__foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(143, 184, 232, 0.08);
+  color: #566a87;
+  font: 10px var(--mono);
+}
+.pc-palette__foot span { display: inline-flex; align-items: center; gap: 5px; }
+.pc-palette__foot span:last-child { margin-left: auto; }
+
+@media (max-width: 600px) {
+  .pc-palette__panel { max-height: calc(var(--vh) - var(--safe-t) - var(--sp-4)); }
+  .pc-palette__item { min-height: var(--tap); }
+  .pc-palette__search input { font-size: var(--fs-input); }
+  .pc-palette__foot { display: none; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   觸控長按 NPC：手指下方一圈逐漸填滿的環，滿了就開徑向選單
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-longpress {
+  position: fixed;
+  z-index: 50;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1.5px solid rgba(0, 229, 255, 0.2);
+  /* 先等 120ms 才出現：一般的點一下、拖曳畫面不會每次都閃一圈。 */
+  animation: pc-fade-in var(--dur-2) ease 120ms both;
+}
+.pc-longpress::after {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border: 1.5px solid var(--cyan);
+  border-radius: 50%;
+  scale: 0.4;
+  opacity: 0;
+  animation: pc-longpress-fill var(--longpress-ms, 360ms) var(--ease-in-out) 120ms forwards;
+}
+@keyframes pc-longpress-fill {
+  to { scale: 1; opacity: 1; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   prefers-reduced-motion：同名 keyframes 重新定義成純淡入／淡出；位移、
+   回彈、循環光條全部拿掉。時長也縮短——淡入本身已經夠表達「出現了」。
+   ════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-2: 120ms;
+    --dur-3: 140ms;
+    --dur-4: 160ms;
+    --dur-spring: 160ms;
+    --dur-spring-soft: 140ms;
+    --ease-spring: ease-out;
+    --ease-spring-soft: ease-out;
+    --stagger: 0ms;
+  }
+  @keyframes pc-pop-in { from { opacity: 0; } }
+  @keyframes pc-pop-out { to { opacity: 0; } }
+  @keyframes pc-item-in { from { opacity: 0; } }
+  @keyframes pc-dialog-in { from { opacity: 0; } }
+  @keyframes pc-dialog-out { to { opacity: 0; } }
+  @keyframes pc-sheet-in { from { opacity: 0; } }
+  @keyframes pc-model-list-in { from { opacity: 0; } }
+  @keyframes pc-check-stamp { from { opacity: 0; } }
+  @keyframes pc-toast-out { to { opacity: 0; } }
+  @keyframes pc-roll-in { from { opacity: 0; } }
+  @keyframes pc-roll-out { to { opacity: 0; } }
+  @keyframes pc-label-out { to { opacity: 0; } }
+  @keyframes pc-label-in { from { opacity: 0; } }
+  @keyframes pc-check-pop { from { opacity: 0; } }
+  @keyframes pc-receipt-plane { from { opacity: 0; } }
+  /* 起飛改成：飛機原地淡入再淡出，不飛。 */
+  @keyframes pc-focus-in { from { outline-color: transparent; } }
+  @keyframes pc-plane-takeoff { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: 0; } }
+
+  .turn-card--running::before,
+  .command-composer[data-busy="true"]::after,
+  .npc-radial--open .npc-radial__hub::after,
+  .command-composer__submit-fx::after { animation: none; display: none; }
+  /* 忙碌光條改成一條不動的淡線：資訊還在，只是不動。 */
+  .command-composer[data-busy="true"]::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 16px;
+    right: 16px;
+    height: 1px;
+    background: rgba(0, 229, 255, 0.45);
+    pointer-events: none;
+  }
+  .command-composer__receipt::after { animation: none; }
+  .holo-panel,
+  .holo-panel--closed { transition-duration: 0.01ms, var(--dur-2), 0s; }
+  .npc-radial__item,
+  .npc-radial__hub { transition-duration: var(--dur-2); }
+  .npc-radial--open .npc-radial__item:hover,
+  .npc-radial--open .npc-radial__item:focus-visible,
+  .npc-radial--open .npc-radial__item[data-active="true"] { scale: 1; }
+  :is(
+    .top-bar__capability, .top-bar__boss, .top-bar__running, .top-bar__health, .top-bar__update,
+    .top-bar__more-menu button, .top-bar__more-menu a, .health-popover button, .ui-mode-switch button,
+    .command-composer__attach, .command-composer__library, .command-composer__submit, .command-composer__queue,
+    .composer-roundtable-toggle, .composer-roundtable-menu button, .voice-input__mic, .task-log-toolbar button,
+    .panel-toggle, .autopilot-toggle, .autopilot-config button, .confirm-dialog__btn, .crew-rail button,
+    .focus-controls button, .npc-approval-bar button, .toast, .pc-palette__item, .command-composer__receipt
+  ):not(:disabled):active { scale: 1; }
+  .pc-palette__cursor { transition-duration: 0.01ms; }
+  .pc-longpress::after { animation-timing-function: linear; }
+  .top-bar__model-trigger svg { transition: none; }
+}

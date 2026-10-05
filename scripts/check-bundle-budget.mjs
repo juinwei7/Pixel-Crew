@@ -26,6 +26,12 @@ const budgets = [
   // below instead of smuggling ~420 KiB of vendor library through it.
   { name: "three.js vendor", match: /^three-vendor-[\w-]+\.js$/, max: 460 * 1024 },
   { name: "xterm vendor", match: /^xterm-vendor-[\w-]+\.js$/, max: 400 * 1024 },
+  // 像素辦公室場景（web/src/game：Pixi 精靈、動畫特效、桌位版面、NPC 行為）由
+  // GameCanvas 動態載入，不進 entry。它是一整塊功能而非單一面板，體積遠大於一般
+  // lazy modal，所以給它自己的上限：現況 ~142 KiB + 餘裕 = 160 KiB，而不是套用下方
+  // 80 KiB 的通用 lazy 上限。Pixi 本體仍在自己的 vendor chunk。UI 需要的少量場景
+  // 資料（crewLook / furnitureDefs / nameplateLod 等）刻意保持輕量、留在 entry。
+  { name: "office scene", match: /^scene-[\w-]+\.js$/, max: 160 * 1024 },
 ];
 
 const errors = [];

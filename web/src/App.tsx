@@ -8,7 +8,11 @@ import { MissionActivityFeed } from "./components/MissionActivityFeed";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
 import { roomName } from "./workspace";
-import { TaskComposer } from "./components/TaskComposer";
+import { TaskComposer, type ComposerInject, type ComposerLaunch } from "./components/TaskComposer";
+import { CommandPalette, type PaletteEntry, type PaletteStatus } from "./components/CommandPalette";
+import { emitFx, onFx } from "./fxBus";
+import { useDeliverableWatch, type NewDeliverable } from "./hooks/useDeliverableWatch";
+import { LONG_PRESS_MS, useNpcLongPress } from "./hooks/useNpcLongPress";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { ConfirmDialog, type ConfirmTone } from "./components/ConfirmDialog";
 import { CrewChips } from "./components/CrewChips";
@@ -40,6 +44,11 @@ import { buildFocusStudios, focusStudioWorkers, studioWorkerId } from "./focusSt
 import { addPane, createFocusPanes, MAX_FOCUS_PANES, removePane, setPaneWorker, type FocusPane } from "./focusPanes";
 import type { AutoApproveMode, ProviderId } from "./types";
 import { Icon } from "./components/Icon";
+import { ConnectionBanner } from "./components/ConnectionBanner";
+import { celebrateWorker, flashArrival } from "./interactionFx";
+import { attentionSummary } from "./uxMotion";
+import { ElapsedSeconds } from "./components/ConnectionBanner";
+import { PanelSkeleton } from "./components/BuildMoment";
 
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
@@ -82,6 +91,7 @@ function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: ty
   return [{ id: "", label: t("預設模型"), description: t("跟隨本機 Claude 設定") }, ...models.values()];
 }
 
+
 const EMPTY_CAPABILITIES = {
   slashCommands: [], mcpServers: [], models: [], toolCount: null, builtinTools: null, loading: true,
   source: "empty" as const, updatedAt: null, error: null,
@@ -101,7 +111,13 @@ export function App() {
   const [newWorkerProvider, setNewWorkerProvider] = useState<ProviderId>("claude");
   const [newWorkerAccountId, setNewWorkerAccountId] = useState<string | null>(null);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
+  // commandPaletteOpen 是輸入框裡的斜線指令清單；quickPaletteOpen 是 Ctrl/⌘ K 的全域指令面板。
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [quickPaletteOpen, setQuickPaletteOpen] = useState(false);
+  // 外部要求預填輸入框（拖到 NPC 身上、指令面板「對某人下指令」）。只填不送。
+  const [composerInject, setComposerInject] = useState<ComposerInject | null>(null);
+  const [topMenuRequest, setTopMenuRequest] = useState<{ menu: "npc" | "platform"; seq: number } | null>(null);
+  const officeRef = useRef<HTMLDivElement>(null);
   // 快速圓桌＝目前 NPC 單回合模擬多視角；作戰室＝2–4 個跟隨目前 provider 的短命同儕真的辯論。
   // 兩者刻意分成不同入口，讓時間、Provider 與用量預期不會混在一起。
   const [discussionMode, setDiscussionMode] = useState<DiscussionMode>(null);
@@ -114,6 +130,8 @@ export function App() {
   const roundtableTempIdRef = useRef<string | null>(null);
   const [warroomResult, setWarroomResult] = useState<WarRoomResult | null>(null);
   const [warroomRunning, setWarroomRunning] = useState(false);
+  // 作戰室開議時間：等待提示顯示「已進行 N 秒」。
+  const [warroomStartedAt, setWarroomStartedAt] = useState(0);
   // 作戰室歷史面板：列出 .warroom/ 的過往裁決報告，可回看/刪除（null＝面板關閉）。
   const [warroomHistory, setWarroomHistory] = useState<Array<{ file: string; topic: string; difficulty: string }> | null>(null);
   const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
@@ -187,6 +205,7 @@ export function App() {
     if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return; }
     const hostId = activeId;
     setWarroomRunning(true);
+    setWarroomStartedAt(Date.now());
     // 讓召集人頭上冒「討論中」泡泡（roundtableWorkerIds 的清理 effect 會在它忙過又閒置後自動移除）。
     setRoundtableWorkerIds((current) => (current.includes(hostId) ? current : [...current, hostId]));
     notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
@@ -674,6 +693,32 @@ export function App() {
     activateNpc(workerId);
   }, [activateNpc]);
 
+  // 「切到某位 NPC」的單一入口：專業模式要換進目前的分割窗，像素模式就是點他。
+  const goToWorker = useCallback((workerId: string) => {
+    if (taskFocusMode) assignWorkerToPane(focusedPaneId, workerId);
+    else activateNpc(workerId);
+  }, [activateNpc, assignWorkerToPane, focusedPaneId, taskFocusMode]);
+
+  // 「等你核准」：頂欄的琥珀色提示。點了＝跳到第一位等你的 NPC，等批准卡畫出來
+  // 後平滑捲到眼前、亮一圈，隊員列也跟著亮——眼睛不用自己找。
+  const needsYou = useMemo(() => attentionSummary(workerList), [workerList]);
+  const jumpToNeedsYou = useCallback(() => {
+    if (!needsYou.firstId) return;
+    goToWorker(needsYou.firstId);
+    updatePreferences({ taskLogOpen: true });
+    flashArrival(".approval-card--pending");
+    flashArrival(`[data-crew-id="${CSS.escape(needsYou.firstId)}"]`);
+  }, [goToWorker, needsYou.firstId, updatePreferences]);
+
+  // 預填某位 NPC 的輸入框：先切過去，再把文字／檔案交給 TaskComposer——它會等
+  // 草稿切到那位 NPC 的那一份才填。絕不自動送出，送不送由使用者自己按。
+  const prefillComposerFor = useCallback((workerId: string, text: string, files: File[] = []) => {
+    const worker = workers[workerId];
+    if (!worker) return;
+    goToWorker(workerId);
+    setComposerInject({ seq: Date.now(), sessionKey: `${workerId}:${worker.provider}:${worker.workspacePath || targetRepoPath}`, text, files });
+  }, [goToWorker, targetRepoPath, workers]);
+
   const focusPane = useCallback((paneId: string) => {
     setFocusWorkbench((current) => (current.focusedPaneId === paneId ? current : { ...current, focusedPaneId: paneId }));
     const worker = focusPanes.find((pane) => pane.id === paneId)?.workerId;
@@ -722,11 +767,48 @@ export function App() {
     return true;
   }, [assignWorkerToPane, focusStudios, focusedPaneId, preferences.focusStudioLastWorkerIds]);
 
+  // 場景 → 介面：拖東西到 NPC 身上＝切過去並預填；點舉手的 NPC＝打開他的批准介面
+  // （跟 ⌘/Ctrl ⇧ A 同一條路：切到他、展開任務日誌，批准卡就在日誌最上面）。
+  const fxHandlersRef = useRef({ prefillComposerFor, goToWorker });
+  fxHandlersRef.current = { prefillComposerFor, goToWorker };
+  useEffect(() => onFx((event) => {
+    if (event.type === "drop-dispatch") fxHandlersRef.current.prefillComposerFor(event.workerId, event.text, event.files);
+    else if (event.type === "open-approval") {
+      fxHandlersRef.current.goToWorker(event.workerId);
+      flashArrival(".approval-card--pending");
+    }
+  }), []);
+
+  // 送出成功（TaskComposer 的真實送出路徑，或示範模式）→ 通知場景放紙飛機。
+  const handleComposerLaunch = useCallback((launch: ComposerLaunch) => {
+    emitFx({ type: "dispatch", workerId: launch.workerId, from: launch.from, text: launch.text });
+  }, []);
+
+  // 成品匣出現新檔 → 通知場景，並給一個不打擾的提示。
+  const handleNewDeliverables = useCallback((items: NewDeliverable[]) => {
+    for (const item of items.slice(0, 3)) emitFx({ type: "deliverable", workerId: item.workerId, name: item.name });
+    notify(items.length > 1
+      ? t("成品匣新增 {count} 份：{name} 等", { count: items.length, name: items[0].name })
+      : t("成品匣新增：{name}", { name: items[0].name }), "ok");
+  }, [notify]);
+  useDeliverableWatch(workerList, handleNewDeliverables);
+
+  // 觸控長按 NPC＝右鍵選單（手機沒有右鍵）。專業／黑窗模式下辦公室是 inert，不收。
+  const longPressRing = useNpcLongPress(officeRef, !taskFocusMode && !blackWindowMode);
+
+
   const notifySnapshots = useRef(new Map<string, WorkerSnapshot>());
   useEffect(() => {
     const prev = notifySnapshots.current;
     const events = diffNotifications(prev, workerList);
     notifySnapshots.current = new Map(workerList.map((worker) => [worker.id, snapshotWorker(worker)]));
+    // 任務順利完成：從那位 NPC 的隊員列噴一小撮彩帶（純視覺，跟桌面通知開關無關）。
+    for (const event of events) {
+      const [kind, workerId] = event.tag.split(":");
+      if (kind !== "turn" || !workerId) continue;
+      const worker = workerList.find((item) => item.id === workerId);
+      if (worker?.turns[worker.turns.length - 1]?.status === "done") celebrateWorker(workerId);
+    }
     if (!preferences.notificationsEnabled || !events.length) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;
     for (const event of events) {
@@ -751,6 +833,7 @@ export function App() {
     void Notification.requestPermission().then((permission) => {
       if (permission === "granted") {
         updatePreferences({ notificationsEnabled: true });
+        emitFx({ type: "system", kind: "notify-on" });
         notify(t("桌面通知已開啟：任務完成或等待核准時通知（分頁在背景才會跳）"));
       } else {
         notify(t("瀏覽器未授權通知，請在網址列旁的權限設定允許"), "error");
@@ -839,7 +922,7 @@ export function App() {
   }, [updatePreferences]);
 
   const shortcuts = useMemo(() => ({
-    onCommandPalette: () => setCommandPaletteOpen(true),
+    onCommandPalette: () => setQuickPaletteOpen(true),
     onShortcutsHelp: () => setShortcutsHelpOpen((open) => !open),
     onStudioShortcut: (index: number) => taskFocusMode ? selectFocusStudio(focusStudios[index]?.workspacePath ?? "") : false,
     onPaneCycle: (direction: 1 | -1) => taskFocusMode && cycleFocusPane(direction),
@@ -858,6 +941,7 @@ export function App() {
       setSelectedDepartmentId(null);
       setBossMissionDetailId(null);
       updatePreferences({ taskLogOpen: true });
+      flashArrival(".approval-card--pending");
     },
     onEscape: () => {
       // The roundtable overflow and its two child surfaces live beside the
@@ -1198,6 +1282,70 @@ export function App() {
     }
   }
 
+  // Ctrl/⌘ K 指令面板的內容：全部是現有的 handler（切 NPC、開既有面板），不新增
+  // 任何會改設定或送請求的動作——重啟、關服務、改模型／自動核准刻意不放進來。
+  const paletteStatus = (worker: WorkerState): PaletteStatus => {
+    const attention = workerAttention(worker);
+    return attention === "approval" ? "approval" : attention === "error" ? "error" : attention === "working" ? "busy" : "idle";
+  };
+  const paletteWorkers = useMemo(() => quickPaletteOpen
+    ? workerList.filter((worker) => !worker.ephemeralKind).map((worker) => ({ id: worker.id, name: worker.name, detail: worker.persona?.role || roomName(worker.workspacePath), status: paletteStatus(worker) }))
+    : [], [quickPaletteOpen, workerList]);
+  const paletteEntries = useMemo<PaletteEntry[]>(() => {
+    if (!quickPaletteOpen) return [];
+    const people = t("人員");
+    const rooms = t("房間");
+    const views = t("視圖");
+    const tools = t("面板與工具");
+    const open = (action: () => void) => action;
+    return [
+      ...workerList.filter((worker) => !worker.ephemeralKind).map((worker): PaletteEntry => ({
+        id: `worker:${worker.id}`,
+        group: people,
+        label: worker.name,
+        detail: [worker.persona?.role, roomName(worker.workspacePath)].filter(Boolean).join(" · "),
+        meta: worker.id === activeId ? t("目前") : workerFocusStatus(worker),
+        status: paletteStatus(worker),
+        icon: "user",
+        keywords: `${worker.provider} ${worker.model ?? ""}`,
+        run: () => goToWorker(worker.id),
+      })),
+      ...focusStudios.filter((studio) => studio.workspacePath !== activeWorkspace).map((studio): PaletteEntry => ({
+        id: `room:${studio.workspacePath}`,
+        group: rooms,
+        label: t("前往 {room}", { room: studio.name }),
+        detail: studio.workspacePath,
+        icon: "building",
+        run: () => { selectFocusStudio(studio.workspacePath); },
+      })),
+      { id: "view:pixel", group: views, label: t("像素辦公室"), icon: "layout", keywords: "pixel office", run: () => { exitBlackWindowMode(); exitTaskFocusMode(); } },
+      { id: "view:pro", group: views, label: t("專業模式"), icon: "layout", keywords: "professional focus", run: () => { exitBlackWindowMode(); requestAnimationFrame(enterTaskFocusMode); } },
+      { id: "view:black", group: views, label: t("黑窗模式"), icon: "code", keywords: "terminal cli black window", run: enterBlackWindowMode },
+      { id: "view:log", group: views, label: preferences.taskLogOpen ? t("收合任務日誌") : t("展開任務日誌"), meta: "⌘J", icon: "board", run: () => updatePreferences({ taskLogOpen: !preferences.taskLogOpen }) },
+      { id: "view:summary", group: views, label: t("日誌：摘要"), icon: "file", run: () => updatePreferences({ taskLogView: "summary", taskLogOpen: true }) },
+      { id: "view:activity", group: views, label: t("日誌：活動"), icon: "running", run: () => updatePreferences({ taskLogView: "activity", taskLogOpen: true }) },
+      { id: "tool:boss", group: tools, label: t("老闆交辦"), icon: "briefcase", keywords: "boss", run: openBossDesk },
+      { id: "tool:npc-settings", group: tools, label: t("NPC 設定"), detail: active?.name, icon: "user", run: () => setTopMenuRequest({ menu: "npc", seq: Date.now() }) },
+      { id: "tool:platform", group: tools, label: t("平台設定"), icon: "gear", run: () => setTopMenuRequest({ menu: "platform", seq: Date.now() }) },
+      { id: "tool:slash", group: tools, label: t("斜線指令與技能"), detail: activeProvider === "claude" ? "Claude" : "Codex", icon: "code", keywords: "slash commands skills /", run: () => requestAnimationFrame(() => setCommandPaletteOpen(true)) },
+      { id: "tool:outbox", group: tools, label: t("成品匣"), icon: "box", keywords: "outbox", run: open(() => setOutboxOpen(true)) },
+      { id: "tool:kanban", group: tools, label: t("任務看板"), icon: "board", keywords: "kanban", run: open(() => setKanbanModalOpen(true)) },
+      { id: "tool:day-report", group: tools, label: t("今日報告"), icon: "chart", run: open(() => setDayReportOpen(true)) },
+      { id: "tool:mcp", group: tools, label: t("MCP 能力"), icon: "wrench", keywords: "mcp", run: open(() => setMcpModalOpen(true)) },
+      { id: "tool:memory", group: tools, label: t("全域記憶"), icon: "brain", keywords: "memory", run: open(() => setGlobalMemoryModalOpen(true)) },
+      { id: "tool:accounts", group: tools, label: t("帳號管理"), icon: "key", keywords: "account login", run: open(() => { setAccountsModalProvider(activeProvider); setAccountsModalOpen(true); }) },
+      { id: "tool:command-center", group: tools, label: t("指令中心"), icon: "code", keywords: "workflow command center", run: open(() => setCommandCenterOpen(true)) },
+      { id: "tool:new-npc", group: tools, label: t("新增 NPC"), icon: "user", keywords: "create add", run: open(() => openWorkspaceForCreate(activeProvider)) },
+      { id: "tool:new-department", group: tools, label: t("建立部門"), icon: "building", keywords: "department", run: open(() => setDepartmentCreatorOpen(true)) },
+      { id: "tool:remote", group: tools, label: t("遠端存取"), icon: "phone", keywords: "remote phone", run: open(() => setRemoteModalOpen(true)) },
+      { id: "tool:backup", group: tools, label: t("備份與還原"), icon: "archive", keywords: "backup", run: open(() => setBackupModalOpen(true)) },
+      { id: "tool:shortcuts", group: tools, label: t("快捷鍵說明"), meta: "?", icon: "help", keywords: "shortcuts keys", run: open(() => setShortcutsHelpOpen(true)) },
+      { id: "tool:tour", group: tools, label: t("新手導覽"), icon: "flag", keywords: "tour onboarding", run: openTour },
+    ];
+    // openBossDesk / openTour 等是每次 render 重建的區域函式；面板開著時內容跟著 render 走即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickPaletteOpen, workerList, activeId, focusStudios, activeWorkspace, activeProvider, preferences.taskLogOpen, active?.name]);
+
   // 專業模式的標題列在手機只留「對象 + 搜尋 + 管理」一排。工作對象切換與
   // 用量本來各佔一排（加起來 88px，報告只剩四成畫面），改成收進管理面板。
   const focusKindSwitch = <div className="focus-context-switch__kind" aria-label={t("專業模式工作對象")}>
@@ -1212,7 +1360,7 @@ export function App() {
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
-      <div className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
+      <div ref={officeRef} className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
       <GameCanvas
         workers={workerList}
         activeId={activeId}
@@ -1258,6 +1406,8 @@ export function App() {
         runningCount={runningCount}
         runningWorkers={runningWorkers}
         onSelectRunning={activateNpc}
+        needsYou={needsYou.count ? { count: needsYou.count, name: needsYou.firstName } : null}
+        onNeedsYou={jumpToNeedsYou}
         providerChanging={providerChanging}
         accounts={Object.values(accounts)}
         onSetWorkerAccount={handleSetWorkerAccount}
@@ -1291,6 +1441,7 @@ export function App() {
         onProfessionalModeChange={(enabled) => enabled ? enterTaskFocusMode() : exitTaskFocusMode()}
         blackWindowMode={blackWindowMode}
         onBlackWindowModeChange={(enabled) => enabled ? enterBlackWindowMode() : exitBlackWindowMode()}
+        menuRequest={topMenuRequest}
       >
         {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
       </TopBar>}
@@ -1311,11 +1462,12 @@ export function App() {
         notify={notify}
       /></Suspense>}
 
-      {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
+      <ConnectionBanner ready={wsReady} reason={updateApplying ? "update" : restartPending ? "restart" : "blip"} />
       {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />{t("Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。")}</div>}
 
       <button
         className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`}
+        data-shortcut-hint="toggle_task_log"
         aria-hidden={taskFocusMode || blackWindowMode || undefined}
         inert={taskFocusMode || blackWindowMode ? "" : undefined}
         // Capture the pointer so a tap OR a swipe off the button both toggle: on a
@@ -1564,6 +1716,11 @@ export function App() {
         voiceEnabled
         globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !codexCommandsModalOpen && !accountsModalOpen}
         dropTargetLabel={active?.name}
+        launchTarget={active ? { id: active.id, name: active.name } : null}
+        onLaunch={handleComposerLaunch}
+        onReceiptOpen={goToWorker}
+        inject={composerInject}
+        onInjectApplied={(seq) => setComposerInject((current) => current?.seq === seq ? null : current)}
         palette={{
           workspacePath: activeWorkspace,
           provider: activeProvider,
@@ -1734,7 +1891,9 @@ export function App() {
         return error;
       }} />}
 
-      <Suspense fallback={null}>
+      {/* 視窗的程式碼還在下載（第一次打開、慢網路）：先給一張骨架卡，不讓按了沒反應。
+          骨架卡延遲 160ms 才出現，載得快的時候根本看不到。 */}
+      <Suspense fallback={<PanelSkeleton />}>
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify(t("自訂角色已套用")); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify(t("官方角色已套用")); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify(t("已切回自訂角色")); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify(t("已刪除自訂角色並恢復經典隊員")); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
       {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onDirectSwitch={switchProviderFresh} onClose={() => setHandoffTarget(null)} />}
@@ -1817,6 +1976,8 @@ export function App() {
       {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />
         {t("作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
+        {warroomStartedAt > 0 && <span className="warroom-running__elapsed">· {t("已進行")} <ElapsedSeconds since={warroomStartedAt} /> {t("秒")}</span>}
+        <span className="pc-indeterminate" aria-hidden="true" />
       </div>}
 
       {warroomResult && <Modal
@@ -1870,6 +2031,15 @@ export function App() {
                   </li>
                 ))}</ul>}
       </Modal>}
+
+      {quickPaletteOpen && <CommandPalette
+        entries={paletteEntries}
+        workers={paletteWorkers}
+        activeWorker={active ? { id: active.id, name: active.name } : null}
+        onComposeTo={(workerId, text) => prefillComposerFor(workerId, text)}
+        onClose={() => setQuickPaletteOpen(false)}
+      />}
+      {longPressRing && <span key={longPressRing.key} className="pc-longpress" style={{ left: longPressRing.x, top: longPressRing.y, "--longpress-ms": `${LONG_PRESS_MS - 120}ms` } as CSSProperties} aria-hidden="true" />}
 
       <footer className="app-copyright" aria-label={t("版權資訊")} aria-hidden={blackWindowMode || undefined} inert={blackWindowMode ? "" : undefined}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

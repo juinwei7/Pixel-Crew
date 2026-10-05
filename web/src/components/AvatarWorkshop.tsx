@@ -9,7 +9,7 @@ import {
   type AvatarControls,
 } from "../avatar/normalizeAvatar";
 import { AVATAR_PRESETS, paintPresetPreview, type AvatarPresetId } from "../game/avatarPresets";
-import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/person";
+import { FRONT_IDLE_0, SHIRT_COLORS } from "../game/crewLook";
 import { dragContainsFiles } from "../composerDrag";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 

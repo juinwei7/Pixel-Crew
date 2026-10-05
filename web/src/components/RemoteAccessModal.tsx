@@ -5,6 +5,9 @@ import { type CfInfo, describeDownload } from "../cloudflaredProgress";
 import { Modal } from "./Modal";
 import { QrTree } from "./QrTree";
 import { Icon } from "./Icon";
+import { CopyButton } from "./CopyButton";
+import { RollingNumber } from "./RollingNumber";
+import { emitFx } from "../fxBus";
 
 type TsInfo = { installed: boolean; running: boolean; dnsName: string; mode: "public" | "private" | "off" };
 type State = {
@@ -70,6 +73,7 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
     setAutoStart(next);
     try {
       await apiRequest("/api/app-settings", { method: "POST", body: { remoteAccessAutoStart: next } });
+      emitFx({ type: "system", kind: "settings-saved" });
       notify(next ? t("已開啟：開啟程式時會自動啟動遠端存取") : t("已關閉遠端存取自動啟動"), "ok");
     } catch (e) {
       setAutoStart(!next);
@@ -202,16 +206,9 @@ export function RemoteAccessModal({ notify, onClose }: Props) {
     >
       <div className="remote-access-modal__content" style={{ padding: "2px 2px 8px", color: "#e6ecff", lineHeight: 1.6 }}>
         {/* 進度條 */}
-        <div className="remote-access-modal__steps" style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 4px" }}>
-          {steps.map((s, i) => (
-            <div key={i} style={{ flex: 1 }}>
-              <div style={{ height: 6, borderRadius: 4, background: s.done ? "#5b8cff" : "#232c46" }} />
-              <div style={{ fontSize: 11, marginTop: 4, color: s.done ? "#9fc0ff" : "#5f6f9c" }}>{i + 1}. {s.label}</div>
-            </div>
-          ))}
-        </div>
+        <RemoteSteps steps={steps} />
         <p style={{ margin: "6px 0 12px", fontSize: 12, color: "#7d8cb8" }}>
-          {t("完成度")} {pct}%
+          {t("完成度")} <RollingNumber value={pct} />%
           <button style={{ ...btnGhost, padding: "3px 8px", fontSize: 11, marginLeft: 10 }} onClick={() => setDemo((v) => !v)}>
             {demo ? t("← 離開預覽") : t("預覽新手引導")}
           </button>
@@ -265,36 +262,29 @@ function Dashboard({ st, cf, busy, run, notify, installCf, cancelCf, onReload }:
 
   async function chooseCloudflared() {
     if (!st.cloudflared.installed) { if (!(await installCf())) return; }
-    if (await run("channel", { type: "cloudflared" }, "chan", 40000)) notify(t("已開通公開網址"), "ok");
+    if (await run("channel", { type: "cloudflared" }, "chan", 40000)) {
+      emitFx({ type: "system", kind: "remote-on" });
+      notify(t("已開通公開網址"), "ok");
+    }
   }
   async function chooseTailscale(mode: "public" | "private") {
-    if (await run("channel", { type: "tailscale", mode }, "chan", 30000)) notify(t("已切換到 Tailscale"), "ok");
+    if (await run("channel", { type: "tailscale", mode }, "chan", 30000)) {
+      emitFx({ type: "system", kind: "remote-on" });
+      notify(t("已切換到 Tailscale"), "ok");
+    }
   }
-  async function turnOff() { if (await run("channel", { type: "off" }, "chan", 20000)) notify(t("已關閉對外通道"), "ok"); }
-  async function copyUrl(u: string) { try { await navigator.clipboard.writeText(u); notify(t("已複製"), "ok"); } catch { /* noop */ } }
+  async function turnOff() {
+    if (await run("channel", { type: "off" }, "chan", 20000)) {
+      emitFx({ type: "system", kind: "remote-off" });
+      notify(t("已關閉對外通道"), "ok");
+    }
+  }
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {/* 目前對外網址 */}
       {st.publicUrl ? (
-        <div className="remote-access-modal__url-card" style={{ ...card, borderColor: "#2e6f4e", background: "#0d1a14" }}>
-          <div className="remote-access-modal__url-layout" style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-            <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-              <div style={{ fontSize: 12, color: "#7ee0a2", marginBottom: 6 }}>{t("● 已上線，手機用這個網址＋通行碼連進來")}</div>
-              <div className="remote-access-modal__url-actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <code style={{ flex: 1, color: "#cfe0ff", fontSize: 13, wordBreak: "break-all" }}>{st.publicUrl}</code>
-                <button style={btnGhost} onClick={() => void copyUrl(st.publicUrl)}>{t("複製")}</button>
-              </div>
-              {st.channel === "cloudflared" && (
-                <div style={{ fontSize: 11, color: "#7d8cb8", marginTop: 6 }}>{t("※ 免安裝通道的網址每次重啟會變，重開後記得重新複製。")}</div>
-              )}
-            </div>
-            <div className="remote-access-modal__qr" style={{ textAlign: "center", margin: "0 auto" }}>
-              <QrTree text={st.publicUrl} px={200} />
-              <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("掃碼開啟・點一下逛夜城")}</div>
-            </div>
-          </div>
-        </div>
+        <RemoteLiveCard key={st.publicUrl} url={st.publicUrl} channel={st.channel} />
       ) : (
         <div style={{ ...card, borderColor: "#5a4a20", background: "#191405" }}>
           <div style={{ fontSize: 13, color: "#ffd479" }}>{t("尚未開通對外通道，選下面一種：")}</div>
@@ -364,6 +354,53 @@ function Dashboard({ st, cf, busy, run, notify, installCf, cancelCf, onReload }:
   );
 }
 
+// 0→100 的三段進度：完成的那段從左往右填滿、勾勾蓋章；目前這段有一小段光
+// 在軌道裡來回走，看得出「下一步在這」。樣式在 styles/motion-ui.css。
+export function RemoteSteps({ steps }: { steps: Array<{ label: string; done: boolean }> }) {
+  const current = steps.findIndex((step) => !step.done);
+  return (
+    <div className="remote-access-modal__steps remote-steps" style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 4px" }}>
+      {steps.map((s, i) => (
+        <div key={i} className="remote-steps__step" data-done={s.done || undefined} data-current={i === current || undefined} style={{ flex: 1 }}>
+          <div className="remote-steps__bar" style={{ height: 6, borderRadius: 4, background: "#232c46" }}><i /></div>
+          <div className="remote-steps__label" style={{ fontSize: 11, marginTop: 4, color: s.done ? "#9fc0ff" : "#5f6f9c" }}>
+            {s.done
+              ? <svg className="remote-steps__check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              : <span className="remote-steps__num">{i + 1}.</span>} {s.label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// 已上線的網址卡：卡片彈進來、邊框亮一下綠；「已上線」前面的燈號一直輕輕發出
+// 聲納波（手機連得進來的那條線是活的）；QR 由 QrTree 自己演夜城長出來。
+export function RemoteLiveCard({ url, channel }: { url: string; channel: State["channel"] }) {
+  return (
+    <div className="remote-access-modal__url-card remote-live-card" style={{ ...card, borderColor: "#2e6f4e", background: "#0d1a14" }}>
+      <div className="remote-access-modal__url-layout" style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div className="remote-live" style={{ fontSize: 12, color: "#7ee0a2", marginBottom: 6 }}>
+            <i className="remote-live__dot" aria-hidden="true" />{t("已上線，手機用這個網址＋通行碼連進來")}
+          </div>
+          <div className="remote-access-modal__url-actions" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <code style={{ flex: 1, color: "#cfe0ff", fontSize: 13, wordBreak: "break-all" }}>{url}</code>
+            <CopyButton text={url} style={btnGhost} />
+          </div>
+          {channel === "cloudflared" && (
+            <div style={{ fontSize: 11, color: "#7d8cb8", marginTop: 6 }}>{t("※ 免安裝通道的網址每次重啟會變，重開後記得重新複製。")}</div>
+          )}
+        </div>
+        <div className="remote-access-modal__qr" style={{ textAlign: "center", margin: "0 auto" }}>
+          <QrTree text={url} px={200} />
+          <div style={{ fontSize: 11, color: "#7ee0a2", marginTop: 4 }}>{t("掃碼開啟・點一下逛夜城")}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // cloudflared 首次下載的進度條。沒有 content-length 時退回「不確定進度」的滿版淡色條，
 // 而不是停在 0% 讓人以為當掉了。
 export function CloudflaredDownload({ info, onCancel }: { info: CfInfo | null; onCancel?(): void }) {
@@ -383,7 +420,8 @@ export function CloudflaredDownload({ info, onCancel }: { info: CfInfo | null; o
         {...(d.pct === null ? {} : { "aria-valuenow": d.pct })}
         style={{ height: 8, borderRadius: 5, background: "#232c46", overflow: "hidden", marginTop: 5 }}
       >
-        <div style={{
+        {/* 不知道總大小時：滿版淡色條上多一段光在軌道裡跑（styles/motion-ui.css），看得出還在動。 */}
+        <div className={d.pct === null ? "remote-dl__fill remote-dl__fill--unknown" : "remote-dl__fill"} style={{
           height: "100%", borderRadius: 5, background: "#5b8cff",
           width: d.pct === null ? "100%" : `${d.pct}%`,
           opacity: d.pct === null ? 0.4 : 1,
@@ -606,7 +644,7 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
         <label style={label}>{t("把這個「已授權的重新導向 URI」貼到 Google Cloud：")}</label>
         <div className="remote-access-modal__input-row" style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <code style={{ ...input, padding: "8px 10px", color: redirectUri ? "#cfe0ff" : "#6b7aa0" }}>{redirectUri || t("（先開通 Tailscale 才會有）")}</code>
-          {redirectUri && <button style={btnGhost} onClick={async () => { try { await navigator.clipboard.writeText(redirectUri); notify(t("已複製"), "ok"); } catch { /* noop */ } }}>{t("複製")}</button>}
+          {redirectUri && <CopyButton text={redirectUri} style={btnGhost} />}
         </div>
         <label style={label}>{t("Client ID")} {st.google.clientIdSet && <span style={{ color: "#7ee0a2" }}>（{t("已設定，留空不變")}）</span>}</label>
         <input style={input} type="text" value={cid} onChange={(e) => setCid(e.target.value)} placeholder="xxxx.apps.googleusercontent.com" />

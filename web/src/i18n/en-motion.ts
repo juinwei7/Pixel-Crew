@@ -1,0 +1,53 @@
+/** 動態系統／指令面板／送出回執的英文字典（key = 中文原文）。 */
+export const enMotion: Record<string, string> = {
+  // 送出回執（TaskComposer）
+  "已交給 {name}": "Handed to {name}",
+  "已排入 {name} 的佇列": "Queued for {name}",
+  "跳到 {name}": "Go to {name}",
+  "斜線指令面板（輸入 / 也能打開）": "Slash command palette (typing / opens it too)",
+  // 成品匣新檔提示（App）
+  "成品匣新增：{name}": "New in Outbox: {name}",
+  "成品匣新增 {count} 份：{name} 等": "{count} new in Outbox: {name} and more",
+  // Ctrl/⌘ K 指令面板
+  "指令面板": "Command palette",
+  "搜尋 NPC、房間、視圖與工具": "Search NPCs, rooms, views and tools",
+  "搜尋 NPC、房間、視圖與工具…（@名字 直接對他下指令）": "Search NPCs, rooms, views, tools… (@name to instruct someone)",
+  "找不到相符的項目": "No matching items",
+  "選擇": "Select",
+  "對某位 NPC 下指令": "Instruct an NPC",
+  "對 NPC 下指令": "Instruct NPC",
+  "對 {name} 下指令": "Instruct {name}",
+  "只預填，不送出": "Prefill only, not sent",
+  "填進 {name} 的輸入框": "Put into {name}'s input",
+  "房間": "Rooms",
+  "視圖": "Views",
+  "面板與工具": "Panels & tools",
+  "前往 {room}": "Go to {room}",
+  "黑窗模式": "Black window mode",
+  "日誌：摘要": "Log: summary",
+  "日誌：活動": "Log: activity",
+  "斜線指令與技能": "Slash commands & skills",
+  "今日報告": "Today's report",
+  "遠端存取": "Remote access",
+  "快捷鍵說明": "Keyboard shortcuts",
+  // 重啟／重新連線（ConnectionBanner）
+  "伺服器重啟中": "Restarting server",
+  "正在安裝新版": "Installing update",
+  "本機服務連線中斷": "Lost connection to the local service",
+  "已回來": "Back online",
+  "正在重新上線…": "Reconnecting…",
+  "已等待": "waited",
+  "秒": "s",
+  "連線恢復，畫面已同步": "Connection restored, everything is in sync",
+  "現有畫面會保留，不用重新整理": "Your screen stays as is, no need to refresh",
+  // 建立 NPC／部門（BuildMoment）
+  "建造工位中…": "Building station…",
+  "工位已就緒": "Station ready",
+  "工作空間已就緒": "Workspace ready",
+  "新隊員正走進辦公室": "Your new crew member is walking into the office",
+  "部門已就緒": "Department ready",
+  "{count} 位新隊員正走進辦公室": "{count} new crew members are walking into the office",
+  "這個資料夾不存在：{path}": "This folder does not exist: {path}",
+  // 手機遠端
+  "已上線，手機用這個網址＋通行碼連進來": "Live — connect from your phone with this URL + passcode",
+};

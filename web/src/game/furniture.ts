@@ -1,151 +1,26 @@
 import { Container, Graphics, Sprite } from "pixi.js";
 import type { StationKey } from "../stations";
 import { PAL, texFromMap } from "./pixels";
-import { t } from "../i18n";
+import { FURNITURE_DEFS, type FurnitureDef } from "./furnitureDefs";
 
-const BOARD = [
-  "WWWWWWWWWWWWWWWWWWWW",
-  "WXXXXXXXXXXXXXXXXXXW",
-  "WXCC..MM..GG......XW",
-  "WXCC..MM..GG..YY..XW",
-  "WX................XW",
-  "WXcc.cc.cc.cc.....XW",
-  "WX................XW",
-  "WXcc.cc...........XW",
-  "WWWWWWWWWWWWWWWWWWWW",
-];
+export { FURNITURE_DEFS, type FurnitureDef };
 
-const SHELF = [
-  "DDDDDDDDDDDDDDDD",
-  "D..............D",
-  "D.OO.CC.MM.YY..D",
-  "D.OO.CC.MM.YY..D",
-  "DDDDDDDDDDDDDDDD",
-  "D..............D",
-  "D.GG.UU.RR.CC..D",
-  "D.GG.UU.RR.CC..D",
-  "DDDDDDDDDDDDDDDD",
-  "D..............D",
-  "D.YY.MM.OO.GG..D",
-  "D.YY.MM.OO.GG..D",
-  "DDDDDDDDDDDDDDDD",
-];
-
-const CODE_DESK = [
-  "....DDDDDDDDDDDDDD....",
-  "....DXXXXXXXXXXXXD....",
-  "....DXCC..XX.C..XD....",
-  "....DXX.CC..CXX.XD....",
-  "....DXC.XX.CC...XD....",
-  "....DXXX.CXX.C..XD....",
-  "....DXXXXXXXXXXXXD....",
-  "....DDDDDDDDDDDDDD....",
-  "..........DD..........",
-  "WWWWWWWWWWWWWWWWWWWWWW",
-  "wwwwwwwwwwwwwwwwwwwwww",
-  "..D................D..",
-  "..D................D..",
-  "..D................D..",
-];
-
-const RACK = [
-  "DDDDDDDDDDDDDD",
-  "DXXXXXXXXXXXXD",
-  "DXGC........XD",
-  "DXXXXXXXXXXXXD",
-  "DXCG........XD",
-  "DXXXXXXXXXXXXD",
-  "DXGG.C......XD",
-  "DXXXXXXXXXXXXD",
-  "DXC..G......XD",
-  "DXXXXXXXXXXXXD",
-  "DXG.........XD",
-  "DXXXXXXXXXXXXD",
-  "DDDDDDDDDDDDDD",
-  ".DD........DD.",
-];
-
-const GLOBE = [
-  ".....WWWWW......",
-  "...WW.....WW....",
-  "..W....C....W...",
-  "..W...C.C...W...",
-  ".W...C..CC...W..",
-  ".W..C.....C..W..",
-  ".W...CC..C...W..",
-  "..W....C....W...",
-  "..W.........W...",
-  "...WW.....WW....",
-  ".....WWWWW......",
-  ".......DD.......",
-  "......DDDD......",
-  "....DDDDDDDD....",
-];
-
-const KIOSK = [
-  ".DDDDDDDDDDDD.",
-  ".DXXXXXXXXXXD.",
-  ".DX........XD.",
-  ".DX......G.XD.",
-  ".DX.....G..XD.",
-  ".DXG...G...XD.",
-  ".DX.G.G....XD.",
-  ".DX..G.....XD.",
-  ".DX........XD.",
-  ".DDDDDDDDDDDD.",
-  "......DD......",
-  ".....DDDD.....",
-];
-
-const CRATE = [
-  "DDDDDDDDDDDDDDDD",
-  "D..............D",
-  "D.Y..Y..Y..Y...D",
-  "D..............D",
-  "DDDDDDDDDDDDDDDD",
-  "D..............D",
-  "D.C..C..C..C...D",
-  "D..............D",
-  "DDDDDDDDDDDDDDDD",
-];
-
-export type FurnitureDef = {
-  key: StationKey;
-  label: string;
-  map: string[];
-  /** Center x, bottom y in the expanded 440x288 art coordinates. */
-  x: number;
-  bottom: number;
-  /** Where the person stands to use it. */
-  standX: number;
-  standY: number;
-  /** LED pixels (relative to sprite top-left) that blink when active. */
-  leds: Array<{ x: number; y: number }>;
-  onWall?: boolean;
-};
-
-export const FURNITURE_DEFS: FurnitureDef[] = [
-  { key: "board", label: t("任務板"), map: BOARD, x: 32, bottom: 48, standX: 32, standY: 72, leds: [{ x: 3, y: 2 }, { x: 15, y: 3 }] },
-  { key: "books", label: t("讀檔案"), map: SHELF, x: 84, bottom: 68, standX: 84, standY: 82, leds: [{ x: 3, y: 2 }, { x: 12, y: 6 }] },
-  { key: "code", label: t("寫程式"), map: CODE_DESK, x: 136, bottom: 68, standX: 136, standY: 82, leds: [{ x: 8, y: 2 }, { x: 12, y: 4 }] },
-  { key: "web", label: t("上網查"), map: GLOBE, x: 190, bottom: 68, standX: 190, standY: 82, leds: [{ x: 8, y: 3 }, { x: 6, y: 5 }] },
-  { key: "terminal", label: t("終端機"), map: RACK, x: 244, bottom: 68, standX: 244, standY: 83, leds: [{ x: 2, y: 2 }, { x: 3, y: 4 }, { x: 2, y: 6 }] },
-  { key: "check", label: t("驗證"), map: KIOSK, x: 298, bottom: 68, standX: 298, standY: 83, leds: [{ x: 3, y: 3 }, { x: 9, y: 3 }] },
-  { key: "desk", label: t("其他工具"), map: CRATE, x: 352, bottom: 66, standX: 352, standY: 81, leds: [{ x: 2, y: 2 }, { x: 13, y: 6 }] },
-  // Invisible rendezvous point around the meeting table drawn by OfficeDecor.
-  // 作戰室會議桌：桌子本體由 OfficeDecor 畫（在最底部空地），這裡放一塊「透明的點擊區」
-  // 蓋在桌面上，讓它跟其他工作站一樣可以懸停看說明、點擊互動（點桌子＝開作戰室模式）。
-  // map 全是透明點：pixi 的點擊判定用貼圖邊界矩形、不看像素透明度，所以照樣可點。
-  { key: "meeting", label: t("作戰室"), map: Array.from({ length: 34 }, () => ".".repeat(112)), x: 120, bottom: 318, standX: 120, standY: 320, leds: [] },
-  // Home positioning and visuals are supplied by PersonalDeskLayer per Worker.
-  { key: "home", label: "", map: ["."], x: 200, bottom: 220, standX: 200, standY: 232, leds: [] },
-];
+const REDUCE_MOTION =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const POKE_MS = 1_300;
 
 class FurnitureSprite {
   readonly container = new Container();
   private readonly ledOverlay = new Graphics();
   private readonly highlight = new Graphics();
+  /** Click reactions + the hover outline. */
+  private readonly fxG = new Graphics();
   active = false;
+  hovered = false;
+  private pokeT = 0;
+  private lastT = 0;
   private readonly w: number;
   private readonly h: number;
 
@@ -154,12 +29,20 @@ class FurnitureSprite {
     this.w = def.map[0].length;
     this.h = def.map.length;
     sprite.anchor.set(0.5, 1);
-    this.container.addChild(this.highlight, sprite, this.ledOverlay);
+    this.container.addChild(this.highlight, sprite, this.ledOverlay, this.fxG);
     this.container.position.set(def.x, def.bottom);
     this.container.zIndex = def.key === "home" ? def.bottom - 10 : def.bottom;
   }
 
+  /** Clicked: the shelf drops a book, the board loses a sticky note, anything else bounces and sparks. */
+  poke(): void {
+    this.pokeT = POKE_MS;
+  }
+
   update(tMs: number): void {
+    const dt = Math.min(100, Math.max(0, tMs - this.lastT));
+    this.lastT = tMs;
+    this.drawPoke(dt);
     const g = this.ledOverlay;
     g.clear();
     const hl = this.highlight;
@@ -185,6 +68,45 @@ class FurnitureSprite {
       alpha: 0.35 + 0.4 * pulse,
     });
   }
+
+  private drawPoke(dt: number): void {
+    const g = this.fxG;
+    g.clear();
+    const left = -this.w / 2;
+    const top = -this.h;
+    if (this.hovered) g.rect(left - 1, top - 1, this.w + 2, this.h + 2).stroke({ color: 0xdfe9f8, width: 0.5, alpha: 0.5 });
+    this.container.scale.y = 1;
+    if (this.pokeT <= 0) return;
+    this.pokeT -= dt;
+    const p = 1 - Math.max(0, this.pokeT) / POKE_MS;
+    if (REDUCE_MOTION) return;
+    if (this.def.key === "books") {
+      // A book slides off the shelf, flops on the floor, then hops back in.
+      g.rect(left + 2, top + 2, 2, 2).fill(0x101828);
+      const [x, y, flat] = fallPath(p, left + 2, top + 2, 2);
+      if (flat) g.rect(x - 0.5, y + 1, 3, 1.5).fill(0xf29e4c);
+      else g.rect(x, y, 2, 2).fill(0xf29e4c);
+      if (p > 0.92) this.sparkle(g, left + 3, top + 3, (p - 0.92) / 0.08);
+    } else if (this.def.key === "board") {
+      // A sticky note peels off and flutters down, then gets pinned back.
+      g.rect(left + 14, top + 3, 2, 1).fill(0x101828);
+      const [x, y] = fallPath(p, left + 14, top + 3, 3);
+      g.rect(x + Math.round(Math.sin(p * 20) * 0.8), y, 2, 2).fill(0xffd166);
+      if (p > 0.92) this.sparkle(g, left + 15, top + 3, (p - 0.92) / 0.08);
+    } else {
+      // Bounce + a little burst of sparks off the top.
+      this.container.scale.y = 1 + Math.sin(p * Math.PI * 4) * 0.07 * (1 - p);
+      if (p < 0.6) this.sparkle(g, 0, top - 1, p / 0.6);
+    }
+  }
+
+  private sparkle(g: Graphics, x: number, y: number, q: number): void {
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + 0.6;
+      g.rect(Math.round(x + Math.cos(a) * (2 + q * 5)), Math.round(y + Math.sin(a) * (2 + q * 4)), 1, 1)
+        .fill({ color: 0xfff3c4, alpha: 1 - q });
+    }
+  }
 }
 
 export class FurnitureLayer {
@@ -206,8 +128,16 @@ export class FurnitureLayer {
         // Touch has no hover: a finger dragging across furniture while panning
         // fires pointerover and would pop tooltips mid-swipe. Mouse hovers only;
         // touch users tap (pointertap below) to pin a station's info instead.
-        sprite.container.on("pointerover", (e) => { if (e.pointerType !== "touch") this.onHover(def.key); });
-        sprite.container.on("pointerout", (e) => { if (e.pointerType !== "touch") this.onHover(null); });
+        sprite.container.on("pointerover", (e) => {
+          if (e.pointerType === "touch") return;
+          sprite.hovered = true;
+          this.onHover(def.key);
+        });
+        sprite.container.on("pointerout", (e) => {
+          if (e.pointerType === "touch") return;
+          sprite.hovered = false;
+          this.onHover(null);
+        });
         // Fire only on a genuine tap (down + up with negligible movement), not on
         // pointerdown — otherwise starting a pan/swipe over the war-room table on a
         // phone instantly opened the roundtable. A drag past ~10px counts as a pan.
@@ -216,7 +146,10 @@ export class FurnitureLayer {
         sprite.container.on("pointerup", (e) => {
           if (e.pointerId !== dpid) return;
           dpid = -1;
-          if (Math.hypot(e.global.x - dx, e.global.y - dy) <= 10) this.onSelect(def.key);
+          if (Math.hypot(e.global.x - dx, e.global.y - dy) <= 10) {
+            sprite.poke(); // visual only; the existing station click carries on as before
+            this.onSelect(def.key);
+          }
         });
       }
       this.sprites.set(def.key, sprite);
@@ -235,4 +168,22 @@ export class FurnitureLayer {
   update(tMs: number): void {
     for (const sprite of this.sprites.values()) sprite.update(tMs);
   }
+}
+
+/**
+ * Path of something knocked off a shelf: falls to the floor below (fall),
+ * lies there, then hops back up into its slot. Returns [x, y, lyingFlat].
+ */
+function fallPath(p: number, x0: number, y0: number, drift: number): [number, number, boolean] {
+  const floor = 2;
+  if (p < 0.3) {
+    const q = p / 0.3;
+    return [x0 + q * drift, y0 + q * q * (floor - y0), q > 0.7];
+  }
+  if (p < 0.65) return [x0 + drift, floor - (p < 0.38 ? Math.sin(((p - 0.3) / 0.08) * Math.PI) * 1.5 : 0), true];
+  if (p < 0.92) {
+    const q = (p - 0.65) / 0.27;
+    return [x0 + drift * (1 - q), floor + (y0 - floor) * q - Math.sin(q * Math.PI) * 6, false];
+  }
+  return [x0, y0, false];
 }

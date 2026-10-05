@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { t } from "../i18n";
 import { TOUR_DONE_KEY } from "../onboardingState";
 import { Icon } from "./Icon";
@@ -85,6 +85,41 @@ export function OnboardingTour({ onClose }: { onClose(): void }) {
 
   const finish = onClose;
 
+  // 聚光燈換目標：位置照舊寫進 left/top/width/height（最終狀態永遠精準），
+  // 但先用 FLIP 把它「放回」上一個目標的位置與大小，再讓 transform 彈簧回到
+  // 新位置——視線被帶著走，而不是一閃跳過去。對話框同樣只位移。
+  const holeRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const lastBoxes = useRef<{ hole: DOMRect | null; dialog: DOMRect | null }>({ hole: null, dialog: null });
+  useLayoutEffect(() => {
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const flip = (el: HTMLElement | null, before: DOMRect | null, scale: boolean) => {
+      if (!el) return null;
+      const after = el.getBoundingClientRect();
+      if (before && !reduced && after.width && after.height) {
+        const dx = before.left - after.left;
+        const dy = before.top - after.top;
+        const sx = scale ? before.width / after.width : 1;
+        const sy = scale ? before.height / after.height : 1;
+        if (Math.abs(dx) + Math.abs(dy) + Math.abs(sx - 1) + Math.abs(sy - 1) > 0.5) {
+          el.style.transition = "none";
+          el.style.transformOrigin = "0 0";
+          el.style.translate = `${dx}px ${dy}px`;
+          el.style.scale = `${sx} ${sy}`;
+          void el.offsetWidth;
+          el.style.transition = "translate var(--dur-spring) var(--ease-spring-soft), scale var(--dur-spring) var(--ease-spring-soft)";
+          el.style.translate = "";
+          el.style.scale = "";
+        }
+      }
+      return after;
+    };
+    lastBoxes.current = {
+      hole: flip(holeRef.current, lastBoxes.current.hole, true),
+      dialog: flip(dialogRef.current, lastBoxes.current.dialog, false),
+    };
+  }, [rect?.left, rect?.top, rect?.width, rect?.height]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") finish();
@@ -115,8 +150,8 @@ export function OnboardingTour({ onClose }: { onClose(): void }) {
 
   return (
     <div className={`tour-overlay ${rect ? "" : "tour-overlay--plain"}`} role="dialog" aria-label={t("新手導覽")}>
-      {rect && <div className="tour-hole" style={holeStyle} />}
-      <div className="tour-dialog" style={dialogStyle}>
+      {rect && <div ref={holeRef} className="tour-hole" style={holeStyle} />}
+      <div ref={dialogRef} className="tour-dialog" style={dialogStyle}>
         <div className="tour-dialog__speaker"><Icon name="cat" /> {t("導覽貓")}</div>
         <h3>{step.title}</h3>
         <p>{step.text}</p>

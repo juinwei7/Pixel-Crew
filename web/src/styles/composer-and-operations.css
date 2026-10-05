@@ -333,7 +333,7 @@
 }
 .command-composer__submit:not(:disabled):hover { border-color: rgba(0, 255, 163,.5); background: rgba(0, 255, 163,.2); }
 .command-composer__attach:hover, .command-composer__submit:not(:disabled):hover, .command-composer__library:hover, .composer-roundtable-toggle:hover { transform: translateY(-1px); }
-.command-composer__attach:active, .command-composer__submit:not(:disabled):active, .command-composer__library:active, .composer-roundtable-toggle:active { transform: translateY(0) scale(.97); }
+.command-composer__attach:active, .command-composer__submit:not(:disabled):active, .command-composer__library:active, .composer-roundtable-toggle:active { transform: translateY(0); } /* 按下微縮改由 motion.css 的 scale 統一負責 */
 .command-composer__attach:focus-visible, .command-composer__submit:focus-visible, .command-composer__library:focus-visible, .composer-roundtable-toggle:focus-visible, .command-composer__queue:focus-visible {
   outline: none; box-shadow: 0 0 0 2px rgba(0, 229, 255,.5);
 }
@@ -350,7 +350,7 @@
   transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
 }
 .voice-input__mic:hover:not(:disabled) { border-color: rgba(0, 229, 255,.38); background: rgba(0, 229, 255,.1); transform: translateY(-1px); }
-.voice-input__mic:active:not(:disabled) { transform: translateY(0) scale(.97); }
+.voice-input__mic:active:not(:disabled) { transform: translateY(0); }
 .voice-input__mic:disabled { opacity: .5; cursor: default; }
 .voice-input__mic--recording {
   border-color: rgba(255, 46, 136,.4); background: rgba(255, 46, 136,.14); color: #ff8fa5;
@@ -700,8 +700,10 @@ summary:focus-visible,
 [role="button"]:focus-visible {
   /* Several specialized editors intentionally remove the browser default.
      Keep one dependable keyboard indicator across every interactive surface. */
-  outline: 2px solid rgba(0, 229, 255, 0.75) !important;
+  outline: 1.5px solid var(--focus-ring-color, rgba(0, 229, 255, 0.75)) !important;
   outline-offset: 2px;
+  /* 焦點環從外面「收」進來（motion.css 的 pc-focus-in），看得出焦點剛落在哪。 */
+  animation: pc-focus-in var(--dur-2, 180ms) var(--ease-out, ease-out);
 }
 
 /* ---------- Command bar ---------- */

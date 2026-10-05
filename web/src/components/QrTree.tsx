@@ -105,12 +105,13 @@ export function QrTree({ text, px = 150 }: { text: string; px?: number }) {
     const mods = encodeQr(text);
     if (!mods) return; // 網址過長：不顯示（呼叫端仍可複製連結）
 
+    // 減少動態：不演長樓與翻面，直接停在可掃描的空拍定格。
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true });
     } catch {
-      draw2dFallback(host, mods, px);
-      return;
+      return draw2dFallback(host, mods, px, reduced);
     }
     const n = mods.length;
     const cell = 2 / n;              // QR 區佔 [-1,1]
@@ -295,12 +296,13 @@ export function QrTree({ text, px = 150 }: { text: string; px?: number }) {
 
     // === 狀態機：進場長出夜城→停一拍自動翻轉成掃碼態；點一下翻回街景，再點翻回掃碼 ===
     let raf = 0, running = false;
-    const enterStart = performance.now();
-    let F = 0, target = 0, morphFrom = 0, morphStart = 0;
+    const enterStart = performance.now() - (reduced ? ENTER_MS : 0);
+    let F = reduced ? 1 : 0, target = F, morphFrom = F, morphStart = 0;
+    const morphMs = reduced ? 1 : MORPH_MS;
 
     function frame(now: number) {
       const enterT = clamp01((now - enterStart) / ENTER_MS);
-      const mp = clamp01((now - morphStart) / MORPH_MS);
+      const mp = clamp01((now - morphStart) / morphMs);
       F = morphFrom + (target - morphFrom) * mp;
       layout(enterT, F);
       renderer.render(scene, cam);
@@ -317,7 +319,7 @@ export function QrTree({ text, px = 150 }: { text: string; px?: number }) {
       kick();
     };
     // 夜城亮相停一拍後自動翻轉成可掃碼；使用者先點擊/拖曳就交還手動控制
-    const autoFlip = window.setTimeout(toggle, ENTER_MS + CITY_HOLD_MS);
+    const autoFlip = reduced ? 0 : window.setTimeout(toggle, ENTER_MS + CITY_HOLD_MS);
     // 拖曳＝環繞夜城（水平轉一圈看街景）；位移沒超過門檻的放開才算點擊＝翻面
     const el = renderer.domElement;
     el.style.touchAction = "none"; // 手機上拖曳轉城，不觸發頁面捲動
@@ -374,8 +376,11 @@ export function QrTree({ text, px = 150 }: { text: string; px?: number }) {
   );
 }
 
-// WebGL 不可用時：把 module 矩陣畫到 2D canvas（靜態、仍可掃）。
-function draw2dFallback(host: HTMLDivElement, mods: boolean[][], px: number) {
+// WebGL 不可用時：把 module 矩陣畫到 2D canvas（仍可掃）。進場時模組從中心
+// 往外一格一格「蓋」上去（約 0.7 秒），跟夜城版由中心長出來是同一個節奏；
+// 減少動態時直接畫完。回傳清除函式（卸載時停掉還沒畫完的動畫）。
+const FALLBACK_DRAW_MS = 700;
+function draw2dFallback(host: HTMLDivElement, mods: boolean[][], px: number, reduced = false): () => void {
   const n = mods.length, quiet = 4, total = n + quiet * 2;
   const cv = document.createElement("canvas");
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -383,12 +388,35 @@ function draw2dFallback(host: HTMLDivElement, mods: boolean[][], px: number) {
   cv.style.width = cv.style.height = `${px}px`;
   cv.style.borderRadius = "10px";
   const ctx = cv.getContext("2d");
+  let raf = 0;
   if (ctx) {
     const u = (px * dpr) / total;
     ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.fillStyle = "#0a0a0a";
+    const cells: Array<[number, number, number]> = [];
+    const mid = (n - 1) / 2;
     for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
-      if (mods[r][c]) ctx.fillRect((c + quiet) * u, (r + quiet) * u, u + 0.5, u + 0.5);
+      if (mods[r][c]) cells.push([r, c, Math.hypot(r - mid, c - mid)]);
+    cells.sort((a, b) => a[2] - b[2]);
+    const paint = (from: number, to: number) => {
+      for (let i = from; i < to; i++) ctx.fillRect((cells[i][1] + quiet) * u, (cells[i][0] + quiet) * u, u + 0.5, u + 0.5);
+    };
+    if (reduced) paint(0, cells.length);
+    else {
+      const start = performance.now();
+      let drawn = 0;
+      const step = (now: number) => {
+        const target = Math.min(cells.length, Math.ceil(cells.length * Math.min(1, (now - start) / FALLBACK_DRAW_MS)));
+        paint(drawn, target);
+        drawn = target;
+        if (drawn < cells.length) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    }
   }
   host.appendChild(cv);
+  return () => {
+    cancelAnimationFrame(raf);
+    if (cv.parentNode === host) host.removeChild(cv);
+  };
 }

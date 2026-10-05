@@ -1,6 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
-import { SHIRT_COLORS } from "./person";
-import { ART_W } from "./room";
+import { SHIRT_COLORS } from "./crewLook";
+import { ART_W, ART_H } from "./room";
 import { t } from "../i18n";
 
 export type DepartmentPhase = "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
@@ -58,6 +58,8 @@ export type DepartmentZone = {
 export type DepartmentDeskLayout = {
   seats: Map<string, DepartmentSeat>;
   departments: DepartmentZone[];
+  /** Total floor height in art px: ART_H, or more when desk rows spill into the annex. */
+  floorHeight: number;
 };
 
 type DeskEntry = {
@@ -96,6 +98,11 @@ const ZONE_BOTTOM = 8;
 /** Floor band reserved for departments, below the shared tool stations. */
 const BAND_TOP = 104;
 const BAND_BOTTOM = 282;
+/** Desk rows that fit in the main office's band; any more go to the annex floor below. */
+const BASE_ROWS = 3;
+/** The annex starts under the main office, past a short divider wall (drawn by Room). */
+export const ANNEX_TOP = ART_H + 16;
+const ANNEX_FIRST_ROW = ANNEX_TOP + ZONE_TOP + 10;
 const BUILD_MS = 980;
 const REMOVE_MS = 720;
 const DEPARTMENT_ACCENTS = [0x4de3ff, 0x37d6a3, 0x8a73e8, 0xffb15c, 0x5dc8ff];
@@ -162,12 +169,20 @@ export function departmentDeskLayout(workers: PersonalDeskState[]): DepartmentDe
 
   // Rows sit at the upper third of the department band instead of clinging to
   // its top edge, so a small crew doesn't leave a huge dead floor below.
-  const extent = rows.length ? (rows.length - 1) * ROW_PITCH + ZONE_TOP + ZONE_BOTTOM : 0;
+  // Big crews: the first BASE_ROWS rows fill the main office band, the rest
+  // continue in the annex below the meeting room (the floor grows; the main
+  // office itself never changes shape, so small crews look exactly as before).
+  const baseRows = Math.min(rows.length, BASE_ROWS);
+  const extent = baseRows ? (baseRows - 1) * ROW_PITCH + ZONE_TOP + ZONE_BOTTOM : 0;
   const firstRowY = BAND_TOP + ZONE_TOP + Math.max(0, Math.floor((BAND_BOTTOM - BAND_TOP - extent) / 3));
+  const rowY = (index: number) => index < BASE_ROWS
+    ? firstRowY + index * ROW_PITCH
+    : ANNEX_FIRST_ROW + (index - BASE_ROWS) * ROW_PITCH;
+  const floorHeight = rows.length > BASE_ROWS ? rowY(rows.length - 1) + ZONE_BOTTOM + 30 : ART_H;
 
   rows.forEach((row, rowIndex) => {
     const offset = ROW_MARGIN + Math.floor((budget - row.width) / 2);
-    const y = firstRowY + rowIndex * ROW_PITCH;
+    const y = rowY(rowIndex);
     let column = 0;
     for (const chunk of row.chunks) {
       chunk.members.forEach((member, seatIndex) => {
@@ -221,7 +236,7 @@ export function departmentDeskLayout(workers: PersonalDeskState[]): DepartmentDe
     };
   });
 
-  return { seats, departments };
+  return { seats, departments, floorHeight };
 }
 
 export class PersonalDeskLayer {

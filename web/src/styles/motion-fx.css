@@ -1,0 +1,260 @@
+/* ────────────────────────────────────────────────────────────────────────
+   互動手感（第三輪）：彈窗從按鈕長出來、主要按鈕火花、延遲提示框、圖示
+   hover 小動作、卡片浮起、徽章彈跳、縮放滑桿、成功小閃光、完成彩帶、
+   PIXEL CREW 彩蛋。行為在 interactionFx.ts，這裡只有樣式。
+
+   規則同 motion.css：只動 transform / opacity（獨立 translate / scale /
+   rotate 屬性），token 沿用，最下面 reduced-motion 全部收斂成淡入或不動。
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* ════════════════════════════════════════════════════════════════════════
+   彈窗／選單從觸發鈕長出來
+   --pop-ox / --pop-oy＝按鈕中心在卡片座標系的位置（interactionFx 量好寫進來，
+   可能在卡片外面）。scale 從 0.2 起、以那一點為原點，看起來就是從按鈕裡
+   彈出來；彈簧收尾帶一點點超過。data-pop-origin 在 a / b 間交替，同一個
+   常駐元素（<details> 選單）每次打開都會重播。
+   各元件原本的入場 animation 寫在 class 上、權重各不相同，這裡用 !important
+   一次蓋過；關閉與 reduced-motion 也都用 !important 接續覆寫。
+   ════════════════════════════════════════════════════════════════════════ */
+[data-pop-origin] { transform-origin: var(--pop-ox, 50%) var(--pop-oy, 0) !important; }
+[data-pop-origin="a"] { animation: pc-origin-in-a var(--dur-spring) var(--ease-spring) both !important; }
+[data-pop-origin="b"] { animation: pc-origin-in-b var(--dur-spring) var(--ease-spring) both !important; }
+@keyframes pc-origin-in-a { from { opacity: 0; scale: 0.2; } }
+@keyframes pc-origin-in-b { from { opacity: 0; scale: 0.2; } }
+/* 關閉（Esc / ×）時縮回原本那顆按鈕：規則寫在 responsive.css 的 dialog 殼
+   那一段（殼的樣式只准在那裡），keyframes 在這裡。 */
+@keyframes pc-origin-out { to { opacity: 0; scale: 0.25; } }
+/* 浮層裡的列本來就有錯開入場（motion.css），從按鈕長出來時讓它們晚一拍，
+   卡片先長到位、內容再落下。 */
+.top-bar__more-menu[data-pop-origin] > * { animation-delay: calc(var(--i, 0) * var(--stagger) + 90ms); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   火花／彩帶（interactionFx.burstAt 產生的暫時元素）
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-burst {
+  position: fixed;
+  z-index: 30000;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.pc-burst i {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 4px;
+  height: 4px;
+  background: var(--burst-c, var(--cyan));
+}
+.pc-burst--spark i { animation: pc-spark-fly 520ms var(--ease-out) both; }
+.pc-burst--spark i:nth-child(even) { width: 3px; height: 3px; background: #e8fbff; }
+@keyframes pc-spark-fly {
+  0% { opacity: 1; translate: 0 0; scale: 1; }
+  100% { opacity: 0; translate: var(--dx) var(--dy); scale: 0.4; }
+}
+/* 方框擴散：像素版的漣漪。 */
+.pc-burst--spark b {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--burst-c, var(--cyan));
+  animation: pc-ripple-box 460ms var(--ease-out) both;
+}
+@keyframes pc-ripple-box {
+  0% { opacity: 0.9; scale: 0.4; }
+  100% { opacity: 0; scale: 3.2; }
+}
+/* 彩帶：先往上拋、再受重力落下，邊轉邊淡。 */
+.pc-burst--confetti i {
+  width: 5px;
+  height: 3px;
+  animation: pc-confetti 1250ms linear both;
+  animation-delay: var(--d, 0ms);
+}
+.pc-burst--confetti i:nth-child(3n) { width: 3px; height: 5px; }
+@keyframes pc-confetti {
+  0% { opacity: 1; translate: 0 0; rotate: 0deg; animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1); }
+  38% { opacity: 1; translate: calc(var(--dx) * 0.6) var(--up); animation-timing-function: cubic-bezier(0.5, 0, 0.9, 0.6); }
+  100% { opacity: 0; translate: var(--dx) var(--down); rotate: var(--rot); }
+}
+
+/* 完成的那位 NPC：頭像連跳兩下（只動頭像——隊員列本身有入場動畫，換掉
+   它的 animation-name 會讓整列重播滑入）。 */
+.pc-celebrate .crew-row__avatar { animation: pc-avatar-hop 560ms var(--ease-out) 2; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   延遲浮出的提示框
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-tip {
+  position: fixed;
+  z-index: 31000;
+  top: 0;
+  left: 0;
+  max-width: 280px;
+  padding: 6px 9px;
+  border: 1px solid rgba(0, 229, 255, 0.32);
+  border-radius: 4px;
+  background: #07101f;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  color: #cfe6f5;
+  font: 11px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", sans-serif;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+/* 小三角：像素方塊轉 45°，指回按鈕。 */
+.pc-tip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tip-x, 50%) - 4px);
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(0, 229, 255, 0.32);
+  background: #07101f;
+  rotate: 45deg;
+}
+.pc-tip[data-side="below"]::before { top: -4.5px; border-right: 0; border-bottom: 0; }
+.pc-tip[data-side="above"]::before { bottom: -4.5px; border-left: 0; border-top: 0; }
+.pc-tip[data-show] { visibility: visible; opacity: 1; }
+.pc-tip[data-side="below"] { transform-origin: var(--tip-x, 50%) top; }
+.pc-tip[data-side="above"] { transform-origin: var(--tip-x, 50%) bottom; }
+.pc-tip[data-show="a"] { animation: pc-tip-in-a var(--dur-spring-soft) var(--ease-spring-soft) both; }
+.pc-tip[data-show="b"] { animation: pc-tip-in-b var(--dur-spring-soft) var(--ease-spring-soft) both; }
+@keyframes pc-tip-in-a { from { opacity: 0; scale: 0.85; translate: 0 -3px; } }
+@keyframes pc-tip-in-b { from { opacity: 0; scale: 0.85; translate: 0 -3px; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   圖示 hover 小動作（Icon.tsx 的 data-icon）：游標停在按鈕上時，圖示做
+   一個跟自己意思有關的小動作。只在可 hover 的裝置上。
+   ════════════════════════════════════════════════════════════════════════ */
+@media (hover: hover) {
+  :is(button, a, summary, label) .ui-icon {
+    transition: rotate var(--dur-spring) var(--ease-spring), scale var(--dur-3) var(--ease-spring-soft), translate var(--dur-3) var(--ease-spring-soft);
+  }
+  /* 齒輪：轉 60°（剛好一齒）。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="gear"] { rotate: 60deg; }
+  /* 重新整理：轉半圈。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="refresh"] { rotate: 180deg; }
+  /* 放大鏡：歪頭端詳。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="search"] { rotate: -14deg; scale: 1.1; }
+  /* 紙飛機：往右上推一下。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="send"] { translate: 2px -2px; }
+  /* 鈴鐺：晃一下。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="bell"] { animation: pc-bell-a 760ms var(--ease-out); transform-origin: 50% 12%; }
+  /* 垃圾桶：蓋子掀起來。 */
+  .ui-icon__lid { transform-box: fill-box; transform-origin: 0% 100%; transition: rotate var(--dur-3) var(--ease-spring), translate var(--dur-3) var(--ease-spring); }
+  :is(button, a, summary):hover:not(:disabled) .ui-icon[data-icon="trash"] .ui-icon__lid { rotate: -18deg; translate: 0 -1.5px; }
+  /* 其他幾個常見的：月亮輕晃、星星轉一點、迴紋針斜一下、地球轉一點、大腦脈動。 */
+  :is(button, a, summary):hover:not(:disabled) .ui-icon:is([data-icon="moon"], [data-icon="paperclip"]) { rotate: -12deg; }
+  :is(button, a, summary):hover:not(:disabled) .ui-icon:is([data-icon="star"], [data-icon="globe"]) { rotate: 20deg; }
+  :is(button, a, summary):hover:not(:disabled) .ui-icon:is([data-icon="brain"], [data-icon="box"], [data-icon="link"], [data-icon="power"]) { scale: 1.14; }
+  /* 「＋」新增人員：轉 90°。 */
+  .crew-rail__add svg { transition: rotate var(--dur-spring) var(--ease-spring); }
+  .crew-rail__add:hover:not(:disabled) svg { rotate: 90deg; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   卡片 hover 浮起
+   ════════════════════════════════════════════════════════════════════════ */
+@media (hover: hover) {
+  .crew-row,
+  .outbox-modal__item,
+  .approval-card,
+  .avatar-workshop__preset {
+    transition-property: translate, border-color, background-color, background, opacity;
+    transition-duration: var(--dur-3), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1);
+    transition-timing-function: var(--ease-spring-soft), ease, ease, ease, ease;
+  }
+  .crew-row:hover:not(.crew-row--dragging) { translate: 2px 0; }
+  .crew-rail__list--reordering .crew-row:hover { translate: 0 0; }
+  .outbox-modal__item:hover { translate: 0 -2px; }
+  .approval-card:hover { translate: 0 -2px; }
+  .avatar-workshop__preset:hover { translate: 0 -3px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   小回饋
+   ════════════════════════════════════════════════════════════════════════ */
+/* 數字一變：整顆徽章彈一下（RollingNumber 的 data-bump）。 */
+.pc-roll[data-bump="a"] { animation: pc-bump-a var(--dur-spring) var(--ease-spring); }
+.pc-roll[data-bump="b"] { animation: pc-bump-b var(--dur-spring) var(--ease-spring); }
+@keyframes pc-bump-a { 0% { scale: 1; } 25% { scale: 1.28; } 100% { scale: 1; } }
+@keyframes pc-bump-b { 0% { scale: 1; } 25% { scale: 1.28; } 100% { scale: 1; } }
+
+/* 縮放滑桿：拇指 hover 微放大、按住鼓起來，放開跟彈簧彈回。 */
+.canvas-zoom input[type="range"]::-webkit-slider-thumb { transition: transform var(--dur-spring) var(--ease-spring); }
+.canvas-zoom input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.18); }
+.canvas-zoom input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.45); transition-duration: var(--dur-2); }
+.canvas-zoom input[type="range"]::-moz-range-thumb { transition: transform var(--dur-spring) var(--ease-spring); }
+.canvas-zoom input[type="range"]:hover::-moz-range-thumb { transform: scale(1.18); }
+.canvas-zoom input[type="range"]:active::-moz-range-thumb { transform: scale(1.45); }
+
+/* 成功的 toast：前面的燈號亮起時旁邊閃出兩顆像素星。 */
+.toast--ok > i { position: relative; overflow: visible; }
+.toast--ok > i::before,
+.toast--ok > i::after {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  background: var(--ok);
+  opacity: 0;
+  animation: pc-twinkle 700ms var(--ease-out) 180ms both;
+}
+.toast--ok > i::before { top: -5px; left: 7px; }
+.toast--ok > i::after { top: 6px; left: -6px; background: #e8fbff; animation-delay: 280ms; }
+@keyframes pc-twinkle {
+  0% { opacity: 0; scale: 0.2; }
+  30% { opacity: 1; scale: 1.5; }
+  100% { opacity: 0; scale: 0.6; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   彩蛋：連點 PIXEL CREW 5 下——字母依序跳兩輪、指示燈轉一圈變色
+   ════════════════════════════════════════════════════════════════════════ */
+.top-bar__brand { cursor: default; user-select: none; }
+.top-bar__brand-text > span { display: inline-block; white-space: pre; }
+.top-bar__brand.pc-egg .top-bar__brand-text > span {
+  animation: pc-egg-hop 520ms var(--ease-out) 2 both;
+  animation-delay: calc(var(--ci, 0) * 55ms);
+}
+@keyframes pc-egg-hop {
+  0%, 100% { translate: 0 0; color: var(--cyan); }
+  35% { translate: 0 -7px; color: #ffcb5b; }
+  60% { translate: 0 1px; color: var(--ok); }
+}
+.top-bar__brand.pc-egg > i { animation: pc-egg-dot 1100ms var(--ease-spring) 2; }
+@keyframes pc-egg-dot {
+  0% { rotate: 0deg; scale: 1; }
+  40% { rotate: 180deg; scale: 2.2; }
+  100% { rotate: 360deg; scale: 1; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   prefers-reduced-motion
+   ════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  [data-pop-origin="a"],
+  [data-pop-origin="b"] { animation: pc-fade-in var(--dur-2) ease both !important; }
+  .pc-burst { display: none; }
+  .pc-celebrate .crew-row__avatar { animation: none !important; }
+  @keyframes pc-tip-in-a { from { opacity: 0; } }
+  @keyframes pc-tip-in-b { from { opacity: 0; } }
+  @keyframes pc-bump-a { from { opacity: 0.6; } }
+  @keyframes pc-bump-b { from { opacity: 0.6; } }
+  :is(button, a, summary, label) .ui-icon,
+  .ui-icon__lid,
+  .crew-rail__add svg { transition: none !important; animation: none !important; rotate: none !important; scale: none !important; translate: none !important; }
+  .crew-row:hover,
+  .outbox-modal__item:hover,
+  .approval-card:hover,
+  .avatar-workshop__preset:hover { translate: 0 0 !important; }
+  .canvas-zoom input[type="range"]::-webkit-slider-thumb { transition: none; transform: none !important; }
+  .toast--ok > i::before,
+  .toast--ok > i::after { display: none; }
+  .top-bar__brand.pc-egg .top-bar__brand-text > span,
+  .top-bar__brand.pc-egg > i { animation: none; }
+}
+

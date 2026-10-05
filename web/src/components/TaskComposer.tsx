@@ -28,10 +28,32 @@ import { useComposerSessionExtras } from "../hooks/useComposerSessionExtras";
 import { useGlobalFileDrop } from "../hooks/useGlobalFileDrop";
 import { VoiceInputButton } from "./VoiceInputButton";
 import type { CapabilityState, CommandSubmission, ProviderId, QueuedCommandDto, WorkerState } from "../types";
+import type { ClientPoint } from "../fxBus";
 import { t } from "../i18n";
 
 // 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
 const INTERRUPT_GUARD_MS = 1000;
+
+// 送出鈕的動態分段（styles/motion.css 依 data-launch 播放）：起飛 → 打勾 → 字浮回來。
+// 起飛至少播這麼久才換打勾，送出回應再快也看得到飛機離開。
+const LAUNCH_MIN_MS = 420;
+const LAUNCH_DONE_MS = 780;
+const LAUNCH_SETTLE_MS = 300;
+// 「已交給 XXX」回執停留時間；跟 CSS 的倒數細線用同一個數字（--receipt-ms）。
+const RECEIPT_MS = 4200;
+
+export type LaunchPhase = "idle" | "launch" | "done" | "settle";
+
+/** 外部（拖放到 NPC 身上、Ctrl+K 指令面板）要求「預填」這個輸入框：只填文字／
+ *  加附件、聚焦，絕不自動送出。sessionKey 對上目前 draftKey 才套用——切換 NPC
+ *  時草稿是分開存的，必須等輸入框切到目標 NPC 那一份才填進去。 */
+export type ComposerInject = { seq: number; sessionKey: string; text: string; files: File[] };
+
+/** 送出成功、要交給場景放紙飛機的那一刻。from 是送出鈕中心（viewport 座標）。 */
+export type ComposerLaunch = { workerId: string; from: ClientPoint; text: string };
+
+type LaunchTarget = { id: string; name: string };
+type Receipt = { key: number; workerId: string; name: string; queued: boolean; leaving: boolean };
 
 // /api/video/process 與 /api/video/from-link 的共同回應形狀（影格＋字幕）。
 type VideoAnalysisResult = {
@@ -83,6 +105,15 @@ type Props = {
   globalDrop?: boolean;
   dropTargetLabel?: string;
   voiceEnabled?: boolean;
+  /** 目前這個輸入框送出的對象（dock composer 才有）：回執顯示名字、紙飛機飛向它。 */
+  launchTarget?: LaunchTarget | null;
+  onLaunch?(launch: ComposerLaunch): void;
+  /** 點「已交給 XXX」回執：跳到那位 NPC。 */
+  onReceiptOpen?(workerId: string): void;
+  inject?: ComposerInject | null;
+  /** 預填已套用：上層要把 inject 清掉——輸入框若重新掛載（切去老闆桌再回來），
+   *  appliedInjectRef 會歸零，留著舊的 inject 會把同一批檔案再附加一次。 */
+  onInjectApplied?(seq: number): void;
 };
 
 export function TaskComposer({
@@ -90,6 +121,7 @@ export function TaskComposer({
   layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
   serverQueue, onEnqueue, onRemoveQueued, onReorderQueued,
   persistExtras = false, globalDrop = false, dropTargetLabel, voiceEnabled = false,
+  launchTarget = null, onLaunch, onReceiptOpen, inject = null, onInjectApplied,
 }: Props) {
   const dock = layout === "dock";
   // 有 onEnqueue＝這個 composer 走 server 佇列（背景 drain＋跨裝置）；否則沿用本地佇列。
@@ -156,6 +188,52 @@ export function TaskComposer({
   const [dispatchTick, setDispatchTick] = useState(0);
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const [launchPhase, setLaunchPhase] = useState<LaunchPhase>("idle");
+  const launchTimersRef = useRef<number[]>([]);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const receiptTimersRef = useRef<number[]>([]);
+  // 外部預填時輸入框閃一下邊框；a/b 交替才能讓同名動畫每次都重播。
+  const [prefillTick, setPrefillTick] = useState(0);
+  const appliedInjectRef = useRef(0);
+  useEffect(() => () => {
+    for (const timer of [...launchTimersRef.current, ...receiptTimersRef.current]) window.clearTimeout(timer);
+  }, []);
+
+  function clearLaunchTimers() {
+    for (const timer of launchTimersRef.current) window.clearTimeout(timer);
+    launchTimersRef.current = [];
+  }
+  function laterLaunch(ms: number, phase: LaunchPhase) {
+    launchTimersRef.current.push(window.setTimeout(() => setLaunchPhase(phase), ms));
+  }
+  /** 起飛：送出那一瞬間就播，不等伺服器。回傳起飛時間，讓結果回來時算還要等多久。 */
+  function beginLaunch(): number {
+    clearLaunchTimers();
+    setLaunchPhase("launch");
+    return Date.now();
+  }
+  /** 結果回來：成功 → 打勾 → 回原狀；失敗 → 直接回原狀（錯誤訊息自己會出現）。 */
+  function finishLaunch(startedAt: number, ok: boolean) {
+    const wait = Math.max(0, LAUNCH_MIN_MS - (Date.now() - startedAt));
+    if (!ok) { laterLaunch(wait, "settle"); laterLaunch(wait + LAUNCH_SETTLE_MS, "idle"); return; }
+    laterLaunch(wait, "done");
+    laterLaunch(wait + LAUNCH_DONE_MS, "settle");
+    laterLaunch(wait + LAUNCH_DONE_MS + LAUNCH_SETTLE_MS, "idle");
+  }
+  function launchOrigin(): ClientPoint {
+    const rect = submitRef.current?.getBoundingClientRect();
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: window.innerWidth / 2, y: window.innerHeight - 40 };
+  }
+  function showReceipt(target: LaunchTarget, queued: boolean) {
+    for (const timer of receiptTimersRef.current) window.clearTimeout(timer);
+    const key = Date.now();
+    setReceipt({ key, workerId: target.id, name: target.name, queued, leaving: false });
+    receiptTimersRef.current = [
+      window.setTimeout(() => setReceipt((current) => current?.key === key ? { ...current, leaving: true } : current), RECEIPT_MS),
+      window.setTimeout(() => setReceipt((current) => current?.key === key ? null : current), RECEIPT_MS + 140),
+    ];
+  }
 
   const { dragActive } = useGlobalFileDrop({
     enabled: globalDrop && dock,
@@ -165,6 +243,26 @@ export function TaskComposer({
   useEffect(() => {
     setFailedFiles([]);
   }, [draftKey]);
+
+  // 外部預填（拖到 NPC 身上／指令面板「對某人下指令」）：等輸入框切到目標 NPC 那份
+  // 草稿、附件也還原完，才把文字接在草稿後面、檔案加成附件，然後聚焦。不送出。
+  useEffect(() => {
+    if (!inject || inject.seq <= appliedInjectRef.current) return;
+    if (inject.sessionKey !== draftKey || switchingSession || disabled) return;
+    appliedInjectRef.current = inject.seq;
+    onInjectApplied?.(inject.seq);
+    const text = inject.text.trim();
+    if (text) setDraftValue((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n${text}` : text);
+    if (inject.files.length > 0) void attachFiles(inject.files);
+    setPrefillTick((tick) => tick + 1);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inject, draftKey, switchingSession, disabled]);
 
   useEffect(() => {
     if (palette?.open) requestAnimationFrame(() => textareaRef.current?.focus());
@@ -389,7 +487,11 @@ export function TaskComposer({
         setImages([]);
         setDocuments([]);
         setError(null);
-        void onEnqueue!(submission).then((message) => { if (message) setError(message); });
+        const queuedFor = launchTarget;
+        void onEnqueue!(submission).then((message) => {
+          if (message) { setError(message); return; }
+          if (queuedFor) showReceipt(queuedFor, true);
+        });
         requestAnimationFrame(() => textareaRef.current?.focus());
         return;
       }
@@ -399,6 +501,7 @@ export function TaskComposer({
       setDocuments([]);
       setError(null);
       setQueued((commands) => [...commands, command]);
+      if (launchTarget) showReceipt(launchTarget, true);
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
@@ -409,6 +512,11 @@ export function TaskComposer({
     const owner = ownerRef.current;
     const identity = newClientMessageIdentity();
     const submission: CommandSubmission = { text, images: images.map(imagePayload), documents: documents.map(documentPayload), ...identity };
+    // 送出動態：起飛點與對象在「按下的這一刻」就記下來——等回應回來時使用者可能
+    // 已經切到別的 NPC，紙飛機仍要飛向這則訊息真正的收件人。
+    const launchedFor = launchTarget;
+    const launchFrom = launchOrigin();
+    const launchStartedAt = beginLaunch();
     setDraftValue("");
     setImages([]);
     setDocuments([]);
@@ -418,6 +526,12 @@ export function TaskComposer({
     const result = await onSubmit(submission).catch((cause: unknown) => cause instanceof Error ? cause.message : t("訊息送出失敗"));
     submittingRef.current = false;
     const message = typeof result === "string" && result ? result : null;
+    // 真實送出成功（onSubmit 沒回錯誤）才打勾、亮回執、通知場景放紙飛機。
+    finishLaunch(launchStartedAt, !message);
+    if (!message && launchedFor) {
+      showReceipt(launchedFor, false);
+      onLaunch?.({ workerId: launchedFor.id, from: launchFrom, text });
+    }
     if (persistExtras && ownerRef.current !== owner) {
       if (message) writeComposerDraft(owner, text);
       updateCachedSession(owner, (session) => message
@@ -599,10 +713,10 @@ export function TaskComposer({
         </div>,
         document.body,
       )}
-      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專業模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <form ref={formRef} className={`command-composer ${focusMode ? "command-composer--focus" : ""} ${hasAttachments ? "command-composer--attachments" : ""}`} data-session-key={draftKey} data-busy={busy || working ? "true" : undefined} data-prefill={prefillTick > 0 ? (prefillTick % 2 ? "a" : "b") : undefined} data-dropping={dragActive && globalDrop ? "true" : undefined} data-file-drop-owner="task-composer" aria-label={focusMode ? t("專業模式指令輸入") : undefined} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         {attachmentsBlock}
         <div className="command-composer__toolbar">
-          {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title={t("指令面板（⌘/Ctrl K）")}>
+          {palette && <button className="command-composer__library" type="button" onClick={() => palette.onOpenChange(!palette.open)} aria-expanded={palette.open} title={t("斜線指令面板（輸入 / 也能打開）")}>
             ⌘ <span>{palette.provider === "claude" ? "CLAUDE" : "CODEX"}</span>
           </button>}
           {fileInput}
@@ -676,7 +790,24 @@ export function TaskComposer({
             setQueued((commands) => commands.filter((item) => item.id !== id));
           }}
         />}
-        <button className={`command-composer__submit ${canInterrupt ? "command-composer__submit--stop" : ""}`} type="submit" disabled={submitDisabled}>{submitLabelToShow}</button>
+        {receipt && <button
+          key={receipt.key}
+          type="button"
+          className={`command-composer__receipt${receipt.queued ? " command-composer__receipt--queued" : ""}`}
+          data-leaving={receipt.leaving ? "true" : undefined}
+          style={{ "--receipt-ms": `${RECEIPT_MS}ms` } as React.CSSProperties}
+          title={t("跳到 {name}", { name: receipt.name })}
+          onClick={() => { onReceiptOpen?.(receipt.workerId); setReceipt(null); }}
+        >
+          <span className="command-composer__receipt-plane" aria-hidden="true"><Icon name={receipt.queued ? "clock" : "send"} /></span>
+          <span role="status">{receipt.queued ? t("已排入 {name} 的佇列", { name: receipt.name }) : t("已交給 {name}", { name: receipt.name })}</span>
+          <small aria-hidden="true">→</small>
+        </button>}
+        <button ref={submitRef} className={`command-composer__submit ${canInterrupt ? "command-composer__submit--stop" : ""}`} type="submit" disabled={submitDisabled} data-launch={launchPhase === "idle" ? undefined : launchPhase}>
+          <span className="command-composer__submit-label">{submitLabelToShow}</span>
+          <span className="command-composer__submit-fx" aria-hidden="true"><Icon name="send" /></span>
+          <span className="command-composer__submit-ok" aria-hidden="true"><Icon name="check" /></span>
+        </button>
       </form>
     </>;
   }

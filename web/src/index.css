@@ -3,6 +3,15 @@
 @import "./styles/workflow-management.css";
 @import "./styles/app-shell-and-focus.css";
 @import "./styles/composer-and-operations.css";
+/* 動態系統（時長/曲線 token 與全站進出場）：在元件之後才能蓋掉舊的 transition，
+   在 responsive.css 之前讓手機版型仍是最終決定。 */
+@import "./styles/motion.css";
+/* 第二輪介面瞬間（建立 NPC、遠端、通知、重新連線、設定已儲存…）：沿用上面的 token。 */
+@import "./styles/motion-ui.css";
+/* 第三輪互動手感（彈窗從按鈕長出來、火花、提示框、圖示 hover、彩蛋…）。 */
+@import "./styles/motion-fx.css";
+/* 第四輪優化體驗（注意力引導、狀態轉場、等待、防誤按、快捷鍵提示、拖放、導覽）。 */
+@import "./styles/motion-ux.css";
 /* 最後載入：手機共用版型要贏過各元件自己的桌面規則（media query 不加權重，
    同權重時由順序決定），token 則不受順序影響。 */
 @import "./styles/responsive.css";

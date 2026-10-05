@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
-import { createScene, type FurnitureScreenPos, type SceneHandle, type SceneView } from "../game/scene";
-import { SHIRT_COLORS } from "../game/person";
+import type { FurnitureScreenPos, SceneHandle, SceneView } from "../game/scene";
+import { SHIRT_COLORS } from "../game/crewLook";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
+import { crowdedView, declutterNameplates, nameplateVisible, type NameplateBox } from "../game/nameplateLod";
 import { bossRoomWorkers } from "../game/bossRoomFilter";
 import { latestMissionSpeech, missionStationOverride } from "../game/missionScene";
-import { FURNITURE_DEFS } from "../game/furniture";
+import { FURNITURE_DEFS } from "../game/furnitureDefs";
 import { roomName } from "../workspace";
 import { milestoneLevel } from "../milestones";
 import { stationForTool, type StationKey } from "../stations";
@@ -73,15 +74,49 @@ type VisualWorker = {
   workspaceLabel: string;
   collaborationPhase: "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
   collaborationRole: "source" | "target" | null;
+  /** The other end of the running collaboration — the scene draws a link beam between them. */
+  collaborationPartnerId: string | null;
+  /** Sub-agents only: who summoned them (portal + summon beam start there). */
+  parentId?: string;
   missionProgress: { completed: number; total: number } | null;
 };
 
 // Zoom is now continuous (not stepped to integers), so the readout needs a
 // decimal — but whole numbers (the common auto-fit case) should still read
 // as "4x" rather than "4.0x".
+/**
+ * Shown on the canvas host while the office scene module downloads and Pixi
+ * boots: the same dark two-tone floor tiles the office uses, so the swap to the
+ * real canvas is seamless (the host's size is CSS-driven — no layout jump).
+ */
+const SCENE_PLACEHOLDER: CSSProperties = {
+  backgroundColor: "#0e1526",
+  backgroundImage: [
+    "linear-gradient(45deg, #111a2e 25%, transparent 25%, transparent 75%, #111a2e 75%)",
+    "linear-gradient(45deg, #111a2e 25%, transparent 25%, transparent 75%, #111a2e 75%)",
+  ].join(", "),
+  backgroundSize: "64px 64px",
+  backgroundPosition: "0 0, 32px 32px",
+};
+
 function formatZoom(scale: number): string {
   const rounded = Math.round(scale * 10) / 10;
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}x`;
+}
+
+/** Scene-side extras derived from data GameCanvas already has (no new props from App). */
+function withSceneExtras(list: VisualWorker[], workers: WorkerState[], thresholdTokens: number | undefined): Array<VisualWorker & { ctxPct: number | null }> {
+  const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const pctById = new Map<string, number | null>();
+  return list.map((w) => {
+    if (w.temporary) return { ...w, ctxPct: null };
+    if (!pctById.has(w.selectId)) {
+      const full = byId.get(w.selectId);
+      const series = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
+      pctById.set(w.selectId, computeCtxGauge(series, thresholdTokens)?.pct ?? null);
+    }
+    return { ...w, ctxPct: pctById.get(w.selectId) ?? null };
+  });
 }
 
 function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
@@ -182,6 +217,9 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       collaborationRole: collaboration
         ? collaboration.sourceWorkerId === worker.id ? "source" : "target"
         : null,
+      collaborationPartnerId: collaboration
+        ? collaboration.sourceWorkerId === worker.id ? collaboration.targetWorkerId : collaboration.sourceWorkerId
+        : null,
       missionProgress: mission && mission.steps.length > 0 ? {
         completed: mission.steps.filter((step) => step.status === "completed").length,
         total: mission.steps.length,
@@ -216,6 +254,8 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       workspaceLabel: worker.departmentId ? departmentById.get(worker.departmentId)?.name ?? roomName(worker.workspacePath) : roomName(worker.workspacePath),
       collaborationPhase: null,
       collaborationRole: null,
+      collaborationPartnerId: null,
+      parentId: worker.id,
       missionProgress: null,
     }));
     return [parent, ...subagents];
@@ -280,6 +320,8 @@ export function GameCanvas({
   const [resolvingApproval, setResolvingApproval] = useState<string | null>(null);
   const hasQuickMenu = Boolean(onRename && onAvatarWorkshop && onPersonaEditor && onRoomSwitch && onRemove);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  // The office scene (Pixi + all of game/*) is its own chunk, loaded on demand.
+  const [sceneReady, setSceneReady] = useState(false);
   const [view, setView] = useState<SceneView | null>(null);
   const [furniturePositions, setFurniturePositions] = useState<Map<StationKey, FurnitureScreenPos>>(new Map());
   const [hoveredStation, setHoveredStation] = useState<StationKey | null>(null);
@@ -320,7 +362,10 @@ export function GameCanvas({
       if (!gauge) continue;
       const prev = ctxPrevCurrentRef.current.get(w.id);
       // current 從高位驟降三成以上＝發生換腦／compact，context 被壓縮重置到新底盤
-      if (prev != null && gauge.currentTokens < prev * 0.7) swapped.push(w.id);
+      if (prev != null && gauge.currentTokens < prev * 0.7) {
+        swapped.push(w.id);
+        sceneRef.current?.brainReset(w.id); // halo over the NPC's head (scene debounces repeats)
+      }
       ctxPrevCurrentRef.current.set(w.id, gauge.currentTokens);
     }
     if (swapped.length === 0) return;
@@ -338,6 +383,8 @@ export function GameCanvas({
   useEffect(() => {
     if (!brainSwapEvent || brainSwapEvent.seq === lastSwapSeqRef.current) return;
     lastSwapSeqRef.current = brainSwapEvent.seq;
+    // The halo is neutral ("context reset"), so it plays whether or not a lesson was learned.
+    sceneRef.current?.brainReset(brainSwapEvent.workerId);
     if (!brainSwapEvent.learned) return; // 誠實門檻：沒真的學到就不宣稱學到
     const id = brainSwapEvent.workerId;
     const lesson = brainSwapEvent.lesson;
@@ -351,6 +398,8 @@ export function GameCanvas({
   const [, forceTick] = useState(0);
   const sceneRef = useRef<SceneHandle | null>(null);
   const screenPositionsRef = useRef(new Map<string, { x: number; y: number }>());
+  // The scene's hover, readable from the per-frame positions callback (nameplate declutter).
+  const hoveredIdRef = useRef<string | null>(null);
   const latest = useRef<{ workers: WorkerState[]; activeId: string | null }>({
     workers,
     activeId,
@@ -361,6 +410,8 @@ export function GameCanvas({
   latestMissions.current = missions;
   const latestDepartments = useRef(departments);
   latestDepartments.current = departments;
+  const swapThresholdRef = useRef(swapThresholdTokens);
+  swapThresholdRef.current = swapThresholdTokens;
   const latestBossRoom = useRef(bossRoom);
   latestBossRoom.current = bossRoom;
   const latestBossTaskDepartmentIds = useRef(bossTaskDepartmentIds);
@@ -386,10 +437,35 @@ export function GameCanvas({
       : new ResizeObserver(syncSceneSize);
     resizeObserver?.observe(host);
 
-    createScene(host, {
+    // Loaded on demand so the office engine stays out of the app's entry bundle.
+    // fxBus events emitted before it arrives simply have no listener yet.
+    import("../game/scene").then(({ createScene }) => createScene(host, {
       onPositions: (positions) => {
         const bounds = host.getBoundingClientRect();
         screenPositionsRef.current = new Map(positions.map((position) => [position.id, { x: position.x, y: position.y }]));
+        // Crowded + zoomed out: keep only tags that don't collide (most important first).
+        const crowded = positions.length > 0 && crowdedView(positions[0].scale, positions.length);
+        let keep: Set<string> | null = null;
+        if (crowded) {
+          const boxes: NameplateBox[] = [];
+          for (const pos of positions) {
+            const plate = nameRefs.current.get(pos.id);
+            if (!plate) continue;
+            const active = plate.classList.contains("npc-nameplate--active");
+            const busy = plate.classList.contains("npc-nameplate--busy");
+            const hovered = pos.id === hoveredIdRef.current;
+            if (!active && !busy && !hovered) continue;
+            boxes.push({
+              id: pos.id,
+              x: pos.x,
+              top: pos.y + 22 * pos.scale,
+              width: plate.offsetWidth || 80,
+              height: plate.offsetHeight || 18,
+              priority: active ? 3 : hovered ? 2 : 1,
+            });
+          }
+          keep = declutterNameplates(boxes);
+        }
         for (const pos of positions) {
           const nameplate = nameRefs.current.get(pos.id);
           if (nameplate) {
@@ -397,7 +473,21 @@ export function GameCanvas({
             // 19 below pos.y at head-top anchor) — keeps the desk, monitor and
             // department sign above the head completely clear of DOM chrome.
             nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale}px)`;
-            nameplate.style.opacity = String(pos.opacity);
+            // Big crew zoomed out: idle tags step back (busy / selected / hovered stay).
+            const show = nameplateVisible({
+              x: pos.x,
+              y: pos.y,
+              viewWidth: bounds.width,
+              viewHeight: bounds.height,
+              scale: pos.scale,
+              crowd: positions.length,
+              important: pos.id === hoveredIdRef.current ||
+                nameplate.classList.contains("npc-nameplate--active") ||
+                nameplate.classList.contains("npc-nameplate--busy"),
+            });
+            const visible = show && (!keep || keep.has(pos.id));
+            nameplate.style.opacity = visible ? String(pos.opacity) : "0";
+            nameplate.style.visibility = visible ? "" : "hidden";
           }
           const identity = identityRefs.current.get(pos.id);
           if (identity) {
@@ -471,7 +561,10 @@ export function GameCanvas({
         onSelectRef.current(id);
         onOpenLog?.(id);
       },
-      onHover: setHoveredId,
+      onHover: (id) => {
+        hoveredIdRef.current = id;
+        setHoveredId(id);
+      },
       onAvatarError: (id, message) => onAvatarErrorRef.current?.(id, message),
       onFurniturePositions: (list) => setFurniturePositions(new Map(list.map((pos) => [pos.key, pos]))),
       onFurnitureHover: setHoveredStation,
@@ -509,7 +602,7 @@ export function GameCanvas({
         setMenuOpenFor(id);
       },
       onViewChange: setView,
-    }).then((h) => {
+    })).then((h) => {
       if (cancelled) {
         h.destroy();
         return;
@@ -523,6 +616,7 @@ export function GameCanvas({
       setSceneError(null);
       h.setMilestone(milestoneRef.current);
       pushWorkers();
+      setSceneReady(true);
     }).catch((error: unknown) => {
       // Most commonly WebGL being unavailable (hardware acceleration off,
       // remote desktop, blocklisted GPU driver). Without this the office
@@ -534,7 +628,7 @@ export function GameCanvas({
     });
 
     function pushWorkers() {
-      sceneRef.current?.setWorkers(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current, latestBossTaskDepartmentIds.current));
+      sceneRef.current?.setWorkers(withSceneExtras(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current, latestBossTaskDepartmentIds.current), latest.current.workers, swapThresholdRef.current));
     }
 
     return () => {
@@ -547,8 +641,8 @@ export function GameCanvas({
 
   useEffect(() => {
     latest.current = { workers, activeId };
-    sceneRef.current?.setWorkers(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds));
-  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds]);
+    sceneRef.current?.setWorkers(withSceneExtras(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds), workers, swapThresholdTokens));
+  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds, swapThresholdTokens]);
 
 
   useEffect(() => {
@@ -626,7 +720,7 @@ export function GameCanvas({
 
   return (
     <>
-      <div className="game-host" ref={hostRef} />
+      <div className="game-host" ref={hostRef} style={sceneReady ? undefined : SCENE_PLACEHOLDER} />
       {aggVisual.length > 0 && (
         <div className="npc-aggbar" role="group" aria-label={t("小隊狀態")}>
           <span className="npc-aggbar__seg"><Icon name="gear" size={11} />{aggBusy} {t("工作中")}</span>
@@ -726,6 +820,8 @@ export function GameCanvas({
           {departmentRename.error && <small>{departmentRename.error}</small>}
         </form>;
       })()}
+      {/* Per-NPC overlays stay hidden until the scene has placed them (no pile-up at the top-left while it loads). */}
+      <div style={{ display: "contents", visibility: sceneReady ? undefined : "hidden" }}>
       {allVisual.map((w) => {
         const collaboration = !w.temporary ? collaborations.find((task) => ["running", "returning"].includes(task.status) && (task.sourceWorkerId === w.id || task.targetWorkerId === w.id)) : undefined;
         const mission = !w.temporary ? missions.find((task) => ["planning", "executing", "reviewing", "needs_attention"].includes(task.status) && (task.departmentId ? task.departmentId === w.departmentKey : task.workspacePath === w.workspacePath)) : undefined;
@@ -985,6 +1081,7 @@ export function GameCanvas({
           </Fragment>
         );
       })}
+      </div>
       {(() => {
         const activeStation = hoveredStation ?? pinnedStation;
         const pos = activeStation ? furniturePositions.get(activeStation) : null;

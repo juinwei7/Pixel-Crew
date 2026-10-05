@@ -10,6 +10,8 @@ import { roomName } from "../workspace";
 const TOP_BAR_COMPACT_LEVELS = ["top-bar--compact", "top-bar--compact-2"] as const;
 import { Icon } from "./Icon";
 import { ModeSwitch, modeIndex } from "./ModeSwitch";
+import { RollingNumber } from "./RollingNumber";
+import { emitFx } from "../fxBus";
 
 type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean; diagnosticsEnabled: boolean };
 
@@ -37,6 +39,9 @@ type Props = {
       NPC 內部再拆出去、還在跑的子代理。 */
   runningWorkers?: Array<{ id: string; name: string; room: string; subAgents?: Array<{ id: string; label: string }> }>;
   onSelectRunning?(id: string): void;
+  /** 有 NPC 在等你核准：頂欄多一顆琥珀色「等你」，點了跳過去（App 負責切人＋捲到批准卡）。 */
+  needsYou?: { count: number; name: string } | null;
+  onNeedsYou?(): void;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
@@ -72,6 +77,8 @@ type Props = {
   topBarRef?: Ref<HTMLElement>;
   professionalModeButtonRef?: Ref<HTMLButtonElement>;
   onOpenCodexCommands?(): void;
+  /** 從外面（Ctrl+K 指令面板）打開「NPC 設定」或「平台設定」選單；seq 每次遞增。 */
+  menuRequest?: { menu: "npc" | "platform"; seq: number } | null;
   /** 置中插槽（能量條）：排進 flex 流裡跟其他控件互相讓位，不再蓋住任何按鈕。 */
   children?: ReactNode;
 };
@@ -88,6 +95,8 @@ export function TopBar({
   runningCount,
   runningWorkers = [],
   onSelectRunning,
+  needsYou = null,
+  onNeedsYou,
   providerChanging = false,
   accounts,
   onSetWorkerAccount,
@@ -123,6 +132,7 @@ export function TopBar({
   topBarRef,
   professionalModeButtonRef,
   onOpenCodexCommands,
+  menuRequest = null,
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
@@ -244,15 +254,41 @@ export function TopBar({
     return () => { cancelled = true; };
   }, [moreOpen]);
 
+  // 開關存檔回饋：伺服器確認後那一列尾端蓋一個勾（data-saved），失敗就彈回並
+  // 抖一下（data-failed）。seq 讓連按同一列也會重播。
+  const [toggleFeedback, setToggleFeedback] = useState<{ key: keyof AppToggles; result: "saved" | "failed"; seq: number } | null>(null);
+  useEffect(() => {
+    if (!toggleFeedback) return;
+    const timer = window.setTimeout(() => setToggleFeedback(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [toggleFeedback]);
   const toggleAppSetting = (key: keyof AppToggles) => {
     if (!appToggles) return;
     const previous = appToggles;
     const next = { ...appToggles, [key]: !appToggles[key] };
     setAppToggles(next);
     void apiRequest<{ settings: AppToggles }>("/api/app-settings", { method: "POST", body: { [key]: next[key] } })
-      .then((data) => setAppToggles(data.settings))
-      .catch(() => setAppToggles(previous));
+      .then((data) => {
+        setAppToggles(data.settings);
+        setToggleFeedback((current) => ({ key, result: "saved", seq: (current?.seq ?? 0) + 1 }));
+        emitFx({ type: "system", kind: "settings-saved" });
+      })
+      .catch(() => {
+        setAppToggles(previous);
+        setToggleFeedback((current) => ({ key, result: "failed", seq: (current?.seq ?? 0) + 1 }));
+      });
   };
+  const toggleState = (key: keyof AppToggles) => toggleFeedback?.key === key
+    ? { "data-saved": toggleFeedback.result === "saved" ? (toggleFeedback.seq % 2 ? "a" : "b") : undefined, "data-failed": toggleFeedback.result === "failed" ? (toggleFeedback.seq % 2 ? "a" : "b") : undefined }
+    : {};
+
+  // 桌面通知剛開啟（權限也拿到了）：鈴鐺搖一下。關掉不搖。
+  const [bellRing, setBellRing] = useState(0);
+  const notifyWasOn = useRef(notificationsEnabled);
+  useEffect(() => {
+    if (notificationsEnabled && !notifyWasOn.current) setBellRing((count) => count + 1);
+    notifyWasOn.current = notificationsEnabled;
+  }, [notificationsEnabled]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -282,6 +318,21 @@ export function TopBar({
       window.removeEventListener("pointerdown", closeOutside, true);
     };
   }, []);
+
+  // 指令面板要求打開某個選單：等面板自己的退場跑完、焦點交還之後才開，
+  // 否則它關掉時的 pointerdown/焦點變化會把剛開的 <details> 又收起來。
+  useEffect(() => {
+    if (!menuRequest) return;
+    const timer = window.setTimeout(() => {
+      const target = menuRequest.menu === "npc" ? npcRef.current : moreRef.current;
+      if (!target) return;
+      for (const menu of menuRefs) if (menu.current && menu.current !== target) menu.current.open = false;
+      target.open = true;
+      target.querySelector<HTMLElement>("summary")?.focus();
+    }, 160);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuRequest?.seq]);
 
   const accountMenuSelect = accountSelect("top-bar__provider-select");
   const closeMenus = () => { setModelListOpen(false); for (const menu of menuRefs) if (menu.current) menu.current.open = false; };
@@ -340,7 +391,8 @@ export function TopBar({
 
   return (
     <header ref={attachBar} className="top-bar">
-      <div className="top-bar__brand"><i />PIXEL CREW</div>
+      {/* 每個字母一個 span：彩蛋（連點 5 下，見 interactionFx.ts）時字母依序跳起來。 */}
+      <div className="top-bar__brand"><i /><span className="top-bar__brand-text">{"PIXEL CREW".split("").map((letter, index) => <span key={index} style={{ "--ci": index } as React.CSSProperties}>{letter}</span>)}</span></div>
       <ModeSwitch
         current={modeIndex(professionalMode, blackWindowMode)}
         onSelect={(index) => {
@@ -370,7 +422,7 @@ export function TopBar({
         >
           <i className="top-bar__running-dot" aria-hidden="true" />
           {runningCount > 0
-            ? <><strong>{runningCount}</strong><span>{t("執行中")}</span></>
+            ? <><strong><RollingNumber value={runningCount} /></strong><span>{t("執行中")}</span></>
             : <span>{t("待命")}</span>}
         </button>
         {runningOpen && runningWorkers.length > 0 && (
@@ -407,6 +459,16 @@ export function TopBar({
           </div>
         )}
       </div>
+      {needsYou && needsYou.count > 0 && onNeedsYou && <button
+        type="button"
+        className="top-bar__needs-you"
+        data-shortcut-hint="approval"
+        onClick={onNeedsYou}
+        title={needsYou.count === 1 ? t("{name} 在等你核准——點一下跳過去", { name: needsYou.name }) : t("{count} 位 NPC 在等你核准——點一下跳到第一位", { count: needsYou.count })}
+      >
+        <i className="top-bar__needs-you-dot" aria-hidden="true" />
+        <strong><RollingNumber value={needsYou.count} /></strong><span>{t("等你核准")}</span>
+      </button>}
       <div className="top-bar__spacer" />
       {children}
       <div className="top-bar__spacer" />
@@ -474,8 +536,9 @@ export function TopBar({
               const next = lang === "zh" ? "en" : "zh";
               void apiRequest("/api/app-settings", { method: "POST", body: { lang: next } }).catch(() => {}).finally(() => setLang(next));
             }}><Icon name="globe" />{lang === "zh" ? t("切換英文 EN") : t("切換中文 中")}</button>
-            <button type="button" onClick={onNotificationsToggle}>
+            <button type="button" className="top-bar__notify" data-on={notificationsEnabled || undefined} data-ring={bellRing ? (bellRing % 2 ? "a" : "b") : undefined} onClick={onNotificationsToggle}>
               <Icon name="bell" />{notificationsEnabled ? t("關閉桌面通知") : t("開啟桌面通知")}
+              {notificationsEnabled && <span className="top-bar__notify-on" aria-hidden="true">ON</span>}
             </button>
           </div>
           <div className="top-bar__menu-group top-bar__more-compact-features">
@@ -524,7 +587,7 @@ export function TopBar({
             </button>}
           </div>
           <div className="top-bar__menu-group">
-            <label className="top-bar__menu-toggle" title={t("CTX 快滿時自動把工作交接給全新工作階段（170k 門檻）；關閉後交給 CLI 自行壓縮")}>
+            <label className="top-bar__menu-toggle" {...toggleState("brainSwapEnabled")} title={t("CTX 快滿時自動把工作交接給全新工作階段（170k 門檻）；關閉後交給 CLI 自行壓縮")}>
               <input
                 type="checkbox"
                 checked={appToggles?.brainSwapEnabled ?? true}
@@ -533,7 +596,7 @@ export function TopBar({
               />
               <span><Icon name="brain" />{t("自動換腦")}</span>
             </label>
-            <label className="top-bar__menu-toggle" title={t("回合撞到訂閱用量上限時，重置時間一到自動叫 NPC 繼續被中斷的工作")}>
+            <label className="top-bar__menu-toggle" {...toggleState("limitResumeEnabled")} title={t("回合撞到訂閱用量上限時，重置時間一到自動叫 NPC 繼續被中斷的工作")}>
               <input
                 type="checkbox"
                 checked={appToggles?.limitResumeEnabled ?? true}
@@ -542,7 +605,7 @@ export function TopBar({
               />
               <span><Icon name="clock" />{t("撞限自動續跑")}</span>
             </label>
-            <label className="top-bar__menu-toggle" title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
+            <label className="top-bar__menu-toggle" {...toggleState("diagnosticsEnabled")} title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
               <input type="checkbox" checked={appToggles?.diagnosticsEnabled ?? true} disabled={!appToggles} onChange={() => toggleAppSetting("diagnosticsEnabled")} />
               <span><Icon name="chart" />{t("本機診斷")}</span>
             </label>

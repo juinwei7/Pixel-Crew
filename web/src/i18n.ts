@@ -7,6 +7,7 @@ import { enApp } from "./i18n/en-app";
 import { enRoot } from "./i18n/en-root";
 import { enRemoteAccess } from "./i18n/en-remote-access";
 import { enVoiceInput } from "./i18n/en-voice-input";
+import { enMotion } from "./i18n/en-motion";
 
 export type Lang = "zh" | "en";
 
@@ -33,7 +34,7 @@ export const lang: Lang = detect();
 if (typeof document !== "undefined") document.documentElement.lang = lang === "en" ? "en" : "zh-Hant";
 
 const dict: Record<string, string> = lang === "en"
-  ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess, ...enVoiceInput }
+  ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess, ...enVoiceInput, ...enMotion }
   : {};
 
 function interpolate(text: string, params?: Record<string, string | number>): string {

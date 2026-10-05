@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { apiRequest } from "../api";
 import type { Persona, ProviderAuthState, ProviderId } from "../types";
 import { roomName } from "../workspace";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
+import { BUILD_DONE_MS, BuildDone, PixelBuild } from "./BuildMoment";
 
 type PlannedMember = Persona & { name: string };
 type PlanResponse = {
@@ -37,7 +38,13 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
   const [creating, setCreating] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pending = planning || creating || browsing;
+  const [errorSeq, setErrorSeq] = useState(0);
+  // 建好了：先演「部門已就緒」再交給 onCreated（它會關掉視窗、切到新成員）。
+  const [built, setBuilt] = useState<{ count: number } | null>(null);
+  const builtTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (builtTimer.current !== null) window.clearTimeout(builtTimer.current); }, []);
+  const pending = planning || creating || browsing || built !== null;
+  function fail(message: string) { setError(message); setErrorSeq((seq) => seq + 1); }
   // ×／Esc 共用同一個關閉入口：規劃中、建立中或瀏覽資料夾中不准關。
   function closeIfIdle() { if (!pending) onClose(); }
 
@@ -47,7 +54,7 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
     setError(null);
     const result = await onBrowse();
     setBrowsing(false);
-    if (result.error) setError(result.error);
+    if (result.error) fail(result.error);
     else if (result.path) setWorkspacePath(result.path);
   }
 
@@ -65,7 +72,7 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
       setLeadIndex(0);
       setPlan(data);
     } catch (err) {
-      setError((err as Error).message);
+      fail((err as Error).message);
     } finally {
       setPlanning(false);
     }
@@ -81,9 +88,10 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
         body: { planToken: plan.planToken, name: departmentName, leadIndex, members: plan.plan.members },
         timeoutMs: 30_000,
       });
-      onCreated(data.workers.map((worker) => worker.id), data.purpose);
+      setBuilt({ count: data.workers.length });
+      builtTimer.current = window.setTimeout(() => onCreated(data.workers.map((worker) => worker.id), data.purpose), BUILD_DONE_MS);
     } catch (err) {
-      setError((err as Error).message);
+      fail((err as Error).message);
     } finally {
       setCreating(false);
     }
@@ -97,6 +105,7 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
           <p>{t("告訴 AI 部門要做什麼、需要幾位 NPC，它會安排互補職務與個性，確認後一次建立。")}</p>
         </header>
 
+        {built && <BuildDone title={t("部門已就緒")} detail={t("{count} 位新隊員正走進辦公室", { count: built.count })} />}
         {!plan ? <form onSubmit={(event) => { event.preventDefault(); void generatePlan(); }}>
           <label className="department-creator__field">
             <span>{t("這是什麼部門？")}</span>
@@ -124,17 +133,17 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
             <small>{t("同一工作位置可以建立多個獨立部門；它們共用同一份專案檔案。")}</small>
           </label>
           <button type="button" className="department-creator__browse" disabled={pending} onClick={() => void browse()}>{browsing ? t("正在開啟資料夾…") : t("選擇其他工作位置")}</button>
-          {error && <div className="department-creator__error" role="alert">{error}</div>}
+          {error && <div key={errorSeq} className="department-creator__error pc-shake" role="alert">{error}</div>}
           <footer>
             <button type="button" disabled={pending} onClick={onClose}>{t("取消")}</button>
-            <button type="submit" className="department-creator__primary" disabled={pending || !purpose.trim() || !workspacePath.trim() || maxMembers < 1}>{planning ? t("AI 正在安排職務…") : t("AI 規劃部門")}</button>
+            <button type="submit" className="department-creator__primary" disabled={pending || !purpose.trim() || !workspacePath.trim() || maxMembers < 1}>{planning ? <PixelBuild label={t("AI 正在安排職務…")} /> : t("AI 規劃部門")}</button>
           </footer>
-        </form> : <div className="department-creator__review">
+        </form> : <div className={`department-creator__review${built ? " department-creator__review--built" : ""}`}>
           <label className="department-creator__field"><span>{t("部門名稱")}</span><input value={departmentName} maxLength={80} onChange={(event) => setDepartmentName(event.target.value)} /></label>
           <div className="department-creator__provider-note"><span>{t("部門 AI Provider")}</span><strong>{providers[plan.provider].displayName}</strong><small>{t("所有 NPC 使用此 Provider 的預設模型")}</small></div>
           <div className="department-creator__summary"><span>{plan.purpose}</span><strong>{plan.plan.summary || t("{count} 位 NPC 的互補配置", { count: plan.plan.members.length })}</strong></div>
           <div className="department-creator__members">
-            {plan.plan.members.map((member, index) => <article key={`${member.name}-${index}`}>
+            {plan.plan.members.map((member, index) => <article key={index} style={{ "--i": index } as CSSProperties}>
               <b>{index + 1}</b><div>
                 <label><input type="radio" name="department-lead" checked={leadIndex === index} onChange={() => setLeadIndex(index)} /> {t("部門主管")}</label>
                 <label>{t("姓名")}<input value={member.name} maxLength={80} onChange={(event) => setPlan({ ...plan, plan: { ...plan.plan, members: plan.plan.members.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) } })} /></label>
@@ -143,10 +152,10 @@ export function DepartmentCreator({ initialProvider, initialWorkspacePath, recen
               </div>
             </article>)}
           </div>
-          {error && <div className="department-creator__error" role="alert">{error}</div>}
+          {error && <div key={errorSeq} className="department-creator__error pc-shake" role="alert">{error}</div>}
           <footer>
             <button type="button" disabled={pending} onClick={() => setPlan(null)}>{t("返回修改")}</button>
-            <button type="button" className="department-creator__primary" disabled={pending || !departmentName.trim() || plan.plan.members.some((member) => !member.name.trim() || !member.role.trim() || !member.instructions.trim())} onClick={() => void createDepartment()}>{creating ? t("正在建立部門…") : t("建立部門與 {count} 位 NPC", { count: plan.plan.members.length })}</button>
+            <button type="button" className="department-creator__primary" disabled={pending || !departmentName.trim() || plan.plan.members.some((member) => !member.name.trim() || !member.role.trim() || !member.instructions.trim())} onClick={() => void createDepartment()}>{creating || built ? <PixelBuild label={t("正在建立部門…")} /> : t("建立部門與 {count} 位 NPC", { count: plan.plan.members.length })}</button>
           </footer>
         </div>}
     </Modal>
