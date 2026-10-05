@@ -65,19 +65,21 @@ const OutboxModal = lazy(() => import("./components/OutboxModal").then((module) 
 const ShortcutsHelp = lazy(() => import("./components/ShortcutsHelp").then((module) => ({ default: module.ShortcutsHelp })));
 const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((module) => ({ default: module.OnboardingTour })));
 
-const CLAUDE_MODEL_OPTIONS = [
-  { id: "opus", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: t("Haiku（最快）") },
-  { id: "fable", label: "Fable" },
+// description 是選單裡「適合什麼情況用」的備註；server 探到的模型通常沒有
+// description，合併時保留這裡的備註，不讓它被覆蓋掉。
+const CLAUDE_MODEL_OPTIONS: Array<{ id: string; label: string; description?: string }> = [
+  { id: "opus", label: "Opus", description: t("主力推薦：寫程式、長任務、大多數工作") },
+  { id: "sonnet", label: "Sonnet", description: t("快又聰明：日常對話、一般任務、省額度") },
+  { id: "haiku", label: "Haiku", description: t("最快最省：簡單查詢、分類、大量小事") },
+  { id: "fable", label: "Fable", description: t("最強推理：高難度推理、長程規劃（較慢較貴）") },
 ];
 
 function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: typeof CLAUDE_MODEL_OPTIONS, activeModel?: string | null) {
   const models = new Map<string, { id: string; label: string; description?: string }>();
   for (const model of fallback) models.set(model.id, model);
-  for (const model of discovered) models.set(model.id, model);
+  for (const model of discovered) models.set(model.id, { ...model, description: model.description ?? models.get(model.id)?.description });
   if (activeModel && !models.has(activeModel)) models.set(activeModel, { id: activeModel, label: activeModel });
-  return [{ id: "", label: t("預設模型") }, ...models.values()];
+  return [{ id: "", label: t("預設模型"), description: t("跟隨本機 Claude 設定") }, ...models.values()];
 }
 
 const EMPTY_CAPABILITIES = {

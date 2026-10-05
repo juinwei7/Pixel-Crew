@@ -171,7 +171,9 @@ export function TopBar({
       aria-label={t("選擇模型")}
     >
       {modelOptions.map((option) => (
-        <option key={option.id} value={option.id}>{option.label}</option>
+        <option key={option.id} value={option.id} title={option.description}>
+          {option.description ? `${option.label} — ${option.description}` : option.label}
+        </option>
       ))}
     </select>
   );
