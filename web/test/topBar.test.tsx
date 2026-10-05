@@ -29,7 +29,7 @@ test("top bar exposes room, selected provider, model, capabilities, and health",
   assert.match(html, /Sonnet/);
   assert.match(html, /MCP/);
   assert.match(html, /top-bar__provider-select/);
-  assert.match(html, /top-bar__model-select/);
+  assert.match(html, /top-bar__model-trigger/);
   // 頂欄只留重點，其餘收進兩個選單：NPC 設定（只動選到的那一位）與
   // 平台設定（跟選到誰無關）。兩個都是原生 <details>，內容永遠在 DOM 裡。
   assert.match(html, /top-bar__npc/);

@@ -131,6 +131,7 @@ export function TopBar({
   const [updateOpen, setUpdateOpen] = useState(false);
   // 全域功能開關：平台選單打開時才抓，改動走樂觀更新、失敗回滾。
   const [moreOpen, setMoreOpen] = useState(false);
+  const [modelListOpen, setModelListOpen] = useState(false);
   const [appToggles, setAppToggles] = useState<AppToggles | null>(null);
   const updateRef = useRef<HTMLDivElement>(null);
   const healthRef = useRef<HTMLDivElement>(null);
@@ -162,20 +163,53 @@ export function TopBar({
     </select>
   );
 
-  const modelSelect = (className = "top-bar__model-select") => (
-    <select
-      className={className}
-      value={active?.model ?? ""}
-      disabled={!active || active.busy || !authReady || modelOptions.length === 0}
-      onChange={(event) => onModel(event.target.value)}
-      aria-label={t("選擇模型")}
-    >
-      {modelOptions.map((option) => (
-        <option key={option.id} value={option.id} title={option.description}>
-          {option.description ? `${option.label} — ${option.description}` : option.label}
-        </option>
-      ))}
-    </select>
+  // 模型選單用自己的清單而不是原生 <select>：原生選項只能一行字，備註擠進去
+  // 收起時會被折成好幾行。收起只顯示名稱；展開時在選單內原地攤開（選單本身
+  // overflow-y:auto，浮出去的下拉會被裁掉），每項名稱一行、用途備註一行。
+  const modelDisabled = !active || active.busy || !authReady || modelOptions.length === 0;
+  const selectedModel = modelOptions.find((option) => option.id === (active?.model ?? ""));
+  const modelPicker = () => (
+    <>
+      <div className="top-bar__menu-row">
+        <span>
+          {t("模型")}
+          {capabilities.loading && <i className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></i>}
+        </span>
+        <button
+          type="button"
+          className="top-bar__model-trigger"
+          disabled={modelDisabled}
+          aria-haspopup="listbox"
+          aria-expanded={modelListOpen}
+          aria-label={t("選擇模型")}
+          title={selectedModel?.description}
+          onClick={() => setModelListOpen((open) => !open)}
+        >
+          <span>{selectedModel?.label ?? active?.model ?? t("預設模型")}</span>
+          <svg viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z" /></svg>
+        </button>
+      </div>
+      {modelListOpen && !modelDisabled && (
+        <div className="top-bar__model-list" role="listbox" aria-label={t("選擇模型")}>
+          {modelOptions.map((option) => {
+            const selected = option.id === (active?.model ?? "");
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`top-bar__model-option${selected ? " top-bar__model-option--selected" : ""}`}
+                onClick={() => { setModelListOpen(false); if (!selected) onModel(option.id); }}
+              >
+                <strong>{option.label}</strong>
+                {option.description && <small>{option.description}</small>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 
   const accountSelect = (className = "top-bar__provider-select") => {
@@ -250,7 +284,7 @@ export function TopBar({
   }, []);
 
   const accountMenuSelect = accountSelect("top-bar__provider-select");
-  const closeMenus = () => { for (const menu of menuRefs) if (menu.current) menu.current.open = false; };
+  const closeMenus = () => { setModelListOpen(false); for (const menu of menuRefs) if (menu.current) menu.current.open = false; };
 
   /* 這條 bar 要多寬取決於「文字有多長」——中英文標籤長度差一截，房間名、
      模型名也都是變數。用固定的 media query 門檻去猜，永遠會在某個組合下
@@ -395,15 +429,9 @@ export function TopBar({
               <Icon name="building" />{t("工作位置")}<strong>{roomName(activeWorkspace)}</strong>
             </button>
             <label><span>{t("供應商")}</span>{providerSelect()}</label>
-            <label>
-              {/* 轉圈跟在「模型」兩個字旁邊，不要當成第三個 grid 項目——那會自己
-                  佔掉一整列，看起來像沒對齊的孤兒。 */}
-              <span>
-                {t("模型")}
-                {capabilities.loading && <i className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></i>}
-              </span>
-              {modelSelect("top-bar__model-select top-bar__menu-model-select")}
-            </label>
+            {/* 轉圈跟在「模型」兩個字旁邊，不要當成第三個 grid 項目——那會自己
+                佔掉一整列，看起來像沒對齊的孤兒。 */}
+            {modelPicker()}
             {accountMenuSelect && <label><span>{t("帳號")}</span>{accountMenuSelect}</label>}
             <label>
               <span>{t("自動核准")}</span>

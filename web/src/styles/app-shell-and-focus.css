@@ -734,6 +734,21 @@ select option[value="invincible"]:hover { background: rgba(255, 51, 85, 0.16); }
 .top-bar__more-menu select, .top-bar__more-menu button, .top-bar__more-menu a { min-height: 34px; border: 1px solid rgba(143,184,232,.13); border-radius: 7px; background: rgba(0, 229, 255,.05); color: #b7c9df; font: 10px var(--mono); }
 .top-bar__more-menu button, .top-bar__more-menu a { display: flex; align-items: center; padding: 0 9px; cursor: pointer; text-align: left; text-decoration: none; }
 .top-bar__more-menu button strong { float: right; color: var(--cyan); }
+/* 模型：收起只顯示名稱，展開在選單內原地攤開，每項名稱＋一行用途備註。 */
+.top-bar__more-menu .top-bar__menu-row { display: grid; grid-template-columns: 1fr 110px; align-items: center; gap: 8px; color: #8296b1; font: 9px var(--mono); }
+.top-bar__more-menu .top-bar__model-trigger { justify-content: space-between; gap: 6px; width: 110px; min-width: 0; }
+.top-bar__more-menu .top-bar__model-trigger:disabled { cursor: default; opacity: 0.4; }
+.top-bar__model-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-bar__model-trigger svg { flex: none; width: 8px; height: 5px; fill: #8296b1; }
+.top-bar__model-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
+.top-bar__model-list { display: grid; gap: 2px; padding: 3px; border: 1px solid rgba(143,184,232,.13); border-radius: 8px; background: rgba(0,0,0,.22); }
+.top-bar__more-menu .top-bar__model-option { display: grid; gap: 3px; align-items: start; min-height: 0; padding: 7px 9px 7px 22px; border: 1px solid transparent; background: transparent; position: relative; }
+.top-bar__more-menu .top-bar__model-option strong { float: none; color: #d6e4f5; font: 600 11px var(--mono); }
+.top-bar__model-option small { color: #7d90aa; font: 10px/1.45 var(--mono); }
+.top-bar__more-menu .top-bar__model-option:hover { background: rgba(0,229,255,.06); }
+.top-bar__more-menu .top-bar__model-option--selected { border-color: rgba(0,229,255,.28); background: rgba(0,229,255,.09); }
+.top-bar__more-menu .top-bar__model-option--selected strong { color: var(--cyan); }
+.top-bar__model-option--selected::before { content: "✓"; position: absolute; left: 8px; top: 7px; color: var(--cyan); font: 600 11px var(--mono); }
 /* Phone-only group inside the ••• menu (language/theme/notifications). Hidden on
    desktop where those controls live in the bar as standalone icons. */
 .top-bar__more-compact-features { display: grid; gap: 7px; padding-top: 7px; border-top: 1px solid rgba(143,184,232,.13); }
