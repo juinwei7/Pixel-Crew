@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-10-05
+
+### Fixed
+
+- Personal autopilot now runs its coach-decision call on the NPC's own assigned account and configured model, instead of always falling back to the shared login and a workspace-picked model. Previously a worker pinned to an account with quota could still stall because the behind-the-scenes decision ran on the shared login (out of credits) or picked a different, exhausted model.
+- Switching an NPC's account is now one click: when the NPC already has a conversation, the UI asks for confirmation and then clears the session and switches in a single step, instead of forcing the owner to clear the session manually first.
+- Cold-install updates no longer pile up duplicate browser tabs. The relaunched controller skips auto-opening a new tab (the owner's existing tab reconnects on its own); the staged installer script is also kept in sync with the repo so fixes like this actually take effect.
+
 ## [2.5.1] - 2026-09-25
 
 ### Added

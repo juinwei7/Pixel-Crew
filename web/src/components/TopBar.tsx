@@ -181,12 +181,12 @@ export function TopBar({
     return <select
       className={className}
       value={active.accountId ?? ""}
-      disabled={active.busy || hasHistory}
+      disabled={active.busy}
       onChange={(event) => onSetWorkerAccount?.(active.id, event.target.value || null)}
       aria-label={t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })}
       title={
         hasHistory
-          ? t("這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶", { provider: providerLabel })
+          ? t("切換帳號會清空這位 NPC 的對話記憶（換帳號無法沿用原本的 {provider} 對話）；切換時會先詢問你確認。", { provider: providerLabel })
           : t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })
       }
     >

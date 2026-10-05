@@ -62,6 +62,13 @@ $marker = @{ firedAt = $prevMtime; reason = $Reason; changedFiles = @(); stagedE
 [System.IO.File]::WriteAllText($pendingJson, ($marker | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
 Log "wrote pending marker"
 
+# Keep the staged installer current: coldinstall\pc-selfinstall.ps1 is a copy, and nothing else
+# refreshes it -- so edits to the repo script (e.g. new launch args like --relaunch) would never
+# take effect without this. Copy the repo version over the staged one before handing off.
+$repoSelfInstall = Join-Path $Repo 'scripts\windows\pc-selfinstall.ps1'
+if (Test-Path -LiteralPath $repoSelfInstall) {
+  try { Copy-Item -LiteralPath $repoSelfInstall -Destination $selfInstall -Force; Log "refreshed coldinstall pc-selfinstall.ps1 from repo" } catch { Log "WARNING: could not refresh pc-selfinstall.ps1: $($_.Exception.Message)" }
+}
 if (-not (Test-Path -LiteralPath $selfInstall)) { Log "FATAL: pc-selfinstall.ps1 missing at $selfInstall"; return }
 # Hand off via WMI Win32_Process.Create (fully detached) so pc-selfinstall survives this script exiting
 # AND survives killing the app it is about to swap. Start-Process from a detached process did not launch.

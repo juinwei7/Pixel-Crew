@@ -753,9 +753,9 @@ export function useWorkers() {
     }
   }, []);
 
-  const setWorkerAccount = useCallback(async (workerId: string, accountId: string | null): Promise<string | null> => {
+  const setWorkerAccount = useCallback(async (workerId: string, accountId: string | null, force = false): Promise<string | null> => {
     try {
-      await apiRequest(`/api/workers/${workerId}/account`, { method: "PATCH", body: { accountId } });
+      await apiRequest(`/api/workers/${workerId}/account`, { method: "PATCH", body: force ? { accountId, force: true } : { accountId } });
       return null;
     } catch (error) {
       return (error as Error).message;

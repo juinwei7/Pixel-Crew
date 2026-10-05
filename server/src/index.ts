@@ -2331,6 +2331,38 @@ function resolveDecisionRuntime(
   return { error: t("Claude 與 Codex 目前都無法進行部門判斷；請先登入至少一個 provider") };
 }
 
+// 自動循環的「教練決策」要對準這位 NPC 指定的帳號，而不是共用登入——否則你把 NPC 設成某個
+// 有 token 的帳號，決定「下一步做什麼」的那通模型呼叫卻跑在共用登入上，共用登入沒 token 就整個
+// 循環卡死。共用登入可用時沿用原本的 provider/model 選法（不動模型行為、避免回歸）；只有共用
+// 登入不可用、但 NPC 指定帳號可用時，才改用 NPC 自己的 provider/model 讓循環照常跑。
+function resolveWorkerDecisionRuntime(worker: Worker): { provider: ProviderId; model: string } | { error: string } {
+  const provider = worker.runner.provider;
+  // 決策要用「這位 NPC 自己設定的模型」——而不是 resolveDecisionRuntime 依工作區挑的模型。後者會
+  // 優先挑到工作區最近一張 BOSS 任務用的決策模型（例如工作區「測試」把 總管小揮 的決策挑成 fable），
+  // 那可能是一個額度已用盡的模型（fable 在該帳號已耗盡 → out of credits），即使 NPC 明明設的是 opus。
+  // 用 NPC 自己的模型既符合「決策繼承 NPC 模型」的設定，也吃對帳號對模型的額度。
+  if (workerProviderReady(worker)) {
+    const model = worker.runner.getModel();
+    if (model && validModel(provider, model)) return { provider, model };
+  }
+  // NPC 沒設明確模型（繼承預設）時才回退到工作區啟發式；指定帳號可用但共用登入未登入時，
+  // 退而用該 provider 的可用模型，不被共用登入狀態綁死。
+  const base = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+  if (!("error" in base)) return base;
+  if (worker.accountId && workerProviderReady(worker)) {
+    const fallback = resolveDecisionRuntime(provider, undefined, worker.runner.workspacePath);
+    if (!("error" in fallback)) return fallback;
+  }
+  return base;
+}
+
+// 用量/受限判斷同樣要對準 NPC 的帳號：有指定帳號就看該帳號的即時工作能量，否則看共用登入。
+function refreshWorkerDecisionUsage(worker: Worker, provider: ProviderId) {
+  return worker.accountId
+    ? accountUsageRegistry.refresh(worker.accountId, true)
+    : usageRegistry.refresh(provider, true);
+}
+
 function normalizeWorkspacePath(input: unknown): string {
   return canonicalWorkspacePath(input, config.targetRepoPath);
 }
@@ -3570,16 +3602,6 @@ app.patch("/api/workers/:id/account", (req, res) => {
     res.status(409).json({ error: t("NPC 忙碌中，請等目前回合結束再切換帳號") });
     return;
   }
-  // Switching accounts only takes effect on the session's next restart, at
-  // which point it can't resume the old thread under the new account's home
-  // directory (thread/conversation history is scoped per CODEX_HOME /
-  // CLAUDE_CONFIG_DIR) and silently starts a blank one. Rather than let that
-  // happen as a surprising side effect of switching, require the owner to
-  // explicitly clear the session first.
-  if (worker.runner.getPersistenceState().completedTurns > 0) {
-    res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
-    return;
-  }
   const raw = req.body?.accountId;
   const accountId = raw === null || raw === undefined || raw === "" ? null : String(raw);
   if (accountId) {
@@ -3588,6 +3610,21 @@ app.patch("/api/workers/:id/account", (req, res) => {
       res.status(400).json({ error: t("找不到指定的帳號") });
       return;
     }
+  }
+  // Switching accounts only takes effect on the session's next restart, at
+  // which point it can't resume the old thread under the new account's home
+  // directory (thread/conversation history is scoped per CODEX_HOME /
+  // CLAUDE_CONFIG_DIR) and silently starts a blank one. We still refuse to do
+  // that silently — but when the owner passes force:true they've already
+  // confirmed the reset in the UI, so we fold the clear INTO the switch (one
+  // click) instead of making them clear the session as a separate step first.
+  if (worker.runner.getPersistenceState().completedTurns > 0) {
+    if (req.body?.force !== true) {
+      res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
+      return;
+    }
+    const cleared = cleanWorkerAndAnnounce(worker);
+    if (!cleared.ok) { res.status(409).json({ error: cleared.error }); return; }
   }
   worker.accountId = accountId;
   persistWorker(worker);
@@ -6241,11 +6278,13 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
 async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: number; deadlineAt: number | null; proactive: boolean }): Promise<void> {
   workerAutopilotAdvancing.add(worker.id);
   try {
-    const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+    const runtime = resolveWorkerDecisionRuntime(worker);
     if ("error" in runtime) {
       disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
       return;
     }
+    // 決策/探索/修復三通呼叫都跑在這位 NPC 指定帳號的 home 上（而非共用登入的預設 home）。
+    const workerHome = homeForWorker(worker) ?? undefined;
     const { turns, originalGoal, carriedSummary } = recentWorkerAutopilotTurns(worker);
     // 活計畫（支柱 A）：載入既有計畫；空則用大局目標＋過往教訓種入一份（吃掉既有狀態、不並存）。
     let plan = workerAutopilotPlans[worker.id];
@@ -6283,7 +6322,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
         // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
         const decisionStart = Date.now();
         appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, model: decisionModel, promptChars: prompt.length, exploreRounds });
-        const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+        const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" }, workerHome)).text;
         appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, model: decisionModel, ms: Date.now() - decisionStart, replyChars: text.length });
         // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
         workerAutopilotRetry.resolve(worker.id);
@@ -6292,7 +6331,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
           // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
           // 靜默收場，一次格式抖動就浪費整輪循環。
           const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
-          const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" })).text;
+          const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" }, workerHome)).text;
           decision = parseWorkerAutopilotDecision(repaired);
           if (!decision) {
             if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
@@ -6332,6 +6371,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
           workerAutopilotExplorePrompt({ workerName: worker.runner.name, workspaceLabel: worker.runner.workspacePath, query: decision.query, originalGoal }),
           150_000,
           { kind: "read_only_query", allowedTools: [], allowSafeShell: true },
+          workerHome,
         )).text;
         finding = parseExplorationFindings(exploreText, decision.query);
       } catch (error) {
@@ -6429,9 +6469,9 @@ function sweepWorkerAutopilot(): void {
       workerAutopilotProbing.add(workerId);
       void (async () => {
         try {
-          const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+          const runtime = resolveWorkerDecisionRuntime(worker);
           if (!("error" in runtime)) {
-            const usage = await usageRegistry.refresh(runtime.provider, true);
+            const usage = await refreshWorkerDecisionUsage(worker, runtime.provider);
             if (usageBlockReason(runtime.provider, usage, runtime.model)) return;
           }
           workerAutopilotRetry.begin(workerId, Date.now());
@@ -6462,7 +6502,8 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   if (enabled) {
     if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開自動循環") }); return; }
     // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
-    const runtime = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+    // 用 account-aware 版本：指定帳號可用時就能開，不被共用登入狀態綁死。
+    const runtime = resolveWorkerDecisionRuntime(worker);
     if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
   }
   const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;

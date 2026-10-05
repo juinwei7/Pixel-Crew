@@ -1100,11 +1100,18 @@ export function App() {
     void closeWorker(id).then((error) => error ? notify(error, "error") : notify(t("人員與工位拆除中"), "info"));
   }
 
-  function handleSetWorkerAccount(workerId: string, accountId: string | null) {
-    // TopBar already hard-disables this control once the NPC has any conversation
-    // history (switching mid-session can't resume the old thread under the new
-    // account anyway) — this is just the plain follow-through for a fresh NPC.
-    void setWorkerAccount(workerId, accountId).then((error) => { if (error) notify(error, "error"); });
+  async function handleSetWorkerAccount(workerId: string, accountId: string | null) {
+    // Switching an account can't resume the old thread under the new account's
+    // home, so it resets the NPC's conversation. For a fresh NPC that's a no-op;
+    // once it has history we fold the clear into the switch behind one explicit
+    // confirm (force) instead of making the owner clear the session as a
+    // separate manual step first.
+    const hasHistory = (workers[workerId]?.turns.length ?? 0) > 0;
+    if (hasHistory) {
+      if (!(await confirm(t("切換帳號會清空這位 NPC 的對話記憶（換帳號後無法沿用原本的對話）。確定要切換嗎？"), "danger"))) return;
+    }
+    const error = await setWorkerAccount(workerId, accountId, hasHistory);
+    if (error) notify(error, "error");
   }
 
   function handleModelChange(model: string) {

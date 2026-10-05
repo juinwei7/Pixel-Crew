@@ -69,8 +69,10 @@ $rollbackHash = (Get-FileHash -LiteralPath $rollbackExe -Algorithm SHA256).Hash
 Log "staged hash: $stagedHash"
 
 # 1) install the new version
+# --relaunch tells the controller not to pop a fresh browser tab: the owner's existing
+# tab auto-reconnects once the server is back, so a new tab would just pile up duplicates.
 Stop-AppProcesses | Out-Null
-Start-Process -FilePath $stagedExe
+Start-Process -FilePath $stagedExe -ArgumentList '--relaunch'
 Log "launched staged (new): $stagedExe"
 $swapped = Wait-SwappedHash $stagedHash
 
@@ -95,7 +97,7 @@ try {
 } catch { Log "FATAL: could not restore rollback over staged: $($_.Exception.Message)"; return }
 
 Stop-AppProcesses | Out-Null
-Start-Process -FilePath $stagedExe
+Start-Process -FilePath $stagedExe -ArgumentList '--relaunch'
 Log "launched staged (rollback/old): $stagedExe"
 $reswapped = Wait-SwappedHash $rollbackHash
 $rehealthy = $false

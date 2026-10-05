@@ -31,7 +31,12 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         var port = ReadPort(args);
         var minimized = args.Any(argument => string.Equals(argument, "--minimized", StringComparison.OrdinalIgnoreCase));
-        Application.Run(new ControllerApplicationContext(root, port, minimized, openSignal));
+        // A self-install cold-install relaunches the controller with --relaunch. The owner's
+        // existing browser tab auto-reconnects to 127.0.0.1:8787 once the server is back (the
+        // web client retries the WebSocket every second), so we must NOT pop a fresh tab on
+        // relaunch — doing so is what piled up duplicate "Pixel Crew" tabs after every update.
+        var relaunch = args.Any(argument => string.Equals(argument, "--relaunch", StringComparison.OrdinalIgnoreCase));
+        Application.Run(new ControllerApplicationContext(root, port, minimized, relaunch, openSignal));
     }
 
     private static bool TryOpenExistingController()
@@ -272,10 +277,12 @@ internal sealed class ControllerApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer openSignalTimer;
     private readonly ControlCenterForm window;
     private readonly EventWaitHandle openSignal;
+    private readonly bool relaunch;
     private bool exiting;
 
-    public ControllerApplicationContext(string root, int port, bool minimized, EventWaitHandle openSignal)
+    public ControllerApplicationContext(string root, int port, bool minimized, bool relaunch, EventWaitHandle openSignal)
     {
+        this.relaunch = relaunch;
         this.openSignal = openSignal;
         host = new PixelCrewHost(root, port);
         host.StateChanged += (_, _) => OnUi(UpdateUi);
@@ -319,7 +326,9 @@ internal sealed class ControllerApplicationContext : ApplicationContext
         };
         openSignalTimer.Start();
         UpdateUi();
-        _ = StartAndMaybeOpenAsync(!minimized);
+        // On a self-install relaunch, don't auto-open a browser tab — the owner's existing
+        // tab reconnects on its own. Still show the control center so the new version is visibly up.
+        _ = StartAndMaybeOpenAsync(!minimized && !relaunch);
         if (!minimized) ShowControlCenter();
     }
 
