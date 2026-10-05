@@ -36,7 +36,7 @@ function withStore(run: (store: LocalStore) => void): void {
 
 test("missions stored under a normalized path are found via a normalized query, and missed via a raw one", () => {
   withStore((store) => {
-    const raw = "C:\\Users\\victo\\Desktop\\量化交易";
+    const raw = "C:\\Users\\Dev\\Desktop\\量化交易";
     const normalized = workspaceIdentity(raw); // = registryKey(raw); the form missions actually land under
     store.saveDepartmentMission(makeMission({ id: "m1", workspacePath: normalized }));
     store.saveDepartmentMission(makeMission({ id: "m2", workspacePath: normalized }));

@@ -6,7 +6,11 @@ const files = readdirSync(assetsDir).filter((file) => file.endsWith(".js"));
 if (!files.length) throw new Error("No web build assets found. Run `npm run build -w web` first.");
 
 const budgets = [
-  { name: "application entry", match: /^index-[\w-]+\.js$/, max: 360 * 1024 },
+  // 上限在 v2.5.0 定為 360 KiB；v2.5.1 的 i18n 補完與 v2.5.2 的功能程式讓
+  // entry（純 app code，vendor 都已拆進各自 chunk）自然長到 ~365 KiB。這個
+  // guard 的目的是擋住「vendor 意外洩進 entry」這類暴衝，不是阻止正常功能
+  // 成長，因此調高到 376 KiB（現況 + 一點餘裕），繼續擋住意外膨脹。
+  { name: "application entry", match: /^index-[\w-]+\.js$/, max: 376 * 1024 },
   { name: "Pixi vendor", match: /^pixi-[\w-]+\.js$/, max: 620 * 1024 },
   { name: "rich text vendor", match: /^rich-text-[\w-]+\.js$/, max: 380 * 1024 },
   // 英文字典補完（2026-09，從 ~100 KiB 到 ~114 KiB；v2.5.1 再補譯 203 句到

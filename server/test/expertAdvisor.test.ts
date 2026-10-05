@@ -45,7 +45,7 @@ test("proactive mode with no domain signal demands genuinely different fields, n
   // literally named 測試) gives no domain signal, so the model would anchor on a
   // single fabricated niche and only vary the angle within it. Proactive mode must
   // instead force each proposal into a different field.
-  const prompt = expertAdvisorPrompt({ idea: "", workspacePath: "/c/users/victo/desktop/測試", proactive: true });
+  const prompt = expertAdvisorPrompt({ idea: "", workspacePath: "/c/users/dev/desktop/測試", proactive: true });
   assert.match(prompt, /ALWAYS propose/);
   assert.match(prompt, /GENUINELY DIFFERENT field/);
   assert.match(prompt, /do NOT invent one narrow domain/i);
