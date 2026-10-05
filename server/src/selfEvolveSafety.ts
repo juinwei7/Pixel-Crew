@@ -42,6 +42,18 @@ function norm(file: string): string {
   return file.trim().replace(/\\/g, "/");
 }
 
+// 只掃真正改動的行（+ 新增／- 刪除），不掃 unified diff 的上下文行：上下文是沒動的舊碼，
+// 例如某行舊註解剛好寫著「失敗回滾」，會讓純前端改動被誤判成動到剎車。刪掉剎車規則一定
+// 出現在 - 行、偷加一定出現在 + 行，所以這樣不會放過任何真的改動。
+// 不像 unified diff（沒有 diff --git／@@ 標頭）的輸入維持整段掃，寧可多攔。
+function changedDiffLines(diffText: string): string {
+  const lines = diffText.split(/\r?\n/);
+  if (!lines.some((line) => line.startsWith("@@") || line.startsWith("diff --git"))) return diffText;
+  return lines
+    .filter((line) => (line.startsWith("+") && !line.startsWith("+++ ")) || (line.startsWith("-") && !line.startsWith("--- ")))
+    .join("\n");
+}
+
 /**
  * 判斷一組自改是否動到安全網。
  * - changedFiles：這次自改會動到的檔案路徑清單。
@@ -67,8 +79,9 @@ export function classifySelfChange(changedFiles: readonly string[], diffText?: s
   }
 
   if (typeof diffText === "string" && diffText) {
+    const scanned = changedDiffLines(diffText);
     for (const { pattern, reason } of SAFETY_RULE_PATTERNS) {
-      if (pattern.test(diffText)) add("(diff)", reason);
+      if (pattern.test(scanned)) add("(diff)", reason);
     }
   }
 
