@@ -299,4 +299,7 @@ export const enCore: Record<string, string> = {
   "無法貼上圖片": "Could not paste the image",
   "無法讀取貼上的圖片": "Could not read the pasted image",
   "放大終端字體": "Increase terminal font size",
+  "畫面載入時發生問題": "Something went wrong while loading",
+  "這通常是更新後舊分頁的快取沒對上新版造成的。重新整理頁面就會恢復正常。": "This usually happens when an open tab's cache doesn't match a new update. Refreshing the page fixes it.",
+  "重新整理頁面": "Reload the page",
 };
