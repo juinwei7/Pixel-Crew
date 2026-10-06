@@ -22,4 +22,7 @@ export const enR3Autopilot: Record<string, string> = {
   "🎯 自動循環目標已改為：{goal}": "🎯 Autopilot goal changed to: {goal}",
   "目標不能是空的": "The goal cannot be empty",
   "自動循環沒有開著": "Autopilot is not on",
+  "\n\n（你正在自動循環中）摘要裡務必保留一段「自動循環」：目標＝「{goal}」、這輪已完成哪些步驟與結論、正在做的那一步做到哪、下一步打算{next}{blocker}。新腦會依這段無縫接續循環。": "\n\n(You are in an autopilot loop.) The summary MUST keep an \"Autopilot\" section: goal = \"{goal}\", which steps this loop has completed and their conclusions, how far the current step got, and the planned next step{next}{blocker}. The fresh session will continue the loop from this section.",
+  "（目前計畫的下一個候選：{next}）": " (current plan next candidate: {next})",
+  "，以及卡點（{blocker}）": ", plus the blocker ({blocker})",
 };

@@ -164,6 +164,8 @@ export type WorkerAutopilotContext = {
   turns: WorkerAutopilotTurn[];
   originalGoal: string | null;
   carriedSummary: string | null;
+  /** 最新一個真實回合之後發生過自動換腦（🧠 系統回合）＝NPC 現在是新 session，只記得交接摘要。 */
+  freshSession: boolean;
 };
 
 // 從對話歷史組出上面的脈絡（純函式、可單測）。關鍵：
@@ -178,9 +180,16 @@ export function autopilotContextFromHistory(history: ReadonlyArray<AutopilotHist
   let carriedSummary: string | null = null;
   let current: WorkerAutopilotTurn | null = null;
   let inSystemTurn = false;
+  let freshSession = false;
   for (const event of history) {
     if (event.type === "user_message" && !event.notice) {
-      if (event.system) { current = null; inSystemTurn = true; continue; }
+      if (event.system) {
+        current = null;
+        inSystemTurn = true;
+        if (typeof event.text === "string" && event.text.startsWith("🧠")) freshSession = true;
+        continue;
+      }
+      freshSession = false;
       const text = typeof event.text === "string" ? event.text : "";
       if (!originalGoal && text) originalGoal = text.slice(0, 800);
       // 完成標準在指示尾端，截斷會先砍到它——先剝出來另存，指示本體再截。
@@ -201,7 +210,32 @@ export function autopilotContextFromHistory(history: ReadonlyArray<AutopilotHist
       }
     }
   }
-  return { turns: turns.slice(-maxTurns), originalGoal, carriedSummary };
+  return { turns: turns.slice(-maxTurns), originalGoal, carriedSummary, freshSession };
+}
+
+/** 最近一則（非 notice）指示是不是系統回合（換腦摘要／已接手／收尾交接）——這種回合出錯不該害循環熄火。 */
+export function lastTurnWasSystem(history: ReadonlyArray<{ type: string; notice?: boolean; system?: boolean }>): boolean {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const event = history[i];
+    if (event.type === "user_message" && !event.notice) return event.system === true;
+  }
+  return false;
+}
+
+/**
+ * 循環開著時要換腦：附在「請寫交接摘要」後面，提醒 NPC 把循環目標與進度寫進摘要——
+ * 新腦只認得這份摘要，少了這段它會不知道自己在循環裡、為了什麼在做。
+ */
+export function workerAutopilotSwapCarryNote(goal: string | null | undefined, plan?: WorkerAutopilotPlan | null): string {
+  const g = bounded(goal, 400);
+  if (!g) return "";
+  const next = bounded(plan?.toTry[0]?.text, 200);
+  const blocker = bounded(plan?.blockers[0], 200);
+  return t("\n\n（你正在自動循環中）摘要裡務必保留一段「自動循環」：目標＝「{goal}」、這輪已完成哪些步驟與結論、正在做的那一步做到哪、下一步打算{next}{blocker}。新腦會依這段無縫接續循環。", {
+    goal: g,
+    next: next ? t("（目前計畫的下一個候選：{next}）", { next }) : "",
+    blocker: blocker ? t("，以及卡點（{blocker}）", { blocker }) : "",
+  });
 }
 
 function bounded(value: unknown, max: number): string {
@@ -226,6 +260,8 @@ export function workerAutopilotNextPrompt(input: {
   originalGoal?: string | null;
   /** 最近一次換腦/交接帶過來的先前工作摘要（背景脈絡，非最新結果，不可拿來當診斷對象）。 */
   carriedSummary?: string | null;
+  /** NPC 剛換腦成新 session（只記得交接摘要）：指示要自足，不能說「照你剛剛的」。 */
+  freshSession?: boolean;
   /** 前幾輪循環留下的復盤教訓（新的在前）——讓循環之間累積經驗而不是每輪歸零。 */
   retros?: string[];
   /** server 端剛觀測到的工作區實況（唯讀）——讓教練能對照 NPC 的自述抓落差。 */
@@ -306,9 +342,11 @@ export function workerAutopilotNextPrompt(input: {
   const carriedBlock = carried
     ? `\n\nEarlier-work summary carried over from a context swap / handoff — BACKGROUND ONLY: this is a digest of what happened before the context was swapped, to give you the earlier arc the recent turns no longer show. It is NOT the latest result: never diagnose it, never "continue" it, never treat a "LLM 交接／自動換腦" system line as a work turn.\n${carried}`
     : "";
-  const carriedRule = carried
+  const carriedRule = (carried
     ? `\n- Earlier-work summary present: use it only as background for the bigger arc. The thing you diagnose and build on is still the latest REAL turn in "Recent turns" — never the carried summary and never a swap/handoff system message.`
-    : "";
+    : "") + (input.freshSession
+    ? `\n- FRESH SESSION: right after the latest real turn the NPC was switched to a brand-new session by an automatic context swap. It now remembers ONLY its own handoff summary — not the details of "Recent turns". Make this instruction fully self-contained: name the exact files, paths, findings, numbers, and decisions it needs, and never lean on "what you just did", "as above", or "continue the previous step". A short "已接手" reply is the swap acknowledgement, not work to diagnose.`
+    : "");
 
   const scopeRule = input.proactive
     ? `- GOAL-ANCHORED, not keep-busy: the owner turned on proactive mode to keep the project ADVANCING TOWARD ITS GOAL and arriving at a clear final decision — NOT to generate motion. Every step must measurably move the ORIGINAL GOAL (see its block) forward: deepen, verify-ONCE, harden, or conclude the thing the owner actually wants. Drifting to an adjacent/tangential GOAL, or re-doing / re-verifying something already shipped or already verified, is busywork — forbidden.

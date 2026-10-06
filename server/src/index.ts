@@ -267,6 +267,8 @@ import {
   workerAutopilotAutoPickPrompt,
   workerAutopilotChoiceNotice,
   workerAutopilotPausedNote,
+  workerAutopilotSwapCarryNote,
+  lastTurnWasSystem,
   workerAutopilotInstructionWithCriterion,
   isWorkerAutopilotPlanEmpty,
   mergeWorkerAutopilotPlan,
@@ -1866,12 +1868,15 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
   // decision.action === "start_swap"：先請 NPC 寫交接摘要
   brainSwapPending.add(worker.id);
   const announcement = decision.message;
+  // 循環開著：要求摘要保留循環目標與進度，新腦才知道自己在循環裡、做到哪。
+  const loopState = workerAutopilotByWorker.get(worker.id);
+  const loopCarry = loopState ? workerAutopilotSwapCarryNote(loopState.goal, workerAutopilotPlans[worker.id]) : "";
   setTimeout(() => {
     if (!brainSwapPending.has(worker.id)) return;
     if (worker.runner.busy) { brainSwapPending.delete(worker.id); return; } // 使用者搶先發話，等下個回合再觸發
     record(worker, { type: "user_message", system: true, text: announcement });
     try {
-      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。\n\n摘要寫完後，若這段工作讓你學到一條「下次換了腦也值得記得、可複用」的做事慣例或踩雷教訓，在最後另起一行用底下格式補一句（沒有就整段省略，別硬湊）：\n---LESSON---\n<一句話、動作導向、不含本次任務細節的可複用心法>"), [], []);
+      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。\n\n摘要寫完後，若這段工作讓你學到一條「下次換了腦也值得記得、可複用」的做事慣例或踩雷教訓，在最後另起一行用底下格式補一句（沒有就整段省略，別硬湊）：\n---LESSON---\n<一句話、動作導向、不含本次任務細節的可複用心法>") + loopCarry, [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch {
       brainSwapPending.delete(worker.id);
@@ -6392,7 +6397,11 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
   // 暫停等 owner 回覆中：什麼都不做（owner 發話時 resumeWorkerAutopilotIfPaused 會先解除暫停）。
   if (state.paused) return;
-  if (event.isError) {
+  if (event.isError && lastTurnWasSystem(worker.history)) {
+    // 出錯的是換腦／交接這類系統回合（不是循環派的工作）：換腦流程自己會放棄或重來，循環不該跟著熄火，
+    // 往下照常讓路／推進（下一步教練會在新的或原本的 session 上接著做）。
+    appendRuntimeLog(config.dataDirectory, "autopilot ignored system-turn error", { worker: worker.runner.name });
+  } else if (event.isError) {
     disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
     return;
   }
@@ -6468,6 +6477,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
         turns,
         originalGoal,
         carriedSummary,
+        freshSession: context.freshSession,
         stepsRemaining: state.stepsRemaining - 1,
         proactive: state.proactive,
         retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
