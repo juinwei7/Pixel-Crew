@@ -139,6 +139,25 @@ test("keeps a Mission turn open across an async Agent intermediate turn_end", ()
   assert.deepEqual(final.activity.openAgentIds, []);
 });
 
+test("closes a background Agent on subagent_done instead of waiting for the timeout", () => {
+  let activity = createMissionActivity();
+  ({ activity } = applyMissionActivityEvent(activity, { type: "tool_call_start", id: "agent-1", name: "Agent" }));
+  ({ activity } = applyMissionActivityEvent(activity, {
+    type: "tool_call_result",
+    id: "agent-1",
+    output: "Async agent launched successfully\nagentId: abc123",
+    isError: false,
+  }));
+  ({ activity } = applyMissionActivityEvent(activity, { type: "turn_end" }));
+  assert.deepEqual(activity.openAgentIds, ["agent-1"]);
+  // 不相干的 id（例如一般 Bash 的 task_notification）不影響。
+  ({ activity } = applyMissionActivityEvent(activity, { type: "subagent_done", id: "toolu_bash" }));
+  assert.deepEqual(activity.openAgentIds, ["agent-1"]);
+  ({ activity } = applyMissionActivityEvent(activity, { type: "subagent_done", id: "agent-1" }));
+  assert.deepEqual(activity.openAgentIds, []);
+  assert.equal(activity.openedAt, null);
+});
+
 test("stamps openedAt once an async Agent call opens and clears it once closed", () => {
   let activity = createMissionActivity();
   assert.equal(activity.openedAt, null);

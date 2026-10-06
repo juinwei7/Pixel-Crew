@@ -197,6 +197,7 @@ export const enModalsD: Record<string, string> = {
   "移除圖片 {n}": "Remove image {n}",
   "移除文件 {n}": "Remove document {n}",
   "等待 {count}": "Waiting {count}",
+  "排隊 {count}·等手上這件": "Queued {count} · after current",
   "等待佇列最多 {max} 項": "Queue holds at most {max} items",
   "等待核准": "Awaiting approval",
   "管理 {label}…": "Manage {label}…",

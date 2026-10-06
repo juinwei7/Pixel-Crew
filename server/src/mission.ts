@@ -162,6 +162,7 @@ type MissionActivityEvent =
   | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
   | { type: "turn_end" }
   | { type: "error" }
+  | { type: "subagent_done"; id: string }
   | { type: string };
 
 export function createMissionActivity(): MissionActivity {
@@ -186,6 +187,9 @@ export function applyMissionActivityEvent(
     open.add(event.id);
   } else if (event.type === "tool_call_result" && "output" in event && open.has(event.id)) {
     if (event.isError || !isAsyncAgentLaunch(event.output)) open.delete(event.id);
+  } else if (event.type === "subagent_done" && "id" in event) {
+    // 背景代理真的跑完（CLI task_notification）：銷號，不必等 15 分鐘逾時。
+    open.delete(event.id);
   } else if (event.type === "error") {
     return { activity: createMissionActivity(), shouldFinish: true };
   } else if (event.type === "turn_end") {

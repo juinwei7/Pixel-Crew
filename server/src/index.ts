@@ -705,6 +705,9 @@ function workerSummary(w: Worker) {
     name: w.runner.name,
     model: w.runner.getModel() ?? null,
     busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy || workerHasBackgroundAgents(w.id),
+    // busy 只因背景代理在跑（本人沒在跑回合）：場景照樣顯執行中，但輸入框不顯「中止」——
+    // 這時中止打不到任何東西，新訊息也會直接送出、不用排隊。
+    backgroundOnly: workerHasBackgroundAgents(w.id) && !(w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy),
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
     avatarKind: w.avatarKind,
@@ -742,9 +745,20 @@ function workerAsyncAgentHook(worker: Worker, event: RunnerEvent): void {
   const { activity } = applyMissionActivityEvent(current, event);
   if (activity.openAgentIds.length > 0) workerActivities.set(worker.id, activity);
   else workerActivities.delete(worker.id);
-  if (before !== (activity.openAgentIds.length > 0)) {
+  const after = activity.openAgentIds.length > 0;
+  // turn_end 會讓所有在線前端把 busy 翻 false；背景代理還在跑時要緊接著補發一次，
+  // 否則只有重新連線（拿 snapshot）的裝置顯示執行中，電腦和手機各說各話。
+  if (before !== after || (after && event.type === "turn_end")) {
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   }
+}
+
+// 換成全新工作階段時，舊 session 開的背景代理隨舊行程結束、不會再有 task_notification。
+// 補記 subagent_done（寫進歷史，重整後重播也一致）並銷號，免得畫面留著已死的子代理、busy 卡到逾時。
+function dropBackgroundAgents(worker: Worker): void {
+  const open = workerActivities.get(worker.id)?.openAgentIds ?? [];
+  for (const id of open) record(worker, { type: "subagent_done", id });
+  workerActivities.delete(worker.id);
 }
 
 function collaborationInProgress(workerId: string): boolean {
@@ -1813,6 +1827,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     brainSwapLastAt.set(worker.id, Date.now());
     brainSwapCooldownNoted.delete(worker.id);
     brainSwapOverflowStreak.delete(worker.id); // 全新 session＝重新起算連續超標
+    dropBackgroundAgents(worker);
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
     // 交接摘要必須是新 session 收到的第一則訊息。掛 pending 旗標讓 drainWorkerQueue 先讓路
     //（同一個 turn_end 已排了 drain，不擋的話排隊訊息會搶先送進零上下文的新 session、摘要被 busy 丟棄）；
@@ -2105,6 +2120,7 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
   // budgets. A fresh `/clear` session must not inherit its old objective.
   setWorkerGoal(worker.id, null);
   clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
+  workerActivities.delete(worker.id); // 舊 session 的背景代理隨行程結束；歷史已清空，不必補記 subagent_done
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
   const announcement = t("已清除工作階段，NPC 記憶重新開始。");
   record(worker, { type: "text_delta", text: announcement });
@@ -8994,6 +9010,7 @@ app.post("/api/workers/:id/model/fresh", (req, res) => {
   }
 
   fresh.warmup();
+  dropBackgroundAgents(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
 });
@@ -9054,6 +9071,7 @@ app.post("/api/workers/:id/provider/fresh", (req, res) => {
   }
 
   fresh.warmup();
+  dropBackgroundAgents(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   if (targetProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
   else void codexCapabilitiesFor(workspacePath).refresh();

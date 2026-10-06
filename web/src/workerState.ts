@@ -212,6 +212,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         ...(event.system ? { system: true } : {}),
       });
       next.busy = true;
+      next.backgroundOnly = false; // 本人開始跑回合：輸入框要能中止
       next.openTextKey = null;
       next.openThinkingKey = null;
       next.character = {

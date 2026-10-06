@@ -84,7 +84,7 @@ test("queued messages show a restrained waiting stack on the queue chip", () => 
   // 最多畫 3 條，不管排了幾則。
   const stack = /command-composer__queue-stack[^>]*>(.*?)<\/span>/.exec(html)?.[1] ?? "";
   assert.equal((stack.match(/<i>/g) ?? []).length, 3);
-  assert.match(html, /等待 4/);
+  assert.match(html, /排隊 4·等手上這件/);
   const idle = dock({ busy: false, serverQueue: queue.slice(0, 1), onEnqueue: async () => null });
   assert.doesNotMatch(idle, /data-waiting/);
 });

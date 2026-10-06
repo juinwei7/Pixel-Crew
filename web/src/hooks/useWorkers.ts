@@ -47,6 +47,7 @@ type ServerMessage =
         name: string;
         model: string | null;
         busy: boolean;
+        backgroundOnly?: boolean;
         colorIndex: number;
         avatarId: string | null;
         avatarKind: "preset" | "custom";
@@ -103,6 +104,7 @@ type WorkerSummary = {
   name: string;
   model: string | null;
   busy: boolean;
+  backgroundOnly?: boolean;
   colorIndex: number;
   avatarId: string | null;
   avatarKind: "preset" | "custom";
@@ -283,6 +285,7 @@ export function useWorkers() {
               });
             }
             state.busy = w.busy;
+            state.backgroundOnly = w.backgroundOnly ?? false;
             state.departmentId = w.departmentId ?? null;
             state.accountId = w.accountId ?? null;
             state.resumeCandidate = w.resumeCandidate ?? null;
@@ -384,7 +387,7 @@ export function useWorkers() {
                 );
             // reset/換 provider 走 emptyWorker 重建時，跟 worker_added 一樣要回填 ephemeralKind 與
             // resumeCandidate——否則 dedicated/warroom NPC 收到 reset 會瞬移回主辦公室、resume 卡片消失。
-            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null };
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null, backgroundOnly: data.worker.backgroundOnly ?? false };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>
@@ -398,7 +401,7 @@ export function useWorkers() {
           setWorkers((prev) => {
             const w = prev[data.workerId];
             if (!w || w.busy === data.busy) return prev;
-            return { ...prev, [data.workerId]: { ...w, busy: data.busy } };
+            return { ...prev, [data.workerId]: { ...w, busy: data.busy, ...(data.busy ? { backgroundOnly: false } : {}) } };
           });
           break;
         }

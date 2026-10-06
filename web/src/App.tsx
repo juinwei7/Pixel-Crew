@@ -820,6 +820,8 @@ export function App() {
   // 「需要你」：全 App 共用 needsYou.ts 的同一份排序清單（頂欄徽章、隊員列、通知、接下一件）。
   // 正在看的 NPC（日誌開著或專業模式）最新回合算已看——失敗／提問看過就不再提醒。
   const needsYou = useNeedsYou(workerList, activeId, preferences.taskLogOpen || taskFocusMode);
+  // 輸入框的忙碌只看「本人在跑回合」：只剩背景子代理在跑時中止打不到東西、訊息也能直接送。
+  const activeTurnBusy = Boolean(active?.busy && !active.backgroundOnly);
   // 輸入框狀態列的「需要你」：目前這位 NPC 有待你處理的事（卡住不算——那不是等你動手）。
   const activeNeedsYou = useMemo(
     () => needsYou.items.some((item) => item.workerId === activeId && item.kind !== "stuck"),
@@ -1927,14 +1929,14 @@ export function App() {
       <div ref={setComposerHostRef} className="unified-composer-host">
       {!bossAssignmentOpen && !selectedDepartment && <TaskComposer
         draftKey={activeSessionKey}
-        placeholder={active?.busy ? t("{name} 執勤中·可排隊", { name: active.name }) : t("對 {name} 下指令（{tip}）", { name: active?.name ?? "…", tip: composerTips[tipIndex] })}
+        placeholder={activeTurnBusy && active ? t("{name} 執勤中·可排隊", { name: active.name }) : t("對 {name} 下指令（{tip}）", { name: active?.name ?? "…", tip: composerTips[tipIndex] })}
         submitLabel={t("執行")}
         disabled={!active || activeAuth.status !== "authenticated"}
         needsAttention={activeNeedsYou}
         layout="dock"
         focusMode={taskFocusMode}
         focusRequest={composerFocusRequest}
-        busy={Boolean(active?.busy)}
+        busy={activeTurnBusy}
         queueEnabled
         serverQueue={active?.queue ?? []}
         onEnqueue={active ? ((submission) => enqueueCommand(active.id, submission)) : undefined}

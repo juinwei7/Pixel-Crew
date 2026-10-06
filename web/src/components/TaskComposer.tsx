@@ -899,7 +899,8 @@ function QueuePanel({ items, waiting = false, restoringExtras, extrasSaved, onEd
   return <>
     <button type="button" className="command-composer__queue" aria-expanded={open} data-waiting={waiting ? "true" : undefined} data-arrive={arrivalTick > 0 ? (arrivalTick % 2 ? "a" : "b") : undefined} onClick={() => setOpen((value) => !value)}>
       <span className="command-composer__queue-stack" aria-hidden="true">{Array.from({ length: Math.min(items.length, 3) }, (_, index) => <i key={index} />)}</span>
-      <span>{t("等待 {count}", { count: items.length })}</span>
+      {/* NPC 手上還有一件在跑：明講「排隊中、等它做完」，不然手機上看起來像訊息卡住沒送到。 */}
+      <span>{waiting ? t("排隊 {count}·等手上這件", { count: items.length }) : t("等待 {count}", { count: items.length })}</span>
     </button>
     {open && <div className="command-queue" aria-label={t("待送訊息佇列")}>
       <header><div><span>UP NEXT</span><strong>{t("待送訊息")} {restoringExtras ? t("· 復原中…") : extrasSaved ? t("· 已保存") : t("· 保存中…")}</strong></div><button type="button" aria-label={t("關閉待送訊息")} onClick={() => setOpen(false)}>×</button></header>

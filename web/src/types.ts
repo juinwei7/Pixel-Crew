@@ -554,6 +554,8 @@ export type WorkerState = {
   name: string;
   model: string | null;
   busy: boolean;
+  /** busy 只因背景子代理還在跑、本人沒在跑回合（server workerSummary）：輸入框不顯「中止」、訊息直接送。 */
+  backgroundOnly?: boolean;
   /** server 端排隊佇列（不再存瀏覽器；由 snapshot 與 queue_updated 廣播帶入）。 */
   queue: QueuedCommandDto[];
   colorIndex: number;
