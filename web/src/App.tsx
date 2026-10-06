@@ -1373,6 +1373,7 @@ export function App() {
         bossTaskDepartmentIds={bossTaskDepartmentIds}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
         brainSwapEvent={brainSwapEvent}
+        onOpenOutbox={() => setOutboxOpen(true)}
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
           setComposerFocusRequest((request) => request + 1);

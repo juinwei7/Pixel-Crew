@@ -35,7 +35,30 @@
   --m-item-y: 6px;
 }
 
+/* 進行中：原本整顆膠囊一明一暗＋卡片上緣掃描光，owner 嫌怪。改成膠囊靜止，
+   只有字前一顆小圓點慢慢呼吸（2.4s，只動 opacity）。 */
+.turn-chip--running {
+  animation: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.turn-chip--running::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pc-polish-breathe 2.4s ease-in-out infinite;
+}
+@keyframes pc-polish-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.turn-card--running::before { content: none; animation: none; }
+
 @media (prefers-reduced-motion: reduce) {
+  .turn-chip--running::before { animation: none; }
   .turn-card__toggle:active,
   :is(.canvas-zoom > button, .copy-button):not(:disabled):active { scale: 1; }
   .copy-button--done .copy-button__glyph,

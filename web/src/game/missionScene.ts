@@ -20,23 +20,44 @@ export function runningToolFor(worker: { turns?: TurnLike[] }): { name: string; 
   return null;
 }
 
-/** busy＋有工具在跑＋角色還停在 home → 推導工作站；其他情況回 null（尊重 server 給的站位）。 */
+type ExecutionEventLike = {
+  workerId: string;
+  event?: { type?: string; text?: string; name?: string; input?: unknown } | null;
+};
+
+/** Mission 步驟的工具站位：Mission 走獨立的 mission runner，工具事件「只」進 mission.executionEvents，
+ *  完全不會進 worker 自己的 turns/character（所以 worker.character.station 永遠停在 home）。
+ *  從尾端倒著找這位 NPC「本輪」最後一次 tool_call_start → 該工具的站位；碰到他的 user_message／
+ *  turn_end／error（輪次邊界）就停、回 null。語意對齊 workerState：工具結果回來後仍留在站點，
+ *  直到該輪結束才回座——工具 start/result 幾乎同一刻到達，若只看「執行中」會瞬間被拉回 home、
+ *  NPC 根本來不及走過去。 */
+export function missionToolStation(events: ExecutionEventLike[] | undefined, workerId: string): StationKey | null {
+  if (!events) return null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const entry = events[i];
+    if (entry.workerId !== workerId) continue;
+    const type = entry.event?.type;
+    if (type === "user_message" || type === "turn_end" || type === "error") return null;
+    if (type === "tool_call_start") return stationForTool(entry.event?.name ?? "", entry.event?.input);
+  }
+  return null;
+}
+
+/** busy＋有工具在跑（或 Mission 本輪用過工具）＋角色還停在 home → 推導工作站；其他情況回 null（尊重 server 給的站位）。
+ *  executionEvents：該 NPC 所屬進行中 Mission 的 mission.executionEvents（見 missionToolStation）。 */
 export function missionStationOverride(
-  worker: { busy: boolean; turns?: TurnLike[]; character: { station?: string } },
+  worker: { id?: string; busy: boolean; turns?: TurnLike[]; character: { station?: string } },
+  executionEvents?: ExecutionEventLike[],
 ): StationKey | null {
   if (!worker.busy) return null;
   const station = worker.character.station;
   if (station && station !== "home") return null;
   const tool = runningToolFor(worker);
-  if (!tool) return null;
-  const target = stationForTool(tool.name, tool.input);
-  return target === "home" || target === "desk" ? null : target;
+  const target = tool
+    ? stationForTool(tool.name, tool.input)
+    : worker.id ? missionToolStation(executionEvents, worker.id) : null;
+  return !target || target === "home" || target === "desk" ? null : target;
 }
-
-type ExecutionEventLike = {
-  workerId: string;
-  event?: { type?: string; text?: string } | null;
-};
 
 /** 從 mission 執行事件倒著撈「這位 NPC 最新講的一段話」，截尾當對話泡。
  *  只吃 text_delta（thinking/meta/工具輸出都跳過），跨到別人的發言就停。 */

@@ -136,6 +136,8 @@ type SceneCallbacks = {
   onContextMenu?(id: string): void;
   /** A genuine tap on empty floor (not on an NPC/desk, and not a pan). */
   onEmptyTap?(): void;
+  /** Tap on the OUT shelf (bottom-right) — App opens the 成品匣. */
+  onOutboxClick?(): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
 };
@@ -329,6 +331,19 @@ export async function createScene(
     onHover: (key) => { overInteractive = key !== null; },
     onTap: () => callbacks.onEmptyTap?.(),
   });
+  // The OUT shelf opens the 成品匣 (same tap-not-pan rule as the cat).
+  shelf.container.eventMode = "static";
+  shelf.container.cursor = "pointer";
+  shelf.container.hitArea = { contains: (x: number, y: number) => x >= -13 && x <= 13 && y >= -27 && y <= 2 };
+  {
+    let shelfPid = -1;
+    shelf.container.on("pointerdown", (e) => { shelfPid = e.pointerId; });
+    shelf.container.on("pointerup", (e) => {
+      if (e.pointerId !== shelfPid) return;
+      shelfPid = -1;
+      if (!isDragging()) callbacks.onOutboxClick?.();
+    });
+  }
   // The cat answers clicks too (meow, hop, purr).
   cat.container.eventMode = "static";
   cat.container.cursor = "pointer";

@@ -178,7 +178,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
     const roundtabling = !handingOff && (isWarRoomPeer || (roundtableIds.has(worker.id) && worker.busy));
     // Mission 場景生命力（missionScene.ts）：有工具在跑但角色還停在自家桌 → 走去對應
     // 工作站；討論類步驟輪到他發言、沒有工具在跑 → 把最新講的話截成對話泡。
-    const stationOverride = !handingOff && !roundtabling ? missionStationOverride(worker) : null;
+    const stationOverride = !handingOff && !roundtabling ? missionStationOverride(worker, mission?.executionEvents) : null;
     const missionTalking = !handingOff && !roundtabling && !stationOverride && worker.busy
       && missionStep != null && missionStep.assigneeWorkerId === worker.id
       ? latestMissionSpeech(mission?.executionEvents, worker.id)
@@ -282,6 +282,8 @@ type Props = {
   onMeetingTableClick?(): void;
   /** Tap on empty office floor — App uses it to dismiss the task log. */
   onEmptyTap?(): void;
+  /** 點右下角 OUT 書架＝開成品匣。 */
+  onOpenOutbox?(): void;
   onSelect(id: string): void;
   onOpenLog?(id: string): void;
   onAvatarError?(id: string, message: string): void;
@@ -301,7 +303,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onOpenOutbox, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -332,6 +334,8 @@ export function GameCanvas({
   meetingClickRef.current = onMeetingTableClick;
   const emptyTapRef = useRef(onEmptyTap);
   emptyTapRef.current = onEmptyTap;
+  const openOutboxRef = useRef(onOpenOutbox);
+  openOutboxRef.current = onOpenOutbox;
   // 工作小窗多行歷史：speech 每次變化就進每人滾動緩衝（收工清空）；終端機小窗用它演出像真 shell 的最近幾條指令。
   // 每行帶時間戳；cmds＝本回合累計指令數（標題列顯示）。
   const speechLogRef = useRef(new Map<string, { last: string; lines: Array<{ text: string; at: number }>; cmds: number }>());
@@ -604,6 +608,7 @@ export function GameCanvas({
         setPinnedStation((current) => (current === key ? null : key));
         if (key === "meeting") meetingClickRef.current?.(); // 點會議桌＝開作戰室模式
       },
+      onOutboxClick: () => openOutboxRef.current?.(),
       onEmptyTap: () => {
         // Tapping bare floor dismisses lingering hover UI (station tooltip + NPC
         // identity card, which touch can leave stuck with no pointerout) and

@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import type { StationKey } from "../stations";
 import type { Trait } from "./officeLife";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "./crewLook";
+import { pickMicro } from "./microLife";
 
 // Re-exported for existing importers inside the scene; UI code imports ./crewLook directly.
 export { FRONT_IDLE_0, SHIRT_COLORS };
@@ -498,30 +499,34 @@ export type MicroAct =
   | "stretch" | "sip" | "knuckles" | "swivel" | "rubEyes"
   | "phone" | "spin" | "idleStretch" | "doze"
   | "read" | "dust" | "bounce" | "game" | "sneeze"
+  | "nod" | "neckRoll" | "lookAway" | "ponder" | "glasses"
   | "water" | "pet";
 
 const MICRO_MS: Record<MicroAct, number> = {
   stretch: 1_300, sip: 1_800, knuckles: 1_000, swivel: 1_400, rubEyes: 1_700,
   phone: 4_400, spin: 1_100, idleStretch: 1_500, doze: 5_600,
-  read: 5_200, dust: 2_600, bounce: 1_600, game: 4_200, sneeze: 2_600,
+  read: 5_200, dust: 2_600, bounce: 1_600, game: 4_200, sneeze: 1_300,
+  nod: 1_700, neckRoll: 1_800, lookAway: 2_800, ponder: 2_600, glasses: 1_100,
   water: 2_800, pet: 2_800,
 };
 /** Idle habits per personality — each NPC drifts toward their own. */
 const TRAIT_IDLE: Record<Trait, MicroAct[]> = {
-  energetic: ["bounce", "spin", "idleStretch", "bounce", "phone"],
-  sleepy: ["doze", "doze", "idleStretch", "phone"],
-  nerdy: ["game", "read", "phone", "game"],
-  tidy: ["dust", "dust", "idleStretch", "phone"],
-  social: ["phone", "spin", "idleStretch", "phone"],
-  chill: ["phone", "spin", "idleStretch", "doze", "phone"],
+  energetic: ["bounce", "spin", "idleStretch", "bounce", "phone", "neckRoll"],
+  sleepy: ["doze", "doze", "idleStretch", "phone", "lookAway", "neckRoll"],
+  nerdy: ["game", "read", "phone", "game", "glasses", "ponder"],
+  tidy: ["dust", "dust", "idleStretch", "phone", "glasses", "lookAway"],
+  social: ["phone", "spin", "idleStretch", "phone", "lookAway"],
+  chill: ["phone", "spin", "idleStretch", "doze", "phone", "lookAway", "ponder"],
 };
 /** Walking pace and how often they fidget, per personality. */
 const TRAIT_PACE: Record<Trait, number> = { energetic: 1.25, sleepy: 0.8, nerdy: 1, tidy: 1, social: 1.05, chill: 0.9 };
 const TRAIT_FIDGET: Record<Trait, number> = { energetic: 0.65, sleepy: 1.1, nerdy: 1, tidy: 0.9, social: 0.9, chill: 1.2 };
 export type Celebration = "jump" | "fistpump" | "dance" | "big";
-const DESK_MICROS: MicroAct[] = ["stretch", "sip", "knuckles", "swivel", "rubEyes", "sip"];
-const BOOK_MICROS: MicroAct[] = ["idleStretch", "rubEyes"];
-const IDLE_MICROS: MicroAct[] = ["phone", "spin", "idleStretch", "doze", "phone"];
+const DESK_MICROS: MicroAct[] = ["stretch", "sip", "knuckles", "swivel", "rubEyes", "sip", "nod", "neckRoll"];
+const BOOK_MICROS: MicroAct[] = ["idleStretch", "rubEyes", "nod", "nod"];
+const IDLE_MICROS: MicroAct[] = ["phone", "spin", "idleStretch", "doze", "phone", "lookAway", "ponder"];
+/** Micros allowed to keep running while the NPC is working (everything else is idle-only). */
+const WORK_MICROS = new Set<MicroAct>([...DESK_MICROS, ...BOOK_MICROS, "sneeze"]);
 const SCENE_MICROS = new Set<MicroAct>(["water", "pet"]);
 
 /** Stations worked at a monitor on a desk (everything except reading and the meeting table). */
@@ -645,7 +650,10 @@ export class Person {
   private errT = 0;
   private comboN = 0;
   private comboT = 0;
+  /** One-shot beat inside a micro-action (the coffee-spill reaction fires once). */
   private sneezeBeat = 0;
+  /** animT of the last sneeze; starts at 0 so nobody sneezes in their first few minutes either. */
+  private lastSneezeAt = 0;
   private spill = false;
   private danceT = 0;
   private fistT = 0;
@@ -722,6 +730,7 @@ export class Person {
     // Now and then the coffee goes everywhere.
     this.spill = kind === "sip" && Math.random() < 0.05;
     this.sneezeBeat = 0;
+    if (kind === "sneeze") this.lastSneezeAt = this.animT;
     this.nextMicroAt = this.animT + this.microGap();
   }
 
@@ -1268,14 +1277,26 @@ export class Person {
     const blocked = moving || cheering || asleep || reach || scratching || yawning || handUp || this.carrying || materialising || leaving;
     if (this.micro) {
       const sceneAct = SCENE_MICROS.has(this.micro);
-      const deskAct = !sceneAct && (DESK_MICROS.includes(this.micro) || this.micro === "idleStretch" || this.micro === "rubEyes" || this.micro === "sneeze") && this.activity === "working";
+      const deskAct = !sceneAct && WORK_MICROS.has(this.micro) && this.activity === "working";
       const idleAct = !sceneAct && this.activity === "idle";
       if (blocked || (!sceneAct && !deskAct && !idleAct)) this.micro = null;
     } else if (this.idleLife && !REDUCE_MOTION && !blocked && this.animT >= this.nextMicroAt) {
       const pool = this.activity === "working"
         ? this.station === "books" ? BOOK_MICROS : SCREEN_STATIONS.has(this.station) ? DESK_MICROS : null
         : this.activity === "idle" && this.gaze === 0 && this.emoteKind === null ? TRAIT_IDLE[this.trait] ?? IDLE_MICROS : null;
-      if (pool) this.microAct(Math.random() < 0.05 ? "sneeze" : pool[Math.floor(Math.random() * pool.length)]);
+      if (pool) {
+        const kind = pickMicro(pool, {
+          nowMs: this.animT,
+          lastSneezeAtMs: this.lastSneezeAt,
+          sneezeRoll: Math.random(),
+          pickRoll: Math.random(),
+          wearsGlasses: (this.accessory === "glasses" || this.sunglasses) && !this.customTexture && !this.gifSprite,
+          sneeze: "sneeze",
+          fallback: "neckRoll",
+          needsGlasses: "glasses",
+        });
+        this.microAct(kind, Math.random() < 0.5 ? -1 : 1);
+      }
       else this.nextMicroAt = this.animT + this.microGap();
     }
 
@@ -1705,24 +1726,42 @@ export class Person {
       case "game":
         return { tex: f.phone, bobY: Math.floor(this.microT / 500) % 4 === 0 ? 1 : 0, offX: 0, flip: 1, view: "front" };
       case "sneeze": {
-        // Anticipation (head back, "ha… ha…") → action ("ACHOO", papers fly) → follow-through (rub nose, "sorry").
+        // Quiet and in place: head tips back a pixel, a small dip, a hand to the nose.
+        // No speech, no hop, nothing thrown across the room.
         const back = atDesk && this.activity === "working";
-        if (p < 0.42) {
-          if (this.sneezeBeat === 0) { this.sneezeBeat = 1; this.say("哈…哈…", 1_000); }
-          return { tex: back ? f.workFrames[0] : f.idleFrames[0], bobY: -1, offX: 0, flip: 1, view: back ? "back" : "front" };
+        if (p < 0.4) return { tex: back ? f.workFrames[0] : f.idleFrames[0], bobY: p > 0.15 ? -1 : 0, offX: 0, flip: 1, view: back ? "back" : "front" };
+        if (p < 0.58) {
+          if (this.sneezeBeat === 0) { this.sneezeBeat = 1; this.kick(0.05); }
+          return { tex: back ? f.workFrames[0] : f.idleBlink[0], bobY: 1, offX: 0, flip: 1, view: back ? "back" : "front" };
         }
-        if (p < 0.6) {
-          if (this.sneezeBeat === 1) {
-            this.sneezeBeat = 2;
-            this.say("哈啾！", 900);
-            this.kick(0.22);
-            this.blowPapers(back);
-          }
-          return { tex: back ? f.backArmsIn : f.idleBlink[0], bobY: 1, offX: 0, flip: 1, view: back ? "back" : "front" };
-        }
-        if (this.sneezeBeat === 2 && p > 0.72) { this.sneezeBeat = 3; this.say("…抱歉", 900); }
-        return { tex: f.rubFrames[Math.floor(this.microT / 200) % 2], bobY: 0, offX: 0, flip: 1, view: "front" };
+        if (back) return { tex: f.workFrames[0], bobY: 0, offX: 0, flip: 1, view: "back" };
+        return { tex: p < 0.85 ? f.rubFrames[0] : f.idleFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
       }
+      case "nod": {
+        // Two small nods: agreeing with what is on the screen / the page.
+        const dip = (p > 0.2 && p < 0.34) || (p > 0.5 && p < 0.64);
+        if (this.station === "books" && this.activity === "working") {
+          return { tex: f.readFrames[0], bobY: dip ? 1 : 0, offX: 0, flip: 1, view: "front" };
+        }
+        if (atDesk) return { tex: f.workFrames[0], bobY: dip ? 1 : 0, offX: 0, flip: 1, view: "back" };
+        return { tex: f.idleFrames[0], bobY: dip ? 1 : 0, offX: 0, flip: 1, view: "front" };
+      }
+      case "neckRoll": {
+        // Easing a stiff neck: a pixel to one side, then the other, then settle.
+        const lean = p < 0.12 || p > 0.82 ? 0 : p < 0.47 ? -this.microDir : this.microDir;
+        return { tex: atDesk ? f.workFrames[0] : f.idleFrames[0], bobY: lean !== 0 ? 1 : 0, offX: lean, flip: 1, view: atDesk ? "back" : "front" };
+      }
+      case "lookAway":
+        // Turns aside and gazes off for a moment (out of the window, into space).
+        if (p < 0.1 || p > 0.9) return { tex: f.idleFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
+        return { tex: f.sidePass, bobY: 0, offX: 0, flip: this.microDir, view: "side" };
+      case "ponder":
+        // Hand to the chin, mulling something over — no thought bubble.
+        if (p < 0.1 || p > 0.9) return { tex: f.idleFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
+        return { tex: f.thinkFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
+      case "glasses":
+        // A quick push of the glasses up the nose (glint drawn in drawMicroProps).
+        return { tex: p > 0.25 && p < 0.6 ? f.rubFrames[0] : f.idleFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
       case "water":
         return { tex: f.reachOut, bobY: 0, offX: 0, flip: this.microDir, view: "front" };
       case "pet":
@@ -2068,8 +2107,12 @@ export class Person {
         const q = (p - 0.45) / 0.4;
         this.drawHeart(fx, 3, -14 - q * 6 + lift, 1 - q);
       }
-    } else if (kind === "read") {
+    } else if (kind === "read" || (kind === "nod" && this.station === "books" && this.activity === "working")) {
       this.drawBookInHands(fx, lift);
+    } else if (kind === "sneeze" && p > 0.42 && p < 0.72 && !this.facesScreen()) {
+      // One faint pixel of breath drifting off — the only particle.
+      const q = (p - 0.42) / 0.3;
+      fx.rect(3 + Math.round(q * 2), -13 + lift, 1, 1).fill({ color: 0xdfe8f5, alpha: 0.45 * (1 - q) });
     } else if (kind === "dust") {
       // Cloth in the outstretched hand, a glint where it has wiped.
       const d = Math.floor(this.microT / 1_300) % 2 ? 1 : -1;
@@ -2261,23 +2304,6 @@ export class Person {
     }
   }
 
-  /** Papers off the desk (sneeze): a few sheets flutter out and float down. */
-  private blowPapers(atDesk: boolean): void {
-    if (REDUCE_MOTION) return;
-    const x0 = Math.round(this.x);
-    const y0 = Math.round(this.y) + (atDesk ? -18 : -9);
-    for (let i = 0; i < 4; i++) {
-      const c = this.confetti[i];
-      c.x = x0 + (i - 1.5) * 2;
-      c.y = y0;
-      c.vx = (i - 1.5) * 0.025 + (Math.random() - 0.5) * 0.02;
-      c.vy = -0.05 - Math.random() * 0.03;
-      c.color = 0xf3f0e6;
-      c.life = 1_500;
-      c.size = 2;
-    }
-  }
-
   /** Hat / band / glasses / scarf / flower — small, follows the head, hidden for custom avatars. */
   private drawAccessory(view: View, lift: number, offX: number, flip: number): void {
     const a = this.accessory;
@@ -2305,6 +2331,11 @@ export class Person {
       g.rect(x - 3, -12 + y, 2, 1).fill({ color: 0xcfe3f7, alpha: 0.55 });
       g.rect(x + 1, -12 + y, 2, 1).fill({ color: 0xcfe3f7, alpha: 0.55 });
       g.rect(x - 1, -12 + y, 2, 0.5).fill(0x2a3550);
+      if (this.micro === "glasses") {
+        // Just pushed them up: a one-pixel glint on the lens.
+        const p = 1 - this.microT / MICRO_MS.glasses;
+        if (p > 0.6 && p < 0.8) g.rect(x + 2, -12 + y, 1, 1).fill({ color: 0xffffff, alpha: 0.85 });
+      }
     } else if (a === "scarf") {
       g.rect(x - 3, -10 + y, 6, 1).fill(c);
       if (view !== "back") g.rect(x + 1, -9 + y, 1, 2).fill(c);
