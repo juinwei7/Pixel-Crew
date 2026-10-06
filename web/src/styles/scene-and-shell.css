@@ -383,20 +383,31 @@ body {
   white-space: nowrap;
   will-change: transform;
 }
-.npc-nameplate__name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.npc-nameplate__role { overflow: hidden; flex: 0 1 auto; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
+/* 名字優先完整，職稱先縮（不會再出現「策.」配一整串職稱）；跟鄰座名牌相撞時職稱整個讓位（--tight，GameCanvas 判定） */
+.npc-nameplate__name { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
+.npc-nameplate__role { overflow: hidden; flex: 0 1 auto; min-width: 0; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
+.npc-nameplate--tight:not(.npc-nameplate--active) .npc-nameplate__role,
+.npc-nameplate--carded .npc-nameplate__role { display: none; }
 .npc-nameplate__elapsed { flex: 0 0 auto; margin-left: auto; color: var(--cyan); font-size: 8px; font-weight: 400; opacity: 0.85; }
 .npc-nameplate:has(.npc-nameplate__collaboration) { flex-wrap: wrap; max-width: 184px; }
-/* 「一眼看出在幹嘛」活動徽章：名牌內自成一行，圖示吃站點色做色彩編碼＋短動詞 */
+/* 「一眼看出在幹嘛」活動徽章：跟名字同一行（名字・圖示＋短動詞・秒數），圖示吃站點色做色彩編碼。
+   不再自成一行——疊成多行的名牌會蓋到下一排鄰座的名牌。忙碌時職稱讓位（滑鼠停留的身分卡看得到）。 */
 .npc-nameplate__activity {
-  flex: 1 0 100%;
-  display: flex; align-items: center; gap: 4px;
-  margin-top: 2px;
+  flex: 0 1 auto; min-width: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0 4px; border-radius: 3px;
+  background: color-mix(in srgb, var(--act, #8fb6ff) 13%, transparent);
   color: #d6e4f6; font-size: 8px; font-weight: 700; letter-spacing: 0.2px;
+  animation: npc-chip-in 0.28s ease-out;
 }
 .npc-nameplate__activity-ico { flex: 0 0 auto; color: var(--act, #8fb6ff); }
 .npc-nameplate__activity-label { overflow: hidden; text-overflow: ellipsis; }
-.npc-nameplate:has(.npc-nameplate__activity) { flex-wrap: wrap; max-width: 152px; }
+.npc-nameplate:has(.npc-nameplate__activity) { align-items: center; max-width: 176px; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__role { display: none; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__activity { order: 1; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__elapsed { order: 2; }
+.npc-nameplate:has(.npc-nameplate__activity)::after { order: 3; }
+@keyframes npc-chip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
 /* 脈絡公事包：名牌內的手提箱，內嵌一條直立填充條＝token 負載（填充高度=ctx%）。
    逼近換腦門檻才浮現並轉暖→紅；換腦（context 驟降）瞬間播一次「瘦身」脈動，把獨有的換腦機制變成一眼看懂的畫面。 */
@@ -439,7 +450,10 @@ body {
   100% { opacity: 0; }
 }
 
+/* 選取中的名牌疊在鄰座名牌之上、底色不透，不再被旁人名字穿透 */
 .npc-nameplate--active {
+  z-index: 8;
+  background: rgba(5, 10, 20, 0.97);
   color: #ffffff;
   opacity: 1;
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.34);
@@ -457,26 +471,53 @@ body {
   animation: hudPulse 1.2s ease-in-out infinite;
 }
 
+/* 合一的 NPC 卡（滑鼠停留時在身旁長出）：頭＝名字＋狀態燈＋用時，身＝職稱、即時工作畫面、模型／部門、統計。
+   外框吃站點強調色（--ww-accent），換站點時平滑過渡；從靠 NPC 那一側長出來。 */
 .npc-identity-card {
   position: absolute;
   z-index: 12;
   top: 0;
   left: 0;
-  min-width: 168px;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 3px 9px;
-  padding: 9px 10px;
-  border: 1px solid rgba(0, 229, 255, 0.2);
-  border-radius: 9px;
-  background: rgba(7, 13, 26, 0.94);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--ww-accent, #00e5ff) 38%, transparent);
+  border-radius: 10px;
+  background: rgba(7, 13, 26, 0.96);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.45),
+    0 0 18px color-mix(in srgb, var(--ww-accent, #00e5ff) 10%, transparent);
   color: #c7d6e7;
   pointer-events: none;
+  will-change: transform;
+  transition: border-color .4s ease, box-shadow .4s ease;
 }
-.npc-identity-card strong { font-size: 11px; }
-.npc-identity-card span { color: var(--cyan); font: 8px var(--mono); }
-.npc-identity-card small { grid-column: 1 / -1; color: #6e819c; font: 8px/1.4 var(--mono); }
+/* 長出來：子層依序滑入（外層 transform 每幀被場景改寫，不能拿來做動畫），從靠 NPC 的那一側出來 */
+.npc-identity-card > * { animation: npc-card-in .26s cubic-bezier(.2, .9, .3, 1.2) both; }
+.npc-identity-card[data-side="left"] > * { animation-name: npc-card-in-left; }
+.npc-identity-card > :nth-child(2) { animation-delay: .03s; }
+.npc-identity-card > :nth-child(3) { animation-delay: .06s; }
+.npc-identity-card > :nth-child(n+4) { animation-delay: .09s; }
+@keyframes npc-card-in { from { opacity: 0; transform: translateX(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes npc-card-in-left { from { opacity: 0; transform: translateX(6px) scale(.97); } to { opacity: 1; transform: none; } }
+.npc-identity-card--error { border-color: rgba(224, 87, 74, .7); }
+.npc-identity-card--success { border-color: rgba(57, 217, 107, .7); }
+.npc-identity-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.npc-identity-card strong { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npc-identity-card__status { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: #9fb2cc; font: 700 8px var(--mono); }
+.npc-identity-card__elapsed { color: #7f93ad; font-weight: 400; }
+/* 狀態燈：執行中快閃、思考中慢呼吸、待命靜止 */
+.npc-identity-card__dot { width: 6px; height: 6px; border-radius: 50%; background: #5d6f88; }
+.npc-identity-card--working .npc-identity-card__dot { background: var(--ww-accent, #00e5ff); box-shadow: 0 0 6px var(--ww-accent, #00e5ff); animation: ww-live .9s ease-in-out infinite; }
+.npc-identity-card--thinking .npc-identity-card__dot { background: #9db4d8; box-shadow: 0 0 6px #9db4d8; animation: ww-breathe 2.4s ease-in-out infinite; }
+.npc-identity-card--error .npc-identity-card__dot { background: #e0574a; box-shadow: 0 0 6px #e0574a; animation: none; }
+.npc-identity-card--success .npc-identity-card__dot { background: #39d96b; box-shadow: 0 0 6px #39d96b; animation: none; }
+.npc-identity-card small { color: #6e819c; font: 8px/1.4 var(--mono); }
+@media (prefers-reduced-motion: reduce) {
+  .npc-identity-card > *, .npc-identity-card__dot { animation: none !important; }
+}
 .npc-identity-card__role { color: #ffcf8a !important; font-weight: 700; letter-spacing: .02em; }
 .npc-identity-card__stats {
   grid-column: 1 / -1;

@@ -115,12 +115,13 @@ export function formatValue(value: unknown): string {
 
 function CopyButton({ value, label = t("複製") }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
-  return <button type="button" className="copy-button" title={label} aria-label={label} onClick={() => {
+  // The glyph is keyed so the ✓ pops in fresh each time (styles/motion-polish.css).
+  return <button type="button" className={`copy-button${copied ? " copy-button--done" : ""}`} title={label} aria-label={label} onClick={() => {
     void navigator.clipboard?.writeText(value).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
-    });
-  }}>{copied ? "✓" : "⧉"}</button>;
+    }).catch(() => { /* no clipboard permission: stay quiet, like before */ });
+  }}><span key={copied ? "done" : "idle"} className="copy-button__glyph">{copied ? "✓" : "⧉"}</span></button>;
 }
 
 export function ToolRow({ item }: { item: ToolCallItem }) {
@@ -513,6 +514,17 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
     // 用 auto(瞬間)而非 smooth，串流時穩穩黏底、不重啟動畫、不彈跳。
     if (el && atBottomRef.current) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, [turns, turns.length, itemCount, lastTurn?.status, focusMode]);
+
+  // Switching summary ↔ activity re-renders the same cards in place, so the list used to
+  // jump. A short fade-up says "this is a different view of the same log".
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current === view) return;
+    previousView.current = view;
+    const el = logRef.current;
+    if (!el || typeof el.animate !== "function" || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches)) return;
+    el.animate([{ opacity: 0.35, translate: "0 4px" }, { opacity: 1, translate: "0 0" }], { duration: 180, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+  }, [view]);
 
   useEffect(() => {
     const enteredFocusMode = focusMode && !previousFocusMode.current;

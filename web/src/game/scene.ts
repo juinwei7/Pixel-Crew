@@ -18,6 +18,7 @@ import { FloorRipples, Hotspots, type Hotspot } from "./officeInteract";
 import { hashId, officeNow, onKonami, seasonal, sessionFlag, setSessionFlag, traitFor } from "./officeLife";
 import { ACCESSORIES } from "./person";
 import { talkLine } from "./smallTalk";
+import { missionCheers } from "./missionCheer";
 import { emitFx, onFx } from "../fxBus";
 import { dragContainsFiles } from "../composerDrag";
 import { PersonalDeskLayer } from "./personalDesks";
@@ -26,7 +27,7 @@ import { DECOR_SPOTS, OfficeDecor, OutboxShelf, type DecorSpot } from "./officeD
 import { Cat } from "./cat";
 import { apiAssetUrl } from "../api";
 import { nightFactor } from "../dayNight";
-import { responsiveOfficeFitScale } from "./camera";
+import { officeMinScale, responsiveOfficeFitScale } from "./camera";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -423,8 +424,7 @@ export async function createScene(
   // at the top when even that doesn't fit; small crews get exactly the old view.
   let floorH = ART_H;
   function minScale(): number {
-    if (floorH <= ART_H) return 2;
-    return Math.max(1, Math.min(2, (app.screen.height - 16) / floorH));
+    return officeMinScale(floorH, ART_H);
   }
   function autoScale(): number {
     if (floorH <= ART_H) return fitScale;
@@ -1213,6 +1213,8 @@ export async function createScene(
 
   // --- 9. Link to the server dropped / back (fxBus "connection").
   let linkUpAt = -Infinity; // performance.now() of the last reconnect
+  /** Completed-step count per department mission last seen (missionCheer). */
+  let missionSeen = new Map<string, number>();
   function setConnection(state: "down" | "up"): void {
     if (state === "down") {
       power.setDown();
@@ -1657,6 +1659,24 @@ export async function createScene(
       }
       // 圓桌進行時（有 NPC 站到 meeting 會議桌），強制顯示會議桌，即使目前人數 >4。
       officeDecor.setWorkerCount(permanentWorkers.length, list.some((w) => w.character.station === "meeting"));
+      // Department mission step done → the team thumbs up; last step → everyone cheers.
+      const missionDiff = missionCheers(missionSeen, list);
+      missionSeen = missionDiff.seen;
+      if (!power.dark && performance.now() - linkUpAt >= 2_500) {
+        for (const cheer of missionDiff.cheers) {
+          for (const id of cheer.ids) {
+            const member = entries.get(id);
+            if (!member || member.transition !== "ready" || member.person.asleep) continue;
+            if (REDUCE_MOTION_SCENE) member.person.emote(cheer.kind === "done" ? "spark" : "thumb", 1_500);
+            else if (cheer.kind === "step") member.person.thumbsUp();
+            else {
+              member.person.cheer();
+              member.person.emote("spark", 1_800);
+              particles.burst(member.person.x, member.person.y - 17, GOLD, 8, 0.035);
+            }
+          }
+        }
+      }
       // Crew diff. Only a worker that is genuinely new — the list has been
       // stable for a few seconds, the link isn't down / just back, and it's
       // one or two people rather than a whole re-snapshot — beams in; same

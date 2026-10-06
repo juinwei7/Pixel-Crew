@@ -2,6 +2,7 @@ import { Container, Graphics, Sprite } from "pixi.js";
 import type { StationKey } from "../stations";
 import { PAL, texFromMap } from "./pixels";
 import { FURNITURE_DEFS, type FurnitureDef } from "./furnitureDefs";
+import { STATION_THEME } from "../stationTheme";
 
 export { FURNITURE_DEFS, type FurnitureDef };
 
@@ -10,6 +11,10 @@ const REDUCE_MOTION =
   typeof window.matchMedia === "function" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const POKE_MS = 1_300;
+/** A station lights up / goes dark over this long (ease-out), instead of snapping. */
+const GLOW_MS = 200;
+const DEFAULT_GLOW = 0x4de3ff;
+const easeOut = (p: number) => 1 - (1 - p) ** 3;
 
 class FurnitureSprite {
   readonly container = new Container();
@@ -20,6 +25,10 @@ class FurnitureSprite {
   active = false;
   hovered = false;
   private pokeT = 0;
+  /** 0 = dark, 1 = fully lit; walks toward `active` over GLOW_MS. */
+  private glow = 0;
+  /** The station's own theme colour, shared with the NPC card's work window. */
+  private readonly accent: number;
   private lastT = 0;
   private readonly w: number;
   private readonly h: number;
@@ -32,6 +41,8 @@ class FurnitureSprite {
     this.container.addChild(this.highlight, sprite, this.ledOverlay, this.fxG);
     this.container.position.set(def.x, def.bottom);
     this.container.zIndex = def.key === "home" ? def.bottom - 10 : def.bottom;
+    const themed = STATION_THEME[def.key]?.accent;
+    this.accent = themed ? parseInt(themed.slice(1), 16) : DEFAULT_GLOW;
   }
 
   /** Clicked: the shelf drops a book, the board loses a sticky note, anything else bounces and sparks. */
@@ -48,25 +59,25 @@ class FurnitureSprite {
     const hl = this.highlight;
     hl.clear();
 
-    if (!this.active) return;
+    const target = this.active ? 1 : 0;
+    if (REDUCE_MOTION) this.glow = target;
+    else if (this.glow !== target) this.glow = Math.max(0, Math.min(1, this.glow + Math.sign(target - this.glow) * (dt / GLOW_MS)));
+    // Idle stations stay completely still: nothing drawn, nothing moving.
+    if (this.glow <= 0) return;
+    // Ease-out both ways: lighting up lands softly, going dark drops away quickly and settles.
+    const k = this.active ? easeOut(this.glow) : 1 - easeOut(1 - this.glow);
+    const c = this.accent;
 
-    // Blinking LEDs
+    // Status LEDs in the station's colour, breathing slowly rather than strobing.
     for (let i = 0; i < this.def.leds.length; i++) {
       const led = this.def.leds[i];
-      const on = Math.floor(tMs / 180 + i) % 2 === 0;
-      g.rect(led.x - this.w / 2, led.y - this.h, 2, 2).fill({
-        color: on ? 0x4de3ff : 0x37d6a3,
-        alpha: on ? 1 : 0.5,
-      });
+      const breath = REDUCE_MOTION ? 1 : 0.7 + 0.3 * Math.sin(tMs / 520 + i * 1.9);
+      g.rect(led.x - this.w / 2, led.y - this.h, 2, 2).fill({ color: c, alpha: k * breath });
     }
 
-    // Pulsing outline under the furniture
-    const pulse = 0.5 + 0.5 * Math.sin(tMs * 0.006);
-    hl.ellipse(0, 1, this.w / 2 + 3, 3.5).stroke({
-      width: 1,
-      color: 0x4de3ff,
-      alpha: 0.35 + 0.4 * pulse,
-    });
+    // A steady pool of the station colour on the floor, with a crisp rim.
+    hl.ellipse(0, 1, this.w / 2 + 3, 3.5).fill({ color: c, alpha: 0.16 * k });
+    hl.ellipse(0, 1, this.w / 2 + 3, 3.5).stroke({ width: 1, color: c, alpha: 0.6 * k });
   }
 
   private drawPoke(dt: number): void {

@@ -12,6 +12,8 @@
 @import "./styles/motion-fx.css";
 /* 第四輪優化體驗（注意力引導、狀態轉場、等待、防誤按、快捷鍵提示、拖放、導覽）。 */
 @import "./styles/motion-ux.css";
+/* 第五輪手感補洞（按下回饋、複製成功、展開與切換的過場）。 */
+@import "./styles/motion-polish.css";
 /* 最後載入：手機共用版型要贏過各元件自己的桌面規則（media query 不加權重，
    同權重時由順序決定），token 則不受順序影響。 */
 @import "./styles/responsive.css";

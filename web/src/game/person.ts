@@ -1419,7 +1419,8 @@ export class Person {
         screen = SCREEN_STATIONS.has(this.station);
       }
     } else {
-      const idx = Math.floor(this.animT / 600) % 2;
+      // Calm resting breath (the dip frame is a whole pixel; quicker reads as jittery bouncing).
+      const idx = Math.floor((this.animT + this.seed * 1_100) / 1_100) % 2;
       const frames = blinking ? f.idleBlink
         : this.gaze < 0 ? f.lookLeft
         : this.gaze > 0 ? f.lookRight
@@ -1455,7 +1456,9 @@ export class Person {
       sx = 1 + s * 0.6;
       sy = 1 - s;
       if (jump > 0) sy *= 1 + jump * 0.015; // stretch in the air
-      if (breathe) sy *= 1 + Math.sin((this.animT / 2600) * Math.PI * 2) * 0.022;
+      // Pixel crew already breathe through their two-frame dip; a fractional stretch on top only
+      // makes rows shimmer. Uploaded avatars have no such frames, so they keep the soft stretch.
+      if (breathe && (this.customTexture || this.gifSprite)) sy *= 1 + Math.sin((this.animT / 2600) * Math.PI * 2) * 0.022;
       if (this.turnT > 0) {
         // -1 -> 1 across the turn; never quite 0 so the sprite doesn't vanish.
         const v = 1 - 2 * (this.turnT / Person.TURN_MS);
@@ -1521,14 +1524,16 @@ export class Person {
     this.drawHalo(lift);
     this.drawEmote(tMs, lift - raise);
     this.drawDizzy(lift);
-    this.drawFocus(lift, view, offX);
-    this.drawAccessory(view, lift, offX, flip);
+    // Things worn on the head follow the head: the frame's baked-in dip plus any squash of the body.
+    const head = headAnchorY(HEAD_DROP.get(this.sprite.texture) ?? 0, bobY - jump, sy);
+    this.drawFocus(head, view, offX);
+    this.drawAccessory(view, head, offX, flip);
     if (this.tired && view === "front" && !this.customTexture && !this.gifSprite) {
       // Eye bags, and now and then a sigh.
-      this.fxG.rect(offX - 2, -11 + lift, 1, 0.6).fill({ color: 0x8a6f8a, alpha: 0.7 });
-      this.fxG.rect(offX + 1, -11 + lift, 1, 0.6).fill({ color: 0x8a6f8a, alpha: 0.7 });
+      this.fxG.rect(offX - 2, -11 + head, 1, 0.6).fill({ color: 0x8a6f8a, alpha: 0.7 });
+      this.fxG.rect(offX + 1, -11 + head, 1, 0.6).fill({ color: 0x8a6f8a, alpha: 0.7 });
       const sigh = (this.animT + this.seed * 5_000) % 6_000;
-      if (sigh < 700 && !REDUCE_MOTION) this.fxG.circle(offX + 4 + sigh / 200, -10 + lift - sigh / 300, 1 + sigh / 700).fill({ color: 0xc4ccdc, alpha: 0.5 * (1 - sigh / 700) });
+      if (sigh < 700 && !REDUCE_MOTION) this.fxG.circle(offX + 4 + sigh / 200, -10 + head - sigh / 300, 1 + sigh / 700).fill({ color: 0xc4ccdc, alpha: 0.5 * (1 - sigh / 700) });
     }
     if (this.errT > 0 && this.errKind === "glare" && screen && !REDUCE_MOTION) {
       // Stare lines from the head to the screen.
@@ -1538,7 +1543,7 @@ export class Person {
     this.drawCombo(lift);
     const lowEyes = this.sprite.texture === f.phone || this.sprite.texture === f.pet || this.sprite.texture === f.readFrames[0] || this.sprite.texture === f.readFrames[1];
     const faceVisible = this.sprite.texture !== f.rubFrames[0] && this.sprite.texture !== f.rubFrames[1];
-    if (faceVisible) this.drawShades(view, lowEyes ? -11 : -12, lift, offX);
+    if (faceVisible) this.drawShades(view, lowEyes ? -11 : -12, head, offX);
     this.drawFireworks();
     if (moving && this.rushT > 0 && !REDUCE_MOTION && Math.floor(this.walkCycleT / 90) % 2 === 0) {
       // Little dust puffs kicked up behind the feet.
@@ -2607,9 +2612,37 @@ export class Person {
   }
 }
 
-function createPresetFrames(presetId: string, colorIndex: number) {
-  const pal = avatarPresetPalette(presetId, colorIndex, SHIRT_COLORS);
-  const tex = (rows: string[]) => texFromMap(avatarPresetRows(rows, presetId), pal);
+/**
+ * How far a frame's head sits below the base idle pose, in art px. Some frames
+ * bake the breathing dip into the pixel map (FRONT_IDLE_1 starts one row lower),
+ * and everything drawn on the head separately — hats, glasses, headphones — has
+ * to sink with it or it slides off the face every other frame.
+ */
+const HEAD_DROP = new WeakMap<object, number>();
+/** First row with hair in it: the top of the head. */
+export const hairTop = (rows: string[]) => Math.max(0, rows.findIndex((row) => /[Hh]/.test(row)));
+/** The recorded head drop of a frame built by {@link buildPresetFrames}; undefined if it bypassed the builder. */
+export const frameHeadDrop = (frame: object): number | undefined => HEAD_DROP.get(frame);
+
+const SPRITE_ROWS = 16;
+/**
+ * Where head-worn things go, relative to the base pose's head. Mirrors exactly how the body
+ * sprite lands: anchored at the feet, moved by `bodyY` (bob minus jump, unrounded) and squashed
+ * by `sy` — so a hat stays on the hair through every dip, heel-strike squash and hop.
+ */
+export function headAnchorY(drop: number, bodyY: number, sy: number): number {
+  return bodyY + SPRITE_ROWS * (1 - sy) + drop * sy;
+}
+
+/** Every pixel-crew frame for a preset. All of them go through `make` here, and get their head drop recorded. */
+export function buildPresetFrames<T extends object>(presetId: string, make: (rows: string[]) => T) {
+  const baseTop = hairTop(avatarPresetRows(FRONT_IDLE_0, presetId));
+  const tex = (rows: string[]) => {
+    const decorated = avatarPresetRows(rows, presetId);
+    const frame = make(decorated);
+    HEAD_DROP.set(frame, hairTop(decorated) - baseTop);
+    return frame;
+  };
   // The cyber visor is one solid band, so a "blink" would just erase it.
   const blink = (rows: string[]) => tex(normalizeAvatarPresetId(presetId) === "cyber" ? rows : closeEyes(rows));
   return {
@@ -2648,6 +2681,11 @@ function createPresetFrames(presetId: string, colorIndex: number) {
     pet: tex(FRONT_PET),
     sidePass: tex(SIDE_PASS),
   };
+}
+
+function createPresetFrames(presetId: string, colorIndex: number) {
+  const pal = avatarPresetPalette(presetId, colorIndex, SHIRT_COLORS);
+  return buildPresetFrames(presetId, (rows) => texFromMap(rows, pal));
 }
 
 async function unloadAvatar(url: string): Promise<void> {

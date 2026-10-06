@@ -18,3 +18,13 @@ export function responsiveOfficeFitScale(viewportWidth: number): number {
   );
   return MIN_AUTO_FIT_SCALE + (MAX_AUTO_FIT_SCALE - MIN_AUTO_FIT_SCALE) * progress;
 }
+
+/**
+ * How far the user may zoom out. A normal office keeps the crisp 2x floor; a
+ * big crew (floor extended with the annex) may go down to 1x so the whole
+ * floor clears the side panels, which overlay the canvas. NPC name tags are
+ * DOM text at a fixed size, so they stay readable at any zoom.
+ */
+export function officeMinScale(floorHeight: number, baseHeight: number): number {
+  return floorHeight <= baseHeight ? 2 : 1;
+}

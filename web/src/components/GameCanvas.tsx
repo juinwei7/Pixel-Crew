@@ -307,10 +307,11 @@ export function GameCanvas({
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
+  // Nameplates squeezed by a neighbour (role hidden); kept here so a React re-render doesn't drop the class for a frame.
+  const tightIdsRef = useRef(new Set<string>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
   const menuAnchorRefs = useRef(new Map<string, HTMLDivElement>());
   const approvalRefs = useRef(new Map<string, HTMLDivElement>());
-  const workWindowRefs = useRef(new Map<string, HTMLDivElement>());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [menuDirection, setMenuDirection] = useState<"left" | "right">("right");
@@ -465,6 +466,39 @@ export function GameCanvas({
             });
           }
           keep = declutterNameplates(boxes);
+        } else if (positions.length > 1) {
+          // Roomy view: neighbours whose full tags (name + role) would touch drop the role instead.
+          // Widths are taken with the role showing (cached while tight) so the check can't flip-flop.
+          const wide = positions.map((pos) => {
+            const plate = nameRefs.current.get(pos.id);
+            if (!plate) return null;
+            if (!plate.classList.contains("npc-nameplate--tight")) plate.dataset.fullw = String(plate.offsetWidth);
+            return { id: pos.id, plate, x: pos.x, top: pos.y + 22 * pos.scale, w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
+          });
+          for (let i = 0; i < wide.length; i++) {
+            const a = wide[i];
+            if (!a) continue;
+            let tight = false;
+            for (let j = 0; j < wide.length && !tight; j++) {
+              const b = wide[j];
+              if (!b || i === j) continue;
+              tight = Math.abs(a.x - b.x) < (a.w + b.w) / 2 + 4 && Math.abs(a.top - b.top) < (a.h + b.h) / 2;
+            }
+            a.plate.classList.toggle("npc-nameplate--tight", tight);
+            if (tight) tightIdsRef.current.add(a.id);
+            else tightIdsRef.current.delete(a.id);
+          }
+          // Dropping the role isn't always enough (side-by-side busy tags at shared desks):
+          // tags that still collide yield to the more important one; hover brings any back.
+          const boxes: NameplateBox[] = [];
+          for (const a of wide) {
+            if (!a) continue;
+            const active = a.plate.classList.contains("npc-nameplate--active");
+            const hovered = a.id === hoveredIdRef.current;
+            const busy = a.plate.classList.contains("npc-nameplate--busy");
+            boxes.push({ id: a.id, x: a.x, top: a.top, width: a.plate.offsetWidth || a.w, height: a.h, priority: active ? 3 : hovered ? 2 : busy ? 1 : 0 });
+          }
+          keep = declutterNameplates(boxes);
         }
         for (const pos of positions) {
           const nameplate = nameRefs.current.get(pos.id);
@@ -493,11 +527,15 @@ export function GameCanvas({
           if (identity) {
             // Beside the sprite instead of on top of it; flip to the left
             // when the NPC stands near the right edge of the canvas.
+            // The card now carries the live work view, so it can be tall: keep it inside the canvas vertically too.
             const sideGap = Math.round(14 + pos.scale * 4);
-            const flip = pos.x + 230 + sideGap > bounds.width;
-            identity.style.transform = flip
-              ? `translate(calc(-100% - ${sideGap}px), -20%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`
-              : `translate(${sideGap}px, -20%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)`;
+            const cardW = identity.offsetWidth || 230;
+            const cardH = identity.offsetHeight || 120;
+            const flip = pos.x + cardW + sideGap > bounds.width;
+            const x = flip ? pos.x - sideGap - cardW : pos.x + sideGap;
+            const y = Math.max(8, Math.min(bounds.height - cardH - 8, pos.y - cardH * 0.25));
+            identity.style.transform = `translate(${bounds.left + x}px, ${bounds.top + y}px)`;
+            identity.dataset.side = flip ? "left" : "right";
           }
           const menuAnchor = menuAnchorRefs.current.get(pos.id);
           if (menuAnchor) {
@@ -508,12 +546,6 @@ export function GameCanvas({
           }
           const approval = approvalRefs.current.get(pos.id);
           if (approval) approval.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y - 34}px)`;
-          // 工作小窗：浮在頭頂上方（比對話泡再高一點，避免打架）。
-          const workWindow = workWindowRefs.current.get(pos.id);
-          if (workWindow) {
-            workWindow.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y - 30}px)`;
-            workWindow.style.opacity = String(pos.opacity);
-          }
         }
         const occupied: BubbleRect[] = [];
         const ordered = [...positions].sort((a, b) =>
@@ -839,12 +871,14 @@ export function GameCanvas({
         const accent = `#${shirtColor.toString(16).padStart(6, "0")}`;
         const startedAt = turnStartRef.current.get(w.id);
         const elapsedSec = w.busy && startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : null;
-        // 工作小窗：忙碌且站點有主題才浮出；web 站點放真實瀏覽器截圖。開窗時就不再另外顯示 speech 泡（避免重複）。
+        // NPC 卡：只在滑鼠停留時於身旁長出一張（身分＋即時工作畫面＋統計），平常只留一行名牌＋活動徽章，辦公室保持整潔。
+        // 卡開著時名牌不再重複用時／活動徽章。有站點主題的忙碌 NPC 一律不顯示 speech 泡（徽章／卡片已交代在幹嘛）。
         const winStation = w.character.station;
         const winTheme = w.busy && winStation ? STATION_THEME[winStation] : undefined;
         const winQuery = w.character.webQuery?.trim() || "";
-        const showWindow = !!winTheme;
-        const bubbleShown = showWindow ? "" : shown;
+        const cardOpen = hoveredId === w.id && !w.temporary && menuOpenFor !== w.id;
+        const thinkingNow = w.character.activity === "thinking";
+        const bubbleShown = winTheme ? "" : shown;
         // 脈絡公事包數據（名牌與 hover 身分卡共用，算一次）：扣掉出生底盤後的「可用量」%。
         const full = workersById.get(w.selectId);
         const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
@@ -866,6 +900,8 @@ export function GameCanvas({
                 isActive ? "npc-nameplate--active" : "",
                 w.busy ? "npc-nameplate--busy" : "",
                 w.temporary ? "npc-nameplate--subagent" : "",
+                tightIdsRef.current.has(w.id) ? "npc-nameplate--tight" : "",
+                cardOpen ? "npc-nameplate--carded" : "",
               ].join(" ")}
               style={{ borderColor: accent }}
             >
@@ -884,7 +920,7 @@ export function GameCanvas({
                   </span>
                 </span>
               )}
-              {elapsedSec != null && <span className="npc-nameplate__elapsed">{elapsedSec}s</span>}
+              {elapsedSec != null && !cardOpen && <span className="npc-nameplate__elapsed">{elapsedSec}s</span>}
               {collaboration && <span className="npc-nameplate__collaboration" title={collaboration.objective}>
                 {collaboration.status === "returning"
                   ? t("{status} · {name}", { status: collaboration.sourceWorkerId === w.id ? t("接續完成中") : t("結果已交回"), name: collaborator?.name ?? "NPC" })
@@ -893,7 +929,7 @@ export function GameCanvas({
               {mission && <span className="npc-nameplate__collaboration npc-nameplate__mission" title={mission.objective}>
                 {mission.status === "planning" && mission.bossWorkerId === w.id ? t("部門工作規劃中") : missionStep?.assigneeWorkerId === w.id ? `${missionStep.kind === "review" ? "REVIEW" : missionStep.kind === "consult" ? "CONSULT" : "MISSION"} · ${missionStep.title}` : t("部門工作")}
               </span>}
-              {w.busy && !collaboration && !mission && (() => {
+              {w.busy && !collaboration && !mission && !cardOpen && (() => {
                 // 一眼看出在幹嘛：思考中 vs 各站點工作，整合成名牌內一行圖示＋短動詞
                 const thinking = w.character.activity === "thinking";
                 const chip = thinking ? { icon: "brain" as IconName, label: t("思考中") } : (ACTIVITY_CHIP[w.character.station] ?? ACTIVITY_CHIP.desk!);
@@ -928,88 +964,97 @@ export function GameCanvas({
             >
               {bubbleShown}
             </div>
-            {showWindow && winTheme && (
-              <div
-                ref={(el) => {
-                  if (el) workWindowRefs.current.set(w.id, el);
-                  else workWindowRefs.current.delete(w.id);
-                }}
-                className={`npc-workwindow npc-workwindow--${winTheme.kind}${w.character.mood === "error" ? " npc-workwindow--error" : w.character.mood === "success" ? " npc-workwindow--success" : ""}`}
-                style={{ "--ww-accent": winTheme.accent } as CSSProperties}
-              >
-                <div className="npc-workwindow__bar">
-                  <span className="npc-workwindow__title">{winTheme.label}</span>
-                  <span className="npc-workwindow__bar-right">
-                    {winTheme.kind === "term" && (speechLogRef.current.get(w.id)?.cmds ?? 0) > 0 && (
-                      <span className="npc-workwindow__meta">{speechLogRef.current.get(w.id)!.cmds} cmd</span>
-                    )}
-                    <span className="npc-workwindow__dot" />
-                  </span>
-                </div>
-                {winTheme.kind === "web" ? (
-                  <div className="npc-workwindow__web">
-                    <div className="npc-workwindow__url">{winQuery ? (/^https?:\/\//i.test(winQuery) ? winQuery : `search · ${winQuery}`) : `search · ${w.name}`}</div>
-                    {winQuery ? (
-                      <WebShotImg query={winQuery} imgClassName="npc-workwindow__shot" />
-                    ) : (
-                      <div className="npc-workwindow__loading">{t("載入實時畫面…")}</div>
-                    )}
-                  </div>
-                ) : winTheme.kind === "term" ? (
-                  <div className="npc-workwindow__body npc-workwindow__body--lines">
-                    {(() => {
-                      const raw = speechLogRef.current.get(w.id)?.lines.slice(-7) ?? [];
-                      const src = raw.length ? raw : [{ text: stripMarkdown(w.character.speech) || t("執行中…"), at: w.character.speechAt ?? Date.now() }];
-                      // 真指令行才給 $ 提示符＋指令名高亮（其他動作用 ›）；連續重複行收合成一行 ×n；
-                      // 過長行改中段省略，結尾的檔名/參數比開頭的路徑更有資訊量
-                      const rows: Array<{ text: string; cmd: boolean; n: number; at: number }> = [];
-                      for (const ln of src) {
-                        const cmd = /^執行指令[:：]/.test(ln.text);
-                        let text = ln.text.replace(/^執行指令[:：]\s*/, "");
-                        if (text.length > 72) text = `${text.slice(0, 42)}…${text.slice(-28)}`;
-                        const prev = rows[rows.length - 1];
-                        if (prev && prev.text === text && prev.cmd === cmd) { prev.n += 1; prev.at = ln.at; }
-                        else rows.push({ text, cmd, n: 1, at: ln.at });
-                      }
-                      const shownRows = rows.slice(-5);
-                      return shownRows.map((row, i) => {
-                        const cut = row.cmd ? row.text.indexOf(" ") : -1;
-                        const head = row.cmd ? (cut > 0 ? row.text.slice(0, cut) : row.text) : "";
-                        const rest = row.cmd ? (cut > 0 ? row.text.slice(cut) : "") : row.text;
-                        return (
-                          <div key={`${i}-${row.text.slice(0, 12)}`} className={`npc-workwindow__line${i === shownRows.length - 1 ? " npc-workwindow__line--cur" : ""}`}>
-                            <span className={`npc-workwindow__prompt${row.cmd ? "" : " npc-workwindow__prompt--info"}`}>{row.cmd ? "$" : "›"}</span>
-                            {head && <span className="npc-workwindow__cmd0">{head}</span>}
-                            {rest}
-                            {row.n > 1 && <span className="npc-workwindow__times">×{row.n}</span>}
-                          </div>
-                        );
-                      });
-                    })()}
-                  </div>
-                ) : (
-                  <div className="npc-workwindow__body">
-                    {winTheme.kind === "check" ? <Icon name="check" size={11} /> : winTheme.kind === "board" ? "• " : ""}
-                    {(stripMarkdown(w.character.speech) || t("執行中…")).slice(0, 90)}
-                  </div>
-                )}
-              </div>
-            )}
-            {hoveredId === w.id && !w.temporary && menuOpenFor !== w.id && (() => {
-              // full / ctxGauge / ctxPct / ctxLevel 已在 map 本體算過（名牌公事包共用），這裡直接重用。
+            {cardOpen && (() => {
+              // 合一的 NPC 卡：滑鼠停留時在身旁長出一張——身分、即時工作畫面（終端機／知識庫／瀏覽器…）、統計，
+              // 取代以前頭上工作窗＋身旁身分卡＋腳下名牌三塊各說各話。full / ctxGauge 已在 map 本體算過，這裡直接重用。
               const doneTurns = full?.turns.filter((turn) => turn.status !== "running").length ?? 0;
               const totalCost = full?.turns.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0) ?? 0;
               const autoMode = full?.autoApproveMode ?? "off";
               const autoLabel = autoMode === "invincible" ? t("無限制") : autoMode === "full" ? t("完全自動") : autoMode === "safe" ? t("安全自動") : t("手動核准");
               const dept = full?.departmentId ? departments.find((candidate) => candidate.id === full.departmentId) : undefined;
+              const status = !w.busy ? "idle" : thinkingNow ? "thinking" : "working";
               return (
               <div ref={(element) => {
                 if (element) identityRefs.current.set(w.id, element);
                 else identityRefs.current.delete(w.id);
-              }} className="npc-identity-card">
-                <strong>{w.name}</strong>
-                <span>{w.character.activity === "working" ? t("執行中") : w.busy ? t("思考中") : t("待命")}</span>
+              }}
+                className={[
+                  "npc-identity-card",
+                  `npc-identity-card--${status}`,
+                  w.character.mood === "error" ? "npc-identity-card--error" : w.character.mood === "success" ? "npc-identity-card--success" : "",
+                ].join(" ")}
+                style={{ "--ww-accent": winTheme?.accent ?? accent } as CSSProperties}
+              >
+                <div className="npc-identity-card__head">
+                  <strong>{w.name}</strong>
+                  <span className="npc-identity-card__status">
+                    <span className="npc-identity-card__dot" />
+                    {status === "working" ? t("執行中") : status === "thinking" ? t("思考中") : t("待命")}
+                    {elapsedSec != null && <span className="npc-identity-card__elapsed">{elapsedSec}s</span>}
+                  </span>
+                </div>
                 {w.role && <small className="npc-identity-card__role">{w.role}</small>}
+                {winTheme && (
+                  <div className={`npc-workwindow npc-workwindow--${winTheme.kind}`}>
+                    <div className="npc-workwindow__bar">
+                      <span className="npc-workwindow__title">
+                        <Icon name={(ACTIVITY_CHIP[winStation] ?? ACTIVITY_CHIP.desk!).icon} size={10} className="npc-workwindow__title-ico" />
+                        {winTheme.label}
+                      </span>
+                      {winTheme.kind === "term" && (speechLogRef.current.get(w.id)?.cmds ?? 0) > 0 && (
+                        <span className="npc-workwindow__meta">{speechLogRef.current.get(w.id)!.cmds} cmd</span>
+                      )}
+                    </div>
+                    {winTheme.kind === "web" ? (
+                      <div className="npc-workwindow__web">
+                        <div className="npc-workwindow__url">{winQuery ? (/^https?:\/\//i.test(winQuery) ? winQuery : `search · ${winQuery}`) : `search · ${w.name}`}</div>
+                        {winQuery ? (
+                          <WebShotImg query={winQuery} imgClassName="npc-workwindow__shot" />
+                        ) : (
+                          <div className="npc-workwindow__loading">{t("載入實時畫面…")}</div>
+                        )}
+                      </div>
+                    ) : winTheme.kind === "term" ? (
+                      <div className="npc-workwindow__body npc-workwindow__body--lines">
+                        {(() => {
+                          const raw = speechLogRef.current.get(w.id)?.lines.slice(-7) ?? [];
+                          const src = raw.length ? raw : [{ text: stripMarkdown(w.character.speech) || t("執行中…"), at: w.character.speechAt ?? Date.now() }];
+                          // 真指令行才給 $ 提示符＋指令名高亮（其他動作用 ›）；連續重複行收合成一行 ×n；
+                          // 過長行改中段省略，結尾的檔名/參數比開頭的路徑更有資訊量
+                          const rows: Array<{ text: string; cmd: boolean; n: number; at: number }> = [];
+                          for (const ln of src) {
+                            const cmd = /^執行指令[:：]/.test(ln.text);
+                            let text = ln.text.replace(/^執行指令[:：]\s*/, "");
+                            if (text.length > 72) text = `${text.slice(0, 42)}…${text.slice(-28)}`;
+                            const prev = rows[rows.length - 1];
+                            if (prev && prev.text === text && prev.cmd === cmd) { prev.n += 1; prev.at = ln.at; }
+                            else rows.push({ text, cmd, n: 1, at: ln.at });
+                          }
+                          const shownRows = rows.slice(-4);
+                          return shownRows.map((row, i) => {
+                            const cut = row.cmd ? row.text.indexOf(" ") : -1;
+                            const head = row.cmd ? (cut > 0 ? row.text.slice(0, cut) : row.text) : "";
+                            const rest = row.cmd ? (cut > 0 ? row.text.slice(cut) : "") : row.text;
+                            return (
+                              <div key={`${i}-${row.text.slice(0, 12)}`} className={`npc-workwindow__line${i === shownRows.length - 1 ? " npc-workwindow__line--cur" : ""}`}>
+                                <span className={`npc-workwindow__prompt${row.cmd ? "" : " npc-workwindow__prompt--info"}`}>{row.cmd ? "$" : "›"}</span>
+                                {head && <span className="npc-workwindow__cmd0">{head}</span>}
+                                {rest}
+                                {row.n > 1 && <span className="npc-workwindow__times">×{row.n}</span>}
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    ) : (
+                      // key 綁內容：換一份文件／一個新動作時重新掛載，播一次翻頁亮光。
+                      <div key={(stripMarkdown(w.character.speech) || "").slice(0, 90)} className="npc-workwindow__body npc-workwindow__body--flip">
+                        {winTheme.kind === "check" ? <Icon name="check" size={11} className="npc-workwindow__body-ico" /> : winTheme.kind === "docs" ? <Icon name="file" size={11} className="npc-workwindow__body-ico" /> : winTheme.kind === "board" ? "• " : ""}
+                        {(stripMarkdown(w.character.speech) || t("執行中…")).slice(0, 90)}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <small>{w.provider === "claude" ? "Claude Code" : "Codex"} · {w.model || t("預設模型")}</small>
                 <small>{dept ? `${dept.name} · ` : ""}{roomName(w.workspacePath)}</small>
                 <div className="npc-identity-card__stats">
