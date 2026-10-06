@@ -4,7 +4,7 @@ Pixel Crew 支援原生 Windows 10 22H2 x64 與 Windows 11 x64。Windows 11 是 
 
 ## 最快方式：單檔 Windows 應用
 
-1. [直接下載最新版 `Pixel Crew.exe`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe)。下載後只需雙擊這一個檔案；不需要解壓 ZIP，也不需要選擇 `.vbs` 或 `.cmd`。
+1. [直接下載最新版 `Pixel Crew.exe`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel.Crew.exe)。下載後只需雙擊這一個檔案；不需要解壓 ZIP，也不需要選擇 `.vbs` 或 `.cmd`。
 
 2. 至少安裝一個 AI CLI：
 

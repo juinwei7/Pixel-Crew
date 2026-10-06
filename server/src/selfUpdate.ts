@@ -2,7 +2,9 @@ import { win32 } from "node:path";
 
 const RELEASE_OWNER = "juinwei7";
 const RELEASE_REPOSITORY = "Pixel-Crew";
-const WINDOWS_ASSET = "Pixel Crew.exe";
+// GitHub stores uploaded asset names with spaces replaced by dots, so the
+// "Pixel Crew.exe" built by CI is published as "Pixel.Crew.exe".
+const WINDOWS_ASSET = "Pixel.Crew.exe";
 
 /** A one-click update is deliberately restricted to the verified, bundled
  * Windows layout. Source checkouts continue to use their normal git workflow. */

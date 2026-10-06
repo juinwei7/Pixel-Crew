@@ -26,7 +26,7 @@ test("release download URLs accept only exact stable semver versions", () => {
   assert.equal(releaseVersion("2.1.1-beta"), null);
   assert.equal(
     windowsReleaseAssetUrl("2.1.1"),
-    "https://github.com/juinwei7/Pixel-Crew/releases/download/v2.1.1/Pixel%20Crew.exe",
+    "https://github.com/juinwei7/Pixel-Crew/releases/download/v2.1.1/Pixel.Crew.exe",
   );
   assert.throws(() => windowsReleaseAssetUrl("../../latest"), /Invalid release version/);
 });
