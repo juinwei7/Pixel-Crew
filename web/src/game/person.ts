@@ -5,9 +5,10 @@ import { texFromMap } from "./pixels";
 import { avatarPresetPalette, avatarPresetRows, normalizeAvatarPresetId } from "./avatarPresets";
 import { t } from "../i18n";
 import type { StationKey } from "../stations";
-import type { Trait } from "./officeLife";
+import { officeNow, type Trait } from "./officeLife";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "./crewLook";
 import { maySpill, pickMicro } from "./microLife";
+import { SCREENSAVER_ALPHA, isLunchTime, maybeBento, screensaverDot } from "./npcHabits";
 import type { MeetingRow } from "./meetingSeats";
 
 // Re-exported for existing importers inside the scene; UI code imports ./crewLook directly.
@@ -433,6 +434,12 @@ const BACK_SIP = patch(BACK_0, {
   4: "..HhHHHHhHS.", 5: "..HHHHHHHHS.", 6: "...hHHHHh.B.", 7: "..BBBBBBBBB.", 8: ".SBBBBBBBB..", 9: ".SBbBBBBbB..",
 });
 
+// A long tool call with no result yet: hands off the keyboard, laced behind the head, leaning back.
+const BACK_LEAN = patch(BACK_0, {
+  3: ".SHHHHHHHHS.", 4: "S.HhHHHHhH.S", 5: ".BHHHHHHHHB.", 6: "..BhHHHHhB..",
+  7: "..BBBBBBBB..", 8: "..BBBBBBBB..", 9: "..BbBBBBbB..",
+});
+
 // ---------- Front-facing activities ----------
 
 // Reading a book held at the chest, eyes down on the page.
@@ -448,6 +455,8 @@ const FRONT_RUB_1 = patch(FRONT_RUB_0, { 4: "..HSBSSBSH..", 5: "..HSBSSBSH..", 6
 const FRONT_PHONE = patch(FRONT_IDLE_0, {
   4: "..HSSSSSSH..", 5: "..HSESSESH..", 8: "..BBBBBBBB..", 9: "..BBSSSSBB..",
 });
+// A paper cup of water at the lips (right hand up to the mouth).
+const FRONT_DRINK = patch(FRONT_IDLE_0, { 6: "...SSSSSSS..", 7: "..BBBBBBBBB.", 8: ".SBBBBBBBBB.", 9: ".SBbBBBBbB.." });
 // Impatient: tapping a foot (right foot lifted a pixel)…
 const FRONT_TAP = patch(FRONT_IDLE_0, { 13: "..PPP..FFF..", 14: "..FFF......." });
 // …and glancing down at the watch on the left wrist.
@@ -532,7 +541,8 @@ export type MicroAct =
   | "phone" | "spin" | "idleStretch" | "doze"
   | "read" | "dust" | "bounce" | "game" | "sneeze"
   | "nod" | "neckRoll" | "lookAway" | "ponder" | "glasses"
-  | "water" | "pet";
+  | "water" | "pet"
+  | "bento" | "drink" | "brew";
 
 const MICRO_MS: Record<MicroAct, number> = {
   stretch: 1_300, sip: 1_800, knuckles: 1_000, swivel: 1_400, rubEyes: 1_700,
@@ -540,6 +550,7 @@ const MICRO_MS: Record<MicroAct, number> = {
   read: 5_200, dust: 2_600, bounce: 1_600, game: 4_200, sneeze: 1_300,
   nod: 1_700, neckRoll: 1_800, lookAway: 2_800, ponder: 2_600, glasses: 1_100,
   water: 2_800, pet: 2_800,
+  bento: 6_400, drink: 2_400, brew: 2_000,
 };
 /** Idle habits per personality — each NPC drifts toward their own. */
 const TRAIT_IDLE: Record<Trait, MicroAct[]> = {
@@ -559,7 +570,7 @@ const BOOK_MICROS: MicroAct[] = ["idleStretch", "rubEyes", "nod", "nod"];
 const IDLE_MICROS: MicroAct[] = ["phone", "spin", "idleStretch", "doze", "phone", "lookAway", "ponder"];
 /** Micros allowed to keep running while the NPC is working (everything else is idle-only). */
 const WORK_MICROS = new Set<MicroAct>([...DESK_MICROS, ...BOOK_MICROS, "sneeze"]);
-const SCENE_MICROS = new Set<MicroAct>(["water", "pet"]);
+const SCENE_MICROS = new Set<MicroAct>(["water", "pet", "drink", "brew"]);
 
 /** Stations worked at a monitor on a desk (everything except reading and the meeting table). */
 const SCREEN_STATIONS = new Set<StationKey>(["terminal", "code", "web", "check", "board", "desk", "home"]);
@@ -683,7 +694,13 @@ export class Person {
   /** Personality (from the id hash, see officeLife.traitFor). */
   trait: Trait = "chill";
   /** Carried while walking between stations — the scene picks one per trip. */
-  walkProp: "laptop" | "papers" | null = null;
+  walkProp: "laptop" | "papers" | "cup" | null = null;
+  /** Walking speed factor set by the scene for unhurried strolls (pacing, the water cooler). */
+  walkSpeedMul = 1;
+  /** A tool call has been running a long while with no result: lean back (scene keeps the hysteresis). */
+  longWait = false;
+  /** Idle at the desk a long while: the desk monitor shows a dim screensaver (scene decides). */
+  screensaver = false;
   /** Long stretch of work: headphones on, a quiet focus aura, the odd sweat drop. */
   deepFocus = false;
   /** Easter egg (poked 20 times): shades on for the rest of the session. */
@@ -806,7 +823,7 @@ export class Person {
    * a few they get annoyed, then dizzy. Purely visual — never selects or sends anything.
    */
   poke(level: number): void {
-    const pick = (lines: string[]) => lines[Math.floor(Math.random() * lines.length)];
+    const pick = (lines: string[]) => t(lines[Math.floor(Math.random() * lines.length)]);
     if (this.asleep) {
       this.say(pick(["呼嚕…", "再五分鐘…"]), 1_300);
       this.kick(0.08);
@@ -844,12 +861,12 @@ export class Person {
         break;
       case 2:
         this.microAct("spin");
-        this.say("咻～", 900);
+        this.say(t("咻～"), 900);
         break;
       case 3:
         this.waveT = Person.WAVE_MS;
         this.waveCooldown = 4_000;
-        this.say("嗨～", 1_300);
+        this.say(t("嗨～"), 1_300);
         break;
       default:
         this.hop();
@@ -1025,7 +1042,7 @@ export class Person {
    * the monitor. Returns the line they mutter, for the scene's talk limiter.
    */
   reactError(level: number): string {
-    const pick = (lines: string[]) => lines[Math.floor(Math.random() * lines.length)];
+    const pick = (lines: string[]) => t(lines[Math.floor(Math.random() * lines.length)]);
     this.micro = null;
     if (level >= 2) {
       this.errKind = "glare";
@@ -1093,7 +1110,7 @@ export class Person {
     this.haloT = Person.HALO_MS;
     this.kick(0.1);
     this.dizzyT = Math.max(this.dizzyT, 1_800);
-    this.say("我是誰？", 1_800);
+    this.say(t("我是誰？"), 1_800);
   }
 
   /** Pixel emote bubble above the head; ms <= 0 clears it. */
@@ -1227,7 +1244,7 @@ export class Person {
     // a couple of shorter first steps, a slower last one into the spot.
     const gaitPace = this.path.length > 0 ? this.walkPace(dtMs) : 1;
     if (this.path.length === 0) this.walkRamp = 0;
-    let budget = Person.SPEED * TRAIT_PACE[this.trait] * (this.rushT > 0 ? 1.9 : this.tired ? 0.8 : 1) * gaitPace * dtMs;
+    let budget = Person.SPEED * TRAIT_PACE[this.trait] * (this.rushT > 0 ? 1.9 : this.tired ? 0.8 : 1) * this.walkSpeedMul * gaitPace * dtMs;
     while (budget > 0 && this.path.length > 0) {
       const wp = this.path[0];
       dx = wp.x - this.x;
@@ -1255,7 +1272,7 @@ export class Person {
         this.facing = nextFacing;
       }
       // Legs keep time with the actual speed, so the feet don't skate while easing.
-      this.walkCycleT += dtMs * (this.rushT > 0 ? 1.7 : 1) * TRAIT_PACE[this.trait] * Math.max(0.6, gaitPace);
+      this.walkCycleT += dtMs * (this.rushT > 0 ? 1.7 : 1) * TRAIT_PACE[this.trait] * Math.max(0.6, gaitPace) * Math.max(0.5, this.walkSpeedMul);
     } else {
       this.walkCycleT = 0;
       this.lastStepIdx = -1;
@@ -1364,7 +1381,7 @@ export class Person {
       if (blocked || (!sceneAct && !deskAct && !idleAct)) this.micro = null;
     } else if (this.idleLife && !REDUCE_MOTION && !blocked && this.animT >= this.nextMicroAt) {
       const pool = this.activity === "working"
-        ? this.station === "books" ? BOOK_MICROS : SCREEN_STATIONS.has(this.station) ? DESK_MICROS : null
+        ? this.longWait ? null : this.station === "books" ? BOOK_MICROS : SCREEN_STATIONS.has(this.station) ? DESK_MICROS : null
         : this.activity === "idle" && this.gaze === 0 && this.emoteKind === null ? TRAIT_IDLE[this.trait] ?? IDLE_MICROS : null;
       if (pool) {
         const kind = pickMicro(pool, {
@@ -1377,7 +1394,9 @@ export class Person {
           fallback: "neckRoll",
           needsGlasses: "glasses",
         });
-        this.microAct(kind, Math.random() < 0.5 ? -1 : 1);
+        // Lunch hour: some of the idle acts become a bento - a swap, never an extra act.
+        const act = this.activity === "idle" ? maybeBento(kind, "bento", isLunchTime(officeNow()), Math.random()) : kind;
+        this.microAct(act, Math.random() < 0.5 ? -1 : 1);
       }
       else this.nextMicroAt = this.animT + this.microGap();
     }
@@ -1523,6 +1542,11 @@ export class Person {
         bobY = c > 2_200 && c < 2_380 ? 1 : 0;
         breathe = true;
         reading = true;
+      } else if (this.longWait && SCREEN_STATIONS.has(this.station)) {
+        // Waiting on a slow tool: hands off the keys, laced behind the head, leaning back.
+        this.sprite.texture = f.backLean;
+        view = "back";
+        screen = true;
       } else {
         const work = this.workPose(wt);
         this.sprite.texture = work.tex;
@@ -1882,6 +1906,14 @@ export class Person {
         return { tex: f.reachOut, bobY: 0, offX: 0, flip: this.microDir, view: "front" };
       case "pet":
         return { tex: f.pet, bobY: 1, offX: 0, flip: this.microDir, view: "front" };
+      case "bento":
+        // Head down over a little lunch box; a small dip as each bite goes in.
+        return { tex: f.phone, bobY: this.microT % 1_600 < 200 ? 1 : 0, offX: 0, flip: 1, view: "front" };
+      case "drink":
+        return { tex: p > 0.15 && p < 0.85 ? f.drink : f.idleFrames[0], bobY: 0, offX: 0, flip: 1, view: "front" };
+      case "brew":
+        // Back to us at the coffee machine, both hands on it.
+        return { tex: p > 0.2 && p < 0.8 ? f.backArmsIn : f.workFrames[0], bobY: 0, offX: 0, flip: 1, view: "back" };
     }
   }
 
@@ -1936,7 +1968,7 @@ export class Person {
       else if (this.bootT > 0) this.drawBoot(g);
       else this.drawScreen(g, wt);
       // Key flashes on the keyboard while typing.
-      if (!asleep && !REDUCE_MOTION && !this.micro && (this.station === "terminal" || this.station === "code" || this.station === "desk")) {
+      if (!asleep && !REDUCE_MOTION && !this.micro && !this.longWait && (this.station === "terminal" || this.station === "code" || this.station === "desk")) {
         const k = Math.floor(wt / (this.station === "terminal" ? 90 : 150));
         g.rect(-4 + Math.floor(hash01(k) * 8), -18, 1, 1).fill({ color: 0xffffff, alpha: 0.9 });
       }
@@ -1952,6 +1984,12 @@ export class Person {
     } else if (meetingChair) {
       this.drawChair(fx, "back");
     }
+    if (screen && this.longWait && this.activity === "working" && !asleep) {
+      // Tiny hourglass: the monitor's top-right corner, or just above the head at a counter device.
+      if (BUILT_IN_SCREEN.has(this.station)) drawHourglass(fx, 5, -22 + lift, this.animT);
+      else drawHourglass(g, SCR_L + SCR_W - 3, SCR_T + 1, this.animT);
+    }
+    if (this.screensaver && !screen && !asleep && this.activity === "idle" && !this.isMoving) this.drawScreensaver(g);
     if (reading || (this.activity === "working" && this.station === "books" && this.micro)) this.drawBooks(g, fx, wt, lift, reading);
     this.drawMicroProps(fx, lift, asleep);
     this.drawResult(g, fx);
@@ -2148,6 +2186,18 @@ export class Person {
     g.rect(SCR_L + SCR_W - 2, SCR_T + SCR_H - 2, 1, 1).fill({ color: 0xffb547, alpha: on ? 0.95 : 0.25 });
   }
 
+  /**
+   * Idle a long while: the personal desk's monitor (art px -6..6, -31..-25 from the feet,
+   * see personalDesks) goes almost black with one dim pixel slowly bouncing corner to corner.
+   */
+  private drawScreensaver(g: Graphics): void {
+    const W = 12;
+    const H = 6;
+    g.rect(-6, -31, W, H).fill(0x04060c);
+    const dot = REDUCE_MOTION ? { x: 5, y: 2 } : screensaverDot(this.animT + this.seed * 60_000, W, H);
+    g.rect(-6 + dot.x, -31 + dot.y, 1, 1).fill({ color: 0xcfe3f7, alpha: SCREENSAVER_ALPHA });
+  }
+
   /** Just the open book held at the chest (idle reading). */
   private drawBookInHands(fx: Graphics, lift: number): void {
     const top = -10 + lift;
@@ -2253,6 +2303,24 @@ export class Person {
       if (!REDUCE_MOTION && Math.floor(this.microT / 450) % 3 === 0) {
         fx.rect(4, -13 + lift - (this.microT % 450) / 150, 1, 1).fill({ color: 0x9dff9c, alpha: 0.8 });
       }
+    } else if (kind === "bento") {
+      // Lunch box held at the chest: rice, a pickled plum, a bit of greens; chopsticks go up now and then.
+      const top = -8 + lift;
+      fx.rect(-3, top, 6, 2.4).fill(0x8a5f33);
+      fx.rect(-2.5, top + 0.3, 3, 1.4).fill(0xf3f0e6);
+      fx.rect(-1.5, top + 0.6, 1, 1).fill(0xd94a5a);
+      fx.rect(1, top + 0.3, 1.5, 1.4).fill(0x6fbf73);
+      const up = !REDUCE_MOTION && this.microT % 1_600 < 450;
+      fx.rect(2.5, top - (up ? 3 : 1), 0.6, 2.4).fill(0xc8955a);
+      fx.rect(3.3, top - (up ? 3 : 1), 0.6, 2.4).fill(0xc8955a);
+    } else if (kind === "drink" && p > 0.15 && p < 0.85) {
+      // Small paper cup at the lips.
+      fx.rect(2, -11 + lift, 2, 2).fill(0xe8eef8);
+      fx.rect(2, -11 + lift, 2, 0.6).fill({ color: 0x9ff3ff, alpha: 0.8 });
+    } else if (kind === "brew" && !REDUCE_MOTION && p > 0.3) {
+      // One wisp of steam over the machine.
+      const q = (this.microT % 900) / 900;
+      fx.rect(1, -20 + lift - q * 4, 1, 1).fill({ color: 0xdfe9f8, alpha: 0.6 * (1 - q) });
     } else if (kind === "water") {
       const d = this.microDir;
       const hx = 5 * d;
@@ -2415,7 +2483,12 @@ export class Person {
     const side = gait === "side";
     const cx = side ? this.facing * 3 : 4;
     const top = -9 + lift;
-    if (this.walkProp === "laptop") {
+    if (this.walkProp === "cup") {
+      // A mug of coffee carried back to the desk, a faint wisp of steam.
+      g.rect(cx - 1, top + 1, 2, 2).fill({ color: 0xb56f2f, alpha });
+      g.rect(cx - 1, top + 1, 2, 0.6).fill({ color: 0x6e4218, alpha });
+      if (!REDUCE_MOTION && Math.floor(this.walkCycleT / 300) % 2 === 0) g.rect(cx - 0.5, top - 1, 1, 1).fill({ color: 0xcfe3f7, alpha: 0.5 * alpha });
+    } else if (this.walkProp === "laptop") {
       if (side) {
         g.rect(cx - 3, top + 1, 6, 1.6).fill({ color: 0x9fb6cf, alpha });
         g.rect(cx - 3, top + 2.6, 6, 0.6).fill({ color: 0x4de3ff, alpha: 0.7 * alpha });
@@ -2828,6 +2901,8 @@ export function buildPresetFrames<T extends object>(presetId: string, make: (row
     backArmsIn: tex(BACK_ARMS_IN),
     backStretch: tex(BACK_STRETCH),
     backSip: tex(BACK_SIP),
+    backLean: tex(BACK_LEAN),
+    drink: tex(FRONT_DRINK),
     readFrames: [tex(FRONT_READ), tex(shiftEyes(FRONT_READ, 1))],
     rubFrames: [tex(FRONT_RUB_0), tex(FRONT_RUB_1)],
     phone: tex(FRONT_PHONE),
@@ -2986,4 +3061,18 @@ const CHECK_STAMP = 2_150;
 function hash01(n: number): number {
   const x = Math.sin(n * 12.9898) * 43758.5453;
   return x - Math.floor(x);
+}
+
+/**
+ * A 2px-wide hourglass (amber, dim) for "still waiting on the tool". The sand drains from the
+ * top bulb into the bottom one over ~2.4 s, then it flips. Static under reduced motion.
+ */
+function drawHourglass(g: Graphics, x: number, y: number, tMs: number): void {
+  const p = REDUCE_MOTION ? 0.5 : (tMs % 2_400) / 2_400;
+  const c = 0xffd166;
+  g.rect(x, y, 2, 0.5).fill({ color: c, alpha: 0.55 });
+  g.rect(x, y + 0.5, 2, 1).fill({ color: c, alpha: 0.25 + 0.5 * (1 - p) });
+  g.rect(x + 0.5, y + 1.5, 1, 0.5).fill({ color: c, alpha: 0.6 });
+  g.rect(x, y + 2, 2, 1).fill({ color: c, alpha: 0.25 + 0.5 * p });
+  g.rect(x, y + 3, 2, 0.5).fill({ color: c, alpha: 0.55 });
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiRequest } from "../api";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 import { Modal } from "./Modal";
 import type { WorkerState } from "../types";
 
@@ -230,7 +230,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
             <p className="ops-diagnostics__privacy">{t("只儲存在此裝置，不會上傳。診斷包不含 prompt、路徑、模型或工具輸出。")}</p>
             <div className="ops-diagnostics__grid">
               <div><small>{t("Mission 成功率")}</small><strong>{diagnostics.diagnostics.missions.successRate == null ? "—" : `${diagnostics.diagnostics.missions.successRate}%`}</strong></div>
-              <div><small>{t("完成／失敗")}</small><strong>{diagnostics.diagnostics.missions.completed}／{diagnostics.diagnostics.missions.failed}</strong></div>
+              <div><small>{t("完成／失敗")}</small><strong>{diagnostics.diagnostics.missions.completed}{tc("punct", "／")}{diagnostics.diagnostics.missions.failed}</strong></div>
               <div><small>{t("WebSocket 重連")}</small><strong>{diagnostics.diagnostics.responsiveness.websocketReconnects}</strong></div>
               <div><small>{t("3D FPS 分級")}</small><strong>{diagnostics.diagnostics.responsiveness.fpsBand === "unknown" ? "—" : diagnostics.diagnostics.responsiveness.fpsBand}</strong></div>
             </div>

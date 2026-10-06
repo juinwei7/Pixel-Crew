@@ -10,16 +10,7 @@ import { Modal } from "./Modal";
 import { type ConfirmTone } from "./ConfirmDialog";
 import { t } from "../i18n";
 
-const NEW_COMMAND = `---
-description: 說明這個指令適合在什麼情況使用
----
-
-請依照以下步驟完成任務：
-
-1. 先理解目前狀況。
-2. 說明執行計畫。
-3. 完成後驗證結果。
-`;
+const NEW_COMMAND = t("---\ndescription: 說明這個指令適合在什麼情況使用\n---\n\n請依照以下步驟完成任務：\n\n1. 先理解目前狀況。\n2. 說明執行計畫。\n3. 完成後驗證結果。\n");
 
 type CommandDocument = {
   name: string;

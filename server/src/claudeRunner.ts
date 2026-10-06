@@ -618,7 +618,7 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
   return content;
 }
 
-function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
+export function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
   switch (parsed.type) {
     case "system": {
       if (parsed.subtype === "init") {
@@ -637,6 +637,8 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastCont
             ? parsed.tools.filter((tool: unknown): tool is string => typeof tool === "string")
             : [],
         });
+      } else if (parsed.subtype === "task_notification" && typeof parsed.tool_use_id === "string" && parsed.tool_use_id) {
+        onEvent({ type: "subagent_done", id: parsed.tool_use_id });
       }
       break;
     }

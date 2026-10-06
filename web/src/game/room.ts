@@ -1,4 +1,5 @@
 import { Container, Graphics } from "pixi.js";
+import { dayKey, tallyStrokes } from "./deskProps";
 
 // A multiple of 32 (the wall-panel seam spacing) and 16 (the floor-tile
 // spacing) so the rightmost panel/tile isn't a truncated partial segment.
@@ -34,7 +35,7 @@ export const ROOM_SPOTS: Record<RoomSpot, { x: number; y: number; w: number; h: 
   frameB: { x: 195, y: 13, w: 22, h: 20 },
   window: { x: 246, y: 4, w: 92, h: 42 },
   shelf: { x: 348, y: 10, w: 58, h: 36 },
-  whiteboard: { x: 91, y: 6, w: 34, h: 22 },
+  whiteboard: { x: 91, y: 6, w: 34, h: 28 },
   aquarium: { x: 143, y: 32, w: 22, h: 17 },
   rack: { x: 411, y: 5, w: 28, h: 42 },
   hangL: { x: 2, y: 8, w: 13, h: 24 },
@@ -56,6 +57,12 @@ const DOODLES: Array<Array<[number, number, number, number, number]>> = [
   [[102, 13, 1, 2, 0x3b4a6b], [107, 13, 1, 2, 0x3b4a6b], [102, 15, 6, 5, 0x3b4a6b], [103, 16, 1, 1, 0xffd166], [106, 16, 1, 1, 0xffd166], [104, 18, 2, 1, 0xff9ec4], [108, 18, 6, 2, 0x3b4a6b], [114, 15, 1, 4, 0x3b4a6b], [97, 22, 24, 1, 0xc9d4ea]],
 ];
 const DOODLE_MS = 32_000;
+/** Today's 正 tally sits in a strip under the doodles (the board grew 6px for it). */
+const TALLY_X = 94;
+const TALLY_Y = 26;
+const TALLY_COLOR = 0x5c6f94;
+/** A new tally stroke is written in at the same pace as the doodle strokes. */
+const TALLY_STROKE_MS = 260;
 
 export class Room {
   readonly container = new Container();
@@ -99,6 +106,13 @@ export class Room {
   private doodleIdx = 0;
   private doodleT = 0;
   private doodleDrawn = -1;
+  /** Whiteboard 正 tally of today's crew-wide completions (own layer, redrawn only when a stroke lands). */
+  private readonly tallyG = new Graphics();
+  private tallyTarget = 0;
+  private tallyShown = 0;
+  private tallyStrokeT = 0;
+  private tallyDrawn = -1;
+  private tallyDay = dayKey(new Date());
   private hangSway = [0, 0];
   private raining = false;
   private weatherCheck = 60_000;
@@ -186,11 +200,11 @@ export class Room {
 
 
     // ---- Whiteboard (doodles change on their own every half minute) ----
-    g.rect(91, 6, 34, 21).fill(0x8fa3c8);
-    g.rect(92, 7, 32, 19).fill(0xeef3f8);
-    g.rect(94, 27, 28, 1).fill(0x5c729a); // marker tray
-    g.rect(97, 26, 4, 1).fill(0xff5d73);
-    g.rect(103, 26, 4, 1).fill(0x4de3ff);
+    g.rect(91, 6, 34, 27).fill(0x8fa3c8);
+    g.rect(92, 7, 32, 25).fill(0xeef3f8);
+    g.rect(94, 33, 28, 1).fill(0x5c729a); // marker tray
+    g.rect(97, 32, 4, 1).fill(0xff5d73);
+    g.rect(103, 32, 4, 1).fill(0x4de3ff);
     // ---- Aquarium on a small wall shelf ----
     g.rect(142, 47, 24, 2).fill(0x2a3a60);
     g.rect(144, 33, 20, 14).fill(0x8fb8e8);
@@ -236,7 +250,7 @@ export class Room {
     this.drawFloorLight();
     this.container.addChild(
       g, this.floorLightG, this.annexG, this.poster, this.frameA, this.frameB, this.sky, this.stars, this.sun, this.moon, this.weatherG,
-      this.glassG, this.clockHands, this.rackLeds, this.tank, this.doodle, this.hangL, this.hangR, this.fxG,
+      this.glassG, this.clockHands, this.rackLeds, this.tank, this.doodle, this.tallyG, this.hangL, this.hangR, this.fxG,
     );
   }
 
@@ -259,6 +273,12 @@ export class Room {
   /** 牆上時鐘走真實時間：時針＋分針，由 scene 對時（每 30 秒）呼叫重畫。 */
   setClock(date: Date): void {
     this.lastDate = date;
+    // Past midnight the tally is wiped (the next setTodayCount brings the new day's number).
+    const day = dayKey(date);
+    if (day !== this.tallyDay) {
+      this.tallyDay = day;
+      this.setTodayCount(0);
+    }
     if (this.spinT > 0) return; // mid-spin; snaps back to real time when it ends
     this.drawHands(date, 0);
   }
@@ -323,6 +343,26 @@ export class Room {
     g.roundRect(10, top + 18, ART_W - 20, h - top - 24, 5)
       .fill({ color: 0x0b1425, alpha: 0.2 })
       .stroke({ width: 1, color: 0x243654, alpha: 0.18 });
+  }
+
+  /**
+   * Today's crew-wide completed count, tallied on the whiteboard in 正 strokes.
+   * Going up writes the new strokes in one at a time; going down (a new day,
+   * a resync) wipes straight to the new number.
+   */
+  setTodayCount(count: number): void {
+    const n = Math.max(0, Math.floor(Number.isFinite(count) ? count : 0));
+    this.tallyTarget = n;
+    if (n < this.tallyShown) this.tallyShown = n;
+  }
+
+  /** One more job finished (for event-driven callers). */
+  addCompletion(): void {
+    this.setTodayCount(this.tallyTarget + 1);
+  }
+
+  get todayCount(): number {
+    return this.tallyTarget;
   }
 
   /** Very rare: a flying saucer drifts past the window. */
@@ -434,6 +474,22 @@ export class Room {
       const d = this.doodle;
       d.clear();
       if (!wiping) for (let i = 0; i < shown; i++) d.rect(...(strokes[i].slice(0, 4) as [number, number, number, number])).fill(strokes[i][4]);
+    }
+    // Today's tally: one stroke per completion, written in at doodle pace.
+    if (this.tallyShown < this.tallyTarget) {
+      this.tallyStrokeT += dt;
+      if (REDUCE_MOTION || this.tallyStrokeT >= TALLY_STROKE_MS) {
+        this.tallyStrokeT = 0;
+        this.tallyShown = REDUCE_MOTION ? this.tallyTarget : this.tallyShown + 1;
+      }
+    } else {
+      this.tallyStrokeT = 0;
+    }
+    if (this.tallyShown !== this.tallyDrawn) {
+      this.tallyDrawn = this.tallyShown;
+      const tg = this.tallyG;
+      tg.clear();
+      for (const [x, y, w, h] of tallyStrokes(this.tallyShown, TALLY_X, TALLY_Y)) tg.rect(x, y, w, h).fill(TALLY_COLOR);
     }
     // Hanging plants: barely-there sway, a proper swing when tapped.
     [this.hangL, this.hangR].forEach((g, i) => {

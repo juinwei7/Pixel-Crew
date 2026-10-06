@@ -710,6 +710,17 @@ export function App() {
     setComposerFocusRequest((request) => request + 1);
   }, [preferences.focusStudioLastWorkerIds, setActiveId, updatePreferences, workers]);
 
+  // 鏡頭滑到 NPC：只在使用者「在介面別處」主動點名時（左欄、手機頭像列、頂欄「需要你」）。
+  // 在畫布上直接點 NPC 不動鏡頭——他本來就在眼前。
+  const [cameraFocus, setCameraFocus] = useState<{ id: string; seq: number } | null>(null);
+  const requestCameraFocus = useCallback((id: string) => {
+    setCameraFocus((current) => ({ id, seq: (current?.seq ?? 0) + 1 }));
+  }, []);
+  const activateNpcWithCamera = useCallback((id: string) => {
+    activateNpc(id);
+    requestCameraFocus(id);
+  }, [activateNpc, requestCameraFocus]);
+
   // Assigning a worker to a pane always focuses that pane too — picking an
   // NPC for pane 2 should let you type to it immediately, without a second
   // click. With a single pane this degenerates to today's plain "select NPC".
@@ -730,10 +741,11 @@ export function App() {
   const jumpToNeedsYou = useCallback(() => {
     if (!needsYou.firstId) return;
     goToWorker(needsYou.firstId);
+    requestCameraFocus(needsYou.firstId);
     updatePreferences({ taskLogOpen: true });
     flashArrival(".approval-card--pending");
     flashArrival(`[data-crew-id="${CSS.escape(needsYou.firstId)}"]`);
-  }, [goToWorker, needsYou.firstId, updatePreferences]);
+  }, [goToWorker, needsYou.firstId, requestCameraFocus, updatePreferences]);
 
   // 預填某位 NPC 的輸入框：先切過去，再把文字／檔案交給 TaskComposer——它會等
   // 草稿切到那位 NPC 的那一份才填。絕不自動送出，送不送由使用者自己按。
@@ -1416,6 +1428,7 @@ export function App() {
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
+        focusRequest={cameraFocus}
       />
       </div>
       {!blackWindowMode && <TopBar
@@ -1859,7 +1872,7 @@ export function App() {
         collapsed={preferences.crewRailCollapsed}
         onFilter={(crewFilter) => updatePreferences({ crewFilter })}
         onCollapsed={(crewRailCollapsed) => updatePreferences({ crewRailCollapsed })}
-        onSelect={activateNpc}
+        onSelect={activateNpcWithCamera}
         onSelectDepartment={selectDepartment}
         onReorder={(ids) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); }}
         onCreate={() => openWorkspaceForCreate(activeProvider)}

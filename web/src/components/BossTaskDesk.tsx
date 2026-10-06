@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 import type { AdvisorProposal, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
 import { apiRequest } from "../api";
 import { clearAdvisorErrors, getActiveAdvisorWorkspace, getAdvisorEntry, releaseAdvisorPin, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
@@ -264,7 +264,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     } else {
       const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
       result = await onCreate({
-        message: text || "請依附加檔案規劃並完成任務",
+        message: text || t("請依附加檔案規劃並完成任務"),
         acceptanceCriteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 8),
         workspacePath: advisorWorkspace,
         decisionProvider: decision?.provider,
@@ -346,7 +346,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     setWorking(false);
     if (preview.error) { setError(preview.error); return; }
     const missionCount = preview.data?.missions?.length ?? 0;
-    const memberNames = preview.data?.members?.map((member) => member.name).join("、") || t("相關 NPC");
+    const memberNames = preview.data?.members?.map((member) => member.name).join(tc("punct", "、")) || t("相關 NPC");
     if (!(await confirm(t("清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。", { count: missionCount, members: memberNames }), "danger"))) return;
     setWorking(true); setError(null);
     const committed = await onRestart(selected.id, true);

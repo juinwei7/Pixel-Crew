@@ -3,6 +3,7 @@
 // picks what fits the moment.
 import type { StationKey } from "../stations";
 import type { Trait } from "./officeLife";
+import { t } from "../i18n";
 
 export type TalkContext = {
   kind: "working" | "thinking" | "waiting" | "idle" | "success";
@@ -40,7 +41,7 @@ const BY_TRAIT: Partial<Record<Trait, string[]>> = {
 };
 
 function pick(lines: string[] | undefined): string | null {
-  return lines && lines.length ? lines[Math.floor(Math.random() * lines.length)] : null;
+  return lines && lines.length ? t(lines[Math.floor(Math.random() * lines.length)]) : null;
 }
 
 /** A line for this moment, or null if nothing fits. */

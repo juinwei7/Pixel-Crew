@@ -100,6 +100,9 @@ export type RunnerEvent =
   | { type: "tool_call_start"; id: string; name: string; input: unknown; at?: number }
   | { type: "tool_call_output_delta"; id: string; delta: string; at?: number }
   | { type: "tool_call_result"; id: string; output: unknown; isError: boolean; at?: number }
+  // 背景子代理（run_in_background）真正跑完：CLI 在回合之間送 system/task_notification，
+  // id＝當初開它的 Agent tool_use id。前端靠它把會議桌座位上的子代理收走。
+  | { type: "subagent_done"; id: string; at?: number }
   | { type: "approval_requested"; request: ApprovalRequest; at?: number }
   | { type: "approval_resolved"; id: string; decision: ApprovalDecision; at?: number }
   | {

@@ -1,6 +1,7 @@
 import { Container, Graphics, Text } from "pixi.js";
 import { ART_W, ART_H } from "./room";
 import { sessionFlag, setSessionFlag } from "./officeLife";
+import { t } from "../i18n";
 
 type CatState = "wander" | "pause" | "sit" | "sleep" | "stretch";
 /** Waking from a nap: a long, low stretch before it pads off. */
@@ -68,7 +69,7 @@ export class Cat {
     else if (this.state === "wander") this.enter("pause");
     this.hopT = 320;
     this.meowT = 1_500;
-    const line = sleepy ? "喵？" : Math.random() < 0.5 ? "喵～" : "呼嚕～";
+    const line = sleepy ? t("喵？") : Math.random() < 0.5 ? t("喵～") : t("呼嚕～");
     if (!this.meowText) {
       this.meowText = new Text({
         text: line,

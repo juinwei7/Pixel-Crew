@@ -2,6 +2,7 @@ import { Container, Graphics, Text } from "pixi.js";
 import { SHIRT_COLORS } from "./crewLook";
 import { ART_W, ART_H } from "./room";
 import { t } from "../i18n";
+import { dayKey, lampLit, noteHit, noteLayout, paperBalls, queueCard, trinketFor, trinketPixels, type QueueCard } from "./deskProps";
 
 export type DepartmentPhase = "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
 
@@ -19,6 +20,17 @@ export type PersonalDeskState = {
   ephemeral?: boolean;
   /** 部門任務「當前步驟」的負責人——桌位畫值勤指標，一眼看出現在到誰。 */
   onDuty?: boolean;
+  /** Scene worker state already carries this; working/thinking keeps the night desk lamp on. */
+  character?: { activity: string };
+};
+
+/** Tap on a desk's queued-command sticky notes: the first three commands + where to float the card. */
+export type QueueNotesTap = {
+  id: string;
+  items: string[];
+  card: QueueCard;
+  /** Pointer position in canvas (global) px. */
+  global: { x: number; y: number };
 };
 
 export type DepartmentSeat = {
@@ -73,6 +85,14 @@ type DeskEntry = {
   parts: Graphics[];
   transition: "building" | "ready" | "removing";
   transitionMs: number;
+  /** Lamp, trinket, sticky notes, waste bin — static, redrawn only when propsKey changes. */
+  props: Graphics;
+  /** Invisible tap target over the sticky notes (only interactive while the queue is non-empty). */
+  notesHit: Container;
+  propsKey: string;
+  busy: boolean;
+  /** performance.now() of the last moment we saw this worker busy; null = not since load. */
+  lastBusyAt: number | null;
 };
 
 type PhaseHighlight = {
@@ -246,6 +266,15 @@ export class PersonalDeskLayer {
   private readonly entries = new Map<string, DeskEntry>();
   private phaseHighlights: PhaseHighlight[] = [];
   private readonly reduceMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  private night = false;
+  private day = dayKey(new Date());
+  /** Queued commands per worker (full list; the desk shows the count, the card the first three). */
+  private readonly queues = new Map<string, string[]>();
+  /** Today's failed jobs per worker — paper balls in the desk's waste bin. */
+  private readonly failures = new Map<string, number>();
+  private lampCheckMs = 0;
+  /** Set by the scene: a tap on a desk's sticky notes (the UI floats a card listing the commands). */
+  onQueueNotesTap: ((tap: QueueNotesTap) => void) | null = null;
 
   constructor(
     private readonly onSelect: (id: string) => void,
@@ -257,6 +286,55 @@ export class PersonalDeskLayer {
     this.departmentLayer.zIndex = -10;
     this.deskLayer.sortableChildren = true;
     this.container.addChild(this.departmentLayer, this.deskLayer);
+  }
+
+  /** Night lamps: the scene calls this from its day/night tick (same flag as room.setNight). */
+  setNight(night: boolean): void {
+    if (night === this.night) return;
+    this.night = night;
+    this.refreshAllProps();
+  }
+
+  /** Daily counters (waste-bin paper) clear when the local day changes. Call alongside room.setClock. */
+  setClock(date: Date): void {
+    const day = dayKey(date);
+    if (day === this.day) return;
+    this.day = day;
+    this.failures.clear();
+    this.refreshAllProps();
+  }
+
+  /** Queued commands for one worker (oldest first). One sticky note per command, max three + a pad. */
+  setQueue(id: string, items: readonly string[]): void {
+    const prev = this.queues.get(id);
+    if (items.length === 0) {
+      if (!prev) return;
+      this.queues.delete(id);
+    } else {
+      if (prev && prev.length === items.length && prev.every((item, i) => item === items[i])) return;
+      this.queues.set(id, [...items]);
+    }
+    this.refreshProps(id);
+  }
+
+  /** Today's failed-job count for one worker: one paper ball each in the desk's bin (max five). */
+  setFailures(id: string, count: number): void {
+    const n = Math.max(0, Math.floor(Number.isFinite(count) ? count : 0));
+    if ((this.failures.get(id) ?? 0) === n) return;
+    if (n === 0) this.failures.delete(id);
+    else this.failures.set(id, n);
+    this.refreshProps(id);
+  }
+
+  /** One more failed job for this worker (for event-driven callers). */
+  addFailure(id: string): void {
+    this.setFailures(id, (this.failures.get(id) ?? 0) + 1);
+  }
+
+  /** Card content for a worker's queue (what a sticky-note tap shows). */
+  queueCardFor(id: string): QueueCard | null {
+    const items = this.queues.get(id);
+    return items?.length ? queueCard(items) : null;
   }
 
   setWorkers(workers: PersonalDeskState[]): DepartmentDeskLayout {
@@ -296,6 +374,11 @@ export class PersonalDeskLayer {
       } else {
         entry.duty.clear();
       }
+      const activity = worker.character?.activity;
+      const busy = activity === "working" || activity === "thinking";
+      if (busy || entry.busy) entry.lastBusyAt = performance.now();
+      entry.busy = busy;
+      this.refreshProps(worker.id);
     });
 
     for (const [id, entry] of this.entries) {
@@ -307,12 +390,83 @@ export class PersonalDeskLayer {
         entry.highlight.clear();
         entry.duty.clear();
         entry.onDuty = false;
+        entry.props.visible = false;
+        entry.notesHit.eventMode = "none";
       }
     }
     return layout;
   }
 
+  private refreshAllProps(): void {
+    for (const id of this.entries.keys()) this.refreshProps(id);
+  }
+
+  /**
+   * Desk props: night lamp (+ a couple of warm pixels on the desk top), the
+   * NPC's trinket, sticky notes for queued commands, and the waste bin with
+   * today's paper balls. Everything is static — the Graphics is only rebuilt
+   * when the visible state key changes, so 20 desks cost nothing per frame.
+   */
+  private refreshProps(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    if (entry.transition !== "ready") {
+      entry.props.visible = false;
+      entry.notesHit.eventMode = "none";
+      return;
+    }
+    entry.props.visible = true;
+    const lit = lampLit(this.night, entry.busy, entry.lastBusyAt, performance.now());
+    const queued = this.queues.get(id)?.length ?? 0;
+    const notes = noteLayout(queued);
+    const balls = paperBalls(this.failures.get(id) ?? 0);
+    entry.notesHit.eventMode = queued > 0 ? "static" : "none";
+    const key = `${lit ? 1 : 0}|${notes.notes.length}|${notes.stacked ? 1 : 0}|${balls.length}`;
+    if (key === entry.propsKey) return;
+    entry.propsKey = key;
+    const g = entry.props;
+    g.clear();
+    // Desk lamp (left of the monitor): base, post, shade. Off = dark metal only.
+    g.rect(-14, -6, 3, 1).fill(0x2c3b59)
+      .rect(-13, -10, 1, 4).fill(0x34446a)
+      .rect(-13, -11, 3, 1).fill(lit ? 0x6b6450 : 0x3f5072);
+    if (lit) {
+      // Bulb under the shade and a small warm patch on the desk — squares, never a round glow.
+      g.rect(-12, -10, 2, 1).fill({ color: 0xffd9a0, alpha: 0.8 })
+        .rect(-13, -5, 4, 1).fill({ color: 0xffcf8a, alpha: 0.26 })
+        .rect(-14, -4, 5, 1).fill({ color: 0xffcf8a, alpha: 0.12 });
+    }
+    for (const [x, y, w, h, color] of trinketPixels(trinketFor(id))) g.rect(x, y, w, h).fill(color);
+    // Sticky notes on the monitor's right bezel; a long queue turns the last one into a pad.
+    notes.notes.forEach(([x, y, w, h], i) => {
+      const last = i === notes.notes.length - 1;
+      if (last && notes.stacked) {
+        g.rect(x + 1, y - 1, w, h).fill(0x6e6236);
+        g.rect(x, y + h, w, 1).fill(0x5f5530);
+      }
+      g.rect(x, y, w, h).fill(0x9a8848).rect(x, y + h - 1, w, 1).fill(0x857540);
+    });
+    // Waste-paper bin beside the right desk leg; balls fill it bottom-up to the rim.
+    g.rect(14, 7, 6, 1).fill({ color: 0x050810, alpha: 0.3 })
+      .rect(15, 2, 4, 4).fill({ color: 0x111827, alpha: 0.85 })
+      .rect(14, 1, 6, 1).fill(0x3a4a6c)
+      .rect(14, 2, 1, 5).fill(0x2c3b59)
+      .rect(19, 2, 1, 5).fill(0x2c3b59)
+      .rect(15, 6, 4, 1).fill(0x2c3b59);
+    for (const [x, y, w, h] of balls) {
+      g.rect(x, y, w, h).fill(0x7d8698).rect(x, y, 1, 1).fill(0x98a0b0);
+    }
+  }
+
   update(dt: number): void {
+    // Idle lamps go out on their own: a cheap once-a-second check (redraws only on a real change).
+    if (this.night) {
+      this.lampCheckMs += dt;
+      if (this.lampCheckMs >= 1_000) {
+        this.lampCheckMs = 0;
+        this.refreshAllProps();
+      }
+    }
     for (const highlight of this.phaseHighlights) {
       const alpha = this.reduceMotion
         ? 0.58
@@ -352,6 +506,7 @@ export class PersonalDeskLayer {
         if (entry.transitionMs >= BUILD_MS) {
           entry.transition = "ready";
           this.renderAssembly(entry, 1, false);
+          this.refreshProps(id);
         }
         continue;
       }
@@ -630,7 +785,33 @@ export class PersonalDeskLayer {
       if (!this.isDragging()) this.onSelect(worker.id);
     });
     const duty = new Graphics();
-    container.addChild(highlight, blueprint, ...parts, effect, duty);
+    const props = new Graphics();
+    props.visible = false;
+    // Sticky-note tap target: a child of the desk, so it is hit-tested before the
+    // desk itself; stopping propagation keeps the tap from also selecting the NPC.
+    const notesHit = new Container();
+    notesHit.eventMode = "none";
+    notesHit.cursor = "pointer";
+    notesHit.hitArea = {
+      contains: (x: number, y: number) => noteHit(x, y, this.queues.get(worker.id)?.length ?? 0),
+    };
+    let notesPid = -1;
+    notesHit.on("pointerdown", (event) => { notesPid = event.pointerId; });
+    notesHit.on("pointerup", (event) => {
+      if (event.pointerId !== notesPid) return;
+      notesPid = -1;
+      event.stopPropagation();
+      if (this.isDragging()) return;
+      const items = this.queues.get(worker.id);
+      if (!items?.length) return;
+      this.onQueueNotesTap?.({
+        id: worker.id,
+        items: items.slice(0, 3),
+        card: queueCard(items),
+        global: { x: event.global.x, y: event.global.y },
+      });
+    });
+    container.addChild(highlight, blueprint, ...parts, props, effect, duty, notesHit);
     for (const part of parts) part.visible = false;
     return {
       container,
@@ -642,6 +823,11 @@ export class PersonalDeskLayer {
       parts,
       transition: "building",
       transitionMs: 0,
+      props,
+      notesHit,
+      propsKey: "",
+      busy: false,
+      lastBusyAt: null,
     };
   }
 }

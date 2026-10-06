@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 import { isCompositionKey } from "../keyboardInput";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 
 // Ctrl/⌘ K 指令面板：搜尋 NPC 並切換、換房間／視圖、對某位 NPC 預填指令、打開
 // 現有的設定面板與工具。全部只是呼叫 App 既有的 handler——這裡不打任何 API、
@@ -122,7 +122,7 @@ export function CommandPalette({ entries, workers, activeWorker, onComposeTo, on
             id: `compose:${worker.id}`,
             group: t("對 NPC 下指令"),
             label: t("對 {name} 下指令", { name: worker.name }),
-            detail: mention.text ? `「${mention.text.length > 40 ? `${mention.text.slice(0, 40)}…` : mention.text}」` : worker.detail,
+            detail: mention.text ? `${tc("punct", "「")}${mention.text.length > 40 ? `${mention.text.slice(0, 40)}…` : mention.text}${tc("punct", "」")}` : worker.detail,
             meta: t("只預填，不送出"),
             status: worker.status,
             icon: "send" as const,
@@ -149,7 +149,7 @@ export function CommandPalette({ entries, workers, activeWorker, onComposeTo, on
           id: "compose:active",
           group: t("對 NPC 下指令"),
           label: t("填進 {name} 的輸入框", { name: activeWorker.name }),
-          detail: `「${query.trim().length > 40 ? `${query.trim().slice(0, 40)}…` : query.trim()}」`,
+          detail: `${tc("punct", "「")}${query.trim().length > 40 ? `${query.trim().slice(0, 40)}…` : query.trim()}${tc("punct", "」")}`,
           meta: t("只預填，不送出"),
           icon: "enter",
           run: () => onComposeTo(activeWorker.id, query.trim()),

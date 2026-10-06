@@ -40,9 +40,9 @@ function shiftDay(day: string, delta: number): string {
 }
 
 const KIND_META: Record<TimelineItem["kind"], { icon: IconName; label: string }> = {
-  user_message: { icon: "speech", label: "指示" },
-  turn_end: { icon: "check", label: "回合完成" },
-  error: { icon: "fire", label: "錯誤" },
+  user_message: { icon: "speech", label: t("指示") },
+  turn_end: { icon: "check", label: t("回合完成") },
+  error: { icon: "fire", label: t("錯誤") },
 };
 
 export function DayReportModal({ notify, onClose }: Props) {

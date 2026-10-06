@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
-import type { FurnitureScreenPos, SceneHandle, SceneView } from "../game/scene";
+import type { FurnitureScreenPos, PersonScreenPos, SceneHandle, SceneView } from "../game/scene";
+import type { QueueNotesTap } from "../game/personalDesks";
+import { apiRequest } from "../api";
 import { SHIRT_COLORS } from "../game/crewLook";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
 import { crowdedView, declutterNameplates, nameplateVisible, type NameplateBox } from "../game/nameplateLod";
@@ -15,7 +17,9 @@ import { parseMcpToolName } from "../mcpToolName";
 import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
+import { clearViewRect, edgeMarkers, isOffscreen, nameInitials, rectCenter, type EdgeMarker, type Pt, type Rect, type SceneCameraControls } from "../game/cameraFocus";
+import { lastDoneLine } from "../lastDone";
 
 // 「一眼看出在幹嘛」活動徽章：依當前工具所屬站點給一個線性圖示＋短動詞，整合進名牌內
 // （只在工作中出現、閒置收起）。圖示吃站點主題色做色彩編碼，加速一眼辨識。
@@ -150,6 +154,50 @@ export function radialMenuDirection(x: number, width: number): "left" | "right" 
   if (x < edgeGuard) return "right";
   if (x > width - edgeGuard) return "left";
   return x < width / 2 ? "left" : "right";
+}
+
+// scene.ts 接上鏡頭導引前，這些方法不存在——一律用 optional 呼叫，接線前什麼都不做、也不會壞。
+type CameraScene = SceneHandle & Partial<SceneCameraControls>;
+function cameraOf(scene: SceneHandle | null): CameraScene | null {
+  return scene as CameraScene | null;
+}
+
+// 會蓋在 canvas 上的面板：鏡頭置中與畫面外判定都只算「沒被蓋住的那塊」。
+const CAMERA_OBSTACLES = ".crew-rail:not(.crew-rail--sheet), .holo-panel:not(.holo-panel--closed):not(.holo-panel--focus), .top-bar, .crew-strip-wrap";
+// 邊緣指示不要壓在左下角的縮放列／分流條上。
+const CAMERA_KEEPOUTS = ".npc-aggbar, .canvas-zoom";
+
+/** 元素的版面位置（扣掉 transform 位移）：任務日誌開場是滑進來的，動畫途中量也要量到終點。 */
+function layoutRect(el: Element): DOMRect {
+  const r = el.getBoundingClientRect();
+  const transform = typeof getComputedStyle === "function" ? getComputedStyle(el).transform : "none";
+  if (!transform || transform === "none" || typeof DOMMatrixReadOnly === "undefined") return r;
+  const m = new DOMMatrixReadOnly(transform);
+  return new DOMRect(r.left - m.m41, r.top - m.m42, r.width, r.height);
+}
+
+function hostLocal(r: DOMRect, bounds: DOMRect): Rect {
+  return { left: r.left - bounds.left, top: r.top - bounds.top, right: r.right - bounds.left, bottom: r.bottom - bounds.top };
+}
+
+/** canvas 上真正看得到的區域（host 座標）。 */
+function measureClearRect(host: HTMLElement): Rect {
+  const bounds = host.getBoundingClientRect();
+  const view: Rect = { left: 0, top: 0, right: bounds.width, bottom: bounds.height };
+  if (typeof document === "undefined") return view;
+  const obstacles = [...document.querySelectorAll(CAMERA_OBSTACLES)].map((el) => hostLocal(layoutRect(el), bounds));
+  return clearViewRect(view, obstacles);
+}
+
+function measureKeepouts(host: HTMLElement): Rect[] {
+  if (typeof document === "undefined") return [];
+  const bounds = host.getBoundingClientRect();
+  return [...document.querySelectorAll(CAMERA_KEEPOUTS)].map((el) => hostLocal(el.getBoundingClientRect(), bounds));
+}
+
+function placeEdgeMarker(el: HTMLElement, marker: EdgeMarker, bounds: { left: number; top: number }): void {
+  el.style.transform = `translate(-50%, -50%) translate(${Math.round(bounds.left + marker.x)}px, ${Math.round(bounds.top + marker.y)}px)`;
+  el.style.setProperty("--edge-angle", `${marker.angle.toFixed(3)}rad`);
 }
 
 // 穩定的空集合預設值：避免每次 render 都 new Set() 造成參照改變、白白觸發下游重算。
@@ -306,11 +354,13 @@ type Props = {
   // Lets a pending approval be resolved right on the sprite instead of
   // requiring the task log panel to be open. Optional, same reasoning as above.
   onResolveApproval?(workerId: string, approvalId: string, decision: ApprovalDecision): Promise<string | null>;
+  /** 使用者在介面別處（左欄、手機頭像列、頂欄「需要你」）主動點了某位 NPC：鏡頭滑過去。seq 每次點擊遞增。 */
+  focusRequest?: { id: string; seq: number } | null;
 };
 
 export function GameCanvas({
   workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onOpenOutbox, onSelect, onOpenLog, onAvatarError,
-  onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval,
+  onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval, focusRequest,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const bubbleRefs = useRef(new Map<string, HTMLDivElement>());
@@ -332,6 +382,8 @@ export function GameCanvas({
   // The office scene (Pixi + all of game/*) is its own chunk, loaded on demand.
   const [sceneReady, setSceneReady] = useState(false);
   const [view, setView] = useState<SceneView | null>(null);
+  // 點桌上的便利貼（排隊中的指令）→ 浮一張小卡列出前三則；點別處或 Esc 收起。
+  const [notesCard, setNotesCard] = useState<QueueNotesTap | null>(null);
   const [furniturePositions, setFurniturePositions] = useState<Map<StationKey, FurnitureScreenPos>>(new Map());
   // Same positions, readable from the per-frame callback (tags step below the station plates).
   const furniturePosRef = useRef<Map<StationKey, FurnitureScreenPos>>(new Map());
@@ -454,6 +506,48 @@ export function GameCanvas({
   const onDepartmentMissionRef = useRef(onDepartmentMission);
   onDepartmentMissionRef.current = onDepartmentMission;
 
+  // ── 鏡頭導引（game/cameraFocus.ts；scene 端接線見 SceneCameraControls）──
+  // 跟拍：scene 是唯一事實來源（拖曳／恢復視角／NPC 離場都會結束），每幀同步回來。
+  const [followingId, setFollowingId] = useState<string | null>(null);
+  const followingRef = useRef<string | null>(null);
+  // Alt+點擊＝戳人：Alt 連點兩下不能被當成「雙擊跟拍」。
+  const altPressRef = useRef(false);
+  // 主動點名後，選取環在 NPC 腳下亮一下。
+  const [focusPulse, setFocusPulse] = useState<{ id: string; seq: number } | null>(null);
+  const focusPulseRef = useRef<{ id: string; seq: number } | null>(null);
+  focusPulseRef.current = focusPulse;
+  const focusRingRef = useRef<HTMLDivElement | null>(null);
+  // 畫面外的「需要你」NPC：邊緣指示。
+  const needIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const offscreenRef = useRef<ReadonlySet<string>>(new Set());
+  const [offscreenNeed, setOffscreenNeed] = useState<string[]>([]);
+  const edgeMarkerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const edgeMarkerPosRef = useRef(new Map<string, EdgeMarker>());
+  const clearRectRef = useRef<{ rect: Rect; keepouts: Rect[]; at: number } | null>(null);
+
+  const cameraAnchor = (): Pt | undefined => {
+    const host = hostRef.current;
+    return host ? rectCenter(measureClearRect(host)) : undefined;
+  };
+  const focusOnNpc = (id: string) => {
+    cameraOf(sceneRef.current)?.focusOn?.(id, cameraAnchor());
+    setFocusPulse((current) => ({ id, seq: (current?.seq ?? 0) + 1 }));
+  };
+  const followNpc = (id: string) => {
+    const scene = cameraOf(sceneRef.current);
+    if (!scene?.follow) return;
+    scene.follow(id, cameraAnchor());
+    followingRef.current = id;
+    setFollowingId(id);
+  };
+  const stopFollowing = () => {
+    cameraOf(sceneRef.current)?.stopFollow?.();
+    followingRef.current = null;
+    setFollowingId(null);
+  };
+  const followNpcRef = useRef(followNpc);
+  followNpcRef.current = followNpc;
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -465,6 +559,61 @@ export function GameCanvas({
       ? null
       : new ResizeObserver(syncSceneSize);
     resizeObserver?.observe(host);
+    const notePointerAlt = (event: PointerEvent) => { altPressRef.current = event.altKey; };
+    host.addEventListener("pointerdown", notePointerAlt, true);
+
+    // 每幀：跟拍狀態同步、選取環跟著 NPC、畫面外「需要你」的邊緣指示。
+    function updateCameraOverlays(positions: PersonScreenPos[], bounds: DOMRect): void {
+      const scene = cameraOf(sceneRef.current);
+      const following = scene?.followingId?.() ?? null;
+      if (following !== followingRef.current) {
+        followingRef.current = following;
+        setFollowingId(following);
+      }
+      const pulse = focusPulseRef.current;
+      const ring = focusRingRef.current;
+      if (pulse && ring) {
+        const pos = positions.find((candidate) => candidate.id === pulse.id);
+        if (pos) {
+          ring.style.transform = `translate(-50%, -50%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 17 * pos.scale}px)`;
+          ring.style.setProperty("--ring-w", `${Math.round(20 * pos.scale)}px`);
+        }
+      }
+      const now = performance.now();
+      const host = hostRef.current;
+      if (host && (!clearRectRef.current || now - clearRectRef.current.at > 250)) {
+        clearRectRef.current = { rect: measureClearRect(host), keepouts: measureKeepouts(host), at: now };
+      }
+      const clear = clearRectRef.current;
+      const need = needIdsRef.current;
+      if (!clear || need.size === 0) {
+        if (offscreenRef.current.size > 0) {
+          offscreenRef.current = new Set();
+          setOffscreenNeed([]);
+        }
+        return;
+      }
+      const wasOff = offscreenRef.current;
+      const nextOff = new Set<string>();
+      const points: Array<{ id: string; x: number; y: number }> = [];
+      for (const pos of positions) {
+        if (!need.has(pos.id) || pos.opacity <= 0.05) continue;
+        const point = { x: pos.x, y: pos.y + 8 * pos.scale };
+        if (isOffscreen(point, clear.rect, wasOff.has(pos.id))) {
+          nextOff.add(pos.id);
+          points.push({ id: pos.id, ...point });
+        }
+      }
+      for (const marker of edgeMarkers(points, clear.rect, { keepouts: clear.keepouts })) {
+        edgeMarkerPosRef.current.set(marker.id, marker);
+        const el = edgeMarkerRefs.current.get(marker.id);
+        if (el) placeEdgeMarker(el, marker, bounds);
+      }
+      if (nextOff.size !== wasOff.size || [...nextOff].some((id) => !wasOff.has(id))) {
+        offscreenRef.current = nextOff;
+        setOffscreenNeed([...nextOff]);
+      }
+    }
 
     // Loaded on demand so the office engine stays out of the app's entry bundle.
     // fxBus events emitted before it arrives simply have no listener yet.
@@ -505,8 +654,13 @@ export function GameCanvas({
           const wide = positions.map((pos) => {
             const plate = nameRefs.current.get(pos.id);
             if (!plate) return null;
-            if (!plate.classList.contains("npc-nameplate--tight")) plate.dataset.fullw = String(plate.offsetWidth);
-            return { id: pos.id, plate, x: pos.x, top: tagTop(pos, plate.offsetHeight || 18, plate.offsetWidth || 80), w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
+            if (!plate.classList.contains("npc-nameplate--tight")) {
+              plate.dataset.fullw = String(plate.offsetWidth);
+              // 閒置名牌第二行（X 分前完成）收合時高度會變矮——高度也用展開時的，避免收／展來回跳。
+              plate.dataset.fullh = String(plate.offsetHeight);
+            }
+            const h = Number(plate.dataset.fullh) || plate.offsetHeight || 18;
+            return { id: pos.id, plate, x: pos.x, top: tagTop(pos, h, plate.offsetWidth || 80), w: Number(plate.dataset.fullw) || plate.offsetWidth, h };
           });
           for (let i = 0; i < wide.length; i++) {
             const a = wide[i];
@@ -580,6 +734,7 @@ export function GameCanvas({
           const approval = approvalRefs.current.get(pos.id);
           if (approval) approval.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y - 34}px)`;
         }
+        updateCameraOverlays(positions, bounds);
         const occupied: BubbleRect[] = [];
         const ordered = [...positions].sort((a, b) =>
           Number(b.id === latest.current.activeId) - Number(a.id === latest.current.activeId),
@@ -625,6 +780,8 @@ export function GameCanvas({
         setHoveredId(null);
         onSelectRef.current(id);
         onOpenLog?.(id);
+        // 雙擊 NPC＝跟拍（Alt 連點是戳人，不算）。
+        if (!altPressRef.current) followNpcRef.current(id);
       },
       onHover: (id) => {
         hoveredIdRef.current = id;
@@ -671,7 +828,12 @@ export function GameCanvas({
         if (position) setMenuDirection(radialMenuDirection(position.x, host.getBoundingClientRect().width));
         setMenuOpenFor(id);
       },
-      onViewChange: setView,
+      // 平移（拖曳、鏡頭滑動、跟拍）每幀都會回報；縮放列只關心這四個值，沒變就不重畫整個覆蓋層。
+      onQueueNotes: (tap) => setNotesCard(tap),
+      onViewChange: (next) => setView((current) => (
+        current && current.scale === next.scale && current.minScale === next.minScale &&
+        current.maxScale === next.maxScale && current.isDefault === next.isDefault ? current : next
+      )),
     })).then((h) => {
       if (cancelled) {
         h.destroy();
@@ -704,6 +866,7 @@ export function GameCanvas({
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      host.removeEventListener("pointerdown", notePointerAlt, true);
       handle?.destroy();
       sceneRef.current = null;
     };
@@ -718,6 +881,80 @@ export function GameCanvas({
   useEffect(() => {
     sceneRef.current?.setMilestone(milestoneLevel(completedTurns));
   }, [completedTurns]);
+
+  // 桌上便利貼＝每位的排隊指令。
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    for (const worker of workers) scene.setQueue(worker.id, (worker.queue ?? []).map((item) => item.message));
+  }, [workers, sceneReady]);
+
+  // 白板正字（今日完成）與紙簍紙團（各人今日失敗）：吃 /api/day-report，回合數變了才重抓（2 秒防抖）。
+  useEffect(() => {
+    if (!sceneReady) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      apiRequest<{ totals: { turns: number; errors: number }; workers: Array<{ workerId: string; errors: number }> }>("/api/day-report")
+        .then((report) => {
+          const scene = sceneRef.current;
+          if (cancelled || !scene) return;
+          scene.setTodayDone(Math.max(0, report.totals.turns - report.totals.errors));
+          scene.setTodayFailures(new Map(report.workers.map((stat) => [stat.workerId, stat.errors])));
+        })
+        .catch(() => { /* 只是裝飾，抓不到就維持原樣 */ });
+    }, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [completedTurns, sceneReady]);
+
+  useEffect(() => {
+    if (!notesCard) return;
+    const close = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event.target instanceof Element && event.target.closest(".queue-notes-card")) return;
+      setNotesCard(null);
+    };
+    window.addEventListener("keydown", close);
+    window.addEventListener("pointerdown", close, true);
+    return () => {
+      window.removeEventListener("keydown", close);
+      window.removeEventListener("pointerdown", close, true);
+    };
+  }, [notesCard]);
+
+  // 介面別處主動點名（左欄／手機頭像列／頂欄「需要你」）→ 鏡頭滑過去。掛載時的舊請求不重播。
+  const lastFocusSeqRef = useRef(focusRequest?.seq ?? 0);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.seq === lastFocusSeqRef.current) return;
+    lastFocusSeqRef.current = focusRequest.seq;
+    focusOnNpc(focusRequest.id);
+  }, [focusRequest]);
+
+  // 選取環只亮一下就收。
+  useEffect(() => {
+    if (!focusPulse) return;
+    const timer = setTimeout(() => setFocusPulse((current) => (current?.seq === focusPulse.seq ? null : current)), 1200);
+    return () => clearTimeout(timer);
+  }, [focusPulse]);
+
+  // 跟拍中按 Esc 結束（不吞掉這個鍵：其他層照常收到）。
+  useEffect(() => {
+    if (!followingId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.isComposing) stopFollowing();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [followingId]);
+
+  // 閒置名牌「X 分前完成」：每 30 秒重畫一次就夠（忙碌時另有每秒的計時）。
+  useEffect(() => {
+    if (!workers.some((worker) => !worker.busy && worker.turns.length > 0)) return;
+    const timer = setInterval(() => forceTick((n) => n + 1), 30_000);
+    return () => clearInterval(timer);
+  }, [workers]);
 
   useEffect(() => {
     const starts = turnStartRef.current;
@@ -787,6 +1024,7 @@ export function GameCanvas({
   const needIds = aggVisual
     .map((w) => w.selectId)
     .filter((id) => { const full = workersById.get(id); return !!full && (!!pendingApprovalFor(full) || unansweredAutopilotAsk(full)); });
+  needIdsRef.current = new Set(needIds);
   const aggBusy = aggVisual.filter((w) => w.busy).length;
   const aggIdle = aggVisual.length - aggBusy;
 
@@ -798,13 +1036,64 @@ export function GameCanvas({
           <span className="npc-aggbar__seg"><Icon name="gear" size={11} />{aggBusy} {t("工作中")}</span>
           {needIds.length > 0 && (
             <button type="button" className="npc-aggbar__seg npc-aggbar__seg--need" title={t("點我跳到需要你的 NPC")}
-              onClick={() => { const id = needIds[0]; if (id) { onSelect(id); onOpenLog?.(id); } }}>
+              onClick={() => { const id = needIds[0]; if (id) { onSelect(id); onOpenLog?.(id); focusOnNpc(id); } }}>
               <Icon name="bell" size={11} />{needIds.length} {t("需要你")}
             </button>
           )}
           <span className="npc-aggbar__seg npc-aggbar__seg--idle"><Icon name="moon" size={11} />{aggIdle} {t("待命")}</span>
+          {followingId && (
+            <button type="button" className="npc-aggbar__seg npc-aggbar__seg--follow"
+              title={t("正在跟拍 {name}；拖曳畫面、按 Esc 或點這裡結束", { name: workersById.get(followingId)?.name ?? "NPC" })}
+              onClick={stopFollowing}>
+              <span className="npc-aggbar__follow-dot" aria-hidden="true" />{t("跟拍中・Esc 結束")}
+            </button>
+          )}
         </div>
       )}
+      {focusPulse && <div key={focusPulse.seq} ref={focusRingRef} className="npc-focus-ring" aria-hidden="true" />}
+      {offscreenNeed.map((id) => {
+        const worker = workersById.get(id);
+        if (!worker) return null;
+        const last = edgeMarkerPosRef.current.get(id);
+        const bounds = hostRef.current?.getBoundingClientRect();
+        return (
+          <button
+            key={id}
+            type="button"
+            ref={(el) => {
+              if (el) edgeMarkerRefs.current.set(id, el);
+              else edgeMarkerRefs.current.delete(id);
+            }}
+            className="npc-edge-marker"
+            style={last && bounds ? {
+              transform: `translate(-50%, -50%) translate(${Math.round(bounds.left + last.x)}px, ${Math.round(bounds.top + last.y)}px)`,
+              "--edge-angle": `${last.angle.toFixed(3)}rad`,
+            } as CSSProperties : { visibility: "hidden" }}
+            aria-label={t("{name} 在畫面外等你核准，點我移過去", { name: worker.name })}
+            title={t("{name} 等你核准", { name: worker.name })}
+            onClick={() => focusOnNpc(id)}
+          >
+            <span className="npc-edge-marker__arrow" aria-hidden="true" />
+            <span className="npc-edge-marker__face" aria-hidden="true">{nameInitials(worker.name)}</span>
+          </button>
+        );
+      })}
+      {notesCard && (() => {
+        const bounds = hostRef.current?.getBoundingClientRect();
+        if (!bounds) return null;
+        return (
+          <div
+            className="queue-notes-card"
+            role="dialog"
+            aria-label={notesCard.card.title}
+            style={{ left: Math.round(bounds.left + notesCard.global.x), top: Math.round(bounds.top + notesCard.global.y) }}
+          >
+            <strong>{notesCard.card.title}</strong>
+            <ol>{notesCard.card.lines.map((line, index) => <li key={index}>{line}</li>)}</ol>
+            {notesCard.card.more && <small>{notesCard.card.more}</small>}
+          </div>
+        );
+      })()}
       {view && (
         <div className="canvas-zoom" role="group" aria-label={t("畫面縮放")}>
           <button
@@ -835,7 +1124,7 @@ export function GameCanvas({
             aria-label={t("恢復預設視角")}
             title={t("恢復預設視角（大小與位置）")}
             disabled={view.isDefault}
-            onClick={() => sceneRef.current?.resetView()}
+            onClick={() => { stopFollowing(); sceneRef.current?.resetView(); }}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 0 1 14-4.5" /><path d="M18 2v4h-4" /><path d="M20 14a8 8 0 0 1-14 4.5" /><path d="M6 22v-4h4" /></svg>
           </button>
@@ -930,6 +1219,8 @@ export function GameCanvas({
         const swapFlash = swapFlashIds.has(w.id);
         // 整潔優先：ctx 還低（<50%）就不顯示公事包，逼近換腦門檻才浮現並長高變紅；換腦脈動時強制顯示。
         const showCase = ctxPct !== null && (ctxPct >= 50 || swapFlash);
+        // 閒置名牌第二行「12 分前・寫完 README」；忙碌時仍是活動徽章，協作／部門任務徽章在時讓位。
+        const doneLine = !w.busy && !w.temporary && !collaboration && !mission && full ? lastDoneLine(full, Date.now()) : null;
         return (
           <Fragment key={w.id}>
             <div
@@ -979,10 +1270,11 @@ export function GameCanvas({
                 return (
                   <span className="npc-nameplate__activity" style={{ "--act": tint } as CSSProperties}>
                     <Icon name={chip.icon} size={9} className="npc-nameplate__activity-ico" />
-                    <span className="npc-nameplate__activity-label">{thinking ? chip.label : t(chip.label)}</span>
+                    <span className="npc-nameplate__activity-label">{thinking ? chip.label : tc("activity", chip.label)}</span>
                   </span>
                 );
               })()}
+              {doneLine && <span className="npc-nameplate__done">{doneLine}</span>}
               {learnedFlash?.id === w.id && (
                 <span className="npc-nameplate__learned" title={learnedFlash.lesson ?? undefined}>
                   <Icon name="brain" size={9} className="npc-nameplate__learned-ico" />

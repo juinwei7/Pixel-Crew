@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, type RunnerEvent } from "../src/claudeRunner.js";
+import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, handleLine, type RunnerEvent } from "../src/claudeRunner.js";
 
 test("approval MCP bridge starts outside the Pixel Crew working directory", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pixel-crew-approval-cwd-"));
@@ -334,4 +334,11 @@ test("builds Claude stream-json image content blocks", () => {
     { type: "text", text: "這是什麼？" },
     { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
   ]);
+});
+
+test("maps a background task_notification to subagent_done keyed by the Agent tool_use id", () => {
+  const events: RunnerEvent[] = [];
+  handleLine({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "toolu_1", status: "completed" }, (e) => events.push(e));
+  handleLine({ type: "system", subtype: "task_notification", task_id: "a2", status: "completed" }, (e) => events.push(e));
+  assert.deepEqual(events, [{ type: "subagent_done", id: "toolu_1" }]);
 });

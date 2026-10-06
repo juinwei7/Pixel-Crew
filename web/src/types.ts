@@ -148,6 +148,8 @@ export type SubagentState = {
   name: string;
   task: string;
   background: boolean;
+  /** 開出來的時間（事件 at）；背景子代理跨回合留座，靠它設上限防殘影。 */
+  startedAt?: number;
 };
 
 export type { CapabilityState } from "../../server/src/protocol";

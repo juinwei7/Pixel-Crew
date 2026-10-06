@@ -6,7 +6,7 @@ import type {
   WorkerState,
 } from "./types";
 import { shortToolName, stationForTool } from "./stations";
-import { t } from "./i18n";
+import { t, tc } from "./i18n";
 
 // 把工具呼叫美化成好讀的中文短句（帶真實細節），取代直接吐英文工具名。3D/2D 小窗與對話泡共用。
 export function friendlyToolSpeech(name: string, input: unknown): string {
@@ -56,7 +56,7 @@ function readableFailureDetail(value: unknown): string {
   if (tool || reason) {
     return [tool ? t("工具 {name}", { name: String(tool) }) : t("權限遭拒"), reason ? String(reason) : t("未獲授權")]
       .filter(Boolean)
-      .join("：");
+      .join(tc("punct", "："));
   }
   try {
     return JSON.stringify(value);
@@ -92,6 +92,8 @@ function subagentInfo(input: unknown): { name: string; task: string } {
     task: description || (prompt.length > 80 ? `${prompt.slice(0, 79)}…` : prompt) || type || t("協助處理任務"),
   };
 }
+
+const BACKGROUND_SUBAGENT_MAX_MS = 3 * 60 * 60 * 1000;
 
 function isAsyncAgentResult(output: unknown): boolean {
   const text = readableFailureDetail(output);
@@ -281,7 +283,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         const info = subagentInfo(event.input);
         next.subagents = [
           ...next.subagents.filter((agent) => agent.id !== event.id),
-          { id: event.id, name: info.name, task: info.task, background: false },
+          { id: event.id, name: info.name, task: info.task, background: false, startedAt: event.at },
         ];
       }
       const startStation = stationForTool(event.name, event.input);
@@ -380,6 +382,10 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       next.character.bump = next.character.bump + 1;
       break;
     }
+    case "subagent_done": {
+      next.subagents = next.subagents.filter((agent) => agent.id !== event.id);
+      break;
+    }
     case "turn_end": {
       const turn = currentTurn();
       if (turn) {
@@ -431,7 +437,12 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       next.busy = false;
       next.openTextKey = null;
       next.openThinkingKey = null;
-      next.subagents = [];
+      // 背景子代理的回合結束後仍在跑——留在會議桌，等 subagent_done 才收；
+      // 萬一漏收通知，超過上限就當殘影清掉。前景子代理此時必已結束。
+      next.subagents = next.subagents.filter((agent) =>
+        agent.background &&
+        (event.at == null || agent.startedAt == null || event.at - agent.startedAt < BACKGROUND_SUBAGENT_MAX_MS),
+      );
       next.character = {
         ...next.character,
         activity: "idle",

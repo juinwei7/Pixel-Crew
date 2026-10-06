@@ -107,18 +107,20 @@ test("resumes the same task when background Agent activity arrives after an inte
   assert.equal(completed.turns[0].status, "done");
 });
 
-test("keeps an async Agent visible until its parent turn ends", () => {
+test("keeps a background Agent at the table past turn_end until subagent_done", () => {
   const launched = applyRunnerEvent(startedWorker(), {
     type: "tool_call_start",
     id: "agent-1",
     name: "Agent",
     input: { description: "檢查規範", subagent_type: "general-purpose" },
+    at: 1_000,
   });
   assert.deepEqual(launched.subagents, [{
     id: "agent-1",
     name: "檢查規範",
     task: "檢查規範",
     background: false,
+    startedAt: 1_000,
   }]);
 
   const background = applyRunnerEvent(launched, {
@@ -136,6 +138,26 @@ test("keeps an async Agent visible until its parent turn ends", () => {
     durationMs: 100,
     isError: false,
     permissionDenials: [],
+    at: 2_000,
+  });
+  assert.equal(ended.busy, false);
+  assert.deepEqual(ended.subagents.map((agent) => agent.id), ["agent-1"]);
+
+  const done = applyRunnerEvent(ended, { type: "subagent_done", id: "agent-1" });
+  assert.deepEqual(done.subagents, []);
+});
+
+test("drops a background Agent whose completion notice was missed after the cap", () => {
+  const launched = applyRunnerEvent(startedWorker(), {
+    type: "tool_call_start", id: "agent-1", name: "Agent", input: { description: "長跑" }, at: 0,
+  });
+  const background = applyRunnerEvent(launched, {
+    type: "tool_call_result", id: "agent-1",
+    output: "Async agent launched successfully.\nagentId: a1", isError: false,
+  });
+  const ended = applyRunnerEvent(background, {
+    type: "turn_end", resultText: "", costUsd: 0, durationMs: 1, isError: false, permissionDenials: [],
+    at: 4 * 60 * 60 * 1000,
   });
   assert.deepEqual(ended.subagents, []);
 });

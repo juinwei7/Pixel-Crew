@@ -18,6 +18,11 @@ import { FloorRipples, Hotspots, type Hotspot } from "./officeInteract";
 import { hashId, officeNow, onKonami, seasonal, sessionFlag, setSessionFlag, traitFor } from "./officeLife";
 import { ACCESSORIES } from "./person";
 import { talkLine } from "./smallTalk";
+import { t } from "../i18n";
+import {
+  COFFEE_ERRAND_COOLDOWN_MS, PACE_SPEED, WATER_COOLDOWN_MS, WATER_SPEED, mayFetchWater, mayPace, nearestTo, newToolWait,
+  pacePlan, screensaverOn, stepToolWait, type ToolWaitTrack,
+} from "./npcHabits";
 import { missionCheers } from "./missionCheer";
 import { emitFx, onFx } from "../fxBus";
 import { dragContainsFiles } from "../composerDrag";
@@ -30,6 +35,9 @@ import { isWallStation, wallStandSpot } from "./furnitureDefs";
 import { apiAssetUrl } from "../api";
 import { nightFactor } from "../dayNight";
 import { officeMinScale, responsiveOfficeFitScale } from "./camera";
+import { CameraDirector, centerPanOn, type SceneCameraControls } from "./cameraFocus";
+import { targetFps } from "./framePacing";
+import type { QueueNotesTap } from "./personalDesks";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -119,8 +127,14 @@ export type SceneHandle = {
   setMilestone(level: number): void;
   /** Context reset (brain swap / compaction) just happened for this worker — halo flash. */
   brainReset(workerId: string): void;
+  /** Queued commands for one worker — sticky notes on their desk. */
+  setQueue(id: string, items: readonly string[]): void;
+  /** Today's finished jobs — the whiteboard tally. */
+  setTodayDone(count: number): void;
+  /** Today's failed jobs per worker — paper balls in each desk's bin. */
+  setTodayFailures(byWorker: ReadonlyMap<string, number>): void;
   destroy(): void;
-};
+} & SceneCameraControls;
 
 type SceneCallbacks = {
   onPositions(list: PersonScreenPos[]): void;
@@ -142,6 +156,8 @@ type SceneCallbacks = {
   onOutboxClick?(): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
+  /** Tap on a desk's queued-command sticky notes — the UI floats a card listing them. */
+  onQueueNotes?(tap: QueueNotesTap): void;
 };
 
 type PersonEntry = {
@@ -191,6 +207,14 @@ type PersonEntry = {
   chain: number;
   /** Scene clock when the current approval wait began (null when not waiting). */
   waitingSince: number | null;
+  /** Lean-back hysteresis for a long-running tool call (npcHabits.stepToolWait). */
+  toolWait: ToolWaitTrack;
+  /** ms spent thinking in a row (not waiting) — long enough and they get up and pace. */
+  thinkMs: number;
+  /** ms not working / thinking in a row — the screensaver, and when a turn has really ended. */
+  idleRunMs: number;
+  /** Busy ms in the current stretch of work (short idle gaps, e.g. text output, don't reset it; used up by the water-break roll). */
+  streakBusyMs: number;
 };
 
 /**
@@ -290,6 +314,7 @@ export async function createScene(
     callbacks.onDepartmentRename,
     isDragging,
   );
+  personalDesks.onQueueNotesTap = (tap) => callbacks.onQueueNotes?.(tap);
   const officeDecor = new OfficeDecor();
   const cat = new Cat();
   const fx = new OfficeFx(world);
@@ -320,7 +345,10 @@ export async function createScene(
       z: key === "neon" ? -400 : DECOR_SPOTS[key].y + DECOR_SPOTS[key].h,
       poke: () => {
         officeDecor.poke(key);
-        if (key === "coffee") for (let i = 0; i < 3; i++) particles.rise(396, 68, 0xdfe9f8, 4);
+        if (key === "coffee") {
+          for (let i = 0; i < 3; i++) particles.rise(396, 68, 0xdfe9f8, 4);
+          orderCoffee();
+        }
       },
       enabled: key === "neon" ? () => officeDecor.neonShown
         : key === "tree" ? () => officeDecor.seasonNow.xmas
@@ -399,8 +427,11 @@ export async function createScene(
     const hourFloat = now.getHours() + now.getMinutes() / 60;
     officeDecor.setSeasonal(seasonal(now));
     room.setSky(daylightSky(hourFloat));
-    room.setNight(nightFactor(hourFloat) >= 0.5);
+    const night = nightFactor(hourFloat) >= 0.5;
+    room.setNight(night);
     room.setClock(now);
+    personalDesks.setNight(night);
+    personalDesks.setClock(now);
   }
   applyDaylight();
   for (const child of [...furniture.container.children]) {
@@ -503,6 +534,30 @@ export async function createScene(
   // the cursor), double-click the floor to reset. Sprite/furniture handlers
   // keep working — a drag only starts panning past a small threshold, so
   // ordinary clicks are unaffected.
+  // Camera guidance (cameraFocus): focusOn glides to an NPC the user picked,
+  // follow tracks one slowly. Stepped once per frame in the ticker below.
+  const director = new CameraDirector();
+  function panToCenter(id: string, anchor: Pt | null): Pt | null {
+    const entry = entries.get(id);
+    if (!entry || entry.transition === "removing") return null;
+    const base = baseOffset(scale);
+    return centerPanOn({
+      worldX: entry.person.x,
+      worldY: entry.person.y - 17,
+      scale,
+      screenW: app.screen.width,
+      screenH: app.screen.height,
+      baseX: base.x,
+      baseY: base.y,
+      contentW: ART_W,
+      contentH: floorH,
+      anchor,
+    });
+  }
+  // Frame pacing (framePacing): 30fps when the office is idle, 60 when anyone works or the user is touching it.
+  let lastInputAt = performance.now();
+  let anyBusy = false;
+
   let overInteractive = false;
   let dragId: number | null = null;
   let dragStartX = 0;
@@ -528,6 +583,7 @@ export async function createScene(
   };
 
   const onPointerDown = (event: PointerEvent) => {
+    lastInputAt = performance.now();
     if (event.pointerType === "mouse" && event.button !== 0) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size >= 2) {
@@ -553,6 +609,7 @@ export async function createScene(
     }
     if (dragId !== event.pointerId) return;
     if (!dragPanning && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
+    if (!dragPanning) director.stopFollow(); // the user grabbed the camera: hand control back
     dragPanning = true;
     panX += event.clientX - dragLastX;
     panY += event.clientY - dragLastY;
@@ -595,11 +652,13 @@ export async function createScene(
   const WHEEL_ZOOM_SENSITIVITY = 0.0018;
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
+    lastInputAt = performance.now();
     const rect = app.canvas.getBoundingClientRect();
     const factor = Math.exp(-event.deltaY * WHEEL_ZOOM_SENSITIVITY);
     zoomAnchored(scale * factor, event.clientX - rect.left, event.clientY - rect.top);
   };
   function resetView(): void {
+    director.stopFollow();
     userScale = null;
     panX = 0;
     panY = 0;
@@ -767,6 +826,168 @@ export async function createScene(
   function idOf(entry: PersonEntry): string {
     for (const [id, candidate] of entries) if (candidate === entry) return id;
     return "";
+  }
+
+  // --- 15. Quiet habits (npcHabits): pacing while thinking hard, a slow walk to the
+  // water cooler after a long stretch of work, and the coffee errand when the
+  // machine is clicked. One at a time each, aborted the moment real work arrives.
+  type Pace = { entry: PersonEntry; plan: number[]; step: number; pauseMs: number; homeX: number; homeY: number };
+  const pacers: Pace[] = [];
+  let paceScanAccum = 0;
+
+  function atSeat(entry: PersonEntry): boolean {
+    return !entry.person.isMoving && Math.abs(entry.person.x - entry.targetX) < 0.5 && Math.abs(entry.person.y - entry.targetY) < 0.5;
+  }
+
+  function endPace(pace: Pace): void {
+    const { entry } = pace;
+    entry.strolling = false;
+    entry.person.walkSpeedMul = 1;
+    if (entry.transition === "ready") entry.person.setTarget(entry.targetX, entry.targetY); // leaving: keep the exit walk
+    pacers.splice(pacers.indexOf(pace), 1);
+  }
+
+  function updatePacing(dt: number): void {
+    for (const pace of [...pacers]) {
+      const { entry } = pace;
+      const still = entries.get(idOf(entry)) === entry && entry.transition === "ready" && !entry.waiting &&
+        !entry.person.asleep && entry.last?.activity === "thinking" && entry.last.station === "home" &&
+        entry.targetX === pace.homeX && entry.targetY === pace.homeY;
+      if (!still) {
+        endPace(pace); // output started / new work / moved seats: sit straight back down
+        continue;
+      }
+      if (entry.person.isMoving || pace.step >= pace.plan.length) continue;
+      pace.pauseMs -= dt;
+      if (pace.pauseMs > 0) continue;
+      entry.person.setTarget(pace.homeX + pace.plan[pace.step], pace.homeY);
+      pace.step += 1;
+      pace.pauseMs = 1_400 + Math.random() * 900;
+    }
+    paceScanAccum += dt;
+    if (paceScanAccum < 1_000 || REDUCE_MOTION_SCENE) return;
+    paceScanAccum = 0;
+    for (const entry of entries.values()) {
+      if (entry.temporary || entry.transition !== "ready" || entry.strolling || entry.person.asleep || !entry.last) continue;
+      if (pacers.some((pace) => pace.entry === entry)) continue;
+      if (!mayPace({
+        thinkingMs: entry.thinkMs,
+        station: entry.last.station,
+        atSeat: atSeat(entry),
+        waiting: entry.waiting,
+        busy: delivery?.entry === entry || social?.visitor === entry || social?.host === entry || chore?.entry === entry,
+      }, pacers.length)) continue;
+      entry.strolling = true;
+      entry.person.walkSpeedMul = PACE_SPEED;
+      pacers.push({ entry, plan: pacePlan(Math.random()), step: 0, pauseMs: 0, homeX: entry.targetX, homeY: entry.targetY });
+    }
+  }
+
+  /** Where to stand at the water cooler (DECOR_SPOTS.cooler) and the coffee machine. */
+  const COOLER_SPOT: Pt = { x: 376, y: 97 };
+  const COFFEE_SPOT: Pt = { x: 396, y: 96 };
+  type Errand = { kind: "water" | "coffee"; entry: PersonEntry; stage: "going" | "doing" | "back"; t: number };
+  let waterRun: Errand | null = null;
+  let waterCooldown = 60_000;
+  let coffeeRun: Errand | null = null;
+  let coffeeReadyAt = 0;
+
+  function endErrand(run: Errand): void {
+    const { entry } = run;
+    entry.strolling = false;
+    entry.person.walkSpeedMul = 1;
+    if (run.kind === "coffee" && entry.person.walkProp === "cup") entry.person.walkProp = null;
+    if (entry.transition === "ready") entry.person.setTarget(entry.targetX, entry.targetY); // leaving: keep the exit walk
+    if (run.kind === "water") {
+      waterRun = null;
+      waterCooldown = WATER_COOLDOWN_MS;
+    } else {
+      coffeeRun = null;
+    }
+  }
+
+  /** Called once a stretch of work has really ended (idle for a few seconds). */
+  function afterWork(entry: PersonEntry): void {
+    if (REDUCE_MOTION_SCENE || !lifeEligible(entry) || pendingDeliveries.has(idOf(entry))) return;
+    if (!mayFetchWater(entry.streakBusyMs, waterCooldown, waterRun !== null || coffeeRun?.entry === entry, Math.random())) return;
+    entry.strolling = true;
+    entry.person.walkSpeedMul = WATER_SPEED;
+    entry.person.setTarget(COOLER_SPOT.x, COOLER_SPOT.y);
+    waterRun = { kind: "water", entry, stage: "going", t: 0 };
+  }
+
+  /** Someone clicked the coffee machine: the nearest free NPC calls "I'll go!" and fetches a cup. */
+  function orderCoffee(): void {
+    if (coffeeRun || elapsed < coffeeReadyAt) return;
+    const idle = [...entries.values()].filter(lifeEligible);
+    const pick = nearestTo(idle.map((entry) => ({ entry, x: entry.person.x, y: entry.person.y })), COFFEE_SPOT);
+    if (!pick) return;
+    coffeeReadyAt = elapsed + COFFEE_ERRAND_COOLDOWN_MS;
+    const { entry } = pick;
+    trySay(entry, t("我去！"), true);
+    entry.strolling = true;
+    entry.person.setTarget(COFFEE_SPOT.x, COFFEE_SPOT.y);
+    coffeeRun = { kind: "coffee", entry, stage: "going", t: 0 };
+  }
+
+  function stepErrand(run: Errand, dt: number): void {
+    const { entry } = run;
+    if (entries.get(idOf(entry)) !== entry || !socialEligible(entry) || entry.person.asleep) {
+      endErrand(run); // new work (or gone): drop it and head straight back
+      return;
+    }
+    run.t += dt;
+    if (run.stage === "going") {
+      if (entry.person.isMoving) {
+        if (run.t > 30_000) endErrand(run);
+        return;
+      }
+      run.stage = "doing";
+      run.t = 0;
+      entry.person.microAct(run.kind === "water" ? "drink" : "brew");
+    } else if (run.stage === "doing") {
+      if (run.t < (run.kind === "water" ? 2_600 : 2_100)) return;
+      run.stage = "back";
+      run.t = 0;
+      if (run.kind === "coffee") entry.person.walkProp = "cup";
+      entry.person.setTarget(entry.targetX, entry.targetY);
+    } else if (!entry.person.isMoving) {
+      if (run.kind === "coffee") entry.person.emote("coffee", 2_200);
+      endErrand(run);
+    }
+  }
+
+  function updateErrands(dt: number): void {
+    if (waterCooldown > 0) waterCooldown -= dt;
+    if (waterRun) stepErrand(waterRun, dt);
+    if (coffeeRun) stepErrand(coffeeRun, dt);
+  }
+
+  /** Per-frame bookkeeping for the habits above (cheap counters only). */
+  function trackHabits(entry: PersonEntry, dt: number): void {
+    const state = entry.last;
+    const busy = state?.activity === "working" || state?.activity === "thinking";
+    entry.thinkMs = state?.activity === "thinking" && !entry.waiting ? entry.thinkMs + dt : 0;
+    if (busy) {
+      entry.streakBusyMs += dt;
+      entry.idleRunMs = 0;
+    } else {
+      entry.idleRunMs += dt;
+      // A turn streams its text as "idle" (mood neutral); the turn has ended once the mood is
+      // set. One roll per stretch of work, once they're back and settled at the desk.
+      if (entry.streakBusyMs > 0 && entry.idleRunMs >= 8_000 && state?.mood !== "neutral" && lifeEligible(entry)) {
+        afterWork(entry);
+        entry.streakBusyMs = 0;
+      } else if (entry.idleRunMs >= 60_000) {
+        entry.streakBusyMs = 0;
+      }
+    }
+    // Long tool call: lean back after ~20 s; sit up only when that call's result arrives.
+    const toolKey = state?.activity === "working" && !entry.waiting ? `${state.station}:${state.bump}` : null;
+    entry.toolWait = stepToolWait(entry.toolWait, toolKey, elapsed);
+    entry.person.longWait = entry.toolWait.leaning && !entry.temporary;
+    entry.person.screensaver = !entry.temporary && state?.activity === "idle" && state.station === "home" && !entry.waiting &&
+      screensaverOn(entry.idleRunMs) && atSeat(entry);
   }
 
   function standSpot(station: StationKey, index: number, id?: string): { x: number; y: number } {
@@ -1376,6 +1597,7 @@ export async function createScene(
   // --- 7. Idle NPCs glance toward a nearby mouse cursor (mouse only).
   let cursor: Pt | null = null;
   const onCanvasPointerMove = (event: PointerEvent) => {
+    lastInputAt = performance.now();
     cursor = event.pointerType === "mouse" ? clientToWorld(event.clientX, event.clientY) : null;
   };
   const onCanvasPointerLeave = () => {
@@ -1506,6 +1728,15 @@ export async function createScene(
     const dt = ticker.deltaMS;
     elapsed += dt;
 
+    const fps = targetFps({ anyBusy, cameraMoving: director.active, sinceInputMs: performance.now() - lastInputAt });
+    if (ticker.maxFPS !== fps) ticker.maxFPS = fps;
+    const glide = director.step(dt, { x: panX, y: panY }, panToCenter);
+    if (glide) {
+      panX = glide.x;
+      panY = glide.y;
+      applyView();
+    }
+
     room.update(elapsed);
     furniture.update(elapsed);
     personalDesks.update(dt);
@@ -1521,6 +1752,8 @@ export async function createScene(
     updateFatigue(dt);
     updateDragTimeout();
     updateChores(dt);
+    updatePacing(dt);
+    updateErrands(dt);
     updateRare(dt);
     updateTalk(dt);
     updateGreetings(dt);
@@ -1641,6 +1874,7 @@ export async function createScene(
       if (!busy) entry.busySince = null;
       else if (entry.busySince === null) entry.busySince = elapsed;
       entry.person.deepFocus = busy && elapsed - (entry.busySince ?? elapsed) > 180_000;
+      trackHabits(entry, dt);
 
       entry.person.update(elapsed, dt);
 
@@ -1673,6 +1907,7 @@ export async function createScene(
 
   return {
     setWorkers(list: WorkerSceneState[]) {
+      anyBusy = list.some((worker) => worker.character.activity === "working" || worker.character.activity === "thinking");
       const permanentWorkers = list.filter((worker) => !worker.temporary);
       const deskLayout = personalDesks.setWorkers(permanentWorkers);
       homeSeats = deskLayout.seats;
@@ -1846,6 +2081,10 @@ export async function createScene(
             errors: [],
             chain: 0,
             waitingSince: null,
+            toolWait: newToolWait(),
+            thinkMs: 0,
+            idleRunMs: 0,
+            streakBusyMs: 0,
           };
           entries.set(w.id, entry);
           if (beamIn) {
@@ -1959,6 +2198,29 @@ export async function createScene(
       officeDecor.setMilestone(level);
     },
     brainReset,
+    setQueue(id: string, items: readonly string[]) {
+      personalDesks.setQueue(id, items);
+    },
+    setTodayDone(count: number) {
+      room.setTodayCount(count);
+    },
+    setTodayFailures(byWorker: ReadonlyMap<string, number>) {
+      for (const [id, count] of byWorker) personalDesks.setFailures(id, count);
+    },
+    focusOn(id: string, anchor?: Pt) {
+      lastInputAt = performance.now();
+      director.focusOn(id, anchor);
+    },
+    follow(id: string, anchor?: Pt) {
+      lastInputAt = performance.now();
+      director.follow(id, anchor);
+    },
+    stopFollow() {
+      director.stopFollow();
+    },
+    followingId() {
+      return director.followingId();
+    },
     destroy() {
       offFx();
       app.canvas.removeEventListener("dragenter", onDragEnter);

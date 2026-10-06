@@ -21,12 +21,25 @@ export type Hotspot = {
   enabled?(): boolean;
 };
 
+/**
+ * Decor taps that the app may want to act on (beyond the visual reaction).
+ * Today only the coffee machine: the scene can open a coffee-break entry from it.
+ */
+export type SpotEvent = "coffee-machine";
+const SPOT_EVENTS: Record<string, SpotEvent> = { coffee: "coffee-machine" };
+
+export function spotEvent(key: string): SpotEvent | null {
+  return SPOT_EVENTS[key] ?? null;
+}
+
 type Options = {
   /** A press that turned into a pan is not a tap. */
   isDragging?: () => boolean;
   onHover?: (key: string | null) => void;
   /** After the reaction plays (the scene uses it to keep "tap empty space closes the log"). */
   onTap?: (key: string) => void;
+  /** A tap on a spot that maps to an app-level event (see spotEvent), after onTap. */
+  onSpotEvent?: (event: SpotEvent, key: string) => void;
 };
 
 export class Hotspots {
@@ -54,6 +67,8 @@ export class Hotspots {
         if (opts.isDragging?.()) return;
         spot.poke();
         opts.onTap?.(spot.key);
+        const event = spotEvent(spot.key);
+        if (event) opts.onSpotEvent?.(event, spot.key);
       });
       c.on("pointerover", (e) => {
         if (e.pointerType === "touch") return;

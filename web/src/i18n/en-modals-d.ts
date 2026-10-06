@@ -338,5 +338,5 @@ export const enModalsD: Record<string, string> = {
   "目前有 {count} 位 NPC 正在背景執行——點開看是誰": "{count} NPCs are working in the background — tap to see who",
   "背景執行中（點一位跳過去看）": "Working in the background (tap one to jump there)",
   "圖片總大小不可超過 {mib} MiB": "Total image size cannot exceed {mib} MiB",
-  "交辦房 · {count}人": "Assignment room · {count}",
+  "交辦房 · {count}人": "Boss room · {count} people",
 };

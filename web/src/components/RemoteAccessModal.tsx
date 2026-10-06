@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 import { apiRequest } from "../api";
 import { type CfInfo, describeDownload } from "../cloudflaredProgress";
 import { Modal } from "./Modal";
@@ -559,8 +559,8 @@ function ShareSection({ st, busy, run, notify }: { st: State; busy: string; run:
           <>
             {st.share.expiresAt > 0 && (
               <div style={{ fontSize: 12.5, color: "#7ee0a2", margin: "0 0 10px" }}>
-                {t("到期時間")}：{new Date(st.share.expiresAt).toLocaleString()}
-                <span style={{ color: "#9fb0dd", marginLeft: 8 }}>（{fmtRemain(st.share.expiresAt - Date.now())}）</span>
+                {t("到期時間")}{tc("punct", "：")}{new Date(st.share.expiresAt).toLocaleString()}
+                <span style={{ color: "#9fb0dd", marginLeft: 8 }}>{tc("punct", "（")}{fmtRemain(st.share.expiresAt - Date.now())}{tc("punct", "）")}</span>
               </div>
             )}
             <button style={btnGhost} disabled={!!busy} onClick={async () => {
@@ -646,9 +646,9 @@ function GoogleSection({ st, busy, run, notify, onReload }: { st: State; busy: s
           <code style={{ ...input, padding: "8px 10px", color: redirectUri ? "#cfe0ff" : "#6b7aa0" }}>{redirectUri || t("（先開通 Tailscale 才會有）")}</code>
           {redirectUri && <CopyButton text={redirectUri} style={btnGhost} />}
         </div>
-        <label style={label}>{t("Client ID")} {st.google.clientIdSet && <span style={{ color: "#7ee0a2" }}>（{t("已設定，留空不變")}）</span>}</label>
+        <label style={label}>{t("Client ID")} {st.google.clientIdSet && <span style={{ color: "#7ee0a2" }}>{tc("punct", "（")}{t("已設定，留空不變")}{tc("punct", "）")}</span>}</label>
         <input style={input} type="text" value={cid} onChange={(e) => setCid(e.target.value)} placeholder="xxxx.apps.googleusercontent.com" />
-        <label style={{ ...label, marginTop: 10 }}>{t("Client Secret")}（{t("留空不變")}）</label>
+        <label style={{ ...label, marginTop: 10 }}>{t("Client Secret")}{tc("punct", "（")}{t("留空不變")}{tc("punct", "）")}</label>
         <input style={input} type="password" value={csec} onChange={(e) => setCsec(e.target.value)} placeholder="••••••••" />
         <label style={{ ...label, marginTop: 10 }}>{t("允許的 Email（可多個，用逗號分隔）")}</label>
         <input style={input} type="text" value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="you@gmail.com, friend@gmail.com" />

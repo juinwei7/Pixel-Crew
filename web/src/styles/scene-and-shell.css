@@ -358,6 +358,93 @@ body {
   50%      { box-shadow: 0 2px 14px rgba(255, 180, 84, 0.42); }
 }
 
+/* 跟拍中：分流條尾端一顆安靜的提示（點它、Esc 或拖曳畫面都會結束）。 */
+.npc-aggbar__seg--follow {
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
+  color: #c8eef6;
+  border-color: rgba(0, 229, 255, 0.24);
+  animation: npc-quiet-in 0.2s ease-out both;
+}
+.npc-aggbar__follow-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); }
+.npc-aggbar__seg--follow:hover, .npc-aggbar__seg--follow:focus-visible { border-color: rgba(0, 229, 255, 0.5); }
+
+/* 鏡頭滑到 NPC 之後，腳下的選取環亮一下（等平移 300ms 走完才亮，只亮一次）。 */
+.npc-focus-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  width: var(--ring-w, 40px);
+  height: calc(var(--ring-w, 40px) * 0.38);
+  border: 2px solid var(--cyan);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  animation: npc-focus-ring 0.7s ease-out 0.28s both;
+}
+@keyframes npc-focus-ring {
+  0% { opacity: 0; scale: 0.6; }
+  35% { opacity: 0.85; scale: 1; }
+  100% { opacity: 0; scale: 1.22; }
+}
+
+/* 畫面外等你核准的 NPC：邊緣一顆琥珀小箭頭＋名字縮寫，只淡入一次、不閃。點了鏡頭移過去。 */
+.npc-edge-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  animation: npc-quiet-in 0.24s ease-out both;
+}
+.npc-edge-marker__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 180, 84, 0.62);
+  border-radius: 50%;
+  background: rgba(22, 16, 7, 0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: #ffd9a6;
+  font: 700 10px/1 var(--mono);
+}
+.npc-edge-marker__arrow {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--edge-angle, 0rad));
+  pointer-events: none;
+}
+.npc-edge-marker__arrow::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -7px;
+  margin-top: -4px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid #ffb454;
+}
+.npc-edge-marker:hover .npc-edge-marker__face,
+.npc-edge-marker:focus-visible .npc-edge-marker__face { border-color: #ffb454; }
+.npc-edge-marker:focus-visible { outline: none; }
+@keyframes npc-quiet-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .npc-focus-ring { animation: npc-focus-ring-calm 0.6s linear both; }
+  .npc-edge-marker, .npc-aggbar__seg--follow { animation: none; }
+}
+@keyframes npc-focus-ring-calm {
+  0%, 100% { opacity: 0; }
+  30%, 60% { opacity: 0.8; }
+}
+
 .npc-nameplate {
   position: absolute;
   top: 0;
@@ -388,6 +475,11 @@ body {
 .npc-nameplate__role { overflow: hidden; flex: 0 1 auto; min-width: 0; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
 .npc-nameplate--tight:not(.npc-nameplate--active) .npc-nameplate__role,
 .npc-nameplate--carded .npc-nameplate__role { display: none; }
+/* 閒置名牌第二行：「12 分前・寫完 README」灰色小字。跟職稱一樣，跟鄰座相撞（--tight）或身分卡開著時收起。 */
+.npc-nameplate:has(.npc-nameplate__done) { flex-wrap: wrap; row-gap: 1px; }
+.npc-nameplate__done { flex: 0 0 100%; order: 5; min-width: 0; overflow: hidden; color: #7d8ba0; font-size: 8px; font-weight: 400; text-overflow: ellipsis; }
+.npc-nameplate--tight:not(.npc-nameplate--active) .npc-nameplate__done,
+.npc-nameplate--carded .npc-nameplate__done { display: none; }
 .npc-nameplate__elapsed { flex: 0 0 auto; margin-left: auto; color: var(--cyan); font-size: 8px; font-weight: 400; opacity: 0.85; }
 .npc-nameplate:has(.npc-nameplate__collaboration) { flex-wrap: wrap; max-width: 184px; }
 /* 「一眼看出在幹嘛」活動徽章：跟名字同一行（名字・圖示＋短動詞・秒數），圖示吃站點色做色彩編碼。
@@ -2972,4 +3064,43 @@ body {
 
 .worker-tab__avatar-button--custom {
   text-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
+}
+
+/* 桌上便利貼小卡：點排隊便利貼浮出，列前三則指令。安靜、紙色，不搶畫面。 */
+.queue-notes-card {
+  position: absolute;
+  z-index: 32;
+  max-width: 260px;
+  padding: 8px 10px 9px;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: #f3ecd2;
+  color: #2b2618;
+  border: 1px solid rgba(43, 38, 24, 0.28);
+  border-radius: 3px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  line-height: 1.45;
+  animation: npc-quiet-in 0.18s ease-out both;
+}
+.queue-notes-card strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #5a4f2e;
+}
+.queue-notes-card ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+.queue-notes-card li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-notes-card small {
+  display: block;
+  margin-top: 4px;
+  color: #7a6d47;
 }
