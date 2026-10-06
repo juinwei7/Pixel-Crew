@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Quick Roundtable conclusions now carry trade-offs, confidence, and what would change the call, and the conclusion card offers one-click "Do it", "Stress-test", and "Escalate to War Room". Topics about the current project get up to 3 read-only lookups before the discussion instead of guesses.
+- War Room verdicts include confidence, overturn conditions, and rejected options; action items can be handed to the convener in one click, and the verdict queues when the convener is busy.
+- Personal autopilot gives every step a done-criterion, checks the previous step first, compares directions before choosing, warns when it is going in circles, reports one line of progress per step, and labels stops as done, needs your decision, or stuck.
+- A persistent working / needs-you / idle strip, nameplate activity badges, and a livelier office: station-specific screens and poses, idle moments, department-wide celebrations, an annex that extends the office when it gets crowded, and 16 smaller office touches such as camera follow and per-desk queue notes.
+- The model menu explains what each model is good for, in a two-line list that no longer wraps inside the collapsed box.
+
+### Changed
+
+- War Room peers now use 6 reserved seats outside the 20-NPC limit. When seats run out the War Room refuses with a clear message instead of opening short-handed; the NPC count and add button only count permanent NPCs.
+- The War Room skips its rebuttal round when nobody objects in round 1 and at most one peer agrees conditionally. The challenger states its real bottom line instead of being told to oppose by default, and peers that failed round 1 are not sent a rebuttal.
+- Personal autopilot no longer sends a duplicate wrap-up turn when it uses up its step budget.
+- First-screen JavaScript dropped from about 474 KB to 51 KB: the app shell, office scene, and English catalog load on demand. Streaming messages are coalesced, WebSocket traffic is compressed, render updates are batched, and the scene drops to 30 fps when everyone is idle.
+
+### Fixed
+
+- War Room background subagents stay at the table until they actually finish instead of being cleared when the lead's turn ends.
+- Subagent-internal messages are no longer mistaken for the main NPC's turn.
+- NPCs on a mission walk to the station for the tool they are actually using, and mission speech bubbles show the current step instead of old chat.
+- Autopilot tells you to sign in again when the Claude login has expired, instead of reporting a generic decision-model failure.
+- The self-update safety gate only scans added and removed lines of a diff, so unchanged context no longer blocks a front-end-only change.
+- The bundle budget check matches the new chunk layout (entry shell, app chunk, lazily loaded English catalog).
+
 ## [2.5.2] - 2026-10-05
 
 ### Fixed
