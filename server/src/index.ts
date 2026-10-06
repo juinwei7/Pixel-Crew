@@ -369,8 +369,12 @@ function persistentWorkerCount(): number {
   for (const worker of workers.values()) if (!worker.ephemeralKind) count += 1;
   return count;
 }
+// 已開場、但主持還沒上桌的作戰室替主持預留的席位。開場時只檢查「成員＋主持」夠不夠，
+// 主持卻要等兩輪辯論後才建立；沒預留的話，這段期間另一場作戰室會把那席坐走，
+// 先開的那場只能拿未整理的辯論原文當裁決。
+let reservedEphemeralSeats = 0;
 function ephemeralSeatsLeft(): number {
-  return MAX_WORKERS + EPHEMERAL_HEADROOM - workers.size;
+  return MAX_WORKERS + EPHEMERAL_HEADROOM - workers.size - reservedEphemeralSeats;
 }
 // 「為此交辦開專屬部門」建立的臨時團隊部門名稱前綴——用完即散；重啟時靠這個前綴清掉殘留。
 const EPHEMERAL_DEPT_PREFIX = "臨時團隊·";
@@ -7904,9 +7908,16 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   if (ephemeralSeatsLeft() < stances.length + 1) {
     throw new Error(t("作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。", { n: stances.length + 1 }));
   }
+  reservedEphemeralSeats += 1; // 主持的席位，主持上桌或本場結束時歸還
+  let leadSeatReserved = true;
+  const releaseLeadSeat = () => {
+    if (!leadSeatReserved) return;
+    leadSeatReserved = false;
+    reservedEphemeralSeats -= 1;
+  };
   try {
     for (const stance of stances) {
-      if (ephemeralSeatsLeft() <= 1) break; // 至少留一席給主持
+      if (ephemeralSeatsLeft() <= 0) break; // 主持的席位已預留
       const peer = createWorker(stance.name, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
       // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
@@ -7955,6 +7966,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     })).join("\n\n");
     // 主持裁決（可見的臨時 lead，用較強模型）
     let result: WarRoomResult | null = null;
+    releaseLeadSeat();
     if (ephemeralSeatsLeft() > 0) {
       const lead = createWorker(t("主持"), leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       lead.autoApproveMode = "safe";
@@ -7977,6 +7989,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     completed = true;
     return result;
   } finally {
+    releaseLeadSeat();
     // 正常完成才留一小段時間讓畫面播放散會；失敗／整場逾時則立即中止並清掉，避免留下
     // 仍在跑的 CLI session 或卡在桌上的 NPC。server 非正常重啟則由 startup sweep 接手。
     const ids = created.map((worker) => worker.id);

@@ -389,8 +389,15 @@ export function workerAutopilotProgressGuard(
 // NPC 連兩回合回差不多的東西、A→B→A 來回擺盪。這裡用字元雙字組（bigram）重疊度量測，
 // 結果只當「證據」注入決策 prompt 逼教練換角度——不硬停（措辭相近未必是重複，誤殺代價高）。
 // 純字串運算、零額外模型呼叫。
+// 門檻依 2026-10 真實循環回放校準（34 段對話、198 個決策點）：舊的 0.75 指示門檻對中文換句話說
+// （實測 0.4–0.7）一次都沒觸發；真實的踏步多半是「空回合」與「一直在等背景工作」，不是同文重講。
 const STALL_RESULT_SIMILARITY = 0.85;
-const STALL_INSTRUCTION_SIMILARITY = 0.75;
+const STALL_INSTRUCTION_SIMILARITY = 0.6;
+// 等待空轉：回覆很短、結尾只說自己在等背景工作／等人叫醒。
+const STALL_WAIT_MAX_CHARS = 700;
+const STALL_WAIT_TAIL_CHARS = 300;
+const STALL_WAIT_PATTERN = /(背景(執行|跑|監看|代理)|叫醒我|還在(跑|建置|進行)|正在跑|待命中|稍候|已掛(上|好)|等.{0,16}(回來|完成|通知|回報|回覆|結果|閒置)|in the background|wake me|still (running|building|in progress)|standing by|waiting (for|on) .{0,30}(finish|complete|return|report|result))/iu;
+const STALL_EMPTY_REPLY = /^no response requested\.?$/iu;
 
 function bigramSet(text: string): Set<string> {
   const out = new Set<string>();
@@ -415,25 +422,44 @@ function compactForCompare(text: string | undefined): string {
 
 /**
  * 從最近回合量出原地踏步訊號（英文句子，直接進 prompt）。沒有訊號回空陣列。
- * ①最近三則回覆中任兩則高度相似（含 A→B→A 擺盪）②最近兩則指示換句話說的近似重複。
+ * ①空回合：最近三則回覆中有兩則空話（No response requested.）或任兩則完全相同
+ * ②最近三則回覆中任兩則高度相似（含 A→B→A 擺盪）
+ * ③最近兩則回覆都只是在等背景工作
+ * ④最近三則「自動循環」指示中任兩則換句話說的近似重複（owner 自己的訊息不算，
+ *   重貼同一段話或固定開頭會誤報）
  */
 export function workerAutopilotStallSignals(turns: ReadonlyArray<WorkerAutopilotTurn>): string[] {
   const signals: string[] = [];
   const recent = turns.slice(-3);
-  const results = recent.map((turn) => compactForCompare(turn.result)).filter((text) => text.length >= 40);
+  const compactReplies = recent.map((turn) => compactForCompare(turn.result)).filter(Boolean);
+  // 單獨一則空話常是回應內部通知的正常回合；要兩則以上才算空轉。
+  const emptyReplies = recent.filter((turn) => STALL_EMPTY_REPLY.test((turn.result ?? "").trim())).length;
+  const identicalReplies = compactReplies.some((text, i) => compactReplies.indexOf(text) !== i);
+  if (emptyReplies >= 2 || identicalReplies) {
+    signals.push("The NPC's recent replies are empty or word-for-word identical — the last steps produced nothing new.");
+  }
+  const results = compactReplies.filter((text) => text.length >= 40);
   let bestResult = 0;
   for (let i = 0; i < results.length; i++) {
     for (let j = i + 1; j < results.length; j++) bestResult = Math.max(bestResult, workerAutopilotTextSimilarity(results[i], results[j]));
   }
-  if (bestResult >= STALL_RESULT_SIMILARITY) {
+  if (!identicalReplies && bestResult >= STALL_RESULT_SIMILARITY) {
     signals.push(`Two of the NPC's last ${results.length} replies are ~${Math.round(bestResult * 100)}% the same text — the work is not moving forward.`);
   }
-  const instructions = turns.slice(-2).map((turn) => normalizedInstruction(turn.instruction)).filter((text) => text.length >= 8);
-  if (instructions.length === 2) {
-    const sim = workerAutopilotTextSimilarity(instructions[0], instructions[1]);
-    if (sim >= STALL_INSTRUCTION_SIMILARITY) {
-      signals.push(`The last two instructions overlap ~${Math.round(sim * 100)}% — the same move was re-issued in different words.`);
-    }
+  const lastTwo = turns.slice(-2).map((turn) => (turn.result ?? "").trim());
+  if (lastTwo.length === 2 && lastTwo.every((text) => text && text.length < STALL_WAIT_MAX_CHARS && STALL_WAIT_PATTERN.test(text.slice(-STALL_WAIT_TAIL_CHARS)))) {
+    signals.push("The NPC's last two replies only say it is waiting on background work — another \"check on it\" step just spins. Give it independent useful work meanwhile, or stop and let the background work finish.");
+  }
+  const instructions = recent
+    .filter((turn) => /^\s*🔁/u.test(turn.instruction))
+    .map((turn) => normalizedInstruction(turn.instruction))
+    .filter((text) => text.length >= 8);
+  let bestInstruction = 0;
+  for (let i = 0; i < instructions.length; i++) {
+    for (let j = i + 1; j < instructions.length; j++) bestInstruction = Math.max(bestInstruction, workerAutopilotTextSimilarity(instructions[i], instructions[j]));
+  }
+  if (bestInstruction >= STALL_INSTRUCTION_SIMILARITY) {
+    signals.push(`Two of the last ${instructions.length} loop instructions overlap ~${Math.round(bestInstruction * 100)}% — the same move was re-issued in different words.`);
   }
   return signals;
 }

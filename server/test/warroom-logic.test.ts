@@ -45,6 +45,12 @@ test("context only appears when provided and stays out of the rebuttal round", (
   assert.doesNotMatch(rebuttal, /【背景】/);
 });
 
+test("opening prompt counts 'yes, with safeguards' as GO so HOLD means a real pause", () => {
+  const opening = warroomOpeningPrompt({ topic: "t", stanceBrief: "b" });
+  assert.match(opening, /「可以做，但要這樣做」是 GO，不是 HOLD/);
+  assert.match(opening, /HOLD<\/position>（現在先別做，要先等某個答案或證據）/);
+});
+
 test("position signal parses the last tag, case-insensitively", () => {
   assert.equal(parseWarroomPosition("一堆理由\n<position>GO</position>"), "GO");
   assert.equal(parseWarroomPosition("<position>no</position> 後來改口 <position> HOLD </position>"), "HOLD");

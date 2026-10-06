@@ -14,8 +14,8 @@ export const enR3Warroom: Record<string, string> = {
   "使用者": "User",
   "\n\n【背景】\n{context}": "\n\n[Background]\n{context}",
   // 總體判斷信號與反駁輪
-  "\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。":
-    "\n\nOn the last line, on its own, mark your honest bottom line (not your assigned stance): <position>GO</position> (do it / bullish), <position>HOLD</position> (conditional / wait and see) or <position>NO</position> (don't / bearish) — pick exactly one. Even if your job is to argue against it, mark GO when every risk you raised has a workable fix and you would not block it; mark NO only if you truly think it should not be done.",
+  "\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做，可以附配套或做法建議）、<position>HOLD</position>（現在先別做，要先等某個答案或證據）或 <position>NO</position>（不該做／看壞），三選一。「可以做，但要這樣做」是 GO，不是 HOLD；只有你真的會堅持先停下來等某件事時才標 HOLD，並在主張裡寫明要等什麼。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。":
+    "\n\nOn the last line, on its own, mark your honest bottom line (not your assigned stance): <position>GO</position> (do it; safeguards or how-to advice are fine), <position>HOLD</position> (not yet; first wait for a specific answer or evidence) or <position>NO</position> (don't / bearish) — pick exactly one. \"Yes, but do it this way\" is GO, not HOLD; mark HOLD only if you would really insist on pausing until something specific is known, and say in your argument what that is. Even if your job is to argue against it, mark GO when every risk you raised has a workable fix and you would not block it; mark NO only if you truly think it should not be done.",
   "\n對照你自己第 1 輪的主張：被說服而修正的點要明講，堅持的點補上更強的理由。最後一行同樣標出你現在的 <position>GO|HOLD|NO</position>。":
     "\nCompare against your own round-1 position: say plainly which points you revised because you were persuaded, and give stronger reasons for the ones you keep. End with your current <position>GO|HOLD|NO</position> on the last line as well.",
   // 主持裁決

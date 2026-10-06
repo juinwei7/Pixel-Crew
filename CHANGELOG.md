@@ -17,11 +17,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 - War Room peers now use 6 reserved seats outside the 20-NPC limit. When seats run out the War Room refuses with a clear message instead of opening short-handed; the NPC count and add button only count permanent NPCs.
 - The War Room skips its rebuttal round when nobody objects in round 1 and at most one peer agrees conditionally. The challenger states its real bottom line instead of being told to oppose by default, and peers that failed round 1 are not sent a rebuttal.
+- War Room peers now mark "yes, but do it this way" as GO and keep HOLD for a real "wait until we know X", so consensus is recognised and the rebuttal round is skipped when it would add nothing. In testing, a consensus topic dropped from about 90 s and $0.43 to about 55 s and $0.18 with the same disputes still ruled on.
+- Personal autopilot's going-in-circles detection was recalibrated against 198 real loop decisions, where the old thresholds never fired. It now flags back-to-back empty replies, replies that only say the NPC is waiting on background work, and loop instructions that re-issue the same move in different words (owner messages are ignored). In the replay it catches 8 of 12 genuine stalls instead of 0.
 - Personal autopilot no longer sends a duplicate wrap-up turn when it uses up its step budget.
 - First-screen JavaScript dropped from about 474 KB to 51 KB: the app shell, office scene, and English catalog load on demand. Streaming messages are coalesced, WebSocket traffic is compressed, render updates are batched, and the scene drops to 30 fps when everyone is idle.
 
 ### Fixed
 
+- Two War Rooms opened back to back can no longer take each other's moderator seat: the seat is reserved when a session starts, so neither falls back to an unsynthesised transcript.
 - War Room background subagents stay at the table until they actually finish instead of being cleared when the lead's turn ends.
 - Subagent-internal messages are no longer mistaken for the main NPC's turn.
 - NPCs on a mission walk to the station for the tool they are actually using, and mission speech bubbles show the current step instead of old chat.

@@ -168,7 +168,7 @@ export function warroomOpeningPrompt(input: { topic: string; stanceBrief: string
   ) + contextSection(input.context)
     // 標的是「真實底線」而非角色立場：挑戰方的職責是唱反調，若照角色標，它永遠是 NO，
     // 「第 1 輪已共識就省反駁輪」就永遠不會觸發（實測中等難度兩場都沒省到）。
-    + t("\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。");
+    + t("\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做，可以附配套或做法建議）、<position>HOLD</position>（現在先別做，要先等某個答案或證據）或 <position>NO</position>（不該做／看壞），三選一。「可以做，但要這樣做」是 GO，不是 HOLD；只有你真的會堅持先停下來等某件事時才標 HOLD，並在主張裡寫明要等什麼。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。");
 }
 
 // 第 2 輪：看到其他人的意見後反駁／補強——這一輪才是「真辯論」。

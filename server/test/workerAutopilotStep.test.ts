@@ -91,8 +91,8 @@ test("相似度：相同=1、無交集=0、太短=0", () => {
 test("踏步訊號：回覆幾乎相同、指示換句話說重下 → 有訊號；正常推進 → 無", () => {
   const same = "已檢查設定檔，發現 timeout 設為 30 秒，建議調高到 60 秒並重跑整合測試確認是否還會逾時。";
   const stalled = workerAutopilotStallSignals([
-    { instruction: "檢查設定檔的 timeout 並回報", result: same },
-    { instruction: "再檢查一次設定檔的 timeout 並回報", result: same + "。" },
+    { instruction: "🔁（自動循環）檢查設定檔的 timeout 並回報", result: same },
+    { instruction: "🔁（自動循環）再檢查一次設定檔的 timeout 並回報", result: same + "。" },
   ]);
   assert.equal(stalled.length, 2);
   assert.match(stalled[0], /replies are ~\d+% the same/);
@@ -111,6 +111,43 @@ test("踏步訊號：回覆幾乎相同、指示換句話說重下 → 有訊號
     { instruction: "針對 DB 查詢加索引並重跑基準", result: "加了兩個複合索引，p95 降到 410ms，序列化變成新的最大熱點，接下來可以處理它。" },
   ]);
   assert.deepEqual(healthy, []);
+});
+
+test("踏步訊號（真實回放校準）：空回合、等背景工作、換句話說重下同一招", () => {
+  // 空回合：短到舊版長度門檻會濾掉的「No response requested.」
+  const empty = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）確認部署結果", result: "No response requested." },
+    { instruction: "🔁（自動循環）整理部署紀錄", result: "No response requested." },
+  ]);
+  assert.ok(empty.some((s) => /empty or word-for-word identical/.test(s)));
+
+  // 等待空轉：兩步都只回「還在跑，完成會叫醒我」
+  const waiting = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）檢查 B 階段進度", result: "主編排還在 B 階段，背景代理還在跑，完成會自動叫醒我。" },
+    { instruction: "🔁（自動循環）確認 B 階段是否完成", result: "B 階段仍在進行，已掛好監看，等它回來再接著做。" },
+  ]);
+  assert.ok(waiting.some((s) => /waiting on background work/.test(s)));
+
+  // 換句話說重下同一招（真實案例相似度 ~0.7，舊門檻 0.75 抓不到）
+  const reissued = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）讀監看輸出，解卡後回填附錄", result: "第 1 次解卡腳本已掛好，35 秒後觸發。" },
+    { instruction: "🔁（自動循環）再讀一次監看輸出，解卡後把附錄回填完", result: "附錄已回填第一段，第二段等解卡結果。" },
+  ]);
+  assert.ok(reissued.some((s) => /re-issued in different words/.test(s)));
+
+  // owner 自己重貼同一段話不算教練踏步
+  const owner = workerAutopilotStallSignals([
+    { instruction: "請幫我讀監看輸出，解卡後回填附錄", result: "已讀完監看輸出，卡在權限，改用唯讀方式取得資料後回填了附錄第一段。" },
+    { instruction: "請幫我讀監看輸出，解卡後回填附錄", result: "附錄第二段也回填完成，並附上三筆來源連結與驗證結果，整份附錄已可交付。" },
+  ]);
+  assert.deepEqual(owner, []);
+
+  // 長回覆裡提到背景工作、但有實質產出 → 不算等待空轉
+  const busy = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）實作匯出功能", result: `${"新增 CSV 匯出與測試，".repeat(80)}剩下的整合測試在背景跑。` },
+    { instruction: "🔁（自動循環）補上錯誤處理", result: `${"補上三種錯誤路徑與對應測試，".repeat(60)}完整測試還在跑。` },
+  ]);
+  assert.ok(!busy.some((s) => /waiting on background work/.test(s)));
 });
 
 test("prompt：有踏步訊號才注入區塊；換角度與選最佳候選的規則常駐", () => {
