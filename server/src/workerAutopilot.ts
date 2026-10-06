@@ -51,10 +51,15 @@ export function workerAutopilotResultSummary(text: string, head = 200, tail = 60
   return `${trimmed.slice(0, head)}\n…（中略 ${omitted} 字）…\n${trimmed.slice(-tail)}`;
 }
 
+/** 教練對「上一步完成標準」的驗收判定：達成／部分／未達。 */
+export type WorkerAutopilotCriterionVerdict = "met" | "partial" | "missed";
+/** 停止類型：done＝目標達成無事待決、ask＝要 owner 的資料／偏好／授權、stuck＝多角度都撞牆需 owner 指方向。 */
+export type WorkerAutopilotStopKind = "done" | "ask" | "stuck";
+
 export type WorkerAutopilotDecision =
-  | { action: "continue"; instruction: string; reason: string; rung?: string; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown }
+  | { action: "continue"; instruction: string; reason: string; rung?: string; doneWhen?: string; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown }
   | { action: "explore"; query: string; reason: string; planUpdate?: unknown }
-  | { action: "stop"; reason: string; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown };
+  | { action: "stop"; reason: string; kind?: WorkerAutopilotStopKind; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown };
 
 /** 支柱 B · 探索：決策每一步最多先查幾次再定稿——花錢/延遲防呆，用盡就逼它用現有資訊決定。 */
 export const WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP = 2;
@@ -72,6 +77,8 @@ export type WorkerAutopilotFinding = {
 export type WorkerAutopilotTurn = {
   instruction: string;
   result?: string;
+  /** 這則指示附帶的完成標準（從尾端「完成標準：」行取出）——另存，免得長指示截斷時被砍掉。 */
+  doneWhen?: string;
 };
 
 /** 教練決策要的脈絡：近期真實回合＋大局目標＋換腦帶來的背景摘要。 */
@@ -98,7 +105,11 @@ export function autopilotContextFromHistory(history: ReadonlyArray<AutopilotHist
       if (event.system) { current = null; inSystemTurn = true; continue; }
       const text = typeof event.text === "string" ? event.text : "";
       if (!originalGoal && text) originalGoal = text.slice(0, 800);
-      current = { instruction: text.slice(0, 600) };
+      // 完成標準在指示尾端，截斷會先砍到它——先剝出來另存，指示本體再截。
+      const doneWhen = extractWorkerAutopilotCriterion(text);
+      current = doneWhen
+        ? { instruction: stripWorkerAutopilotCriterion(text).slice(0, 600), doneWhen }
+        : { instruction: text.slice(0, 600) };
       turns.push(current);
       inSystemTurn = false;
     } else if (event.type === "turn_end") {
@@ -149,6 +160,8 @@ export function workerAutopilotNextPrompt(input: {
   canExplore?: boolean;
   /** 本步已做過的探索結果（真的查回來的真相）——注入決策，讓定稿基於實情而非猜測。 */
   explorationFindings?: WorkerAutopilotFinding[];
+  /** server 端量到的原地踏步訊號（workerAutopilotStallSignals）——有才注入，逼教練換角度。 */
+  stallSignals?: string[];
 }): string {
   const turns = input.turns.slice(-6);
   const turnsBlock = turns.length
@@ -158,9 +171,10 @@ export function workerAutopilotNextPrompt(input: {
           const isLatest = index === turns.length - 1;
           const result = bounded(turn.result, isLatest ? 3000 : 600);
           const label = isLatest ? t("\n   最新回覆（完整據此診斷）：{result}", { result }) : t("\n   回覆摘要：{result}", { result });
+          const criterion = bounded(turn.doneWhen, 400);
           return t("{n}. 指示：{instruction}{result}", {
             n: index + 1,
-            instruction: bounded(turn.instruction, isLatest ? 800 : 400),
+            instruction: bounded(turn.instruction, isLatest ? 800 : 400) + (criterion ? `\n   完成標準 / Done when: ${criterion}` : ""),
             result: result ? label : "",
           });
         })
@@ -197,6 +211,11 @@ export function workerAutopilotNextPrompt(input: {
     : (findings.length
       ? `\n- EXPLORATION BUDGET FOR THIS STEP IS USED UP: decide now (continue or stop) using the exploration results above plus the plan — do NOT ask to explore again this step.`
       : "");
+
+  const stall = (input.stallSignals ?? []).map((s) => bounded(s, 300)).filter(Boolean).slice(0, 4);
+  const stallBlock = stall.length
+    ? `\n\nSTALL SIGNALS (server-measured on the recent turns — evidence the loop may be spinning in place):\n${stall.map((s) => `- ${s}`).join("\n")}\n- Do NOT issue another variant of the same move. Take a genuinely different angle on the SAME original goal and say in "reason" what is different this time; only if every angle is truly exhausted, stop with "kind":"stuck".`
+    : "";
 
   const planBlock = input.plan ? workerAutopilotPlanBlock(input.plan) : "";
   const planRule = `\n- MAINTAIN THE LIVING PLAN: the "Living plan" block (below, when shown) is the single evolving source of truth across rounds — it already folds in the original goal and past lessons, so do NOT keep a second mental plan. Read it, then return an UPDATED plan in the "plan" field of your JSON: fold what the LATEST turn established into "tried" (with its outcome), confirm or refute "hypotheses", re-rank "toTry", and refresh "blockers". Never re-list something already in "tried" as a fresh "toTry" — that is exactly the circling to avoid. If no plan block is shown yet, create the initial plan from the original goal. Keep every list tight: a working plan, not a transcript.`;
@@ -244,18 +263,22 @@ ${scopeRule}
 - NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS: you ARE authorized to decide and act on the owner's behalf for anything reversible you can get right by thinking or investigating — that is the job. But an action that spends money, cannot be undone, or sends something outward (deploy, cold-install, external send, deletion) needs the owner's OWN words — a past "yes / 好" to one thing does not authorize a different money/irreversible action. For those, stop with a prepared recommendation rather than proceeding on an assumption.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
+- PICK, DON'T DEFAULT: before choosing, weigh 2–3 candidate moves (the top of the plan's "toTry" plus any fresh idea) by how far each moves the ORIGINAL GOAL versus what it costs this turn, and choose the highest-leverage one. In "reason", add one clause on why it beats the runner-up.
+- DONE-WHEN FOR EVERY STEP: on "continue", put in "doneWhen" one concrete, checkable acceptance criterion for THIS step (what the NPC's reply or files must show). The server appends it to the instruction the NPC sees as a "完成標準" line, so do not repeat it inside "instruction".
+- CHECK THE LAST CRITERION FIRST: if the previous instruction in "Recent turns" ends with a "完成標準" / "Done when" line, judge the latest reply against it and set "prevMet" to "met", "partial", or "missed". A missed or partial criterion is what your diagnosis opens with — close that gap or re-approach it before stacking a new rung on top of it.
+- STOP KIND: on "stop", set "kind" — "done" (the goal is reached and nothing is left for the owner to decide), "ask" (you need the owner's data, preference, or authorization; "reason" is the prepared A/B/C question), or "stuck" (a wall you could not get around from several angles; "reason" names the angles tried and offers directions). If any decision is left for the owner, use "ask", never "done".
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
 Workspace: ${JSON.stringify(input.workspaceLabel)}
-Loop steps remaining after this one: ${input.stepsRemaining}${goalBlock}${carriedBlock}${planBlock}${findingsBlock}
+Loop steps remaining after this one: ${input.stepsRemaining}${goalBlock}${carriedBlock}${planBlock}${findingsBlock}${stallBlock}
 
 Recent turns (oldest first):
 ${turnsBlock}${retroBlock}${factsBlock}${openBlock}
 
 Return only one marked JSON block, no Markdown fences. The "plan" field is the UPDATED living plan (single source of truth) — always include it, on both continue and stop:
-<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done","rung":"one line: which rung the work stands on right now","plan":{"goal":"root anchor — keep stable","hypotheses":["open questions / bets"],"tried":[{"text":"what has been done","outcome":"result or lesson"}],"toTry":[{"text":"next candidate","need":"capability e.g. 讀碼/上網/跑測試/某專長"}],"blockers":["stuck points"]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done, and why it beats the runner-up","rung":"one line: which rung the work stands on right now","doneWhen":"one checkable acceptance criterion for this step","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor — keep stable","hypotheses":["open questions / bets"],"tried":[{"text":"what has been done","outcome":"result or lesson"}],"toTry":[{"text":"next candidate","need":"capability e.g. 讀碼/上網/跑測試/某專長"}],"blockers":["stuck points"]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
 or
-<worker_autopilot_next>{"action":"stop","reason":"one line: why stopping now is right","plan":{"goal":"root anchor","hypotheses":[],"tried":[{"text":"...","outcome":"..."}],"toTry":[],"blockers":[]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>${input.canExplore ? `
+<worker_autopilot_next>{"action":"stop","kind":"done | ask | stuck","reason":"one line: why stopping now is right","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor","hypotheses":[],"tried":[{"text":"...","outcome":"..."}],"toTry":[],"blockers":[]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>${input.canExplore ? `
 or (when you must check current reality before deciding well):
 <worker_autopilot_next>{"action":"explore","query":"precisely what to find out — a question a read-only investigator can answer with web search, reading files, or running read-only commands","reason":"one line: why this fact blocks a good decision right now","plan":{"goal":"root anchor","hypotheses":[],"tried":[],"toTry":[],"blockers":[]}}</worker_autopilot_next>` : ""}`;
 }
@@ -285,6 +308,10 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   const resolved = resolvedIds.length ? { resolvedRequestIds: resolvedIds } : {};
   // 活計畫（支柱 A）：原樣帶出模型回傳的 plan（物件才收），交由呼叫端用 mergeWorkerAutopilotPlan 正規化落盤。
   const planUpdate = value.plan && typeof value.plan === "object" && !Array.isArray(value.plan) ? { planUpdate: value.plan } : {};
+  // 上一步完成標準的驗收判定（選填）：只收三個合法值，其他一律略過。
+  const prevMet = value.prevMet === "met" || value.prevMet === "partial" || value.prevMet === "missed"
+    ? { prevMet: value.prevMet as WorkerAutopilotCriterionVerdict }
+    : {};
   if (value.action === "explore") {
     // 支柱 B：需要先查證才能好好決定。沒給具體查詢內容的 explore 不可執行——退回安全停止。
     const query = bounded(value.query, 500);
@@ -292,7 +319,11 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
     return { ok: true, decision: { action: "stop", reason: reason || "Exploration requested without a concrete query.", ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   }
   if (value.action === "stop") {
-    return { ok: true, decision: { action: "stop", reason, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
+    // 停止類型（選填）：不認得的值當沒給——呼叫端退回舊行為（有理由就當成問 owner）。
+    const kind = value.kind === "done" || value.kind === "ask" || value.kind === "stuck"
+      ? { kind: value.kind as WorkerAutopilotStopKind }
+      : {};
+    return { ok: true, decision: { action: "stop", reason, ...kind, ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   }
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
@@ -301,7 +332,8 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   // 沒有可執行指示的 "continue" 一律當成 stop——寧可安全停下，也不要送空話進 NPC 的 session。
   if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   const rung = bounded(value.rung, 300);
-  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
+  const doneWhen = bounded(value.doneWhen, 400).replace(/[。．.\s]+$/u, "");
+  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(doneWhen ? { doneWhen } : {}), ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
 }
 
 // ── 進步護欄（機制三的程式面）──────────────────────────────────────────────
@@ -309,7 +341,30 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
 // 這種情況換策略或誠實停止，這裡再結構性兜底：同層重複一律轉成 stop，不燒 NPC 的步數。
 // 只做比對用的正規化：剝前綴、去掉所有空白（中文指示常見全半形空白差異）、統一小寫。
 function normalizedInstruction(text: string): string {
-  return stripWorkerAutopilotPrefix(text).replace(/\s+/gu, "").toLowerCase();
+  return stripWorkerAutopilotCriterion(stripWorkerAutopilotPrefix(text)).replace(/\s+/gu, "").toLowerCase();
+}
+
+// ── 完成標準（每步的驗收條件）─────────────────────────────────────────────
+// 教練每步除了指示，再給一條「這步做到什麼算完成」的可核對標準，附在送給 NPC 的指示尾端；
+// 下一步教練先拿最新回覆對照這條標準判定 met/partial/missed，再決定往上爬還是補洞。
+// 比對（進步護欄、計畫繞圈）前要把這段尾巴剝掉，否則同一招只因標準措辭不同就逃過偵測。
+const CRITERION_TAIL = /\n+\s*(?:完成標準|Done when)\s*[:：][\s\S]*$/u;
+
+export function stripWorkerAutopilotCriterion(text: string): string {
+  return text.replace(CRITERION_TAIL, "").trim();
+}
+
+/** 把完成標準接到指示尾端（沒有標準就原樣回傳）。 */
+export function workerAutopilotInstructionWithCriterion(instruction: string, doneWhen?: string): string {
+  const criterion = bounded(doneWhen, 400);
+  if (!criterion) return instruction;
+  return `${instruction}\n\n${t("完成標準：{doneWhen}", { doneWhen: criterion.replace(/\s*\n\s*/gu, " ") })}\n${t("（回覆結尾請用一句話對照這條完成標準，說明達成與否）")}`;
+}
+
+/** 從送出的指示文字取回完成標準（標籤後的那一行）；沒有就回空字串。 */
+export function extractWorkerAutopilotCriterion(text: string): string {
+  const match = typeof text === "string" ? text.match(/\n+\s*(?:完成標準|Done when)\s*[:：]\s*([^\n]*)/u) : null;
+  return match ? match[1].trim().slice(0, 400) : "";
 }
 
 export function workerAutopilotProgressGuard(
@@ -323,9 +378,117 @@ export function workerAutopilotProgressGuard(
   return {
     action: "stop",
     reason: t("下一步與最近的指示重複、說不出實質推進，改為誠實停止"),
+    kind: "stuck",
     ...(decision.retro ? { retro: decision.retro } : {}),
     ...(decision.resolvedRequestIds?.length ? { resolvedRequestIds: decision.resolvedRequestIds } : {}),
   };
+}
+
+// ── 原地踏步偵測（軟訊號）──────────────────────────────────────────────────
+// 進步護欄只抓「一字不差」的重複；實務上的原地踏步多半是換句話說：同一招換個措辭再下一次、
+// NPC 連兩回合回差不多的東西、A→B→A 來回擺盪。這裡用字元雙字組（bigram）重疊度量測，
+// 結果只當「證據」注入決策 prompt 逼教練換角度——不硬停（措辭相近未必是重複，誤殺代價高）。
+// 純字串運算、零額外模型呼叫。
+const STALL_RESULT_SIMILARITY = 0.85;
+const STALL_INSTRUCTION_SIMILARITY = 0.75;
+
+function bigramSet(text: string): Set<string> {
+  const out = new Set<string>();
+  const chars = Array.from(text);
+  for (let i = 0; i < chars.length - 1; i++) out.add(chars[i] + chars[i + 1]);
+  return out;
+}
+
+/** 兩段文字的雙字組 Dice 係數（0–1）；任一方太短（<2 字）回 0。 */
+export function workerAutopilotTextSimilarity(a: string, b: string): number {
+  const sa = bigramSet(a);
+  const sb = bigramSet(b);
+  if (!sa.size || !sb.size) return 0;
+  let shared = 0;
+  for (const gram of sa) if (sb.has(gram)) shared += 1;
+  return (2 * shared) / (sa.size + sb.size);
+}
+
+function compactForCompare(text: string | undefined): string {
+  return typeof text === "string" ? text.replace(/\s+/gu, "").toLowerCase() : "";
+}
+
+/**
+ * 從最近回合量出原地踏步訊號（英文句子，直接進 prompt）。沒有訊號回空陣列。
+ * ①最近三則回覆中任兩則高度相似（含 A→B→A 擺盪）②最近兩則指示換句話說的近似重複。
+ */
+export function workerAutopilotStallSignals(turns: ReadonlyArray<WorkerAutopilotTurn>): string[] {
+  const signals: string[] = [];
+  const recent = turns.slice(-3);
+  const results = recent.map((turn) => compactForCompare(turn.result)).filter((text) => text.length >= 40);
+  let bestResult = 0;
+  for (let i = 0; i < results.length; i++) {
+    for (let j = i + 1; j < results.length; j++) bestResult = Math.max(bestResult, workerAutopilotTextSimilarity(results[i], results[j]));
+  }
+  if (bestResult >= STALL_RESULT_SIMILARITY) {
+    signals.push(`Two of the NPC's last ${results.length} replies are ~${Math.round(bestResult * 100)}% the same text — the work is not moving forward.`);
+  }
+  const instructions = turns.slice(-2).map((turn) => normalizedInstruction(turn.instruction)).filter((text) => text.length >= 8);
+  if (instructions.length === 2) {
+    const sim = workerAutopilotTextSimilarity(instructions[0], instructions[1]);
+    if (sim >= STALL_INSTRUCTION_SIMILARITY) {
+      signals.push(`The last two instructions overlap ~${Math.round(sim * 100)}% — the same move was re-issued in different words.`);
+    }
+  }
+  return signals;
+}
+
+// ── 給 owner 看的進度與停止說明（純字串組裝）────────────────────────────────
+function verdictLabel(verdict: WorkerAutopilotCriterionVerdict): string {
+  if (verdict === "met") return t("上一步達標");
+  if (verdict === "partial") return t("上一步部分達標");
+  return t("上一步未達標");
+}
+
+/**
+ * 每步一句話進度：上一步驗收結果 · 目前站在哪一階 · 這步要推進什麼 · 這步的完成標準。
+ * 取代原本只有 rung 的通知——owner 掃一眼就知道循環在想什麼、有沒有真的往前。都沒有就回 null。
+ */
+export function workerAutopilotStepNotice(decision: { rung?: string; reason?: string; doneWhen?: string; prevMet?: WorkerAutopilotCriterionVerdict }): string | null {
+  const parts: string[] = [];
+  if (decision.prevMet) parts.push(verdictLabel(decision.prevMet));
+  const rung = bounded(decision.rung, 300);
+  if (rung) parts.push(rung);
+  const reason = bounded(decision.reason, 300);
+  if (reason) parts.push(t("這步：{reason}", { reason }));
+  const doneWhen = bounded(decision.doneWhen, 300);
+  if (doneWhen) parts.push(t("完成標準：{doneWhen}", { doneWhen }));
+  return parts.length ? `🪜 ${parts.join(" · ")}` : null;
+}
+
+/**
+ * 教練主動停下時給 owner 的停止註記，並決定要不要標成「循環問你」卡（ask）。
+ * - done：目標達成、沒有待決事項 → 不打擾（不標 ask），附計畫裡排第一的可選下一步。
+ *   防呆：若理由裡其實帶了 ≥2 個標號選項，仍當成問 owner（寧可多問一次，也不漏掉待決定）。
+ * - ask：要 owner 的資料／偏好／授權 → 問題卡＋一鍵選項。
+ * - stuck：多角度都撞牆 → 問題卡，附計畫裡的卡點，請 owner 指方向。
+ * - 沒給 kind（舊模型輸出）→ 完全沿用舊行為：有理由就當問 owner。
+ */
+export function workerAutopilotStopNote(input: {
+  kind?: WorkerAutopilotStopKind;
+  reason: string;
+  plan?: WorkerAutopilotPlan | null;
+}): { note: string; ask: boolean } {
+  const reason = bounded(input.reason, 500);
+  const legacy = t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" });
+  if (!reason || !input.kind) return { note: legacy, ask: !!reason };
+  const kind = input.kind === "done" && parseAutopilotAskOptions(reason).length >= 2 ? "ask" : input.kind;
+  if (kind === "done") {
+    const next = bounded(input.plan?.toTry[0]?.text, 220);
+    const hint = next ? `\n${t("可選的下一步：{next}（要做就直接下指示或重開開關）", { next })}` : "";
+    return { note: `${t("自動循環已完成目標：{reason}。", { reason })}${hint}`, ask: false };
+  }
+  if (kind === "stuck") {
+    const blocker = bounded(input.plan?.blockers[0], 220);
+    const hint = blocker ? `\n${t("卡點：{blocker}", { blocker })}` : "";
+    return { note: `${t("🅿️ 自動循環卡住而停：{reason}。給個方向或選一個選項，就能換路接著做。", { reason })}${hint}`, ask: true };
+  }
+  return { note: t("🅿️ 自動循環停下來等你拍板：{reason}。回覆選項或直接下指示即可接續。", { reason }), ask: true };
 }
 
 // ── 支柱 B · 探索回合（兩段式的第二段：真的去查）────────────────────────────
@@ -756,6 +919,7 @@ export function workerAutopilotPlanProgressGuard(
   return {
     action: "stop",
     reason: t("下一步等同計畫中已試過的做法（長程繞圈），改為誠實停止——該換角度或交回决定"),
+    kind: "stuck",
     ...(decision.retro ? { retro: decision.retro } : {}),
     ...(decision.resolvedRequestIds?.length ? { resolvedRequestIds: decision.resolvedRequestIds } : {}),
   };

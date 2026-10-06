@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../api";
 import { Modal } from "./Modal";
 import { t } from "../i18n";
 import { Icon, type IconName } from "./Icon";
+import { Skeleton } from "./Skeleton";
+import { indicatorStyle, useTabIndicator } from "../flip";
 
 type ReportWorker = {
   workerId: string; name: string; costUsd: number;
@@ -52,6 +54,15 @@ export function DayReportModal({ notify, onClose }: Props) {
   const [report, setReport] = useState<DayReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [filterWorkerId, setFilterWorkerId] = useState("");
+  // 換日方向：往前一天內容從左邊滑進來、往後一天從右邊；首次載入不滑。
+  const [slide, setSlide] = useState<"prev" | "next" | null>(null);
+  const goDay = (delta: -1 | 1) => {
+    if (!day) return;
+    setSlide(delta < 0 ? "prev" : "next");
+    setDay(shiftDay(day, delta));
+  };
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const tabInk = useTabIndicator(tabsRef, tab);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,17 +106,22 @@ export function DayReportModal({ notify, onClose }: Props) {
     <Modal label={t("下班報告")} eyebrow="DAY REPORT" title={t("下班報告")} cardClassName="warroom-result__card ops-modal day-report" onClose={onClose}>
 
         <div className="day-report__nav">
-          <button type="button" onClick={() => day && setDay(shiftDay(day, -1))} disabled={!day || loading}>{t("◀ 前一天")}</button>
-          <strong>{report?.day ?? "…"}{isToday && report ? t("（今天）") : ""}</strong>
-          <button type="button" onClick={() => day && setDay(shiftDay(day, 1))} disabled={!day || loading || isToday}>{t("後一天 ▶")}</button>
+          <button type="button" onClick={() => goDay(-1)} disabled={!day || loading}>{t("◀ 前一天")}</button>
+          <strong key={report?.day ?? ""} className={slide ? `r2-day-slide r2-day-slide--${slide}` : undefined}>{report?.day ?? "…"}{isToday && report ? t("（今天）") : ""}</strong>
+          <button type="button" onClick={() => goDay(1)} disabled={!day || loading || isToday}>{t("後一天 ▶")}</button>
         </div>
 
-        <div className="ops-modal__tabs" role="tablist">
-          <button type="button" role="tab" className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}>{t("報告")}</button>
-          <button type="button" role="tab" className={tab === "replay" ? "active" : ""} onClick={() => setTab("replay")}>{t("一日回放")}</button>
+        <div className={`ops-modal__tabs${tabInk ? " r2-tabs--ink" : ""}`} role="tablist" ref={tabsRef}>
+          {tabInk && <span className="r2-tab-ink" aria-hidden="true" style={indicatorStyle(tabInk)} />}
+          <button type="button" role="tab" aria-selected={tab === "report"} className={tab === "report" ? "active" : ""} onClick={() => setTab("report")}>{t("報告")}</button>
+          <button type="button" role="tab" aria-selected={tab === "replay"} className={tab === "replay" ? "active" : ""} onClick={() => setTab("replay")}>{t("一日回放")}</button>
         </div>
 
-        {report === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : tab === "report" ? (
+        {report === null ? <Skeleton variant="tiles" rows={5} className="ops-modal__body" /> : <div
+          key={report.day}
+          className={`day-report__page${slide ? ` r2-day-slide r2-day-slide--${slide}` : ""}${loading ? " day-report__page--stale" : ""}`}
+          aria-busy={loading}
+        >{tab === "report" ? (
           <div className="ops-modal__body">
             <div className="day-report__totals">
               <div><small>{t("總花費")}</small><strong>${report.totals.costUsd.toFixed(2)}</strong></div>
@@ -188,7 +204,7 @@ export function DayReportModal({ notify, onClose }: Props) {
               </div>
             ))}
           </div>
-        )}
+        )}</div>}
     </Modal>
   );
 }

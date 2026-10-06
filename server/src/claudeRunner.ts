@@ -492,7 +492,8 @@ export class ClaudeSession implements AgentSession {
         if (line.includes("No conversation found")) sawMissingConversation = true;
         return;
       }
-      if (parsed.type === "assistant") {
+      // 子代理（Agent 工具）內部訊息帶 parent_tool_use_id：那是子代理自己的 context，不能蓋掉主對話的佔用量。
+      if (parsed.type === "assistant" && !isSubagentMessage(parsed)) {
         const usage = parsed.message?.usage;
         if (usage) {
           const total =
@@ -618,7 +619,15 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
   return content;
 }
 
+function isSubagentMessage(parsed: any): boolean {
+  return typeof parsed?.parent_tool_use_id === "string" && parsed.parent_tool_use_id.length > 0;
+}
+
 export function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
+  // 子代理內部的工具呼叫不是主 NPC 的動作：背景子代理在主回合 turn_end 之後還會持續吐這些訊息，
+  // 若照常轉成 tool_call_start/result，前端會把已結束的回合「復活」成 running，
+  // 下次 snapshot 又被當中止回合關掉，連帶把會議桌上還在跑的子代理清空。子代理靠 Agent 工具本身＋task_notification 追蹤。
+  if ((parsed?.type === "assistant" || parsed?.type === "user") && isSubagentMessage(parsed)) return;
   switch (parsed.type) {
     case "system": {
       if (parsed.subtype === "init") {

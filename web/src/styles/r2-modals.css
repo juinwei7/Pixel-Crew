@@ -1,0 +1,179 @@
+/* 第二輪（R2）modals 專屬樣式。
+
+   D 面板：骨架載入、日報換日滑入、分頁亮塊、看板 FLIP（純 JS，見 src/flip.ts）、
+   新交辦落入。原則沿用 motion.css：只動 opacity 與獨立 translate、單一青色
+   強調、不加光暈；prefers-reduced-motion 時位移與掃光全部拿掉（檔尾）。 */
+
+.r2-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── 1. 骨架 ───────────────────────────────────────────────────────────── */
+.r2-skeleton { position: relative; padding: 6px 0; }
+.r2-skeleton__body { display: grid; gap: 9px; }
+
+.r2-skeleton__line {
+  display: block;
+  height: 9px;
+  border-radius: 4px;
+  background-color: rgba(143, 184, 232, 0.09);
+  background-image: linear-gradient(90deg, transparent 0%, rgba(143, 184, 232, 0.09) 50%, transparent 100%);
+  background-repeat: no-repeat;
+  background-size: 60% 100%;
+  background-position: -150% 0;
+  animation: r2-skeleton-sweep 1.5s var(--ease-in-out) infinite;
+}
+.r2-skeleton__line--sub { height: 7px; opacity: 0.7; }
+.r2-skeleton__line--big { height: 14px; }
+.r2-skeleton__line--head { height: 10px; margin-bottom: 2px; }
+.r2-skeleton__line--label { height: 8px; }
+.r2-skeleton__line--bar { height: 8px; }
+
+@keyframes r2-skeleton-sweep {
+  to { background-position: 250% 0; }
+}
+
+.r2-skeleton__item {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid rgba(143, 184, 232, 0.1);
+  border-radius: 8px;
+}
+
+.r2-skeleton__bar-row { display: grid; grid-template-columns: 54px 1fr; align-items: center; gap: 10px; }
+
+.r2-skeleton__tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 6px; }
+.r2-skeleton__tile {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid rgba(143, 184, 232, 0.1);
+  border-radius: 8px;
+}
+
+.r2-skeleton__columns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px; }
+.r2-skeleton__column {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 10px 9px;
+  border: 1px solid rgba(143, 184, 232, 0.12);
+  border-radius: 12px;
+}
+.r2-skeleton__card {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid rgba(143, 184, 232, 0.1);
+  border-radius: 9px;
+}
+
+/* 同一面板裡不要每條都同一拍閃：每列錯開一點相位。 */
+.r2-skeleton__body > :nth-child(2n) .r2-skeleton__line,
+.r2-skeleton__body > .r2-skeleton__line:nth-child(2n) { animation-delay: 90ms; }
+.r2-skeleton__body > :nth-child(3n) .r2-skeleton__line,
+.r2-skeleton__body > .r2-skeleton__line:nth-child(3n) { animation-delay: 180ms; }
+
+.global-memory-modal__skeleton { margin-bottom: 12px; }
+.command-library__skeleton { padding: 4px 2px; }
+
+@media (max-width: 1023px) {
+  .r2-skeleton__columns { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .r2-skeleton__columns { grid-template-columns: 1fr; }
+  .r2-skeleton__columns > :nth-child(n + 3) { display: none; }
+  .r2-skeleton__tiles { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── 2. 日報換日：往前一天從左滑進、往後一天從右滑進 ─────────────────── */
+.day-report__nav,
+.day-report__page { overflow-x: clip; }
+.day-report__page { transition: opacity var(--dur-2) ease; }
+.day-report__page--stale { opacity: 0.55; }
+
+.day-report__nav strong.r2-day-slide--next,
+.day-report__page.r2-day-slide--next > * { animation: r2-day-in-next var(--dur-4) var(--ease-out) both; }
+.day-report__nav strong.r2-day-slide--prev,
+.day-report__page.r2-day-slide--prev > * { animation: r2-day-in-prev var(--dur-4) var(--ease-out) both; }
+
+@keyframes r2-day-in-next {
+  from { opacity: 0; translate: 18px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes r2-day-in-prev {
+  from { opacity: 0; translate: -18px 0; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* ── 3. 分頁亮塊 ──────────────────────────────────────────────────────── */
+/* 量得到選中分頁時才掛 .r2-tabs--ink：亮塊接手選中底色，按鈕本身改透明；
+   量不到（SSR、首幀）就維持原本的 .active 底色，不會出現空窗。 */
+/* 分頁列一律是定位容器：亮塊的量測用 offsetLeft/Top，必須以分頁列為基準，
+   且掛上 .r2-tabs--ink 前後的基準不能變。 */
+.ops-modal__tabs,
+.command-center__providers { position: relative; }
+.r2-tabs--ink { isolation: isolate; }
+.r2-tabs--ink > button { position: relative; z-index: 1; }
+
+.r2-tab-ink {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  transition:
+    translate var(--dur-4) var(--ease-out),
+    width var(--dur-4) var(--ease-out),
+    height var(--dur-4) var(--ease-out);
+}
+
+.ops-modal__tabs.r2-tabs--ink > button.active,
+.ops-modal__tabs.r2-tabs--ink > button[aria-selected="true"] {
+  background: transparent;
+  border-color: transparent;
+}
+.ops-modal__tabs .r2-tab-ink {
+  border: 1px solid rgba(0, 229, 255, 0.5);
+  border-radius: 8px;
+  background: rgba(0, 229, 255, 0.14);
+}
+
+.command-center__providers.r2-tabs--ink .command-center__provider--active {
+  background: transparent;
+  box-shadow: none;
+}
+.command-center__providers .r2-tab-ink {
+  border-radius: 6px;
+  background: rgba(0, 229, 255, 0.1);
+}
+
+/* ── 5. 新交辦落入：從上方落下、淡入，到位即停（不回彈） ─────────────── */
+.r2-drop-in { animation: r2-drop-in var(--dur-4) var(--ease-out) both; }
+.r2-drop-in--after { animation-delay: 70ms; }
+
+@keyframes r2-drop-in {
+  from { opacity: 0; translate: 0 -12px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* ── prefers-reduced-motion：位移與掃光拿掉，只留淡入 ──────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .r2-skeleton__line { animation: none; background-image: none; }
+  .r2-tab-ink { transition: none; }
+  .day-report__page { transition: none; }
+  @keyframes r2-day-in-next { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes r2-day-in-prev { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes r2-drop-in { from { opacity: 0; } to { opacity: 1; } }
+  .r2-drop-in--after { animation-delay: 0ms; }
+}

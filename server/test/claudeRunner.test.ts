@@ -342,3 +342,14 @@ test("maps a background task_notification to subagent_done keyed by the Agent to
   handleLine({ type: "system", subtype: "task_notification", task_id: "a2", status: "completed" }, (e) => events.push(e));
   assert.deepEqual(events, [{ type: "subagent_done", id: "toolu_1" }]);
 });
+
+test("subagent-internal messages (parent_tool_use_id) are not surfaced as the parent's tool calls", () => {
+  const events: RunnerEvent[] = [];
+  handleLine({ type: "assistant", parent_tool_use_id: "toolu_parent", message: { content: [{ type: "tool_use", id: "toolu_child", name: "Bash", input: { command: "echo hi" } }] } }, (event) => events.push(event));
+  handleLine({ type: "user", parent_tool_use_id: "toolu_parent", message: { content: [{ type: "tool_result", tool_use_id: "toolu_child", content: "hi" }] } }, (event) => events.push(event));
+  assert.deepEqual(events, []);
+  handleLine({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "toolu_parent", name: "Agent", input: {} }] } }, (event) => events.push(event));
+  assert.deepEqual(events.map((event) => event.type), ["tool_call_start"]);
+  handleLine({ type: "system", subtype: "task_notification", tool_use_id: "toolu_parent" }, (event) => events.push(event));
+  assert.deepEqual(events.at(-1), { type: "subagent_done", id: "toolu_parent" });
+});

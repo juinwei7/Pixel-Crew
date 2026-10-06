@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { logContentCount, trackUnseen, type UnseenState } from "../uxMotion";
 import type { ApprovalDecision, ApprovalItem, ToolCallItem, Turn, TurnItem } from "../types";
 import type { TaskLogView } from "../uiPreferences";
@@ -20,7 +20,49 @@ const PIN_STORAGE_KEY = "pixel-crew-pinned-reports-v1";
 // most recent chunk by default, with a "load earlier" affordance — cheap,
 // keeps every existing DOM-id-based feature working, and is a no-op for the
 // vast majority of conversations that never reach the cap.
-const RENDER_CHUNK = 200;
+// 首批只掛最近 RENDER_CHUNK 張卡（長對話切 NPC 時不必一次 reconcile 上百棵 markdown 樹）；
+// 往上捲到接近頂端就自動再接一批，捲動位置用 scrollHeight 差補回去，畫面不會跳。
+export const RENDER_CHUNK = 30;
+const LOAD_EARLIER_THRESHOLD_PX = 160;
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+/** 下一件需要你處理的事（由 App 算好傳進來）。有 turnKey 時點了先捲到那張卡，再交給 onOpenAttention。 */
+export type QuestLogAttention = {
+  id: string;
+  label: string;
+  detail?: string;
+  tone?: "approval" | "question" | "error" | "review";
+  turnKey?: string;
+  workerId?: string;
+};
+
+/** 本回合產出的成品（檔案、連結、報告…）。沒有 turnKey 的掛在最新一張卡底下。 */
+export type TurnDeliverable = {
+  id: string;
+  label: string;
+  kind?: "file" | "link" | "report" | "image";
+  detail?: string;
+  href?: string;
+  turnKey?: string;
+};
+
+/** 往上捲時要不要再接一批更早的卡。 */
+export function shouldLoadEarlier(scrollTop: number, hiddenOlderCount: number, threshold = LOAD_EARLIER_THRESHOLD_PX): boolean {
+  return hiddenOlderCount > 0 && scrollTop <= threshold;
+}
+
+/** 依 turnKey 分組；沒有 turnKey 的歸到 fallbackTurnKey（通常是最新一張）。 */
+export function groupDeliverables(deliverables: TurnDeliverable[] | undefined, fallbackTurnKey: string | undefined): Map<string, TurnDeliverable[]> {
+  const groups = new Map<string, TurnDeliverable[]>();
+  for (const deliverable of deliverables ?? []) {
+    const key = deliverable.turnKey ?? fallbackTurnKey;
+    if (!key) continue;
+    const list = groups.get(key);
+    if (list) list.push(deliverable);
+    else groups.set(key, [deliverable]);
+  }
+  return groups;
+}
 
 function focusTurnId(key: string): string {
   return `focus-turn-${encodeURIComponent(key)}`;
@@ -183,6 +225,15 @@ function ApprovalCard({ item, onApprove }: {
     }
   }
 
+  // 蓋章：按下核准／拒絕的那一刻就蓋（不等伺服器），失敗時章跟著撤掉；
+  // 已處理的卡片留一個不動的章，掃一眼就知道結果。
+  const stampDecision = submitting ?? (!pending ? item.decision : undefined);
+  const stamp = stampDecision ? <span
+    className={`approval-card__stamp approval-card__stamp--${stampDecision === "deny" ? "deny" : "allow"}`}
+    data-live={submitting ? "true" : undefined}
+    aria-hidden="true"
+  >{stampDecision === "deny" ? t("已拒絕") : t("已核准")}</span> : null;
+
   const decisionLabel = item.decision === "allow_once"
     ? t("已允許一次")
     : item.decision === "allow_session"
@@ -192,7 +243,8 @@ function ApprovalCard({ item, onApprove }: {
         : t("已拒絕");
 
   return (
-    <div className={`approval-card ${pending ? "approval-card--pending" : "approval-card--resolved"}`}>
+    <div className={`approval-card ${pending ? "approval-card--pending" : "approval-card--resolved"}`} data-stamped={stamp ? "true" : undefined}>
+      {stamp}
       <div className="approval-card__head">
         <span className="approval-card__icon">!</span>
         <div><strong>{item.request.title}</strong><small>{item.request.reason || t("Agent 需要你的核准才能繼續")}</small></div>
@@ -378,7 +430,7 @@ function TurnItems({ items, status, view, focusMode, turnKey, highlight, onAppro
         return (
           <div key={item.key} className={`turn-text ${isFinal ? "turn-text--final" : ""}`}>
             {isFinal && <div className="turn-text__label">FINAL RESPONSE <CopyButton value={item.text} label={t("複製最終回覆")} /></div>}
-            <RichText text={item.text} headingPrefix={focusMode ? focusTurnId(turnKey) : undefined} highlight={highlight} />
+            <RichText text={item.text} headingPrefix={focusMode ? focusTurnId(turnKey) : undefined} highlight={highlight} streaming={status === "running"} />
           </div>
         );
       })}
@@ -435,7 +487,27 @@ function AutopilotAskCard({ turn, onAnswer }: { turn: Turn; onAnswer?: (text: st
 // onPin takes the turn key (not a per-turn closure) so its reference stays
 // stable across renders and doesn't defeat the memo.
 const COACH_PREFIX = "🔁";
-const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove, onAnswerAutopilot }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(turnKey: string): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; onAnswerAutopilot?: (text: string, workerId?: string) => void }) {
+
+/** 本回合成品：一排克制的小清單。有 href 的直接開新分頁，其餘交給 onOpen（App 決定怎麼打開）。 */
+function TurnDeliverables({ items, onOpen }: { items: TurnDeliverable[]; onOpen?(deliverable: TurnDeliverable): void }) {
+  return (
+    <div className="turn-deliverables" role="group" aria-label={t("本回合成品")}>
+      <span className="turn-deliverables__label">{t("本回合成品")} <small>{items.length}</small></span>
+      <ul>
+        {items.map((deliverable) => {
+          const body = <><Icon name={deliverable.kind === "link" ? "send" : "check"} size={11} /><strong>{deliverable.label}</strong>{deliverable.detail && <small>{deliverable.detail}</small>}</>;
+          return <li key={deliverable.id}>
+            {deliverable.href
+              ? <a className="turn-deliverables__item" href={deliverable.href} target="_blank" rel="noopener noreferrer" title={deliverable.detail ?? deliverable.label} onClick={() => onOpen?.(deliverable)}>{body}</a>
+              : <button type="button" className="turn-deliverables__item" title={deliverable.detail ?? deliverable.label} disabled={!onOpen} onClick={() => onOpen?.(deliverable)}>{body}</button>}
+          </li>;
+        })}
+      </ul>
+    </div>
+  );
+}
+
+const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highlight, pinned, onPin, onApprove, onAnswerAutopilot, deliverables, onOpenDeliverable }: { turn: Turn; isLatest: boolean; view: TaskLogView; focusMode: boolean; highlight: string; pinned: boolean; onPin?(turnKey: string): void; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; onAnswerAutopilot?: (text: string, workerId?: string) => void; deliverables?: TurnDeliverable[]; onOpenDeliverable?(deliverable: TurnDeliverable): void }) {
   const [expanded, setExpanded] = useState<boolean | null>(null);
   const open = focusMode || (expanded ?? (isLatest || turn.status === "running" || turn.status === "error"));
   const waitingForApproval = turn.items.some((item) => item.kind === "approval" && item.status === "pending");
@@ -468,6 +540,7 @@ const TurnCard = memo(function TurnCard({ turn, isLatest, view, focusMode, highl
       {open && (
         <>
           <TurnItems items={turn.items} status={turn.status} view={view} focusMode={focusMode} turnKey={turn.key} highlight={highlight} onApprove={onApprove} />
+          {deliverables && deliverables.length > 0 && <TurnDeliverables items={deliverables} onOpen={onOpenDeliverable} />}
           {!focusMode && turn.status !== "running" && turn.durationMs !== undefined && (
             <div className="turn-card__foot">
               {(turn.durationMs / 1000).toFixed(1)}s{turn.costUsd ? ` · $${turn.costUsd.toFixed(4)}` : ""}
@@ -486,7 +559,26 @@ function navStatus(turn: Turn): string {
   return t("完成");
 }
 
-export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, onAnswerAutopilot, studioRail, studioRailCollapsed = true, missionActivity }: { turns: Turn[]; view?: TaskLogView; searchQuery?: string; focusMode?: boolean; readerKey?: string; onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>; onAnswerAutopilot?: (text: string, workerId?: string) => void; studioRail?: ReactNode; studioRailCollapsed?: boolean; missionActivity?: ReactNode }) {
+type QuestLogProps = {
+  turns: Turn[];
+  view?: TaskLogView;
+  searchQuery?: string;
+  focusMode?: boolean;
+  readerKey?: string;
+  onApprove?: (approvalId: string, decision: ApprovalDecision) => Promise<string | null>;
+  onAnswerAutopilot?: (text: string, workerId?: string) => void;
+  studioRail?: ReactNode;
+  studioRailCollapsed?: boolean;
+  missionActivity?: ReactNode;
+  /** 下一件需要你處理的事：記錄頂端一條可點的提示列。 */
+  nextAttention?: QuestLogAttention | null;
+  onOpenAttention?(attention: QuestLogAttention): void;
+  /** 本回合產出的成品清單：掛在對應任務卡底下。請保持參考穩定（useMemo），以免整串卡片重繪。 */
+  turnDeliverables?: TurnDeliverable[];
+  onOpenDeliverable?(deliverable: TurnDeliverable): void;
+};
+
+export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode = false, readerKey, onApprove, onAnswerAutopilot, studioRail, studioRailCollapsed = true, missionActivity, nextAttention = null, onOpenAttention, turnDeliverables, onOpenDeliverable }: QuestLogProps) {
   const logRef = useRef<HTMLDivElement>(null);
   const previousFocusMode = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -588,6 +680,43 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
     });
   }, [readerKey]);
 
+  // 往上載入更早的卡：記下載入前的捲動高度，掛上新卡後把多出來的高度補回 scrollTop，
+  // 使用者眼前那張卡停在原地，不會被新插入的內容往下推走。
+  const loadAnchorRef = useRef<{ height: number; top: number } | null>(null);
+  function loadEarlier() {
+    const el = logRef.current;
+    if (el) loadAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    setRenderLimit((limit) => limit + RENDER_CHUNK);
+  }
+  useIsomorphicLayoutEffect(() => {
+    const anchor = loadAnchorRef.current;
+    const el = logRef.current;
+    loadAnchorRef.current = null;
+    if (!anchor || !el) return;
+    el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
+  }, [renderLimit]);
+
+  // 跳到某張卡（「下一件需要你」用）：還沒掛載的舊卡先把渲染窗口撐到含它，下一輪再捲過去。
+  const pendingScrollRef = useRef<string | null>(null);
+  const turnElementId = (turnKey: string) => focusMode ? focusTurnId(turnKey) : searchTurnId(turnKey);
+  function scrollToTurn(turnKey: string) {
+    const target = document.getElementById(turnElementId(turnKey));
+    if (target) { target.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    const index = visibleTurns.findIndex((turn) => turn.key === turnKey);
+    if (index < 0) return;
+    pendingScrollRef.current = turnKey;
+    setRenderLimit((limit) => Math.max(limit, visibleTurns.length - index));
+  }
+  useEffect(() => {
+    const turnKey = pendingScrollRef.current;
+    if (!turnKey) return;
+    pendingScrollRef.current = null;
+    document.getElementById(turnElementId(turnKey))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  const latestTurnKey = turns[turns.length - 1]?.key;
+  const deliverableGroups = useMemo(() => groupDeliverables(turnDeliverables, latestTurnKey), [turnDeliverables, latestTurnKey]);
+
   function goToSearchResult(index: number) {
     if (visibleTurns.length === 0) return;
     const next = (index + visibleTurns.length) % visibleTurns.length;
@@ -612,6 +741,7 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
       if (!el) return;
       if (focusMode && readerKey) focusScrollPositions.set(readerKey, el.scrollTop);
       setAtBottomBoth(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+      if (!loadAnchorRef.current && shouldLoadEarlier(el.scrollTop, hiddenOlderCount)) loadEarlier();
       if (focusMode && navigationEntries.length > 0) {
         const threshold = el.getBoundingClientRect().top + 110;
         const current = navigationEntries.reduce<string | null>((found, entry) => {
@@ -621,6 +751,21 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
         setActiveSection(current);
       }
     }}>
+      {nextAttention && <button
+        type="button"
+        className="quest-log__next-attention"
+        data-tone={nextAttention.tone ?? "approval"}
+        title={nextAttention.detail ?? nextAttention.label}
+        onClick={() => {
+          if (nextAttention.turnKey) scrollToTurn(nextAttention.turnKey);
+          onOpenAttention?.(nextAttention);
+        }}
+      >
+        <span className="quest-log__next-attention-kicker">{t("下一件需要你")}</span>
+        <strong>{nextAttention.label}</strong>
+        {nextAttention.detail && <small>{nextAttention.detail}</small>}
+        <span className="quest-log__next-attention-go" aria-hidden="true">→</span>
+      </button>}
       {needle && <div className="quest-log__search-results" role="status">
         <span><strong>{searchOccurrences}</strong> {t("處 · {total} 筆任務", { total: visibleTurns.length })}</span>
         <div><button type="button" disabled={visibleTurns.length === 0} aria-label={t("上一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex - 1)}>↑</button><small>{visibleTurns.length > 0 ? `${searchResultIndex + 1}/${visibleTurns.length}` : "0/0"}</small><button type="button" disabled={visibleTurns.length === 0} aria-label={t("下一筆搜尋結果")} onClick={() => goToSearchResult(searchResultIndex + 1)}>↓</button></div>
@@ -640,12 +785,12 @@ export function QuestLog({ turns, view = "summary", searchQuery = "", focusMode 
           : <div className="quest-log__empty">{t("目前沒有工作內容可顯示。在下面下指令就能開始。")}</div>
       )}
       {hiddenOlderCount > 0 && (
-        <button type="button" className="quest-log__load-earlier" onClick={() => setRenderLimit((limit) => limit + RENDER_CHUNK)}>
+        <button type="button" className="quest-log__load-earlier" onClick={loadEarlier}>
           {t("顯示更早的任務（還有 {count} 筆）", { count: hiddenOlderCount })}
         </button>
       )}
       {renderedTurns.map((turn, i) => (
-        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} onAnswerAutopilot={onAnswerAutopilot} />
+        <TurnCard key={turn.key} turn={turn} isLatest={i === renderedTurns.length - 1} view={view} focusMode={focusMode} highlight={needle} pinned={pinnedTurns.has(turn.key)} onPin={togglePinned} onApprove={onApprove} onAnswerAutopilot={onAnswerAutopilot} deliverables={deliverableGroups.get(turn.key)} onOpenDeliverable={onOpenDeliverable} />
       ))}
       {!atBottom && <button type="button" className={`quest-log__latest${unseen ? " quest-log__latest--new" : ""}`} data-bump={unseen ? (unseen % 2 ? "a" : "b") : undefined} onClick={() => {
         const el = logRef.current;

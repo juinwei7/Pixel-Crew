@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { composerTextareaHeight, insertVoiceTranscript, newClientMessageIdentity, shouldSubmitComposerKey } from "../composerCore";
-import { composerEnterAction } from "../commandInteraction";
+import { composerEnterAction, composerStatus, emptySubmitAction, restoreFailedDraft, shouldAutoFocusComposer, type ComposerSubmitSource } from "../commandInteraction";
 import { Icon } from "./Icon";
 import {
   documentBadge,
@@ -31,18 +31,35 @@ import type { CapabilityState, CommandSubmission, ProviderId, QueuedCommandDto, 
 import type { ClientPoint } from "../fxBus";
 import { t } from "../i18n";
 
-// 送出訊息後這段時間內的「空白 Enter＝中止任務」一律忽略，避免太快連按兩下 Enter 誤砍任務。
+// 空白 Enter 永遠不會中止任務（見 commandInteraction.emptySubmitAction）；只有按「中止」鈕才會。
+// 按鈕在送出訊息後這段時間內也忽略，避免太快連點兩下誤砍剛派出的任務。
 const INTERRUPT_GUARD_MS = 1000;
 
-// 送出鈕的動態分段（styles/motion.css 依 data-launch 播放）：起飛 → 打勾 → 字浮回來。
-// 起飛至少播這麼久才換打勾，送出回應再快也看得到飛機離開。
+// 送出鈕的動態分段（styles/motion.css、r2-composer.css 依 data-launch 播放）：
+// 成功：起飛 → 打勾 → 字浮回來；失敗：起飛 → 紙飛機折返 → 字浮回來（草稿同時放回輸入框）。
+// 起飛至少播這麼久才換下一段，送出回應再快也看得到飛機離開。
 const LAUNCH_MIN_MS = 420;
 const LAUNCH_DONE_MS = 780;
+const LAUNCH_RETURN_MS = 520;
 const LAUNCH_SETTLE_MS = 300;
+// 草稿的 localStorage 前綴（與 hooks/useComposerDraft 相同）：送出失敗時使用者已切到別的
+// NPC，要把原文「併回」那位 NPC 的草稿，不能直接覆蓋他離開前新打的字。
+const DRAFT_STORAGE_PREFIX = "pixel-crew:task-composer:";
+
+function readStoredDraft(key: string): string {
+  try { return typeof localStorage === "undefined" ? "" : localStorage.getItem(`${DRAFT_STORAGE_PREFIX}${key}`) ?? ""; } catch { return ""; }
+}
+
+/** 失敗退回的附件放前面、等待期間新加的接在後面（同 id 不重複），並守住上限。 */
+export function mergeFailed<T extends { id: string }>(failed: T[], current: T[], max: number): T[] {
+  if (failed.length === 0) return current;
+  const seen = new Set(failed.map((item) => item.id));
+  return [...failed, ...current.filter((item) => !seen.has(item.id))].slice(0, max);
+}
 // 「已交給 XXX」回執停留時間；跟 CSS 的倒數細線用同一個數字（--receipt-ms）。
 const RECEIPT_MS = 4200;
 
-export type LaunchPhase = "idle" | "launch" | "done" | "settle";
+export type LaunchPhase = "idle" | "launch" | "done" | "return" | "settle";
 
 /** 外部（拖放到 NPC 身上、Ctrl+K 指令面板）要求「預填」這個輸入框：只填文字／
  *  加附件、聚焦，絕不自動送出。sessionKey 對上目前 draftKey 才套用——切換 NPC
@@ -114,6 +131,8 @@ type Props = {
   /** 預填已套用：上層要把 inject 清掉——輸入框若重新掛載（切去老闆桌再回來），
    *  appliedInjectRef 會歸零，留著舊的 inject 會把同一批檔案再附加一次。 */
   onInjectApplied?(seq: number): void;
+  /** 目前對象有事等你處理（待核准、循環問你…）：狀態列顯示「需要你」。只有 dock 顯示狀態列。 */
+  needsAttention?: boolean;
 };
 
 export function TaskComposer({
@@ -121,7 +140,7 @@ export function TaskComposer({
   layout = "inline", focusMode = false, focusRequest = 0, palette, history, queueEnabled = false, busy = false, onInterrupt,
   serverQueue, onEnqueue, onRemoveQueued, onReorderQueued,
   persistExtras = false, globalDrop = false, dropTargetLabel, voiceEnabled = false,
-  launchTarget = null, onLaunch, onReceiptOpen, inject = null, onInjectApplied,
+  launchTarget = null, onLaunch, onReceiptOpen, inject = null, onInjectApplied, needsAttention = false,
 }: Props) {
   const dock = layout === "dock";
   // 有 onEnqueue＝這個 composer 走 server 佇列（背景 drain＋跨裝置）；否則沿用本地佇列。
@@ -179,6 +198,15 @@ export function TaskComposer({
     formRef,
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** 聚焦輸入框。auto＝不是使用者剛在輸入框上操作（點 NPC、任務結束、送出後…）：
+   *  觸控裝置一律不自動聚焦，免得螢幕鍵盤突然彈出來蓋住畫面。 */
+  const focusTextarea = (auto = true) => {
+    if (auto && !shouldAutoFocusComposer()) return;
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+  // 目前輸入框對應的 session：送出失敗回來時用它判斷「使用者是不是已經切走了」。
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
   const submittingRef = useRef(false);
@@ -213,10 +241,15 @@ export function TaskComposer({
     setLaunchPhase("launch");
     return Date.now();
   }
-  /** 結果回來：成功 → 打勾 → 回原狀；失敗 → 直接回原狀（錯誤訊息自己會出現）。 */
+  /** 結果回來：成功 → 打勾 → 回原狀；失敗 → 紙飛機折返 → 回原狀（草稿已放回、錯誤訊息自己會出現）。 */
   function finishLaunch(startedAt: number, ok: boolean) {
     const wait = Math.max(0, LAUNCH_MIN_MS - (Date.now() - startedAt));
-    if (!ok) { laterLaunch(wait, "settle"); laterLaunch(wait + LAUNCH_SETTLE_MS, "idle"); return; }
+    if (!ok) {
+      laterLaunch(wait, "return");
+      laterLaunch(wait + LAUNCH_RETURN_MS, "settle");
+      laterLaunch(wait + LAUNCH_RETURN_MS + LAUNCH_SETTLE_MS, "idle");
+      return;
+    }
     laterLaunch(wait, "done");
     laterLaunch(wait + LAUNCH_DONE_MS, "settle");
     laterLaunch(wait + LAUNCH_DONE_MS + LAUNCH_SETTLE_MS, "idle");
@@ -255,7 +288,8 @@ export function TaskComposer({
     if (text) setDraftValue((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n${text}` : text);
     if (inject.files.length > 0) void attachFiles(inject.files);
     setPrefillTick((tick) => tick + 1);
-    requestAnimationFrame(() => {
+    // 觸控裝置只預填、不聚焦：邊框閃一下就知道字填進來了，鍵盤等使用者點了才出來。
+    if (shouldAutoFocusComposer()) requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
       textarea.focus();
@@ -265,18 +299,18 @@ export function TaskComposer({
   }, [inject, draftKey, switchingSession, disabled]);
 
   useEffect(() => {
-    if (palette?.open) requestAnimationFrame(() => textareaRef.current?.focus());
+    if (palette?.open) focusTextarea(false);
   }, [palette?.open]);
 
   useEffect(() => {
-    if (focusRequest <= 0 || disabled) return;
+    if (focusRequest <= 0 || disabled || !shouldAutoFocusComposer()) return;
     const frame = requestAnimationFrame(() => textareaRef.current?.focus());
     return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest, draftKey, disabled]);
 
   useEffect(() => {
-    if (wasBusyRef.current && !busy && !disabled) requestAnimationFrame(() => textareaRef.current?.focus());
+    if (wasBusyRef.current && !busy && !disabled) focusTextarea();
     wasBusyRef.current = busy;
   }, [busy, disabled]);
 
@@ -286,41 +320,15 @@ export function TaskComposer({
     if (useServerQueue || !queueEnabled || switchingSession || busy || disabled || queued.length === 0 || dispatchingSessionsRef.current.has(draftKey)) return;
     const next = queued[0];
     const owner = ownerRef.current;
+    const ownerKey = draftKey;
     dispatchingSessionsRef.current.add(owner);
     setQueued((commands) => commands.slice(1));
     void onSubmitRef.current({ text: next.text, images: next.images.map(imagePayload), documents: next.documents.map(documentPayload), clientMessageId: next.clientMessageId, idempotencyKey: next.idempotencyKey })
+      .catch((cause: unknown) => cause instanceof Error ? cause.message : t("排隊訊息送出失敗"))
       .then((result) => {
         const message = typeof result === "string" && result ? result : null;
-        if (ownerRef.current !== owner) {
-          if (message) writeComposerDraft(owner, next.text);
-          updateCachedSession(owner, (session) => message
-            ? { ...session, error: message, images: session.images.length ? session.images : next.images, documents: session.documents.length ? session.documents : next.documents }
-            : { ...session, error: null });
-          return;
-        }
-        if (message) {
-          setError(message);
-          setDraftValue((current) => current || next.text);
-          setImages((current) => current.length ? current : next.images);
-          setDocuments((current) => current.length ? current : next.documents);
-        }
-      })
-      .catch((cause: unknown) => {
-        const message = cause instanceof Error ? cause.message : t("排隊訊息送出失敗");
-        if (ownerRef.current !== owner) {
-          writeComposerDraft(owner, next.text);
-          updateCachedSession(owner, (session) => ({
-            ...session,
-            error: message,
-            images: session.images.length ? session.images : next.images,
-            documents: session.documents.length ? session.documents : next.documents,
-          }));
-          return;
-        }
-        setError(message);
-        setDraftValue((current) => current || next.text);
-        setImages((current) => current.length ? current : next.images);
-        setDocuments((current) => current.length ? current : next.documents);
+        if (message) { restoreFailedSubmission(owner, ownerKey, next.text, next.images, next.documents, message); return; }
+        if (ownerRef.current !== owner) updateCachedSession(owner, (session) => ({ ...session, error: null }));
       })
       .finally(() => {
         dispatchingSessionsRef.current.delete(owner);
@@ -359,7 +367,7 @@ export function TaskComposer({
       if (transcriptDoc) setDocuments((current) => [...current, transcriptDoc].slice(0, MAX_DOCUMENTS));
       if (!transcript && data.transcriptError) setError(String(data.transcriptError));
       else setError(null);
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      focusTextarea();
     }
   }
 
@@ -440,7 +448,7 @@ export function TaskComposer({
       setDocuments((current) => [...current, ...nextDocuments]);
       setFailedFiles([]);
       setError(null);
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      focusTextarea();
     } catch {
       if (persistExtras && ownerRef.current !== owner) {
         updateCachedSession(owner, (session) => ({ ...session, error: t("附件讀取失敗，可重試") }));
@@ -456,10 +464,31 @@ export function TaskComposer({
     historyHook.resetHistoryIndex();
     setError(null);
     palette?.onOpenChange(false);
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    focusTextarea(false);
   }
 
-  async function submit() {
+  /** 送出（或排隊）失敗：把原文、附件放回它原本那位 NPC 的輸入框。使用者等待期間
+   *  若已切到別的 NPC，就併回那位 NPC 存起來的草稿／附件快取，不灌進眼前這個輸入框。 */
+  function restoreFailedSubmission(owner: string, ownerKey: string, text: string, failedImages: ComposerImage[], failedDocuments: ComposerDocument[], message: string) {
+    if (ownerRef.current !== owner || draftKeyRef.current !== ownerKey) {
+      writeComposerDraft(ownerKey, restoreFailedDraft(readStoredDraft(ownerKey), text));
+      if (persistExtras) {
+        updateCachedSession(owner, (session) => ({
+          ...session,
+          error: message,
+          images: mergeFailed(failedImages, session.images, MAX_IMAGES),
+          documents: mergeFailed(failedDocuments, session.documents, MAX_DOCUMENTS),
+        }));
+      }
+      return;
+    }
+    setError(message);
+    setDraftValue((current) => restoreFailedDraft(current, text));
+    setImages((current) => mergeFailed(failedImages, current, MAX_IMAGES));
+    setDocuments((current) => mergeFailed(failedDocuments, current, MAX_DOCUMENTS));
+  }
+
+  async function submit(source: ComposerSubmitSource = "button") {
     if (disabled || switchingSession || submittingRef.current) return;
     if (palette?.open) return;
     // 影片還在解析：不要現在送（會漏掉影格/字幕）。記下來，解析完由 effect 自動送出。
@@ -467,11 +496,9 @@ export function TaskComposer({
     const text = draftValue.trim();
     if (queueEnabled && busy) {
       if (!text && images.length === 0 && documents.length === 0) {
-        // 防呆：剛送出訊息後 INTERRUPT_GUARD_MS 內的空白 Enter 視為誤觸（例如太快連按兩下
-        // Enter：第一下送出、清空輸入框，第二下就落到這個「空送出＝中止任務」的分支），
-        // 不要把剛派出去的任務直接砍掉。真的要中止請按「中止」鈕，或停頓一下再按 Enter。
-        if (Date.now() - lastSubmitAtRef.current < INTERRUPT_GUARD_MS) return;
-        onInterrupt?.();
+        // 空白送出＝中止任務，只認「中止」鈕：空白 Enter（太快連按兩下、或手指只是碰到
+        // Enter）一律不動作，不會把正在跑的任務砍掉。按鈕剛送出後的短時間內也忽略。
+        if (emptySubmitAction(source, Date.now() - lastSubmitAtRef.current, INTERRUPT_GUARD_MS) === "interrupt") onInterrupt?.();
         return;
       }
       const queueLength = useServerQueue ? serverQueueItems.length : queued.length;
@@ -483,16 +510,23 @@ export function TaskComposer({
       if (useServerQueue) {
         // 排到 server 佇列：手機/電腦共用，該 NPC 一空下來 server 自己送。
         const submission: CommandSubmission = { text, images: images.map(imagePayload), documents: documents.map(documentPayload), ...newClientMessageIdentity() };
+        const owner = ownerRef.current;
+        const ownerKey = draftKey;
+        const queuedImages = images;
+        const queuedDocuments = documents;
         setDraftValue("");
         setImages([]);
         setDocuments([]);
         setError(null);
         const queuedFor = launchTarget;
-        void onEnqueue!(submission).then((message) => {
-          if (message) { setError(message); return; }
-          if (queuedFor) showReceipt(queuedFor, true);
-        });
-        requestAnimationFrame(() => textareaRef.current?.focus());
+        // 排隊失敗（回錯誤或請求本身丟例外）以前會直接吃掉草稿；現在原文與附件一律放回。
+        void onEnqueue!(submission)
+          .catch((cause: unknown) => cause instanceof Error ? cause.message : t("排隊訊息送出失敗"))
+          .then((message) => {
+            if (message) { restoreFailedSubmission(owner, ownerKey, text, queuedImages, queuedDocuments, message); return; }
+            if (queuedFor) showReceipt(queuedFor, true);
+          });
+        focusTextarea();
         return;
       }
       const command: QueuedCommand = { id: newQueueId(), text, images, documents, ...newClientMessageIdentity() };
@@ -502,7 +536,7 @@ export function TaskComposer({
       setError(null);
       setQueued((commands) => [...commands, command]);
       if (launchTarget) showReceipt(launchTarget, true);
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      focusTextarea();
       return;
     }
     if (working) return;
@@ -510,6 +544,9 @@ export function TaskComposer({
     submittingRef.current = true;
     lastSubmitAtRef.current = Date.now();
     const owner = ownerRef.current;
+    const ownerKey = draftKey;
+    const submittedImages = images;
+    const submittedDocuments = documents;
     const identity = newClientMessageIdentity();
     const submission: CommandSubmission = { text, images: images.map(imagePayload), documents: documents.map(documentPayload), ...identity };
     // 送出動態：起飛點與對象在「按下的這一刻」就記下來——等回應回來時使用者可能
@@ -522,29 +559,25 @@ export function TaskComposer({
     setDocuments([]);
     setError(null);
     palette?.onOpenChange(false);
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    focusTextarea();
     const result = await onSubmit(submission).catch((cause: unknown) => cause instanceof Error ? cause.message : t("訊息送出失敗"));
     submittingRef.current = false;
     const message = typeof result === "string" && result ? result : null;
-    // 真實送出成功（onSubmit 沒回錯誤）才打勾、亮回執、通知場景放紙飛機。
+    // 真實送出成功（onSubmit 沒回錯誤）才打勾、亮回執、通知場景放紙飛機；失敗則紙飛機折返。
     finishLaunch(launchStartedAt, !message);
     if (!message && launchedFor) {
       showReceipt(launchedFor, false);
       onLaunch?.({ workerId: launchedFor.id, from: launchFrom, text });
     }
-    if (persistExtras && ownerRef.current !== owner) {
-      if (message) writeComposerDraft(owner, text);
-      updateCachedSession(owner, (session) => message
-        ? { ...session, error: message, images: session.images.length ? session.images : images, documents: session.documents.length ? session.documents : documents }
-        : { ...session, error: null });
+    if (message) {
+      restoreFailedSubmission(owner, ownerKey, text, submittedImages, submittedDocuments, message);
       return;
     }
-    setError(message);
-    if (message) {
-      setDraftValue((current) => current || text);
-      setImages((current) => current.length ? current : images);
-      setDocuments((current) => current.length ? current : documents);
+    if (persistExtras && ownerRef.current !== owner) {
+      updateCachedSession(owner, (session) => ({ ...session, error: null }));
+      return;
     }
+    setError(null);
   }
 
   // 影片解析完成後，若使用者稍早按過送出（awaitingVideoSend），就用當前(已含影格/字幕)的
@@ -552,7 +585,7 @@ export function TaskComposer({
   useEffect(() => {
     if (videoProcessing || !awaitingVideoSend) return;
     setAwaitingVideoSend(false);
-    void submit();
+    void submit("auto");
     // submit 是每次 render 重建的函式；此處刻意只依賴這兩個狀態，觸發時會捕捉到最新 submit。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoProcessing, awaitingVideoSend]);
@@ -589,12 +622,12 @@ export function TaskComposer({
         if (action === "ignore" && event.shiftKey) return;
         event.preventDefault();
         if (action === "choose") choose(paletteHook.items[paletteHook.selected] ?? paletteHook.items[0]);
-        else if (action === "submit") void submit();
+        else if (action === "submit") void submit("enter");
         return;
       }
       if (shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, isComposing, repeat: event.repeat })) {
         event.preventDefault();
-        void submit();
+        void submit("enter");
       }
     }
   }
@@ -604,6 +637,12 @@ export function TaskComposer({
   const canInterrupt = queueEnabled && busy && !hasContent;
   const submitDisabled = disabled || (working && !queueEnabled) || (!hasContent && !canInterrupt);
   const submitLabelToShow = canInterrupt ? t("中止") : queueEnabled && busy && hasContent ? t("排隊") : working ? busyLabel : submitLabel;
+  // 輸入框旁的狀態列（只在有送出對象的 dock 輸入框）：需要你／工作中／待命。
+  const status = composerStatus({ busy, working, needsAttention });
+  const statusLine = dock && launchTarget ? <span className="composer-status" data-state={status} role="status" aria-live="polite" title={t("{name} 目前狀態", { name: launchTarget.name })}>
+    <i className="composer-status__mark" aria-hidden="true" />
+    <span key={status} className="composer-status__label">{status === "attention" ? t("需要你") : status === "working" ? t("工作中") : t("待命")}</span>
+  </span> : null;
 
   // 收合影片影格：同一支影片的多張關鍵影格併成「一個」影片晶片（cover=第一格、count=張數），
   // 其餘圖片各自一個。這樣影片解析完不會冒出一坨縮圖，只看到一個「影片 · N 格」。
@@ -670,7 +709,7 @@ export function TaskComposer({
 
   const textareaField = <textarea
     ref={textareaRef}
-    autoFocus={dock && focusRequest > 0}
+    autoFocus={dock && focusRequest > 0 && shouldAutoFocusComposer()}
     value={draftValue}
     rows={1}
     spellCheck={false}
@@ -723,7 +762,7 @@ export function TaskComposer({
           <button className="command-composer__attach" type="button" onClick={() => fileRef.current?.click()} title={t("附加圖片或文件")} aria-label={t("附加圖片或文件")}>＋</button>
           {voiceEnabled && !disabled && <VoiceInputButton onTranscript={(text) => {
             setDraftValue((current) => insertVoiceTranscript(current, text));
-            requestAnimationFrame(() => textareaRef.current?.focus());
+            focusTextarea();
           }} />}
           {toolbar}
         </div>
@@ -748,7 +787,9 @@ export function TaskComposer({
         {videoProcessing && <span className="command-composer__video-processing" role="status">{awaitingVideoSend ? <><Icon name="film" /> {t("影片解析中…完成後自動送出")}</> : t("處理影片中…（抽畫面＋音訊轉文字）")}</span>}
         {error && <span className="command-composer__error" role="alert">{error}</span>}
         {persistenceWarning && <span className="command-composer__error command-composer__error--storage" role="alert">{persistenceWarning}</span>}
+        {statusLine}
         {queueEnabled && (useServerQueue ? serverQueueItems.length > 0 : queued.length > 0) && <QueuePanel
+          waiting={busy || working}
           items={useServerQueue
             ? serverQueueItems.map((item) => ({ id: item.id, text: item.message, imageCount: item.images.length, documentCount: item.documents.length }))
             : queued.map((command) => ({ id: command.id, text: command.text, imageCount: command.images.length, documentCount: command.documents.length }))}
@@ -762,7 +803,7 @@ export function TaskComposer({
               onRemoveQueued?.(target.id);
               setDraftValue(target.message);
               setError(null);
-              requestAnimationFrame(() => textareaRef.current?.focus());
+              focusTextarea(false);
               return;
             }
             const target = queued[index];
@@ -775,7 +816,7 @@ export function TaskComposer({
             setImages(target.images);
             setDocuments(target.documents);
             setError(null);
-            requestAnimationFrame(() => textareaRef.current?.focus());
+            focusTextarea(false);
           }}
           onMove={(index, offset) => {
             if (useServerQueue) { onReorderQueued?.(moveQueuedItem(serverQueueItems.map((item) => item.id), index, offset)); return; }
@@ -837,8 +878,10 @@ export function TaskComposer({
 
 type QueueDisplayItem = { id: string; text: string; imageCount: number; documentCount: number };
 
-function QueuePanel({ items, restoringExtras, extrasSaved, onEdit, onMove, onReorder, onCancel }: {
+function QueuePanel({ items, waiting = false, restoringExtras, extrasSaved, onEdit, onMove, onReorder, onCancel }: {
   items: QueueDisplayItem[];
+  /** NPC 還在忙：排隊中的訊息正在等，晶片上的堆疊條慢慢「往前推」。 */
+  waiting?: boolean;
   restoringExtras: boolean;
   extrasSaved: boolean;
   onEdit(index: number): void;
@@ -848,8 +891,16 @@ function QueuePanel({ items, restoringExtras, extrasSaved, onEdit, onMove, onReo
 }) {
   const [open, setOpen] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  // 新排進一則：晶片輕輕落定一下（a/b 交替，連續排隊也會重播）。數量變少（送出／取消）不動。
+  const arrivalRef = useRef({ count: items.length, tick: 0 });
+  if (items.length > arrivalRef.current.count) arrivalRef.current.tick += 1;
+  arrivalRef.current.count = items.length;
+  const arrivalTick = arrivalRef.current.tick;
   return <>
-    <button type="button" className="command-composer__queue" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{t("等待 {count}", { count: items.length })}</button>
+    <button type="button" className="command-composer__queue" aria-expanded={open} data-waiting={waiting ? "true" : undefined} data-arrive={arrivalTick > 0 ? (arrivalTick % 2 ? "a" : "b") : undefined} onClick={() => setOpen((value) => !value)}>
+      <span className="command-composer__queue-stack" aria-hidden="true">{Array.from({ length: Math.min(items.length, 3) }, (_, index) => <i key={index} />)}</span>
+      <span>{t("等待 {count}", { count: items.length })}</span>
+    </button>
     {open && <div className="command-queue" aria-label={t("待送訊息佇列")}>
       <header><div><span>UP NEXT</span><strong>{t("待送訊息")} {restoringExtras ? t("· 復原中…") : extrasSaved ? t("· 已保存") : t("· 保存中…")}</strong></div><button type="button" aria-label={t("關閉待送訊息")} onClick={() => setOpen(false)}>×</button></header>
       <ol>{items.map((command, index) => <li key={command.id} className={dragIndex === index ? "command-queue__item--dragging" : ""} onDragOver={(event) => { if (dragIndex !== null) event.preventDefault(); }} onDrop={(event) => {

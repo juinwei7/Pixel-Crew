@@ -1,0 +1,13 @@
+/* 快速圓桌結論小卡：與自訂角色面板同一套浮卡外觀，掛在工具列上方。 */
+.roundtable-followup { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 19; width: min(420px, 86vw); padding: 10px 12px; border: 1px solid rgba(255,196,77,.3); border-radius: 12px; background: rgba(14,20,34,.99); box-shadow: 0 16px 44px rgba(0,0,0,.5); animation: tooltip-fade .15s ease both; }
+.roundtable-followup header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.roundtable-followup header strong { color: #ffce7a; font-size: 11px; letter-spacing: .04em; }
+.roundtable-followup__confidence { padding: 1px 6px; border: 1px solid rgba(132,171,190,.3); border-radius: 6px; color: #9fb3c6; font: 10px var(--mono); }
+.roundtable-followup__confidence--low { border-color: rgba(255,196,77,.5); color: #ffce7a; }
+.roundtable-followup__close { margin-left: auto; width: 24px; height: 24px; border: 0; background: transparent; color: #7d8ea3; font-size: 16px; cursor: pointer; }
+.roundtable-followup__close:hover { color: #e6edf6; }
+.roundtable-followup__conclusion { margin: 0 0 8px; color: #dbe6f2; font-size: 12px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.roundtable-followup__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.roundtable-followup__actions .composer-roundtable-toggle { min-height: 28px; }
+.roundtable-followup__actions .composer-roundtable-toggle:disabled { opacity: .45; cursor: not-allowed; }
+.roundtable-followup__actions .is-suggested { border-color: rgba(255,196,77,.65); color: #fff0d0; }

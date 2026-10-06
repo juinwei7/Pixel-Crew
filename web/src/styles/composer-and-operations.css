@@ -357,7 +357,8 @@
 .command-composer__attach:focus-visible, .command-composer__submit:focus-visible, .command-composer__library:focus-visible, .composer-roundtable-toggle:focus-visible, .command-composer__queue:focus-visible {
   outline: none; box-shadow: 0 0 0 2px rgba(0, 229, 255,.5);
 }
-.command-composer__queue { flex: none; padding: 4px 7px; border: 1px solid rgba(255,203,91,.2); border-radius: 999px; background: rgba(255,203,91,.07); color: #e4bd63; font: 700 9px var(--mono); white-space: nowrap; }
+/* 排隊晶片：中性底＋青色堆疊條（r2-composer.css），跟全站單一青色強調一致。 */
+.command-composer__queue { flex: none; padding: 4px 8px; border: 1px solid rgba(0, 229, 255,.2); border-radius: 999px; background: rgba(0, 229, 255,.045); color: #a9c6d3; font: 700 9px var(--mono); white-space: nowrap; }
 .command-composer__queue { cursor: pointer; }
 
 .voice-input { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; }
@@ -412,7 +413,7 @@
 .black-workspace .voice-input__mic { width: 32px; height: 32px; min-height: 32px; padding: 0; border-color: #2b4d45; background: #0d1b18; color: #8cefc0; font-size: 15px; }
 .black-workspace .voice-input__mic:hover:not(:disabled) { border-color: #4fbd9a; background: #123024; color: #bfffd4; }
 .black-workspace .voice-input__panel { border-color: #30433f; background: #0d1415; color: #cfe8dc; }
-.command-composer__queue[aria-expanded="true"] { border-color: rgba(255,203,91,.38); background: rgba(255,203,91,.13); }
+.command-composer__queue[aria-expanded="true"] { border-color: rgba(0, 229, 255,.4); background: rgba(0, 229, 255,.1); }
 .command-queue { position: absolute; right: 0; bottom: calc(100% + 10px); left: 0; max-height: min(52vh, 420px); overflow: auto; padding: 10px; border: 1px solid rgba(132,171,190,.2); border-radius: 13px; background: rgba(11,18,29,.985); box-shadow: 0 22px 60px rgba(0,0,0,.48); color: #aebdca; }
 .command-composer--attachments .command-queue { bottom: calc(100% + 78px); }
 .command-queue > header { display: flex; align-items: center; justify-content: space-between; padding: 3px 4px 9px; border-bottom: 1px solid rgba(143,171,195,.1); }

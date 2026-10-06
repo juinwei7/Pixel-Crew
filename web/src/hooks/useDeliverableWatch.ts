@@ -33,7 +33,13 @@ export function diffDeliverables(
   return fresh;
 }
 
-export function useDeliverableWatch(workers: WorkerState[], onNew: (items: NewDeliverable[]) => void): void {
+/** 成品檔的下載路徑：outbox 以資料夾擁有者（server 回的 workerId）定位，不是剛做完的那位。 */
+export function deliverableHref(ownerWorkerId: string, name: string): string {
+  return `/api/outbox/file?worker=${encodeURIComponent(ownerWorkerId)}&name=${encodeURIComponent(name)}`;
+}
+
+/** onNew 的第二個參數：與 items 一一對應的資料夾擁有者 id（組下載連結用）。 */
+export function useDeliverableWatch(workers: WorkerState[], onNew: (items: NewDeliverable[], owners: string[]) => void): void {
   const knownRef = useRef<Set<string> | null>(null);
   const busyRef = useRef<Set<string>>(new Set());
   const finishedRef = useRef<string[]>([]);
@@ -79,8 +85,10 @@ export function useDeliverableWatch(workers: WorkerState[], onNew: (items: NewDe
         if (!items || !known) return;
         const workspaceOf = (id: string) => workersRef.current.find((worker) => worker.id === id)?.workspacePath;
         const fresh = diffDeliverables(known, items, justFinished, workspaceOf);
+        // diffDeliverables 依序為每個未知檔案產生一筆，所以同樣的過濾就能對齊擁有者。
+        const owners = items.filter((item) => !known.has(`${item.workerId}/${item.name}`)).map((item) => item.workerId);
         knownRef.current = new Set(items.map((item) => `${item.workerId}/${item.name}`));
-        if (fresh.length > 0) onNewRef.current(fresh);
+        if (fresh.length > 0) onNewRef.current(fresh, owners);
       });
     }, SETTLE_MS);
   }, [workers]);

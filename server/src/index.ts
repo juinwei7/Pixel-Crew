@@ -30,6 +30,7 @@ import { claudeChildEnv } from "./claudeEnv.js";
 import {
   isLegacyEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
+  warroomContextBrief, warroomHostConfidenceNote, warroomOthersDigest, warroomRebuttalNeeded, warroomReportExtras,
 } from "./warroom.js";
 import type { EphemeralWorkerKind } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
@@ -72,7 +73,9 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import multer from "multer";
 import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
 import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
-import { snapshotHistory, trimEventForSnapshot } from "./snapshotHistory.js";
+import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot } from "./snapshotHistory.js";
+import { DeltaCoalescer } from "./deltaCoalescer.js";
+import { wsPerMessageDeflate } from "./wsCompression.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -252,6 +255,10 @@ import {
   workerAutopilotExplorePrompt,
   parseExplorationFindings,
   parseAutopilotAskOptions,
+  workerAutopilotStallSignals,
+  workerAutopilotStepNotice,
+  workerAutopilotStopNote,
+  workerAutopilotInstructionWithCriterion,
   isWorkerAutopilotPlanEmpty,
   mergeWorkerAutopilotPlan,
   seedWorkerAutopilotPlan,
@@ -341,10 +348,15 @@ const server = createServer(app);
 const wss = new WebSocketServer({
   server,
   path: "/ws",
+  // 壓縮 >1KB 的訊息（初始 snapshot 是大宗）；細節見 wsCompression.ts。
+  perMessageDeflate: wsPerMessageDeflate,
   verifyClient(info, done) {
     done(!maintenanceMode && isAllowedLocalRequest(info.req.headers.host, info.origin));
   },
 });
+// 同一 worker 的高頻串流 delta 在 ~33ms 視窗內合併後才廣播（見 deltaCoalescer.ts）。任何非 delta
+// 的廣播都會先 flush，順序不變；新連線組 snapshot 前也會 flush，避免重複文字。
+const deltaCoalescer = new DeltaCoalescer((workerId, event) => sendToAllClients(JSON.stringify({ type: "event", workerId, event })));
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
@@ -857,7 +869,16 @@ function broadcastCollaboration(task: CollaborationTask, created = false): void 
 }
 
 function broadcast(payload: unknown): void {
-  const raw = JSON.stringify(payload);
+  // 先送出緩衝中的串流 delta，確保它們排在這則廣播之前（例如 worker_updated busy=false）。
+  deltaCoalescer.flush();
+  sendToAllClients(JSON.stringify(payload));
+}
+
+function broadcastWorkerEvent(workerId: string, event: RunnerEvent): void {
+  deltaCoalescer.push(workerId, event);
+}
+
+function sendToAllClients(raw: string): void {
   for (const client of wss.clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
     // A single client's send failure (socket closing mid-send, etc.) must
@@ -1656,7 +1677,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
     broadcast({ type: "stats_updated", stats: { completedTurns, totalCostUsd } });
   }
   const collaborationTerminal = collaborationEventIsTerminal(worker, event);
-  broadcast({ type: "event", workerId: worker.id, event });
+  broadcastWorkerEvent(worker.id, event);
   // 必須排在 event 廣播「之後」：turn_end 事件會讓前端把 busy 翻 false，這裡若還有背景 Agent
   // 就緊接著補一發 worker_updated(busy=true) 把它蓋回來，BOSS 旁才不會在背景代理還在跑時顯待命。
   workerAsyncAgentHook(worker, event);
@@ -2443,7 +2464,7 @@ function reconcileDanglingTurn(worker: Worker): boolean {
   worker.history.push(event);
   if (worker.history.length > MAX_HISTORY) worker.history.splice(0, worker.history.length - MAX_HISTORY);
   if (worker.persistent) store.appendEvent(worker.id, event, MAX_HISTORY);
-  broadcast({ type: "event", workerId: worker.id, event });
+  broadcastWorkerEvent(worker.id, event);
   return true;
 }
 
@@ -2778,6 +2799,9 @@ wss.on("connection", (socket, request) => {
   // 組 snapshot 前先把「idle 卻還掛著開著 turn」的 worker 權威收尾（見 reconcileDanglingTurn）：
   // 連上來的裝置會拿到一致狀態，已在線的裝置也會收到廣播同步——修掉「電腦還在跑但手機顯示已中止」。
   for (const worker of workers.values()) reconcileDanglingTurn(worker);
+  // snapshot 取自 worker.history（已含緩衝中的 delta）；先把緩衝送出，否則這個新連線稍後
+  // 會再收到同一段 delta、文字重複。flush 送到新 socket 的事件會被隨後的 snapshot 整個蓋掉。
+  deltaCoalescer.flush();
   const snapshotPayload =
     JSON.stringify({
       type: "snapshot",
@@ -2803,7 +2827,7 @@ wss.on("connection", (socket, request) => {
       departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
-        events: snapshotHistory(w.history),
+        events: coalesceDeltaEvents(snapshotHistory(w.history)),
         queue: store.listQueue(w.id),
       })),
     });
@@ -6300,6 +6324,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     // 每步最多探索 WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP 次，用盡就逼它用現有資訊 continue/stop。
     const findingsThisStep: WorkerAutopilotFinding[] = [];
     let exploreRounds = 0;
+    // 原地踏步軟訊號（純字串比對、零額外呼叫）：有才注入 prompt 逼教練換角度。
+    const stallSignals = workerAutopilotStallSignals(turns);
     for (;;) {
       const canExplore = exploreRounds < WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP;
       const prompt = workerAutopilotNextPrompt({
@@ -6317,6 +6343,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
         plan,
         canExplore,
         explorationFindings: findingsThisStep,
+        stallSignals,
       });
       try {
         // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
@@ -6398,11 +6425,13 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (!decision || decision.action !== "continue") {
       if (decision && decision.action === "stop" && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
       const reason = decision && decision.action === "stop" ? decision.reason : "";
-      // reason 非空＝循環把一個決定交還你(ASK 型停)；標成「循環問你」並附可一鍵回答的選項。
-      const ask = reason ? { options: parseAutopilotAskOptions(reason) } : undefined;
+      // 停止類型決定註記措辭與要不要標成「循環問你」卡（見 workerAutopilotStopNote）：
+      // done＝達標不打擾、ask/stuck＝問題卡＋一鍵選項；沒給類型的舊輸出沿用「有理由就問你」。
+      const stopNote = workerAutopilotStopNote({ kind: decision && decision.action === "stop" ? decision.kind : undefined, reason, plan });
+      const ask = stopNote.ask ? { options: parseAutopilotAskOptions(reason) } : undefined;
       // 教練判定做完而停＝正常停：和撞上限一樣補一份四段收尾交接（看得懂＋怎麼接），
       // 有待拍板的決定時停止註記照樣帶一鍵選項卡。只有「出錯停」才不補交接。
-      concludeWorkerAutopilotWithHandoff(worker, t("🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。", { reason: reason ? t("：{reason}", { reason }) : "" }), ask);
+      concludeWorkerAutopilotWithHandoff(worker, stopNote.note, ask);
       return;
     }
     // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
@@ -6413,7 +6442,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (live.stepsRemaining <= 0 && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
     // 刻意不把「剩 N 步」寫進給 NPC 的指令：讓 NPC 看到倒數會誘發「交券效應」——快沒步數時提早草草
     // 收尾、為了在上限前交東西而非真推進。步數只留在引擎內部當安全界限；NPC 靠教練判斷真完成才停。
-    const text = t("🔁（自動循環）{instruction}", { instruction: decision.instruction });
+    // 完成標準附在指示尾端：NPC 知道做到什麼算完成，下一步教練據此驗收（prevMet）。
+    const text = t("🔁（自動循環）{instruction}", { instruction: workerAutopilotInstructionWithCriterion(decision.instruction, decision.doneWhen) });
     record(worker, { type: "user_message", text });
     try {
       worker.runner.send(text, [], []);
@@ -6424,7 +6454,9 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     }
     // 階梯可見化：教練每步都判斷「工作站在哪一階」，只進決策不給主人看太可惜。
     // notice 型訊息只顯示、不進 NPC session、也不進 recentWorkerAutopilotTurns 的回合彙整。
-    if (decision.rung) record(worker, { type: "user_message", text: t("🪜 {rung}", { rung: decision.rung }), notice: true });
+    // 一句話進度：上一步驗收 · 所在階 · 這步推進什麼 · 完成標準（見 workerAutopilotStepNotice）。
+    const stepNotice = workerAutopilotStepNotice(decision);
+    if (stepNotice) record(worker, { type: "user_message", text: stepNotice, notice: true });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   } finally {
     workerAutopilotAdvancing.delete(worker.id);
@@ -7843,7 +7875,7 @@ function deleteWarroomPeer(id: string): void {
   broadcast({ type: "worker_removed", workerId: id });
 }
 
-async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
+async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, customStances: WarRoomStance[] = [], context = ""): Promise<WarRoomResult> {
   const { peer: peerModel, lead: leadModel } = warroomModels(provider, difficulty);
   const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
   const deadlineAt = Date.now() + WARROOM_TOTAL_TIMEOUT_MS;
@@ -7868,7 +7900,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     await waitForWarroomWarmup(1_500, deadlineAt); // 讓 peers 暖機到位再開講
     // 第 1 輪：各自鮮明表態
     const r1 = await Promise.allSettled(peers.map((worker, i) =>
-      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), warroomTurnTimeout(timeoutMs, deadlineAt))));
+      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief, context }), warroomTurnTimeout(timeoutMs, deadlineAt))));
     const r1texts = r1.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
     for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
     // 全員第一輪都沒能發言（額度滿、供應商掛…）→ 整場中止，別拿空辯論去「裁決」。
@@ -7877,12 +7909,15 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
       throw new Error(t("作戰室成員全數未能發言（可能是使用額度已滿或供應商故障），本場中止。請稍後再試。"));
     }
     warroomTurnTimeout(1, deadlineAt);
-    // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決。
+    // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決；
+    // 第 1 輪全員判斷已一致（GO/HOLD/NO 相同、且無查證席）也省略，直接裁決——省一整輪。
     let r2texts: string[] = peers.map(() => "");
-    if (rounds >= 2) {
-      const others = peers.map((_, i) => t("【{name}】\n{text}", { name: stances[i].name, text: r1texts[i] || t("(無)") })).join("\n\n");
+    const seated = stances.slice(0, peers.length);
+    const earlyConsensus = rounds >= 2 && !warroomRebuttalNeeded(seated, r1texts);
+    if (rounds >= 2 && !earlyConsensus) {
+      // 每人只看「別人」的第 1 輪：自己的主張已在同一個 session 裡，不重送。
       const r2 = await Promise.allSettled(peers.map((worker, i) =>
-        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), warroomTurnTimeout(timeoutMs, deadlineAt))));
+        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: warroomOthersDigest(seated, r1texts, i) }), warroomTurnTimeout(timeoutMs, deadlineAt))));
       r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
       for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
       warroomTurnTimeout(1, deadlineAt);
@@ -7899,7 +7934,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
       lead.autoApproveMode = "safe";
       created.push(lead);
       await waitForWarroomWarmup(1_200, deadlineAt);
-      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), warroomTurnTimeout(timeoutMs, deadlineAt));
+      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate, context, peerCount: peers.length, rounds, earlyConsensus }), warroomTurnTimeout(timeoutMs, deadlineAt));
       costMicros += warroomEventCost(provider, ev);
       result = parseWarroomResult(warroomEventText(ev));
       if (result && !result.structured) { // 議會裁決：格式重試一次就好、有上限
@@ -7911,6 +7946,8 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     }
     if (!result) result = parseWarroomResult(debate) ?? { verdict: debate, consensus: [], disputes: [], actions: [], metrics: [], charts: [], structured: false };
     if (provider === "claude") result.costUsd = costMicros / 1_000_000;
+    result.rounds = rounds >= 2 && !earlyConsensus ? 2 : 1;
+    if (earlyConsensus) result.earlyConsensus = true;
     completed = true;
     return result;
   } finally {
@@ -7937,6 +7974,7 @@ function formatWarroomVerdictForHost(topic: string, result: WarRoomResult, hostN
       verdict: result.verdict.slice(0, 600),
       ellipsis: result.verdict.length > 600 ? "…" : "",
     }) +
+    warroomHostConfidenceNote(result) +
     (p1 ? t("P1 行動：\n{p1}\n\n", { p1 }) : "") +
     t("完整內容（共識/分歧/數據/圖表）不貼進對話以節省 token——已存檔：{reportPath}，", { reportPath: reportPath ?? t("（工作區 .warroom/）") }) +
     t("結果卡與 📜 歷史也看得到。請你（{hostName}）接手：可執行的就讀檔細看再動工（高風險先確認），純諮詢的就簡短總結重點給使用者。", { hostName });
@@ -7952,6 +7990,7 @@ function warroomReportMarkdown(topic: string, difficulty: WarRoomDifficulty, res
   const actions = result.actions.map((a) => `- **[${a.priority}]** ${a.title}${a.how ? `\n  - ${a.how}` : ""}`).join("\n");
   return t("# 作戰室裁決\n\n**主題**：{topic}\n**難度／模型**：{difficulty}\n**時間**：{time}\n\n", { topic, difficulty, time: new Date().toISOString() }) +
     t("## 最終裁決\n{verdict}\n\n", { verdict: result.verdict }) +
+    warroomReportExtras(result) +
     (metrics ? t("## 關鍵數字\n{metrics}\n\n", { metrics }) : "") +
     (charts ? t("## 圖表數據\n{charts}\n\n", { charts }) : "") +
     (consensus ? t("## 共識\n{consensus}\n\n", { consensus }) : "") +
@@ -8029,11 +8068,22 @@ app.post("/api/warroom", async (req, res) => {
     ? (requested as WarRoomDifficulty)
     : await triageDifficulty(topic, workspacePath, provider, homeForWorker(host));
   const customStances = sanitizeCustomStances(req.body?.stances);
+  // 議題背景：召集人＋專案名＋召集人最近幾則對話（封頂 900 字），讓成員不必就字面空談。
+  const context = warroomContextBrief({ hostName: host.runner.name, hostRole: host.persona?.role, workspacePath, events: host.history });
   try {
-    const result = await runWarroom(topic, difficulty, workspacePath, provider, host.accountId, customStances);
+    const result = await runWarroom(topic, difficulty, workspacePath, provider, host.accountId, customStances, context);
     const reportPath = saveWarroomReport(topic, difficulty, result, workspacePath); // 自動存檔（人不在也拿得到）
     // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
-    postToHost(hostWorkerId, formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath));
+    const hostMessage = formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath);
+    const liveHost = workers.get(hostWorkerId ?? "");
+    if (liveHost?.runner.busy) {
+      // 開會這幾分鐘召集人可能被派了別的事；以前會直接略過、裁決就此沒送到。改排進它的佇列，忙完自動接手。
+      store.enqueueCommand(randomUUID(), liveHost.id, hostMessage, [], []);
+      broadcastQueue(liveHost.id);
+      scheduleQueueDrain(liveHost);
+    } else {
+      postToHost(hostWorkerId, hostMessage);
+    }
     res.json({ ok: true, result, difficulty });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : t("作戰室執行失敗") });

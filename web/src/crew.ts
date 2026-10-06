@@ -2,12 +2,13 @@ import type { WorkerState } from "./types";
 import type { CrewFilter } from "./uiPreferences";
 import { roomName } from "./workspace";
 import { t } from "./i18n";
+import { pendingApproval } from "./needsYou";
 
 export type WorkerAttention = "approval" | "error" | "working" | "done" | "idle";
 
 export function workerAttention(worker: WorkerState): WorkerAttention {
   const last = worker.turns[worker.turns.length - 1];
-  if (last?.items.some((item) => item.kind === "approval" && item.status === "pending")) return "approval";
+  if (pendingApproval(worker)) return "approval";
   if (last?.status === "error") return "error";
   if (worker.busy) return "working";
   if (last?.status === "done") return "done";

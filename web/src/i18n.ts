@@ -1,15 +1,6 @@
-import { enCore } from "./i18n/en-core";
-import { enModalsA } from "./i18n/en-modals-a";
-import { enModalsB } from "./i18n/en-modals-b";
-import { enModalsC } from "./i18n/en-modals-c";
-import { enModalsD } from "./i18n/en-modals-d";
-import { enApp } from "./i18n/en-app";
-import { enRoot } from "./i18n/en-root";
-import { enRemoteAccess } from "./i18n/en-remote-access";
-import { enVoiceInput } from "./i18n/en-voice-input";
-import { enMotion } from "./i18n/en-motion";
-import { enScene } from "./i18n/en-scene";
-
+/* 英文字典按需載入：中文使用者（預設）完全不下載 ~80 kB 的英文字串。
+   en 時由 main.tsx 在 render 前 await ensureLanguage()，之後 t() 照舊同步查表；
+   字典到位前 t() 退回中文原文（永不顯示空白），所以任何時候呼叫都安全。 */
 export type Lang = "zh" | "en";
 
 const LANG_KEY = "pixel-crew:lang";
@@ -34,9 +25,45 @@ export const lang: Lang = detect();
       的收合門檻本來就該跟著語言走，CSS 用 html[lang^="en"] 判斷。 */
 if (typeof document !== "undefined") document.documentElement.lang = lang === "en" ? "en" : "zh-Hant";
 
-const dict: Record<string, string> = lang === "en"
-  ? { ...enCore, ...enModalsA, ...enModalsB, ...enModalsC, ...enModalsD, ...enApp, ...enRoot, ...enRemoteAccess, ...enVoiceInput, ...enMotion, ...enScene }
-  : {};
+let dict: Record<string, string> = {};
+let loading: Promise<void> | null = null;
+
+/** 載入目前語言需要的字典（只有 en 需要）；重複呼叫共用同一個 Promise。
+ *  載入失敗不丟錯：介面退回中文原文，總比白畫面好。 */
+export function ensureLanguage(): Promise<void> {
+  if (lang !== "en") return Promise.resolve();
+  loading ??= Promise.all([
+    import("./i18n/en-core").then((m) => m.enCore),
+    import("./i18n/en-modals-a").then((m) => m.enModalsA),
+    import("./i18n/en-modals-b").then((m) => m.enModalsB),
+    import("./i18n/en-modals-c").then((m) => m.enModalsC),
+    import("./i18n/en-modals-d").then((m) => m.enModalsD),
+    import("./i18n/en-app").then((m) => m.enApp),
+    import("./i18n/en-root").then((m) => m.enRoot),
+    import("./i18n/en-remote-access").then((m) => m.enRemoteAccess),
+    import("./i18n/en-voice-input").then((m) => m.enVoiceInput),
+    import("./i18n/en-motion").then((m) => m.enMotion),
+    import("./i18n/en-scene").then((m) => m.enScene),
+    import("./i18n/en-r2-scene").then((m) => m.enR2Scene),
+    import("./i18n/en-r2-composer").then((m) => m.enR2Composer),
+    import("./i18n/en-r2-app").then((m) => m.enR2App),
+    import("./i18n/en-r2-modals").then((m) => m.enR2Modals),
+    import("./i18n/en-r3-roundtable").then((m) => m.enR3Roundtable),
+    import("./i18n/en-r3-warroom").then((m) => m.enR3Warroom),
+    import("./i18n/en-r3-autopilot").then((m) => m.enR3Autopilot),
+  ]).then((parts) => {
+    // 後面的檔案覆蓋前面的（跟原本 spread 順序一致）。
+    dict = Object.assign({}, ...parts);
+  }).catch(() => {
+    // 網路或部署問題：留在中文原文。
+  });
+  return loading;
+}
+
+/** 字典是否已就緒（中文永遠就緒）。 */
+export function languageReady(): boolean {
+  return lang !== "en" || Object.keys(dict).length > 0;
+}
 
 function interpolate(text: string, params?: Record<string, string | number>): string {
   let out = text;

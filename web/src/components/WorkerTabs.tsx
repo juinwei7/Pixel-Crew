@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Department, DepartmentMission, WorkerState } from "../types";
 import type { CrewFilter } from "../uiPreferences";
 import { roomName } from "../workspace";
@@ -9,6 +9,8 @@ import { t } from "../i18n";
 import { Modal } from "./Modal";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { Icon } from "./Icon";
+import { sortByTier, type NeedsYouItem, type NeedsYouKind } from "../needsYou";
+import { useSettledTiers } from "../hooks/useSettledTiers";
 
 type Props = {
   workers: WorkerState[];
@@ -32,7 +34,22 @@ type Props = {
   onPersona(id: string): void;
   onRoom(id: string): void;
   inert?: boolean;
+  /** 「需要你」清單（needsYou.ts，以 workerId 索引）。有給就依 需要你 / 工作中 / 待命 排序。 */
+  needsYou?: ReadonlyMap<string, NeedsYouItem>;
+  /** 卡住的 NPC → 已停滯 ms。 */
+  stuck?: ReadonlyMap<string, number>;
 };
+
+const EMPTY_NEEDS: ReadonlyMap<string, NeedsYouItem> = new Map();
+const EMPTY_STUCK: ReadonlyMap<string, number> = new Map();
+
+function needsCopy(kind: NeedsYouKind): string {
+  return { approval: t("等待核准"), decision: t("等你拍板"), question: t("在問你"), failed: t("執行失敗"), stuck: t("久無進展") }[kind];
+}
+
+function stuckMinutes(ms: number): number {
+  return Math.max(1, Math.round(ms / 60_000));
+}
 
 const MAX_WORKERS = 20;
 // Roughly the tallest the row menu gets (5 actions). Used to decide whether to
@@ -56,7 +73,9 @@ function statusCopy(status: WorkerAttention): string {
 const DRAG_THRESHOLD_PX = 6;
 const TOUCH_DRAG_DELAY_MS = 350;
 
-export function WorkerTabs({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed: railCollapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom, inert = false }: Props) {
+export const WorkerTabs = memo(WorkerTabsImpl);
+
+function WorkerTabsImpl({ workers, activeId, departments = [], missions = [], selectedDepartmentId = null, currentRoom, filter, collapsed: railCollapsed, onFilter, onCollapsed, onSelect, onSelectDepartment, onReorder, onCreate, onCreateDepartment, onClose, onRename, onAvatar, onPersona, onRoom, inert = false, needsYou, stuck = EMPTY_STUCK }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -85,6 +104,10 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
   // (In that case `matched === workers` and `pinned` is always null.)
   const canReorder = filter === "all" && query.trim() === "";
   const departmentById = useMemo(() => new Map(departments.map((department) => [department.id, department])), [departments]);
+  // 依「需要你 / 工作中 / 待命」排序：只在各組內排、組的順序不動；同層維持自訂順序（穩定排序）。
+  // 層級變化要穩定幾秒才換位置（useSettledTiers），拖曳中完全凍結，列不會在手底下跳。
+  const sortEnabled = needsYou !== undefined;
+  const tiers = useSettledTiers(workers, needsYou ?? EMPTY_NEEDS, drag !== null || !sortEnabled);
   const groups = useMemo(() => {
     const grouped = new Map<string, WorkerState[]>();
     for (const worker of matched) {
@@ -93,8 +116,10 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
       members.push(worker);
       grouped.set(key, members);
     }
-    return [...grouped.entries()];
-  }, [matched]);
+    const entries = [...grouped.entries()];
+    if (!sortEnabled) return entries;
+    return entries.map(([key, members]) => [key, sortByTier(members, (worker) => tiers[worker.id] ?? 2)] as [string, WorkerState[]]);
+  }, [matched, sortEnabled, tiers]);
   // Rows render grouped by department, not in flat `workers` order — drag math
   // (computeDropIndex/reorderShift) needs indices in that same rendered order.
   const renderOrder = useMemo(() => groups.flatMap(([, members]) => members), [groups]);
@@ -270,6 +295,9 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
 
   function row(worker: WorkerState, isPinned = false, index = -1) {
     const status = workerAttention(worker);
+    const need = needsYou?.get(worker.id);
+    const stuckMs = stuck.get(worker.id);
+    const statusLabel = need ? needsCopy(need.kind) : statusCopy(status);
     const menuOpen = menuId === worker.id;
     const editing = editingId === worker.id;
     const draggable = canReorder && !isPinned && !editing;
@@ -285,15 +313,15 @@ export function WorkerTabs({ workers, activeId, departments = [], missions = [],
               if (event.key === "Escape") { setEditingId(null); setRenameError(null); }
             }} />
           ) : <strong>{worker.name}</strong>}
-          <small>{worker.persona?.role ? <span className="crew-row__role" title={t("職務：{role}", { role: worker.persona.role })}>{worker.persona.role}</span> : null}{isPinned ? t("目前選取 ·") : ""}{roomName(worker.workspacePath)}</small>
+          <small>{stuckMs !== undefined ? <span className="crew-row__stuck-tag" title={t("執行中，但已 {n} 分鐘沒有新的輸出或工具進度", { n: stuckMinutes(stuckMs) })}>{t("卡住 {n} 分", { n: stuckMinutes(stuckMs) })}</span> : need && need.kind !== "approval" && need.kind !== "failed" ? <span className="crew-row__need-tag">{needsCopy(need.kind)}</span> : null}{worker.persona?.role ? <span className="crew-row__role" title={t("職務：{role}", { role: worker.persona.role })}>{worker.persona.role}</span> : null}{isPinned ? t("目前選取 ·") : ""}{roomName(worker.workspacePath)}</small>
         </div>
         <span className={`crew-row__provider crew-row__provider--${worker.provider}`}>{worker.provider === "claude" ? "CL" : "CX"}</span>
       </>}
-      <span className={`crew-row__status crew-row__status--${status}`} aria-label={statusCopy(status)} title={statusCopy(status)}>{status === "approval" ? "!" : status === "error" ? "×" : status === "working" ? "…" : status === "done" ? "✓" : "·"}</span>
+      <span className={`crew-row__status crew-row__status--${status}${need ? ` crew-row__status--need-${need.kind}` : ""}`} aria-label={statusLabel} title={statusLabel}>{status === "approval" ? "!" : need?.kind === "decision" || need?.kind === "question" ? "?" : status === "error" ? "×" : status === "working" ? "…" : status === "done" ? "✓" : "·"}</span>
     </>;
     const npcSelected = selectedDepartmentId === null && worker.id === activeId;
     return (
-      <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} data-worker-id={draggable ? worker.id : undefined} data-crew-id={worker.id} style={shift !== 0 ? { transform: `translateY(${shift}px)` } : undefined} className={`crew-row crew-row--${status} ${npcSelected ? "crew-row--active" : ""}${draggable ? " crew-row--draggable" : ""}${dragging ? " crew-row--dragging" : ""}`} title={t("{name} · {room} · {status}", { name: worker.name, room: roomName(worker.workspacePath), status: statusCopy(status) })}>
+      <div key={`${isPinned ? "pinned-" : ""}${worker.id}`} data-worker-id={draggable ? worker.id : undefined} data-crew-id={worker.id} style={shift !== 0 ? { transform: `translateY(${shift}px)` } : undefined} className={`crew-row crew-row--${status} ${npcSelected ? "crew-row--active" : ""}${draggable ? " crew-row--draggable" : ""}${dragging ? " crew-row--dragging" : ""}${need && need.kind !== "stuck" ? " crew-row--needs-you" : ""}${stuckMs !== undefined ? " crew-row--stuck" : ""}`} title={t("{name} · {room} · {status}", { name: worker.name, room: roomName(worker.workspacePath), status: statusLabel })}>
         {editing ? <div className="crew-row__select crew-row__select--editing">{selectContents}</div> : <button type="button" className="crew-row__select" aria-current={npcSelected ? "true" : undefined} aria-keyshortcuts={draggable ? "Alt+ArrowUp Alt+ArrowDown" : undefined} onPointerDown={draggable ? (event) => beginRowDrag(event, worker.id) : undefined} onKeyDown={draggable ? (event) => moveRowByKeyboard(event, worker.id) : undefined} onClick={() => { if (suppressClickRef.current) { suppressClickRef.current = false; return; } onSelect(worker.id); setMenuId(null); }}>{selectContents}</button>}
         {!collapsed && <button type="button" className="crew-row__menu-button" aria-label={t("{name} 更多操作", { name: worker.name })} aria-expanded={menuOpen} onClick={(event) => { event.stopPropagation(); const opening = !menuOpen; if (opening) { const btn = event.currentTarget.getBoundingClientRect(); const railBottom = railRef.current?.getBoundingClientRect().bottom ?? window.innerHeight; setMenuDropUp(railBottom - btn.bottom < MENU_ESTIMATED_HEIGHT); } setMenuId(opening ? worker.id : null); }}>•••</button>}
         {menuOpen && !collapsed && (

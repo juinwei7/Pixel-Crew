@@ -37,6 +37,10 @@ type Plane = {
 
 type Beam = { a: Resolver; b: Resolver; t: number; ms: number; color: number };
 
+/** 交棒：一根小棒沿低弧線從一人手上飛到另一人手上（協作交接／任務換手）。 */
+type Baton = { from: Resolver; to: Resolver; last: Pt | null; t: number; ms: number; onArrive: () => void };
+const MAX_BATONS = 4;
+
 export type LinkSpec = {
   key: string;
   /** Packets travel from `from` to `to`. */
@@ -77,6 +81,7 @@ export class OfficeFx {
   private readonly world: Container;
   private planes: Plane[] = [];
   private beams: Beam[] = [];
+  private batons: Baton[] = [];
   private links = new Map<string, Link>();
   private portals: Portal[] = [];
   private pool: Graphics[] = [];
@@ -109,6 +114,24 @@ export class OfficeFx {
       nearFired: false,
       onArrive,
     });
+  }
+
+  /**
+   * Hand a baton from one person to another (collaboration hand-off, mission
+   * step changing hands). Both ends may move; `onArrive` fires when it lands
+   * (immediately under reduced motion — the catch pose still plays).
+   */
+  baton(from: Resolver, to: Resolver, onArrive: () => void): void {
+    const a = from();
+    const b = to();
+    if (!a || !b) return;
+    if (REDUCE_MOTION) {
+      onArrive();
+      return;
+    }
+    if (this.batons.length >= MAX_BATONS) this.batons.shift();
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    this.batons.push({ from, to, last: null, t: 0, ms: Math.max(520, Math.min(1_100, dist * 3)), onArrive });
   }
 
   /** One-shot beam that shoots from a to b and fades (summoning a sub-agent). */
@@ -162,7 +185,39 @@ export class OfficeFx {
     this.updateLinks(g, dtMs);
     this.updateBeams(g, dtMs);
     this.updatePlanes(g, dtMs);
+    this.updateBatons(g, dtMs);
     this.updatePortals(dtMs);
+  }
+
+  private updateBatons(g: Graphics, dtMs: number): void {
+    for (let i = this.batons.length - 1; i >= 0; i--) {
+      const baton = this.batons[i];
+      baton.t += dtMs;
+      const a = baton.from();
+      const b = baton.to() ?? baton.last;
+      if (!a || !b) {
+        this.batons.splice(i, 1);
+        continue;
+      }
+      baton.last = b;
+      const raw = Math.min(1, baton.t / baton.ms);
+      if (raw >= 1) {
+        this.batons.splice(i, 1);
+        baton.onArrive();
+        continue;
+      }
+      const dist = Math.hypot(b.x - a.x, b.y - a.y);
+      const pos = arc(a, b, Math.max(8, Math.min(24, dist * 0.2)), easeInOut(raw));
+      // Tumbling end over end: horizontal, diagonal, upright, diagonal — whole pixels only.
+      const spin = Math.floor(raw * 8) % 4;
+      const x = Math.round(pos.x);
+      const y = Math.round(pos.y);
+      const cells: Array<[number, number]> = spin === 0 ? [[-2, 0], [-1, 0], [0, 0], [1, 0]]
+        : spin === 1 ? [[-1, 1], [0, 0], [1, -1]]
+        : spin === 2 ? [[0, -2], [0, -1], [0, 0], [0, 1]]
+        : [[-1, -1], [0, 0], [1, 1]];
+      cells.forEach(([dx, dy], k) => g.rect(x + dx, y + dy, 1, 1).fill(k === 0 ? 0xffffff : 0x4de3ff));
+    }
   }
 
   private updatePlanes(g: Graphics, dtMs: number): void {
@@ -340,6 +395,7 @@ export class OfficeFx {
   }
 
   destroy(): void {
+    this.batons = [];
     for (const portal of [...this.portals]) this.finishPortal(portal);
     for (const g of this.pool) g.destroy();
     this.pool = [];

@@ -86,3 +86,43 @@ export function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
   }
   return history.slice(start).map(trimEventForSnapshot);
 }
+
+// 送前端前把「連續的文字 delta」合併成一則（text_delta 接 text_delta、thinking_delta 接
+// thinking_delta）。前端 reducer（web/src/workerState.ts）本來就把連續同型 delta 串接到同一個
+// 開著的 item，合併後重播出來的畫面完全相同，但 payload 少了每筆的 {"type":…,"at":…} 外殼、
+// 重播次數也從數百降到個位數（每次 reducer 都會複製 turn.items，原本是 O(n²)）。
+// 規則：
+//  - 只合併「相鄰且同型」的 text/thinking delta；中間夾任何其他事件（tool_call_start 會關掉
+//    openTextKey）就斷開，順序與分段完全保留。
+//  - 合併後長度不得超過 maxChars（預設＝SNAPSHOT_MAX_FIELD_CHARS），避免合併後的大段被
+//    trimEventForSnapshot 截短——那就改變呈現內容了。超過就另起一則（前端仍會接回同一段）。
+//  - at 取最後一筆（前端 speechAt＝最後一個 delta 的 at，重播結果一致）。
+//  - 不改動輸入陣列與其中的事件物件。
+export function coalesceDeltaEvents(events: RunnerEvent[], maxChars = SNAPSHOT_MAX_FIELD_CHARS): RunnerEvent[] {
+  const out: RunnerEvent[] = [];
+  let merged = false; // out 最後一筆是否為本函式新建（可就地改寫）
+  for (const ev of events) {
+    const prev = out[out.length - 1];
+    if (
+      (ev.type === "text_delta" || ev.type === "thinking_delta")
+      && prev?.type === ev.type
+      && prev.text.length + ev.text.length <= maxChars
+    ) {
+      const text = prev.text + ev.text;
+      const at = ev.at ?? prev.at;
+      if (merged) {
+        prev.text = text;
+        if (at !== undefined) prev.at = at;
+      } else {
+        const next = { ...prev, text } as typeof prev;
+        if (at !== undefined) next.at = at;
+        out[out.length - 1] = next;
+        merged = true;
+      }
+      continue;
+    }
+    out.push(ev);
+    merged = false;
+  }
+  return out;
+}

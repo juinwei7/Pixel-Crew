@@ -4,6 +4,7 @@ import { apiRequest } from "../api";
 import { shouldSubmitComposerKey } from "../composerCore";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
+import { Skeleton } from "./Skeleton";
 
 type Props = {
   globalMemoryEvent: { notes: GlobalMemoryNoteDto[]; seq: number } | null;
@@ -87,7 +88,7 @@ export function GlobalMemoryModal({ globalMemoryEvent, onClose }: Props) {
     <Modal label={t("全域記憶")} title={t("全域記憶")} overlayClassName="global-memory-modal" cardClassName="global-memory-modal__card" closeClassName="global-memory-modal__close" closeLabel={t("關閉全域記憶")} onClose={onClose}>
       <p className="global-memory-modal__hint">{t("跨所有 NPC 共用的長期記憶。任何 NPC 學到值得記住的事都會寫在這裡，換一個 NPC 也不會失憶。")}</p>
       {notes === null ? (
-        <div className="global-memory-modal__empty">{t("讀取中…")}</div>
+        <Skeleton variant="list" rows={3} className="global-memory-modal__skeleton" />
       ) : notes.length === 0 ? (
         <div className="global-memory-modal__empty">{t("還沒有全域記憶。跟任何 NPC 聊到你的偏好時它會自己記下來，也可以在下面手動新增。")}</div>
       ) : (

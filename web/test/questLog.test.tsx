@@ -240,11 +240,13 @@ function manyTurns(count: number): Turn[] {
 test("caps rendering to the most recent chunk once a conversation grows past it, with a load-earlier affordance", () => {
   const turns = manyTurns(210);
   const html = renderToStaticMarkup(<QuestLog turns={turns} />);
-  // Oldest turn (beyond the 200-turn window) is not rendered...
+  // 首批只掛最近 30 張：更早的（含第 179 筆）不渲染……
   assert.doesNotMatch(html, /任務編號-0</);
-  // ...but the newest is, and the "load earlier" button reports the exact hidden count.
+  assert.doesNotMatch(html, /任務編號-179</);
+  // ……最新的 30 張在，「顯示更早」按鈕報出精確的隱藏數量（往上捲也會自動接下一批）。
+  assert.match(html, /任務編號-180</);
   assert.match(html, /任務編號-209/);
-  assert.match(html, /顯示更早的任務（還有 10 筆）/);
+  assert.match(html, /顯示更早的任務（還有 180 筆）/);
 });
 
 test("an active search bypasses the render cap so an old match still shows and can be counted", () => {

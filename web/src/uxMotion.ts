@@ -1,11 +1,12 @@
 // 第四輪「優化體驗」用到的純邏輯（畫面在各元件與 styles/motion-ux.css）。
 // 全部是純函式，方便測試；不碰 DOM、不送請求。
-import { workerAttention } from "./crew";
+import { collectNeedsYou } from "./needsYou";
 import type { WorkerState } from "./types";
 
 /** 誰在等你：等核准的 NPC（照隊員順序），第一位就是「前往」要跳過去的人。 */
 export function attentionSummary(workers: WorkerState[]): { count: number; firstId: string | null; firstName: string } {
-  const waiting = workers.filter((worker) => workerAttention(worker) === "approval");
+  // 只取「待核准」：與頂欄、隊員列、通知共用 needsYou 的同一份判斷。
+  const waiting = collectNeedsYou(workers).filter((item) => item.kind === "approval").map((item) => ({ id: item.workerId, name: item.workerName }));
   return { count: waiting.length, firstId: waiting[0]?.id ?? null, firstName: waiting[0]?.name ?? "" };
 }
 
@@ -28,6 +29,7 @@ export function logContentCount(turns: Array<{ items: unknown[] }>): number {
 export const SHORTCUT_HINTS = {
   toggle_task_log: { mac: "⌘ J", other: "Ctrl J" },
   approval: { mac: "⌘ ⇧ A", other: "Ctrl ⇧ A" },
+  next_attention: { mac: "N", other: "N" },
   command_palette: { mac: "⌘ K", other: "Ctrl K" },
   shortcuts_help: { mac: "?", other: "?" },
 } as const;

@@ -10,6 +10,7 @@ import { writeComposerDraft } from "../hooks/useComposerDraft";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { MissionActivityFeed } from "./MissionActivityFeed";
 import { type ConfirmTone } from "./ConfirmDialog";
+import { useFreshKeys } from "../flip";
 
 type DecisionModelOption = { provider: ProviderId; model: string; label: string };
 
@@ -216,6 +217,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const visibleTasks = showArchived ? archivedTasks : activeTasks;
   const selected = visibleTasks.find((task) => task.id === selectedId) ?? (!newTask ? visibleTasks[0] : undefined);
 
+  // 「落入」進場：剛交辦出去的任務、同一張任務裡後來才出現的訊息與部門階段。
+  // 打開 Boss Desk 時已存在的、切換到另一張任務時看到的都不算新，不播。
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
+  const freshTaskIds = useFreshKeys(tasks.length === 0 ? "tasks:empty" : "tasks", tasks.map((task) => task.id));
+  const freshTask = Boolean(selected && !newTask && (selected.id === justCreatedId || freshTaskIds.has(selected.id)));
+  const freshMessages = useFreshKeys(`messages:${selected?.id ?? ""}`, selected?.messages.map((entry) => entry.id) ?? []);
+  const freshStages = useFreshKeys(`stages:${selected?.id ?? ""}`, selected?.stages.map((stage) => stage.id) ?? []);
+
   useEffect(() => {
     if (!restoredSelection.current && ordered.length > 0) {
       restoredSelection.current = true;
@@ -289,6 +298,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     // 任務已建立，這筆顧問結果算「消化完」→ 解除釘選，之後開新交辦回到目前工作區；但若還在生成
     // 中（例如另跑的主動建議）就別打斷，讓它繼續浮在原工作區。
     if (isCreate && !getAdvisorEntry(advisorWorkspace).loading) releaseAdvisorPin(advisorWorkspace);
+    if (isCreate) setJustCreatedId(result.data.id);
     setSelectedId(result.data.id);
     setNewTask(false);
     setShowArchived(false);
@@ -540,7 +550,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           </div>}
         </div>
       </div> : <>
-        <div className={`boss-task-desk__status boss-task-desk__status--${selected.status}`}>
+        <div key={`status-${selected.id}`} className={`boss-task-desk__status boss-task-desk__status--${selected.status}${freshTask ? " r2-drop-in" : ""}`}>
           <span>{selected.executionMode === "research" && selected.status === "running" ? t("快速研究中") : statusLabel[selected.status]}</span>
           <small>{selected.decisionProvider} · {selected.decisionModel}</small>
         </div>
@@ -552,8 +562,8 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           completed: selected.stages.filter((stage) => (stage.missionId ? missions.find((mission) => mission.id === stage.missionId)?.status : stage.status) === "completed").length,
           total: selected.stages.length,
         })}</p>}
-        <div className="boss-task-desk__messages">
-          {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}`}>
+        <div key={`messages-${selected.id}`} className={`boss-task-desk__messages${freshTask ? " r2-drop-in r2-drop-in--after" : ""}`}>
+          {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}${freshMessages.has(entry.id) ? " r2-drop-in" : ""}`}>
             <span>{entry.role === "boss" ? t("老闆") : entry.role === "decision_model" ? t("決策模型") : entry.role === "report" ? t("最終報告") : "Pixel Crew"}</span>
             <div className="boss-task-message__content">
               <RichText text={entry.text} compact={entry.role !== "report"} />
@@ -566,7 +576,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           {selected.stages.map((stage, index) => {
             const stageMission = stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined;
             const stageActive = stageMission?.status === "planning" || stageMission?.status === "executing" || stageMission?.status === "reviewing";
-            return <div key={stage.id} className="boss-task-stage">
+            return <div key={stage.id} className={`boss-task-stage${freshStages.has(stage.id) ? " r2-drop-in" : ""}`} style={freshStages.has(stage.id) ? { animationDelay: `${Math.min(index, 5) * 60}ms` } : undefined}>
               <button type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
                 <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stageMission, workers)}</small></span>
               </button>

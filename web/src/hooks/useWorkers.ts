@@ -5,6 +5,7 @@ import { clearAdvisorErrors, resumeAdvisorRuns } from "../advisorStore";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import { runtimeWsOrigin } from "../runtimeOrigin";
+import { createFrameBatcher } from "./frameBatch";
 
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
 const WS_URL = runtimeWsOrigin(browserOrigin);
@@ -206,6 +207,11 @@ export function useWorkers() {
     let retry: ReturnType<typeof setTimeout> | null = null;
     let connectedOnce = false;
     const pendingApprovals = new Map<string, number>();
+    // 同一個 frame 收到的訊息攢起來一次套用：React 會把一個 callback 裡的所有 setState
+    // 合併成一次 render，串流時從「每則訊息一次 render」降到「每 frame 一次」。順序不變。
+    const batcher = createFrameBatcher<ServerMessage>((messages) => {
+      for (const message of messages) handleMessage(message);
+    });
 
     function connect() {
       socket = new WebSocket(`${WS_URL}/ws`);
@@ -220,12 +226,13 @@ export function useWorkers() {
         clearAdvisorErrors();
       };
       socket.onclose = () => {
+        batcher.flush();
         setWsReady(false);
         if (!closed) retry = setTimeout(connect, 1000);
       };
       socket.onmessage = (msg) => {
         const data: ServerMessage = JSON.parse(msg.data);
-        handleMessage(data);
+        batcher.push(data);
       };
     }
 
@@ -577,6 +584,7 @@ export function useWorkers() {
     connect();
     return () => {
       closed = true;
+      batcher.cancel();
       if (retry) clearTimeout(retry);
       socket?.close();
     };

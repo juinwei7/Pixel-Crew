@@ -3,6 +3,7 @@ import { SHIRT_COLORS } from "./crewLook";
 import { ART_W, ART_H } from "./room";
 import { t } from "../i18n";
 import { dayKey, lampLit, noteHit, noteLayout, paperBalls, queueCard, trinketFor, trinketPixels, type QueueCard } from "./deskProps";
+import { planPaper, PLAN_BAR_PX, type ScenePlan } from "./sceneSignals";
 
 export type DepartmentPhase = "reviewing" | "returning" | "planning" | "executing" | "mission_review" | "mission_consult" | "needs_attention" | null;
 
@@ -22,6 +23,10 @@ export type PersonalDeskState = {
   onDuty?: boolean;
   /** Scene worker state already carries this; working/thinking keeps the night desk lamp on. */
   character?: { activity: string };
+  /** 上一回合失敗、使用者還沒看過：桌上螢幕亮紅色錯誤畫面，直到被看過。 */
+  failedUnseen?: boolean;
+  /** TodoWrite 計畫進度：桌上一張小待辦紙，底下進度條顯示 done/total。 */
+  plan?: ScenePlan | null;
 };
 
 /** Tap on a desk's queued-command sticky notes: the first three commands + where to float the card. */
@@ -93,6 +98,10 @@ type DeskEntry = {
   busy: boolean;
   /** performance.now() of the last moment we saw this worker busy; null = not since load. */
   lastBusyAt: number | null;
+  /** Last turn failed and nobody has looked yet: the monitor shows a red error screen. */
+  failed: boolean;
+  /** TodoWrite plan progress (null = no plan): the little to-do sheet on the desk. */
+  plan: ScenePlan | null;
 };
 
 type PhaseHighlight = {
@@ -378,6 +387,8 @@ export class PersonalDeskLayer {
       const busy = activity === "working" || activity === "thinking";
       if (busy || entry.busy) entry.lastBusyAt = performance.now();
       entry.busy = busy;
+      entry.failed = Boolean(worker.failedUnseen);
+      entry.plan = worker.plan ?? null;
       this.refreshProps(worker.id);
     });
 
@@ -421,7 +432,8 @@ export class PersonalDeskLayer {
     const notes = noteLayout(queued);
     const balls = paperBalls(this.failures.get(id) ?? 0);
     entry.notesHit.eventMode = queued > 0 ? "static" : "none";
-    const key = `${lit ? 1 : 0}|${notes.notes.length}|${notes.stacked ? 1 : 0}|${balls.length}`;
+    const paper = planPaper(entry.plan);
+    const key = `${lit ? 1 : 0}|${notes.notes.length}|${notes.stacked ? 1 : 0}|${balls.length}|${entry.failed ? 1 : 0}|${paper ? `${paper.filled}${paper.complete ? "!" : ""}` : "-"}`;
     if (key === entry.propsKey) return;
     entry.propsKey = key;
     const g = entry.props;
@@ -455,6 +467,26 @@ export class PersonalDeskLayer {
       .rect(15, 6, 4, 1).fill(0x2c3b59);
     for (const [x, y, w, h] of balls) {
       g.rect(x, y, w, h).fill(0x7d8698).rect(x, y, 1, 1).fill(0x98a0b0);
+    }
+    if (paper) {
+      // To-do sheet lying between the lamp and the keyboard: two written lines,
+      // then a progress bar (done/total) in the accent cyan.
+      g.rect(-11, -5, 6, 4).fill(0xc9c4b2)
+        .rect(-11, -5, 6, 1).fill(0xdcd7c6)
+        .rect(-10, -4, 3, 1).fill(0x8a8576)
+        .rect(-10, -3, PLAN_BAR_PX, 1).fill(0x5d5a50);
+      if (paper.filled > 0) g.rect(-10, -3, paper.filled, 1).fill(0x4de3ff);
+      // All done: a small tick at the sheet's corner.
+      if (paper.complete) g.rect(-7, -4, 1, 1).fill(0x4de3ff).rect(-6, -5, 1, 1).fill(0x4de3ff);
+    }
+    if (entry.failed) {
+      // The desk monitor (-6..6, -17..-11) stays on a red error screen until someone looks.
+      g.rect(-6, -17, 12, 6).fill(0x3a0d16)
+        .rect(-6, -17, 12, 1).fill(0xff5c7a);
+      for (let i = 0; i < 4; i++) {
+        g.rect(-2 + i, -15 + i, 1, 1).fill(0xffb3bf)
+          .rect(1 - i, -15 + i, 1, 1).fill(0xffb3bf);
+      }
     }
   }
 
@@ -828,6 +860,8 @@ export class PersonalDeskLayer {
       propsKey: "",
       busy: false,
       lastBusyAt: null,
+      failed: false,
+      plan: null,
     };
   }
 }

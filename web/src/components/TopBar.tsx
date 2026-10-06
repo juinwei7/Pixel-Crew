@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode, type Ref } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode, type Ref } from "react";
+import type { NeedsYouKind } from "../needsYou";
 import type { AccountWithAuth, AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
 import { APP_VERSION } from "../appVersion";
 import { lang, setLang, t, tc } from "../i18n";
@@ -39,9 +40,14 @@ type Props = {
       NPC 內部再拆出去、還在跑的子代理。 */
   runningWorkers?: Array<{ id: string; name: string; room: string; subAgents?: Array<{ id: string; label: string }> }>;
   onSelectRunning?(id: string): void;
-  /** 有 NPC 在等你核准：頂欄多一顆琥珀色「等你」，點了跳過去（App 負責切人＋捲到批准卡）。 */
-  needsYou?: { count: number; name: string } | null;
+  /** 有事需要你（needsYou.ts：待核准／等你拍板／在問你／失敗未看）：頂欄多一顆「需要你」，
+      點一下＝接下一件（App 負責切人＋捲到那張卡）。kinds 只有核准時文案維持「等你核准」。 */
+  needsYou?: { count: number; name: string; kinds?: NeedsYouKind[] } | null;
   onNeedsYou?(): void;
+  /** 成品匣未讀數：有新成品時頂欄出現成品匣按鈕；開啟成品匣後 App 歸零。 */
+  outboxUnread?: number;
+  /** 每次有新成品落袋 +1，用來重播「落袋」動畫。 */
+  outboxDropSeq?: number;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
@@ -83,7 +89,9 @@ type Props = {
   children?: ReactNode;
 };
 
-export function TopBar({
+export const TopBar = memo(TopBarImpl);
+
+function TopBarImpl({
   active,
   activeWorkspace,
   platform,
@@ -133,6 +141,8 @@ export function TopBar({
   professionalModeButtonRef,
   onOpenCodexCommands,
   menuRequest = null,
+  outboxUnread = 0,
+  outboxDropSeq = 0,
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
@@ -459,15 +469,32 @@ export function TopBar({
           </div>
         )}
       </div>
-      {needsYou && needsYou.count > 0 && onNeedsYou && <button
+      {needsYou && needsYou.count > 0 && onNeedsYou && (() => {
+        const approvalsOnly = !needsYou.kinds || needsYou.kinds.every((kind) => kind === "approval");
+        return <button
+          type="button"
+          className={`top-bar__needs-you${approvalsOnly ? "" : " top-bar__needs-you--mixed"}`}
+          data-shortcut-hint="next_attention"
+          aria-keyshortcuts="N"
+          onClick={onNeedsYou}
+          title={approvalsOnly
+            ? needsYou.count === 1 ? t("{name} 在等你核准——點一下跳過去", { name: needsYou.name }) : t("{count} 位 NPC 在等你核准——點一下跳到下一位（N）", { count: needsYou.count })
+            : needsYou.count === 1 ? t("{name} 需要你——點一下跳過去", { name: needsYou.name }) : t("{count} 件事需要你——點一下接下一件（N）", { count: needsYou.count })}
+        >
+          <i className="top-bar__needs-you-dot" aria-hidden="true" />
+          <strong><RollingNumber value={needsYou.count} /></strong><span>{approvalsOnly ? t("等你核准") : tc("頂欄", "需要你")}</span>
+        </button>;
+      })()}
+      {outboxUnread > 0 && <button
         type="button"
-        className="top-bar__needs-you"
-        data-shortcut-hint="approval"
-        onClick={onNeedsYou}
-        title={needsYou.count === 1 ? t("{name} 在等你核准——點一下跳過去", { name: needsYou.name }) : t("{count} 位 NPC 在等你核准——點一下跳到第一位", { count: needsYou.count })}
+        className="top-bar__outbox"
+        onClick={onOpenOutbox}
+        aria-label={t("成品匣：{count} 份新成品", { count: outboxUnread })}
+        title={t("成品匣有 {count} 份新成品——點一下查看", { count: outboxUnread })}
       >
-        <i className="top-bar__needs-you-dot" aria-hidden="true" />
-        <strong><RollingNumber value={needsYou.count} /></strong><span>{t("等你核准")}</span>
+        <span key={outboxDropSeq} className="top-bar__outbox-drop" aria-hidden="true" />
+        <Icon name="box" />
+        <strong className="top-bar__outbox-count"><RollingNumber value={outboxUnread} /></strong>
       </button>}
       <div className="top-bar__spacer" />
       {children}
@@ -558,7 +585,7 @@ export function TopBar({
               <Icon name="moon" />{t("下班報告")}
             </button>
             <button type="button" onClick={() => { closeMenus(); onOpenOutbox(); }} title={t("成品匣：隊員完成的交付物（工作區 outbox 資料夾）集中一覽、一鍵開啟")}>
-              <Icon name="box" />{t("成品匣")}
+              <Icon name="box" />{t("成品匣")}{outboxUnread > 0 && <strong className="top-bar__menu-count">{outboxUnread}</strong>}
             </button>
             <button type="button" onClick={() => { closeMenus(); onOpenBackup(); }} title={t("備份與還原：把整個辦公室打包帶走，或從備份還原")}>
               <Icon name="archive" />{t("備份與還原")}

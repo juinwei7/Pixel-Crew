@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../api";
 import { t, tc } from "../i18n";
 import { Modal } from "./Modal";
 import type { WorkerState } from "../types";
+import { Skeleton } from "./Skeleton";
+import { indicatorStyle, useTabIndicator } from "../flip";
 
 type CostRow = { day: string; workerId: string; workerName: string; costUsd: number };
 type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null };
@@ -28,6 +30,8 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   // 每日預算草稿：workerId → 輸入框文字（"" = 無上限）。
   const [budgets, setBudgets] = useState<Record<string, string>>({});
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const tabInk = useTabIndicator(tabsRef, tab);
 
   const loadCosts = useCallback(async () => {
     try {
@@ -122,7 +126,8 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
   return (
     <Modal label={t("營運面板")} eyebrow="OPERATIONS" title={t("營運面板")} cardClassName="warroom-result__card ops-modal" onClose={onClose}>
-        <div className="ops-modal__tabs" role="tablist">
+        <div className={`ops-modal__tabs${tabInk ? " r2-tabs--ink" : ""}`} role="tablist" ref={tabsRef}>
+          {tabInk && <span className="r2-tab-ink" aria-hidden="true" style={indicatorStyle(tabInk)} />}
           <button type="button" role="tab" aria-selected={tab === "costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("成本日報")}</button>
           <button type="button" role="tab" aria-selected={tab === "schedules"} className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("排程任務")}</button>
           <button type="button" role="tab" aria-selected={tab === "diagnostics"} className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("本機診斷")}</button>
@@ -150,7 +155,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
                 </div>
               ))}
             </div>
-            {costs === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : dayTotals.length === 0 ? <p className="ops-modal__empty">{t("最近 14 天還沒有成本紀錄。")}</p> : (
+            {costs === null ? <Skeleton variant="bars" rows={6} /> : dayTotals.length === 0 ? <p className="ops-modal__empty">{t("最近 14 天還沒有成本紀錄。")}</p> : (
               <>
                 <h3>{t("每日總花費（近 14 天）")}</h3>
                 <div className="ops-costs__days">
@@ -205,7 +210,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
               <button type="button" disabled={saving} onClick={() => void addSchedule()}>{saving ? t("建立中…") : t("＋ 新增")}</button>
             </div>
             <h3>{t("現有排程")}</h3>
-            {schedules === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : schedules.length === 0 ? <p className="ops-modal__empty">{t("還沒有排程。上面新增一個吧。")}</p> : (
+            {schedules === null ? <Skeleton variant="list" rows={3} /> : schedules.length === 0 ? <p className="ops-modal__empty">{t("還沒有排程。上面新增一個吧。")}</p> : (
               <ul className="ops-schedule__list">
                 {schedules.map((schedule) => (
                   <li key={schedule.id} className={schedule.enabled ? "" : "ops-schedule__item--off"}>
@@ -226,7 +231,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
           </div>
         )}
         {tab === "diagnostics" && <div className="ops-modal__body">
-          {diagnostics === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : <>
+          {diagnostics === null ? <Skeleton variant="tiles" rows={3} /> : <>
             <p className="ops-diagnostics__privacy">{t("只儲存在此裝置，不會上傳。診斷包不含 prompt、路徑、模型或工具輸出。")}</p>
             <div className="ops-diagnostics__grid">
               <div><small>{t("Mission 成功率")}</small><strong>{diagnostics.diagnostics.missions.successRate == null ? "—" : `${diagnostics.diagnostics.missions.successRate}%`}</strong></div>

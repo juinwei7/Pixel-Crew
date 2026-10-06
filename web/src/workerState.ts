@@ -379,6 +379,8 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       }
       next.character.activity = "idle";
       next.character.mood = event.isError ? "error" : "success";
+      // 單一工具呼叫結束（不是回合結束）：場景只播小勾／紅行，不開大慶祝。
+      next.character.outcome = "tool";
       next.character.bump = next.character.bump + 1;
       break;
     }
@@ -448,6 +450,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         activity: "idle",
         mood: event.isError ? "error" : "success",
         station: "home",
+        outcome: "turn",
         bump: next.character.bump + 1,
       };
       break;
@@ -494,6 +497,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         mood: "error",
         speech: event.message,
         speechAt: event.at,
+        outcome: "turn",
         bump: next.character.bump + 1,
       };
       break;

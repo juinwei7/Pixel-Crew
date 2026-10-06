@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
-import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { ApprovalDecision, BossTask, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
 import type { FurnitureScreenPos, PersonScreenPos, SceneHandle, SceneView } from "../game/scene";
 import type { QueueNotesTap } from "../game/personalDesks";
 import { apiRequest } from "../api";
@@ -14,12 +14,13 @@ import { milestoneLevel } from "../milestones";
 import { stationForTool, type StationKey } from "../stations";
 import { STATION_THEME } from "../stationTheme";
 import { parseMcpToolName } from "../mcpToolName";
-import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
+import { computeCtxGauge, SWAP_THRESHOLD_TOKENS, type CtxGauge } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
 import { t, tc } from "../i18n";
 import { clearViewRect, edgeMarkers, isOffscreen, nameInitials, rectCenter, type EdgeMarker, type Pt, type Rect, type SceneCameraControls } from "../game/cameraFocus";
 import { lastDoneLine } from "../lastDone";
+import { loadSeenErrors, markErrorSeen, pendingApprovalFor, saveSeenErrors, sceneSignals, unansweredAutopilotAsk, type SceneSignals } from "../sceneSignals";
 
 // 「一眼看出在幹嘛」活動徽章：依當前工具所屬站點給一個線性圖示＋短動詞，整合進名牌內
 // （只在工作中出現、閒置收起）。圖示吃站點主題色做色彩編碼，加速一眼辨識。
@@ -36,6 +37,7 @@ const ACTIVITY_CHIP: Partial<Record<StationKey, { icon: IconName; label: string 
 import { NpcRadialMenu } from "./NpcRadialMenu";
 import { WebShotImg } from "./WebShotImg";
 import { Icon, type IconName } from "./Icon";
+import { nextNeedsYou, type NeedsYouItem } from "../needsYou";
 
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
@@ -57,7 +59,7 @@ const STATION_DESCRIPTIONS: Record<string, string> = {
 };
 
 
-type VisualWorker = {
+type VisualWorker = SceneSignals & {
   id: string;
   selectId: string;
   name: string;
@@ -112,30 +114,17 @@ function formatZoom(scale: number): string {
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}x`;
 }
 
+/** 每位 NPC 的 context 量條（名牌公事包、身分卡、場景疲勞共用）——workers／門檻變了才重算。 */
+function ctxGaugesOf(workers: WorkerState[], thresholdTokens: number | undefined): Map<string, CtxGauge | null> {
+  return new Map(workers.map((worker) => [
+    worker.id,
+    computeCtxGauge(worker.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number"), thresholdTokens),
+  ]));
+}
+
 /** Scene-side extras derived from data GameCanvas already has (no new props from App). */
-function withSceneExtras(list: VisualWorker[], workers: WorkerState[], thresholdTokens: number | undefined): Array<VisualWorker & { ctxPct: number | null }> {
-  const byId = new Map(workers.map((worker) => [worker.id, worker]));
-  const pctById = new Map<string, number | null>();
-  return list.map((w) => {
-    if (w.temporary) return { ...w, ctxPct: null };
-    if (!pctById.has(w.selectId)) {
-      const full = byId.get(w.selectId);
-      const series = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
-      pctById.set(w.selectId, computeCtxGauge(series, thresholdTokens)?.pct ?? null);
-    }
-    return { ...w, ctxPct: pctById.get(w.selectId) ?? null };
-  });
-}
-
-function pendingApprovalFor(worker: WorkerState): ApprovalItem | null {
-  const last = worker.turns[worker.turns.length - 1];
-  return last?.items.find((item): item is ApprovalItem => item.kind === "approval" && item.status === "pending") ?? null;
-}
-
-// 未回答的「循環問你」：自動循環停下時標成 autopilotAsk 的通知回合會是末尾那筆——owner 一旦發話
-// 就會再疊上新回合，所以「最後一筆仍是 ask」即等於還沒回。用來把這位 NPC 算進分流條的「需要你」。
-function unansweredAutopilotAsk(worker: WorkerState): boolean {
-  return worker.turns[worker.turns.length - 1]?.autopilotAsk === true;
+function withSceneExtras(list: VisualWorker[], gauges: ReadonlyMap<string, CtxGauge | null>): Array<VisualWorker & { ctxPct: number | null }> {
+  return list.map((w) => ({ ...w, ctxPct: w.temporary ? null : gauges.get(w.selectId)?.pct ?? null }));
 }
 
 export function groupWorkersByWorkspace(workers: WorkerState[]): WorkerState[] {
@@ -200,6 +189,7 @@ function placeEdgeMarker(el: HTMLElement, marker: EdgeMarker, bounds: { left: nu
   el.style.setProperty("--edge-angle", `${marker.angle.toFixed(3)}rad`);
 }
 
+
 // 穩定的空集合預設值：避免每次 render 都 new Set() 造成參照改變、白白觸發下游重算。
 const EMPTY_ROUNDTABLE_IDS: ReadonlySet<string> = new Set();
 
@@ -208,12 +198,17 @@ function nameplateTop(pos: { y: number; scale: number; tagAbove?: boolean }, pla
   return pos.tagAbove ? pos.y - plateHeight - 2 * pos.scale : pos.y + 22 * pos.scale;
 }
 
-function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds?: ReadonlySet<string>): VisualWorker[] {
+const NO_SIGNALS: SceneSignals = { failedUnseen: false, replying: false, asking: false, handoffStage: null, plan: null, missionStep: null, finalNonces: [] };
+const EMPTY_BOSS_TASKS: BossTask[] = [];
+const EMPTY_SEEN: ReadonlyMap<string, string> = new Map();
+
+function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds?: ReadonlySet<string>, seenErrors: ReadonlyMap<string, string> = EMPTY_SEEN, bossTasks: readonly BossTask[] = EMPTY_BOSS_TASKS): VisualWorker[] {
   const departmentById = new Map(departments.map((department) => [department.id, department]));
   // 兩間房：主辦公室（原本的房間）只住常駐夥伴；BOSS 交辦房住「正在做這張交辦的那群人」
   // ——dedicated 專屬部隊＋進行中交辦被路由到的既有部門（bossTaskDepartmentIds）。開著
   // BOSS 頁時場景切到交辦房，關掉就回主辦公室；交辦房沒人時退回主辦公室避免空白（bossRoomFilter.ts）。
   const roomWorkers = bossRoomWorkers(workers, bossRoom, bossTaskDepartmentIds);
+  const nowMs = Date.now();
   return groupWorkersByWorkspace(roomWorkers).flatMap((worker) => {
     const handingOff = Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
     const collaboration = collaborations.find((task) =>
@@ -239,7 +234,9 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
     const missionShown = !handingOff && !roundtabling
       ? missionCharacter(worker, mission, missionStep != null && missionStep.assigneeWorkerId === worker.id)
       : null;
+    const signals = sceneSignals(worker, { activeId, seenErrorKey: seenErrors.get(worker.id), mission, collaboration, nowMs, missions, bossTasks });
     const parent: VisualWorker = {
+      ...signals,
       id: worker.id,
       selectId: worker.id,
       name: worker.name,
@@ -280,6 +277,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       } : null,
     };
     const subagents: VisualWorker[] = (worker.subagents ?? []).map((agent, index) => ({
+      ...NO_SIGNALS,
       id: `${worker.id}:subagent:${agent.id}`,
       selectId: worker.id,
       name: agent.name,
@@ -328,6 +326,12 @@ type Props = {
   bossRoom?: boolean;
   /** 進行中交辦實際在跑的部門 id：交辦房會顯示這些部門的成員（含被路由的既有部門），不只 dedicated。 */
   bossTaskDepartmentIds?: ReadonlySet<string>;
+  /** 全部交辦任務：交辦 completed 時，參與部門的 NPC 播「最終完成」（sceneSignals.finalNoncesOf）。 */
+  bossTasks?: readonly BossTask[];
+  /** App 共用的「需要你」清單（needsYou.ts）：分流條的數字與點擊目標都跟頂欄徽章同一來源。 */
+  needsYouItems?: readonly NeedsYouItem[];
+  /** 點分流條「需要你」：交給 App 跳過去（選取、開日誌、鏡頭、核准卡閃一下）。 */
+  onNeedsYou?: (item: NeedsYouItem) => void;
   /** server 端換腦門檻（tokens）＝CTX 量條的 100%；沒拿到 snapshot 前用預設值。 */
   swapThresholdTokens?: number;
   /** complete_swap 發出的換腦事件：learned 只在心法真的落盤時為 true。用來在名牌內誠實閃「＋1 心法」。 */
@@ -359,7 +363,7 @@ type Props = {
 };
 
 export function GameCanvas({
-  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onOpenOutbox, onSelect, onOpenLog, onAvatarError,
+  workers, activeId, completedTurns = 0, collaborations = [], missions = [], departments = [], roundtableIds = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds, bossTasks = EMPTY_BOSS_TASKS, needsYouItems, onNeedsYou, swapThresholdTokens, brainSwapEvent, onMeetingTableClick, onEmptyTap, onOpenOutbox, onSelect, onOpenLog, onAvatarError,
   onRename, onAvatarWorkshop, onPersonaEditor, onDepartmentMission, onRenameDepartment, onRoomSwitch, onRemove, onResolveApproval, focusRequest,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -367,6 +371,8 @@ export function GameCanvas({
   const nameRefs = useRef(new Map<string, HTMLDivElement>());
   // Nameplates squeezed by a neighbour (role hidden); kept here so a React re-render doesn't drop the class for a frame.
   const tightIdsRef = useRef(new Set<string>());
+  // 名牌「職稱展開時」的寬高快取（收成 tight 後沿用），取代以前寫進 data-* 屬性——每幀寫屬性也會弄髒樣式。
+  const plateFullSizeRef = useRef(new Map<string, { w: number; h: number }>());
   const identityRefs = useRef(new Map<string, HTMLDivElement>());
   const menuAnchorRefs = useRef(new Map<string, HTMLDivElement>());
   const approvalRefs = useRef(new Map<string, HTMLDivElement>());
@@ -409,9 +415,31 @@ export function GameCanvas({
   const speechLogRef = useRef(new Map<string, { last: string; lines: Array<{ text: string; at: number }>; cmds: number }>());
   // 吃「畫面上實際顯示」的角色狀態（visualWorkers）：Mission NPC 的 speech 來自 mission.executionEvents，
   // 直接讀 worker.character 會把他自己上次私聊的舊字灌進工作小窗。
+  // 失敗未讀：選取過的 NPC 把他最近一次失敗記成已看（跨重整保留，見 sceneSignals.ts）。
+  const seenErrorsRef = useRef<Map<string, string> | null>(null);
+  seenErrorsRef.current ??= loadSeenErrors();
+  const seenDirtyRef = useRef(false);
+  // 場景與 DOM 覆蓋層共用的一份 NPC 視圖：只在輸入變了才重算——每秒的計時 tick、hover、
+  // 選單開合等純 UI 重畫都直接重用，不再每次 render 各算一遍（場景推送、工作小窗、覆蓋層原本各算一次）。
+  // 必須與場景 setWorkers 用同一組參數（含 bossRoom 過濾）——否則 BOSS 房裡場景精靈與
+  // DOM 覆蓋層（名牌/泡泡/工作視窗）取到不同的 worker 集合，兩邊對不上。
+  const allVisual = useMemo(() => {
+    const seen = seenErrorsRef.current!;
+    if (markErrorSeen(seen, workers, activeId)) seenDirtyRef.current = true;
+    return visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds, seen, bossTasks);
+  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds, bossTasks]);
+  const ctxGauges = useMemo(() => ctxGaugesOf(workers, swapThresholdTokens), [workers, swapThresholdTokens]);
+  const sceneList = useMemo(() => withSceneExtras(allVisual, ctxGauges), [allVisual, ctxGauges]);
+  const workersById = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
+  useEffect(() => {
+    if (!seenDirtyRef.current) return;
+    seenDirtyRef.current = false;
+    saveSeenErrors(seenErrorsRef.current!);
+  }, [allVisual]);
+
   useEffect(() => {
     const shownById = new Map(
-      visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds)
+      allVisual
         .filter((v) => !v.temporary)
         .map((v) => [v.id, v.character] as const),
     );
@@ -429,7 +457,7 @@ export function GameCanvas({
         if (log.lines.length > 7) log.lines.shift();
       }
     }
-  }, [workers, missions, collaborations, activeId, departments, roundtableIds, bossRoom, bossTaskDepartmentIds]);
+  }, [workers, allVisual]);
 
   // ── 脈絡公事包：把 token 負載畫成名牌內的手提箱（填充＝佔用），換腦（context 驟降）時播一次「瘦身」脈動。
   // 純前端、只吃既有 ctxGauge 數據；不動後端與換腦邏輯。整合進名牌實體，刻意不做頭上飄浮卡。
@@ -438,8 +466,7 @@ export function GameCanvas({
   useEffect(() => {
     const swapped: string[] = [];
     for (const w of workers) {
-      const series = w.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number");
-      const gauge = computeCtxGauge(series, swapThresholdTokens);
+      const gauge = ctxGauges.get(w.id);
       if (!gauge) continue;
       const prev = ctxPrevCurrentRef.current.get(w.id);
       // current 從高位驟降三成以上＝發生換腦／compact，context 被壓縮重置到新底盤
@@ -455,7 +482,7 @@ export function GameCanvas({
     setTimeout(() => {
       setSwapFlashIds((prev) => { const next = new Set(prev); for (const id of swapped) next.delete(id); return next; });
     }, 1500);
-  }, [workers, swapThresholdTokens]);
+  }, [workers, ctxGauges]);
 
   // 「學到心法」誠實閃現：只吃後端 complete_swap 事件、且 learned（心法真的落盤）才閃「＋1 心法」。
   // 被去重擋下或走活命分支時 learned=false → 不閃（畫面只會有上面那個中性的壓縮脈動）。
@@ -485,18 +512,11 @@ export function GameCanvas({
     workers,
     activeId,
   });
-  const latestCollaborations = useRef(collaborations);
-  latestCollaborations.current = collaborations;
-  const latestMissions = useRef(missions);
-  latestMissions.current = missions;
   const latestDepartments = useRef(departments);
   latestDepartments.current = departments;
-  const swapThresholdRef = useRef(swapThresholdTokens);
-  swapThresholdRef.current = swapThresholdTokens;
-  const latestBossRoom = useRef(bossRoom);
-  latestBossRoom.current = bossRoom;
-  const latestBossTaskDepartmentIds = useRef(bossTaskDepartmentIds);
-  latestBossTaskDepartmentIds.current = bossTaskDepartmentIds;
+  // 場景晚於首次 render 才載好：載好那刻直接推這份已算好的清單。
+  const latestSceneList = useRef(sceneList);
+  latestSceneList.current = sceneList;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const milestoneRef = useRef(0);
@@ -562,7 +582,14 @@ export function GameCanvas({
     const notePointerAlt = (event: PointerEvent) => { altPressRef.current = event.altKey; };
     host.addEventListener("pointerdown", notePointerAlt, true);
 
-    // 每幀：跟拍狀態同步、選取環跟著 NPC、畫面外「需要你」的邊緣指示。
+    // 讀取階段用：被面板蓋住後「真正看得到的區域」每 250ms 重量一次（量測含 getComputedStyle，不能每幀做）。
+    function refreshClearRect(): void {
+      const now = performance.now();
+      if (clearRectRef.current && now - clearRectRef.current.at <= 250) return;
+      clearRectRef.current = { rect: measureClearRect(host!), keepouts: measureKeepouts(host!), at: now };
+    }
+
+    // 每幀（寫入階段，不讀版面）：跟拍狀態同步、選取環跟著 NPC、畫面外「需要你」的邊緣指示。
     function updateCameraOverlays(positions: PersonScreenPos[], bounds: DOMRect): void {
       const scene = cameraOf(sceneRef.current);
       const following = scene?.followingId?.() ?? null;
@@ -578,11 +605,6 @@ export function GameCanvas({
           ring.style.transform = `translate(-50%, -50%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 17 * pos.scale}px)`;
           ring.style.setProperty("--ring-w", `${Math.round(20 * pos.scale)}px`);
         }
-      }
-      const now = performance.now();
-      const host = hostRef.current;
-      if (host && (!clearRectRef.current || now - clearRectRef.current.at > 250)) {
-        clearRectRef.current = { rect: measureClearRect(host), keepouts: measureKeepouts(host), at: now };
       }
       const clear = clearRectRef.current;
       const need = needIdsRef.current;
@@ -619,49 +641,80 @@ export function GameCanvas({
     // fxBus events emitted before it arrives simply have no listener yet.
     import("../game/scene").then(({ createScene }) => createScene(host, {
       onPositions: (positions) => {
+        // ── 讀：這一幀要的版面量測一次讀完（bounds、名牌／身分卡／泡泡尺寸、鏡頭可視區），之後只寫。
+        //    以前讀寫交錯（切 class、設 transform 之間又讀 offsetWidth），每個元素都逼瀏覽器重排一次。
         const bounds = host.getBoundingClientRect();
+        refreshClearRect();
+        const hovered = hoveredIdRef.current;
+        const fullSizes = plateFullSizeRef.current;
+        const plates = new Map<string, { el: HTMLDivElement; w: number; h: number; tight: boolean; active: boolean; busy: boolean; failed: boolean }>();
+        const cards = new Map<string, { el: HTMLDivElement; w: number; h: number }>();
+        const bubbles = new Map<string, { el: HTMLDivElement; hidden: boolean; compact: boolean; w: number; h: number }>();
+        for (const pos of positions) {
+          const plate = nameRefs.current.get(pos.id);
+          if (plate) {
+            const cls = plate.classList;
+            const tight = cls.contains("npc-nameplate--tight");
+            const w = plate.offsetWidth || 80;
+            const h = plate.offsetHeight || 18;
+            // 職稱展開時的寬高（tight 時沿用快取）：「要不要收職稱」用它判斷才不會來回跳；
+            // 閒置名牌第二行（X 分前完成）收合時會變矮，高度同理。
+            if (!tight) fullSizes.set(pos.id, { w, h });
+            plates.set(pos.id, {
+              el: plate, w, h, tight,
+              active: cls.contains("npc-nameplate--active"),
+              busy: cls.contains("npc-nameplate--busy"),
+              failed: cls.contains("npc-nameplate--failed"),
+            });
+          }
+          const identity = identityRefs.current.get(pos.id);
+          if (identity) cards.set(pos.id, { el: identity, w: identity.offsetWidth || 230, h: identity.offsetHeight || 120 });
+          const bubble = bubbleRefs.current.get(pos.id);
+          if (bubble) {
+            const hidden = bubble.classList.contains("robot-bubble--hidden");
+            bubbles.set(pos.id, {
+              el: bubble,
+              hidden,
+              compact: bubble.classList.contains("robot-bubble--compact"),
+              w: hidden ? 0 : bubble.offsetWidth || 140,
+              h: hidden ? 0 : bubble.offsetHeight || 44,
+            });
+          }
+        }
+
+        // ── 算：純計算，不碰 DOM。
         screenPositionsRef.current = new Map(positions.map((position) => [position.id, { x: position.x, y: position.y }]));
         // Someone working at the counter has their tag land on the station's
         // name plate; such tags start just below the plate instead.
-        const plates = positions.length > 0 ? stationPlateBoxes(furniturePosRef.current.values(), positions[0].scale) : [];
+        const stationPlates = positions.length > 0 ? stationPlateBoxes(furniturePosRef.current.values(), positions[0].scale) : [];
         const tagTop = (pos: (typeof positions)[number], height: number, width: number) =>
-          tagTopClearOfPlates(pos.x, nameplateTop(pos, height), width, height, plates);
+          tagTopClearOfPlates(pos.x, nameplateTop(pos, height), width, height, stationPlates);
         // Crowded + zoomed out: keep only tags that don't collide (most important first).
         const crowded = positions.length > 0 && crowdedView(positions[0].scale, positions.length);
         let keep: Set<string> | null = null;
+        const nextTight = new Map<string, boolean>();
         if (crowded) {
           const boxes: NameplateBox[] = [];
           for (const pos of positions) {
-            const plate = nameRefs.current.get(pos.id);
-            if (!plate) continue;
-            const active = plate.classList.contains("npc-nameplate--active");
-            const busy = plate.classList.contains("npc-nameplate--busy");
-            const hovered = pos.id === hoveredIdRef.current;
-            if (!active && !busy && !hovered) continue;
-            boxes.push({
-              id: pos.id,
-              x: pos.x,
-              top: tagTop(pos, plate.offsetHeight || 18, plate.offsetWidth || 80),
-              width: plate.offsetWidth || 80,
-              height: plate.offsetHeight || 18,
-              priority: active ? 3 : hovered ? 2 : 1,
-            });
+            const p = plates.get(pos.id);
+            if (!p) continue;
+            const isHovered = pos.id === hovered;
+            if (!p.active && !p.busy && !p.failed && !isHovered) continue;
+            boxes.push({ id: pos.id, x: pos.x, top: tagTop(pos, p.h, p.w), width: p.w, height: p.h, priority: p.active ? 3 : isHovered ? 2 : 1 });
           }
           keep = declutterNameplates(boxes);
         } else if (positions.length > 1) {
           // Roomy view: neighbours whose full tags (name + role) would touch drop the role instead.
-          // Widths are taken with the role showing (cached while tight) so the check can't flip-flop.
           const wide = positions.map((pos) => {
-            const plate = nameRefs.current.get(pos.id);
-            if (!plate) return null;
-            if (!plate.classList.contains("npc-nameplate--tight")) {
-              plate.dataset.fullw = String(plate.offsetWidth);
-              // 閒置名牌第二行（X 分前完成）收合時高度會變矮——高度也用展開時的，避免收／展來回跳。
-              plate.dataset.fullh = String(plate.offsetHeight);
-            }
-            const h = Number(plate.dataset.fullh) || plate.offsetHeight || 18;
-            return { id: pos.id, plate, x: pos.x, top: tagTop(pos, h, plate.offsetWidth || 80), w: Number(plate.dataset.fullw) || plate.offsetWidth, h };
+            const p = plates.get(pos.id);
+            if (!p) return null;
+            const full = fullSizes.get(pos.id);
+            const h = full?.h ?? p.h;
+            return { id: pos.id, p, x: pos.x, top: tagTop(pos, h, p.w), w: full?.w ?? p.w, h };
           });
+          // Dropping the role isn't always enough (side-by-side busy tags at shared desks):
+          // tags that still collide yield to the more important one; hover brings any back.
+          const boxes: NameplateBox[] = [];
           for (let i = 0; i < wide.length; i++) {
             const a = wide[i];
             if (!a) continue;
@@ -671,30 +724,49 @@ export function GameCanvas({
               if (!b || i === j) continue;
               tight = Math.abs(a.x - b.x) < (a.w + b.w) / 2 + 4 && Math.abs(a.top - b.top) < (a.h + b.h) / 2;
             }
-            a.plate.classList.toggle("npc-nameplate--tight", tight);
-            if (tight) tightIdsRef.current.add(a.id);
-            else tightIdsRef.current.delete(a.id);
-          }
-          // Dropping the role isn't always enough (side-by-side busy tags at shared desks):
-          // tags that still collide yield to the more important one; hover brings any back.
-          const boxes: NameplateBox[] = [];
-          for (const a of wide) {
-            if (!a) continue;
-            const active = a.plate.classList.contains("npc-nameplate--active");
-            const hovered = a.id === hoveredIdRef.current;
-            const busy = a.plate.classList.contains("npc-nameplate--busy");
-            boxes.push({ id: a.id, x: a.x, top: a.top, width: a.plate.offsetWidth || a.w, height: a.h, priority: active ? 3 : hovered ? 2 : busy ? 1 : 0 });
+            nextTight.set(a.id, tight);
+            // 這一幀才要收職稱的，收合後的寬度下一幀才量得到——先用現在（較寬）的保守值。
+            const width = tight ? a.p.w : a.w;
+            const priority = a.p.active ? 3 : a.id === hovered ? 2 : a.p.busy || a.p.failed ? 1 : 0;
+            boxes.push({ id: a.id, x: a.x, top: a.top, width, height: a.h, priority });
           }
           keep = declutterNameplates(boxes);
         }
+        const activeId = latest.current.activeId;
+        const occupied: BubbleRect[] = [];
+        const bubblePlacements: Array<{ el: HTMLDivElement; transform: string | null; opacity: string }> = [];
+        const ordered = [...positions].sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
+        for (const pos of ordered) {
+          const bubble = bubbles.get(pos.id);
+          if (!bubble) continue;
+          if (bubble.hidden) {
+            bubblePlacements.push({ el: bubble.el, transform: null, opacity: "0" });
+            continue;
+          }
+          const placement = chooseBubblePlacement(pos.x, pos.y - 20, bubble.w, bubble.h, bounds.width, bounds.height, occupied);
+          occupied.push(placement.rect);
+          bubblePlacements.push({
+            el: bubble.el,
+            transform: `translate(-50%, -100%) translate(${bounds.left + placement.x}px, ${bounds.top + placement.bottom}px)`,
+            opacity: String(pos.opacity * (bubble.compact ? 0.72 : 1)),
+          });
+        }
+
+        // ── 寫：只設 class／style，不再讀版面。
         for (const pos of positions) {
-          const nameplate = nameRefs.current.get(pos.id);
-          if (nameplate) {
+          const p = plates.get(pos.id);
+          if (p) {
+            const tight = nextTight.get(pos.id);
+            if (tight !== undefined) {
+              if (tight !== p.tight) p.el.classList.toggle("npc-nameplate--tight", tight);
+              if (tight) tightIdsRef.current.add(pos.id);
+              else tightIdsRef.current.delete(pos.id);
+            }
             // Below the sprite's feet (pos.y is 17 art px above them, feet sit
             // 19 below pos.y at head-top anchor) — keeps the desk, monitor and
             // department sign above the head completely clear of DOM chrome.
-            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + tagTop(pos, nameplate.offsetHeight || 18, nameplate.offsetWidth || 80)}px)`;
-            // Big crew zoomed out: idle tags step back (busy / selected / hovered stay).
+            p.el.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + tagTop(pos, p.h, p.w)}px)`;
+            // Big crew zoomed out: idle tags step back (busy / selected / hovered / failed stay).
             const show = nameplateVisible({
               x: pos.x,
               y: pos.y,
@@ -702,27 +774,23 @@ export function GameCanvas({
               viewHeight: bounds.height,
               scale: pos.scale,
               crowd: positions.length,
-              important: pos.id === hoveredIdRef.current ||
-                nameplate.classList.contains("npc-nameplate--active") ||
-                nameplate.classList.contains("npc-nameplate--busy"),
+              important: pos.id === hovered || p.active || p.busy || p.failed,
             });
             const visible = show && (!keep || keep.has(pos.id));
-            nameplate.style.opacity = visible ? String(pos.opacity) : "0";
-            nameplate.style.visibility = visible ? "" : "hidden";
+            p.el.style.opacity = visible ? String(pos.opacity) : "0";
+            p.el.style.visibility = visible ? "" : "hidden";
           }
-          const identity = identityRefs.current.get(pos.id);
-          if (identity) {
+          const card = cards.get(pos.id);
+          if (card) {
             // Beside the sprite instead of on top of it; flip to the left
             // when the NPC stands near the right edge of the canvas.
             // The card now carries the live work view, so it can be tall: keep it inside the canvas vertically too.
             const sideGap = Math.round(14 + pos.scale * 4);
-            const cardW = identity.offsetWidth || 230;
-            const cardH = identity.offsetHeight || 120;
-            const flip = pos.x + cardW + sideGap > bounds.width;
-            const x = flip ? pos.x - sideGap - cardW : pos.x + sideGap;
-            const y = Math.max(8, Math.min(bounds.height - cardH - 8, pos.y - cardH * 0.25));
-            identity.style.transform = `translate(${bounds.left + x}px, ${bounds.top + y}px)`;
-            identity.dataset.side = flip ? "left" : "right";
+            const flip = pos.x + card.w + sideGap > bounds.width;
+            const x = flip ? pos.x - sideGap - card.w : pos.x + sideGap;
+            const y = Math.max(8, Math.min(bounds.height - card.h - 8, pos.y - card.h * 0.25));
+            card.el.style.transform = `translate(${bounds.left + x}px, ${bounds.top + y}px)`;
+            card.el.dataset.side = flip ? "left" : "right";
           }
           const menuAnchor = menuAnchorRefs.current.get(pos.id);
           if (menuAnchor) {
@@ -734,35 +802,11 @@ export function GameCanvas({
           const approval = approvalRefs.current.get(pos.id);
           if (approval) approval.style.transform = `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y - 34}px)`;
         }
-        updateCameraOverlays(positions, bounds);
-        const occupied: BubbleRect[] = [];
-        const ordered = [...positions].sort((a, b) =>
-          Number(b.id === latest.current.activeId) - Number(a.id === latest.current.activeId),
-        );
-        for (const pos of ordered) {
-          const bubble = bubbleRefs.current.get(pos.id);
-          if (!bubble) continue;
-          const hidden = bubble.classList.contains("robot-bubble--hidden");
-          if (hidden) {
-            bubble.style.opacity = "0";
-            continue;
-          }
-          const width = bubble.offsetWidth || 140;
-          const height = bubble.offsetHeight || 44;
-          const placement = chooseBubblePlacement(
-            pos.x,
-            pos.y - 20,
-            width,
-            height,
-            bounds.width,
-            bounds.height,
-            occupied,
-          );
-          occupied.push(placement.rect);
-          bubble.style.transform = `translate(-50%, -100%) translate(${bounds.left + placement.x}px, ${bounds.top + placement.bottom}px)`;
-          const compact = bubble.classList.contains("robot-bubble--compact");
-          bubble.style.opacity = String(pos.opacity * (compact ? 0.72 : 1));
+        for (const placed of bubblePlacements) {
+          if (placed.transform) placed.el.style.transform = placed.transform;
+          placed.el.style.opacity = placed.opacity;
         }
+        updateCameraOverlays(positions, bounds);
       },
       onSelect: (id) => {
         // Selecting an NPC must clear any station tooltip. On touch there is no
@@ -860,7 +904,7 @@ export function GameCanvas({
     });
 
     function pushWorkers() {
-      sceneRef.current?.setWorkers(withSceneExtras(visualWorkers(latest.current.workers, latest.current.activeId, latestCollaborations.current, latestMissions.current, latestDepartments.current, EMPTY_ROUNDTABLE_IDS, latestBossRoom.current, latestBossTaskDepartmentIds.current), latest.current.workers, swapThresholdRef.current));
+      sceneRef.current?.setWorkers(latestSceneList.current);
     }
 
     return () => {
@@ -874,8 +918,8 @@ export function GameCanvas({
 
   useEffect(() => {
     latest.current = { workers, activeId };
-    sceneRef.current?.setWorkers(withSceneExtras(visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds), workers, swapThresholdTokens));
-  }, [workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds, swapThresholdTokens]);
+    sceneRef.current?.setWorkers(sceneList);
+  }, [workers, activeId, sceneList]);
 
 
   useEffect(() => {
@@ -949,22 +993,23 @@ export function GameCanvas({
     return () => window.removeEventListener("keydown", onKey);
   }, [followingId]);
 
-  // 閒置名牌「X 分前完成」：每 30 秒重畫一次就夠（忙碌時另有每秒的計時）。
-  useEffect(() => {
-    if (!workers.some((worker) => !worker.busy && worker.turns.length > 0)) return;
-    const timer = setInterval(() => forceTick((n) => n + 1), 30_000);
-    return () => clearInterval(timer);
-  }, [workers]);
-
   useEffect(() => {
     const starts = turnStartRef.current;
     const busyIds = new Set(workers.filter((w) => w.busy).map((w) => w.id));
     for (const id of busyIds) if (!starts.has(id)) starts.set(id, Date.now());
     for (const id of [...starts.keys()]) if (!busyIds.has(id)) starts.delete(id);
-    if (busyIds.size === 0) return;
-    const timer = setInterval(() => forceTick((n) => n + 1), 1000);
-    return () => clearInterval(timer);
   }, [workers]);
+
+  // 單一重畫計時器：有人忙＝每秒（名牌秒數）；全員閒置但有完成紀錄＝每 30 秒（「X 分前完成」）。
+  // 只跟著節奏本身重建——串流事件讓 workers 一直變，不會再把計時器反覆拆掉重來。
+  const tickMs = workers.some((worker) => worker.busy) ? 1000
+    : workers.some((worker) => worker.turns.length > 0) ? 30_000
+    : 0;
+  useEffect(() => {
+    if (!tickMs) return;
+    const timer = setInterval(() => forceTick((n) => n + 1), tickMs);
+    return () => clearInterval(timer);
+  }, [tickMs]);
 
   useEffect(() => {
     if (!pinnedStation) return;
@@ -1013,17 +1058,19 @@ export function GameCanvas({
     );
   }
 
-  // 必須與上方 setWorkers 用同一組參數（含 bossRoom 過濾）——否則 BOSS 房裡場景精靈與
-  // DOM 覆蓋層（名牌/泡泡/工作視窗）取到不同的 worker 集合，兩邊對不上。
-  const allVisual = visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds);
-  const workersById = new Map(workers.map((worker) => [worker.id, worker]));
-
   // 彙總分流條：畫面上的隊員（排除子代理）一眼看「幾個在忙／幾個需要你／幾個待命」；
   // 「需要你」可點，一鍵選取＋開第一個等你核准的 NPC 日誌（全域信號，補名牌徽章的個別視角）。
   const aggVisual = allVisual.filter((w) => !w.temporary);
-  const needIds = aggVisual
-    .map((w) => w.selectId)
-    .filter((id) => { const full = workersById.get(id); return !!full && (!!pendingApprovalFor(full) || unansweredAutopilotAsk(full)); });
+  // 有 App 的共用清單就用它（卡住不算「需要你」——那不是等你動手），只算畫面上看得到的隊員；沒傳才退回舊判斷。
+  const aggVisibleIds = new Set(aggVisual.map((w) => w.selectId));
+  const aggNeedItems = needsYouItems
+    ? needsYouItems.filter((item) => item.kind !== "stuck" && aggVisibleIds.has(item.workerId))
+    : null;
+  const needIds = aggNeedItems
+    ? [...new Set(aggNeedItems.map((item) => item.workerId))]
+    : aggVisual
+      .map((w) => w.selectId)
+      .filter((id) => { const full = workersById.get(id); return !!full && (!!pendingApprovalFor(full) || unansweredAutopilotAsk(full)); });
   needIdsRef.current = new Set(needIds);
   const aggBusy = aggVisual.filter((w) => w.busy).length;
   const aggIdle = aggVisual.length - aggBusy;
@@ -1036,7 +1083,11 @@ export function GameCanvas({
           <span className="npc-aggbar__seg"><Icon name="gear" size={11} />{aggBusy} {t("工作中")}</span>
           {needIds.length > 0 && (
             <button type="button" className="npc-aggbar__seg npc-aggbar__seg--need" title={t("點我跳到需要你的 NPC")}
-              onClick={() => { const id = needIds[0]; if (id) { onSelect(id); onOpenLog?.(id); focusOnNpc(id); } }}>
+              onClick={() => {
+                const item = aggNeedItems && onNeedsYou ? nextNeedsYou(aggNeedItems, activeId) : null;
+                if (item && onNeedsYou) { onNeedsYou(item); focusOnNpc(item.workerId); return; }
+                const id = needIds[0]; if (id) { onSelect(id); onOpenLog?.(id); focusOnNpc(id); }
+              }}>
               <Icon name="bell" size={11} />{needIds.length} {t("需要你")}
             </button>
           )}
@@ -1212,8 +1263,7 @@ export function GameCanvas({
         const bubbleShown = winTheme || warRoomPlaceholder ? "" : shown;
         // 脈絡公事包數據（名牌與 hover 身分卡共用，算一次）：扣掉出生底盤後的「可用量」%。
         const full = workersById.get(w.selectId);
-        const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
-        const ctxGauge = computeCtxGauge(ctxSeries, swapThresholdTokens);
+        const ctxGauge = full ? ctxGauges.get(full.id) ?? null : null;
         const ctxPct = ctxGauge?.pct ?? null;
         const ctxLevel = ctxPct === null ? null : ctxPct >= 85 ? "danger" : ctxPct >= 60 ? "warn" : "ok";
         const swapFlash = swapFlashIds.has(w.id);
@@ -1235,9 +1285,15 @@ export function GameCanvas({
                 w.temporary ? "npc-nameplate--subagent" : "",
                 tightIdsRef.current.has(w.id) ? "npc-nameplate--tight" : "",
                 cardOpen ? "npc-nameplate--carded" : "",
+                w.failedUnseen ? "npc-nameplate--failed" : "",
               ].join(" ")}
-              style={{ borderColor: accent }}
+              // 失敗未讀的紅框交給 .npc-nameplate--failed（r2-scene.css）；內聯框色只給一般狀態，免得蓋掉 class。
+              style={w.failedUnseen ? undefined : { borderColor: accent }}
             >
+              {w.failedUnseen && (
+                // 上一回合失敗、還沒點進去看：名字前一顆紅點＋紅框，選取這位 NPC 後消失。
+                <span className="npc-nameplate__failed" role="img" aria-label={t("上一回合失敗，尚未查看")} title={t("上一回合失敗，點選查看")} />
+              )}
               <span className="npc-nameplate__name">{w.name}</span>
               {w.role && <span className="npc-nameplate__role">{w.role}</span>}
               {showCase && (

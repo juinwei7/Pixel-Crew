@@ -1,0 +1,111 @@
+/* 第二輪（R2）app 專屬樣式。
+   原則：單一青色強調（--cyan）；琥珀色只留給既有的「等你核准」，不新增顏色。
+   只動 transform / opacity；最下方 reduced-motion 收斂。 */
+
+/* ── 頂欄「需要你」：混合種類（拍板／提問／失敗）時改用青色，琥珀只代表核准 ── */
+.top-bar__needs-you--mixed {
+  border-color: rgba(0, 229, 255, 0.42);
+  background: var(--cyan-soft);
+  color: #9feeff;
+}
+.top-bar__needs-you--mixed:hover { border-color: rgba(0, 229, 255, 0.8); background: rgba(0, 229, 255, 0.2); }
+.top-bar__needs-you--mixed strong { color: #e6fbff; }
+.top-bar__needs-you--mixed .top-bar__needs-you-dot { background: var(--cyan); }
+.top-bar__needs-you--mixed .top-bar__needs-you-dot::after { border-color: var(--cyan); }
+
+/* ── 頂欄成品匣：只在有未讀時出現；新成品「落袋」＝一小塊從上方掉進盒子 ── */
+.top-bar__outbox {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid rgba(0, 229, 255, 0.36);
+  border-radius: 7px;
+  background: rgba(0, 229, 255, 0.07);
+  color: var(--cyan);
+  cursor: pointer;
+  font: 700 10px var(--mono);
+  white-space: nowrap;
+  overflow: visible;
+  animation: pc-pop-in var(--dur-spring, 360ms) var(--ease-spring, ease-out) both;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.top-bar__outbox:hover { border-color: rgba(0, 229, 255, 0.75); background: rgba(0, 229, 255, 0.14); }
+.top-bar__outbox svg { width: 14px; height: 14px; }
+.top-bar__outbox-count { color: #e6fbff; }
+.top-bar__outbox-drop {
+  position: absolute;
+  top: 7px;
+  left: 13px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--cyan);
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-outbox-drop 720ms cubic-bezier(0.3, 0, 0.6, 1) 1 both;
+}
+/* 盒子在落袋那一刻輕輕一沉，像收到東西。 */
+.top-bar__outbox:has(.top-bar__outbox-drop) svg { animation: pc-outbox-catch 720ms ease-out 1; }
+@keyframes pc-outbox-drop {
+  0% { opacity: 0; transform: translateY(-16px) scale(0.9); }
+  25% { opacity: 1; }
+  70% { opacity: 1; transform: translateY(2px) scale(0.8); }
+  100% { opacity: 0; transform: translateY(4px) scale(0.4); }
+}
+@keyframes pc-outbox-catch {
+  0%, 55% { transform: translateY(0); }
+  70% { transform: translateY(1.5px); }
+  100% { transform: translateY(0); }
+}
+.top-bar__menu-count {
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  font: 700 9px var(--mono);
+}
+
+/* ── 隊員列：需要你（非核准）與「卡住」 ── */
+.crew-row--needs-you:not(.crew-row--approval)::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(0, 229, 255, 0.55);
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.6;
+}
+.crew-row__status--need-decision,
+.crew-row__status--need-question { background: var(--cyan-soft); color: var(--cyan); }
+.crew-row__need-tag,
+.crew-row__stuck-tag {
+  margin-right: 5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+.crew-row__need-tag { background: var(--cyan-soft); color: var(--cyan); }
+/* 卡住：不是錯誤也不是待辦，用低彩度的虛線，一眼看得出「這位不太對」但不吵。 */
+.crew-row__stuck-tag { border: 1px dashed rgba(158, 176, 199, 0.55); color: #c3d0e0; }
+.crew-row--stuck .crew-row__status--working { animation: none; opacity: 0.55; }
+.crew-row--stuck .crew-row__avatar { filter: saturate(0.45); }
+.crew-rail--collapsed .crew-row--stuck .crew-row__status { outline: 1px dashed rgba(158, 176, 199, 0.7); outline-offset: 1px; }
+
+/* ── 像素辦公室延遲載入時的底：跟場景同色，不閃白、不放 spinner ── */
+.game-canvas-pending {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .top-bar__outbox,
+  .top-bar__outbox-drop,
+  .top-bar__outbox:has(.top-bar__outbox-drop) svg { animation: none; }
+  .top-bar__outbox-drop { display: none; }
+}

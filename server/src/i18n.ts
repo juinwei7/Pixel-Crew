@@ -1,6 +1,9 @@
 import { enServerA } from "./i18n/en-server-a.js";
 import { enServerB } from "./i18n/en-server-b.js";
 import { enServerC } from "./i18n/en-server-c.js";
+import { enR3Roundtable } from "./i18n/en-r3-roundtable.js";
+import { enR3Warroom } from "./i18n/en-r3-warroom.js";
+import { enR3Autopilot } from "./i18n/en-r3-autopilot.js";
 
 export type Lang = "zh" | "en";
 
@@ -10,7 +13,7 @@ export type Lang = "zh" | "en";
 let lang: Lang = "zh";
 // 註：server 端全站字串已於 i18n Phase 2 完成轉換（en-server-a/b/c 三檔，685 key）。
 
-const en: Record<string, string> = { ...enServerA, ...enServerB, ...enServerC };
+const en: Record<string, string> = { ...enServerA, ...enServerB, ...enServerC, ...enR3Roundtable, ...enR3Warroom, ...enR3Autopilot };
 
 export function setLang(next: Lang): void {
   lang = next;

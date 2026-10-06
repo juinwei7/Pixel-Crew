@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import { Modal } from "./Modal";
 import { buildKanbanColumns, COLUMNS, DONE_LIMIT } from "../kanban";
 import type { BossTask, DepartmentMission, WorkerState } from "../types";
 import { Icon } from "./Icon";
+import { Skeleton } from "./Skeleton";
+import { useFlip } from "../flip";
 
 // 任務看板：把既有的 BOSS 任務（AI 拆解的部門 stages）與部門 Mission（每步驟
 // 有指派 NPC 的執行計畫）攤平成卡片，依狀態分四欄。純視圖——資料與流程都復用
@@ -47,18 +49,27 @@ export function KanbanModal({ workers, onOpenBoss, onClose }: Props) {
 
   const total = COLUMNS.reduce((sum, column) => sum + columns[column.id].length, 0);
 
+  // 卡片換欄／重排時 FLIP 平移：signature 是「每欄有哪些卡、什麼順序」，
+  // 5 秒刷新若版面沒變就不動。
+  const boardRef = useRef<HTMLDivElement>(null);
+  const layoutSignature = COLUMNS.map((column) => {
+    const cards = column.id === "done" ? columns.done.slice(0, DONE_LIMIT) : columns[column.id];
+    return `${column.id}:${cards.map((card) => card.key).join(",")}`;
+  }).join("|");
+  useFlip(boardRef, layoutSignature);
+
   return (
     <Modal label={t("任務看板")} eyebrow="TASK BOARD" title={t("任務看板")} cardClassName="warroom-result__card kanban-modal" onClose={onClose}>
         {error && <p className="kanban__error">{error}</p>}
         {missions === null ? (
-          <p className="ops-modal__empty">{t("讀取中…")}</p>
+          <Skeleton variant="columns" className="kanban__skeleton" />
         ) : total === 0 ? (
           <div className="kanban__empty">
             <p>{t("看板還是空的。點「BOSS 交辦工作」，用一句話描述目標，AI 會拆解成卡片、指派給各部門 NPC，進度都會出現在這裡。")}</p>
             <button type="button" onClick={() => { onClose(); onOpenBoss(); }}>{t("BOSS 交辦工作")}</button>
           </div>
         ) : (
-          <div className="kanban__columns">
+          <div className="kanban__columns" ref={boardRef}>
             {COLUMNS.map((column) => {
               const cards = column.id === "done" ? columns.done.slice(0, DONE_LIMIT) : columns[column.id];
               const hidden = columns[column.id].length - cards.length;
@@ -67,7 +78,7 @@ export function KanbanModal({ workers, onOpenBoss, onClose }: Props) {
                   <h3>{column.label}<em>{columns[column.id].length}</em></h3>
                   <div className="kanban__cards">
                     {cards.map((card) => (
-                      <details key={card.key} className="kanban__card">
+                      <details key={card.key} className="kanban__card" data-flip-key={card.key}>
                         <summary>
                           <span className="kanban__card-title"><Icon name={card.icon} /> {card.title}</span>
                           <span className="kanban__card-meta">

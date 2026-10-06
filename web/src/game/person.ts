@@ -701,6 +701,24 @@ export class Person {
   longWait = false;
   /** Idle at the desk a long while: the desk monitor shows a dim screensaver (scene decides). */
   screensaver = false;
+  /** Streaming a text reply (scene decides): types at the desk; the monitor shows the reply being written. */
+  replying = false;
+  /** Waiting on an owner decision (scene decides, with handRaised): holds up a small "?" card. */
+  asking = false;
+  /** Holding the collaboration baton while working a hand-off (scene decides). */
+  holdingBaton = false;
+  /** Final completion running (ms left): two jumps with both arms up, cyan/white pixel confetti, a "完成" stamp. */
+  private finaleT = 0;
+  private finaleX = 0;
+  private finaleY = 0;
+  private readonly stampG = new Graphics();
+  private stampText: Text | null = null;
+  /** One tool call came back: small cyan tick / small red dot (see toolTick). */
+  private tickKind: "ok" | "fail" | null = null;
+  private tickT = 0;
+  /** Static desk slab + monitor bezel at a personal workstation — rebuilt only when deskKey changes. */
+  private readonly deskG = new Graphics();
+  private deskKey = "";
   /** Long stretch of work: headphones on, a quiet focus aura, the odd sweat drop. */
   deepFocus = false;
   /** Easter egg (poked 20 times): shades on for the rest of the session. */
@@ -772,6 +790,9 @@ export class Person {
   private static readonly RESULT_MS = 1_800;
   private static readonly ARRIVE_MS = 1_500;
   private static readonly FAREWELL_MS = 1_700;
+  private static readonly TICK_MS = 1_000;
+  /** The final-completion moment (see finale()). */
+  static readonly FINALE_MS = 3_000;
 
   constructor(colorIndex = 0, presetId = "classic") {
     this.f = createPresetFrames(presetId, colorIndex);
@@ -781,10 +802,10 @@ export class Person {
     this.sprite.anchor.set(0.5, 1);
     this.shadow.ellipse(0, 0, 5.5, 1.8).fill({ color: 0x000000, alpha: 0.4 });
     this.container.addChild(
-      this.shadow, this.underG, this.stationG, this.sprite, this.propG, this.fxG,
+      this.shadow, this.underG, this.deskG, this.stationG, this.sprite, this.propG, this.fxG,
       this.thinkDots, this.marker, this.haloG, this.emoteG,
     );
-    for (let i = 0; i < 18; i++) this.confetti.push({ x: 0, y: 0, vx: 0, vy: 0, color: 0, life: 0, size: 1 });
+    for (let i = 0; i < 30; i++) this.confetti.push({ x: 0, y: 0, vx: 0, vy: 0, color: 0, life: 0, size: 1 });
   }
 
   /**
@@ -954,6 +975,97 @@ export class Person {
     });
   }
 
+  /**
+   * One tool call came back (not the whole turn): only a small cyan tick, or a
+   * small red dot, by the monitor / head. No pose, no flash, no particles —
+   * the full celebration belongs to the end of the turn.
+   */
+  toolTick(ok: boolean): void {
+    this.tickKind = ok ? "ok" : "fail";
+    this.tickT = Person.TICK_MS;
+  }
+
+  /**
+   * The whole job is really done (final tier — not a turn or a step): a ~3 s
+   * moment clearly bigger than the turn celebration. Two jumps with both arms
+   * up, square cyan/white confetti bursting up out of the desk and raining down,
+   * and a cyan "完成" stamp slammed onto the monitor. Reduced motion: only the
+   * stamp, fading in, no jumps and no particles.
+   */
+  finale(): void {
+    this.finaleT = Person.FINALE_MS;
+    this.finaleX = Math.round(this.x);
+    this.finaleY = Math.round(this.y);
+    this.micro = null;
+    this.danceT = 0;
+    this.fistT = 0;
+    this.cheerT = 0;
+    if (REDUCE_MOTION) return;
+    this.confetti.forEach((c, i) => {
+      // Two waves out of the desk top: most straight away, the rest a beat later.
+      const late = i % 3 === 2;
+      c.x = this.finaleX + SCR_L + Math.random() * SCR_W;
+      c.y = this.finaleY - 18;
+      c.vx = (Math.random() - 0.5) * 0.11;
+      c.vy = -0.09 - Math.random() * 0.07;
+      c.color = i % 3 === 0 ? 0xffffff : 0x4de3ff;
+      c.life = (late ? 2_100 : 2_600) + Math.random() * 500;
+      c.size = i % 4 === 0 ? 2 : 1;
+    });
+  }
+
+  /** Is the final-completion moment playing? (The scene skips its own effects meanwhile.) */
+  get inFinale(): boolean {
+    return this.finaleT > 0;
+  }
+
+  /** The "完成" stamp: a solid dark plate with a cyan frame, slammed down (or faded in), over the monitor. */
+  private drawFinaleStamp(): void {
+    const g = this.stampG;
+    g.clear();
+    if (this.finaleT <= 0) {
+      if (this.stampText) this.stampText.visible = false;
+      return;
+    }
+    const at = Person.FINALE_MS - this.finaleT;
+    if (!this.stampText) {
+      this.stampText = new Text({
+        text: t("完成"),
+        style: {
+          fontFamily: "'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', sans-serif",
+          fontSize: 6,
+          fontWeight: "700",
+          fill: 0xffffff,
+        },
+        resolution: 8,
+      });
+      this.stampText.anchor.set(0.5, 0.5);
+      this.container.addChild(this.stampG, this.stampText);
+    }
+    // Reduced motion: a plain fade in; otherwise it lands at 300 ms from 1.8x down to 1x.
+    const appear = REDUCE_MOTION ? Math.min(1, at / 400) : at < 300 ? 0 : 1;
+    const slam = REDUCE_MOTION ? 1 : Math.max(1, 1.8 - (at - 300) / 90);
+    const fade = this.finaleT < 400 ? this.finaleT / 400 : 1;
+    const alpha = appear * fade;
+    const text = this.stampText;
+    text.visible = alpha > 0;
+    if (alpha <= 0) return;
+    const dx = this.finaleX - Math.round(this.x);
+    const dy = this.finaleY - Math.round(this.y);
+    // Pinned to the monitor where the job finished (the spot stays put even if they walk off).
+    const cy = dy + SCR_T + SCR_H / 2;
+    const w = Math.max(16, Math.ceil(text.width / text.scale.x) + 6) * slam;
+    const h = 9 * slam;
+    g.rect(dx - w / 2, cy - h / 2, w, h).fill({ color: 0x0b1424, alpha: 0.96 * alpha })
+      .stroke({ color: 0x4de3ff, width: 1, alpha });
+    g.rect(dx - w / 2 + 1.5, cy - h / 2 + 1.5, w - 3, h - 3).stroke({ color: 0x4de3ff, width: 0.5, alpha: 0.6 * alpha });
+    text.scale.set(slam);
+    text.position.set(dx, cy);
+    text.alpha = alpha;
+    // A one-frame white flash as it lands.
+    if (!REDUCE_MOTION && at >= 300 && at < 360) g.rect(dx - w / 2, cy - h / 2, w, h).fill({ color: 0xffffff, alpha: 0.35 });
+  }
+
   /** A brand-new teammate beams in: light column, materialise, then a "HI" wave. */
   arrive(): void {
     this.arriveT = REDUCE_MOTION ? 1 : Person.ARRIVE_MS;
@@ -981,7 +1093,12 @@ export class Person {
 
   /** Working at a desk monitor (back to the camera)? */
   private facesScreen(): boolean {
-    return this.activity === "working" && SCREEN_STATIONS.has(this.station);
+    return (this.activity === "working" || this.typingReply()) && SCREEN_STATIONS.has(this.station);
+  }
+
+  /** Writing out a reply at a screen (activity stays "idle" while text streams). */
+  private typingReply(): boolean {
+    return this.replying && this.activity === "idle" && SCREEN_STATIONS.has(this.station);
   }
 
   setPreset(presetId: string, colorIndex: number): void {
@@ -1293,6 +1410,7 @@ export class Person {
     if (this.waveCooldown > 0) this.waveCooldown -= dtMs;
     if (this.haloT > 0) this.haloT -= dtMs;
     if (this.resultT > 0) this.resultT -= dtMs;
+    if (this.tickT > 0) this.tickT -= dtMs;
     if (this.arriveT > 0) this.arriveT -= dtMs;
     if (this.farewellT > 0) this.farewellT -= dtMs;
     if (this.yawnT > 0) {
@@ -1328,6 +1446,8 @@ export class Person {
       if (before > 400 && this.highFiveT <= 400) this.kick(0.14); // slap!
     }
     if (this.fireworksT > 0) this.fireworksT -= dtMs;
+    const prevFinaleT = this.finaleT;
+    if (this.finaleT > 0) this.finaleT -= dtMs;
     if (this.turnT > 0) this.turnT = Math.max(0, this.turnT - dtMs);
     this.squashT += dtMs;
     this.animT += dtMs;
@@ -1370,10 +1490,14 @@ export class Person {
     const waving = this.waveT > 0;
     const handUp = (this.handRaised || waving) && still && !cheering && !reach && !scratching && !yawning && !this.carrying && !asleep;
     const thinking = this.activity === "thinking" && still && !cheering && !reach && !scratching && !yawning && !handUp && !asleep;
+    // Streaming a reply: typing at the screen (the idle-time micro-acts wait until it's written).
+    const typing = this.typingReply() && still && !cheering && !reach && !scratching && !yawning && !handUp && !asleep;
 
     // Micro-actions: drop one the moment something more important happens (or
     // the work it belonged to ends); otherwise start a new one now and then.
-    const blocked = moving || cheering || asleep || reach || scratching || yawning || handUp || this.carrying || materialising || leaving;
+    // Final completion: the big victory pose wins over everything but walking / sleeping.
+    const finaleOn = this.finaleT > 0 && still && !asleep && !leaving && !materialising && !REDUCE_MOTION;
+    const blocked = moving || cheering || finaleOn || asleep || reach || scratching || yawning || handUp || typing || this.carrying || materialising || leaving;
     if (this.micro) {
       const sceneAct = SCENE_MICROS.has(this.micro);
       const deskAct = !sceneAct && WORK_MICROS.has(this.micro) && this.activity === "working";
@@ -1412,6 +1536,19 @@ export class Person {
       this.sprite.texture = f.idleFrames[0];
     } else if (leaving) {
       this.sprite.texture = f.handUp[Math.floor(this.animT / 170) % 2];
+    } else if (finaleOn) {
+      // Two big jumps with both arms up, then arms held high with a small bounce, then a fist pump.
+      const at = Person.FINALE_MS - this.finaleT;
+      const JUMP = 420;
+      const hops = [0, 560];
+      this.sprite.texture = at < 2_200 ? f.cheerFrame : f.handUp[Math.floor(at / 130) % 2];
+      for (const h0 of hops) {
+        const p = (at - h0) / JUMP;
+        if (p >= 0 && p < 1) jump = Math.sin(Math.PI * p) * 6;
+        const prevAt = Person.FINALE_MS - prevFinaleT;
+        if (prevAt < h0 + JUMP && at >= h0 + JUMP) this.kick(0.18); // landing
+      }
+      if (jump === 0 && at >= 1_000) bobY = Math.floor(at / 160) % 2 === 0 ? -1 : 0;
     } else if (this.danceT > 0 && still && !asleep) {
       // Little dance: arms up, turn, other side, wave — bouncing on the beat.
       const beat = Math.floor((this.animT + this.seed * 800) / 210) % 4;
@@ -1529,6 +1666,12 @@ export class Person {
       const idx = bulb >= 0 ? 1 : Math.floor(this.animT / 1400) % 2;
       this.sprite.texture = idx === 0 && blinking ? f.thinkBlink : f.thinkFrames[idx];
       breathe = true;
+    } else if (typing) {
+      // Writing the reply: steady two-handed typing with a short pause to read it back.
+      const pause = wt % 3_600 > 3_050;
+      this.sprite.texture = pause ? f.workFrames[0] : f.typeFrames[Math.floor(wt / 170) % 2];
+      view = "back";
+      screen = true;
     } else if (this.activity === "working") {
       if (this.station === "meeting" && this.meetingRow !== null && this.meetingRow !== "front") {
         // Behind the war-room table (or at its end) they face us, not a monitor.
@@ -1700,6 +1843,8 @@ export class Person {
       for (let k = 0; k < 2; k++) this.fxG.rect(offX - 2 + k * 3, -19 - (Math.floor(this.animT / 150) % 2), 1, 2).fill({ color: 0xff5d73, alpha: 0.9 });
     }
     this.stationG.x = this.errT > 0 && this.errKind === "kick" && !REDUCE_MOTION ? Math.round(Math.sin(this.errT / 25)) : 0;
+    // The kick shakes the whole workstation, its cached desk/bezel included.
+    this.deskG.x = this.stationG.x;
     this.drawCombo(lift);
     const lowEyes = this.sprite.texture === f.phone || this.sprite.texture === f.pet || this.sprite.texture === f.readFrames[0] || this.sprite.texture === f.readFrames[1];
     const faceVisible = this.sprite.texture !== f.rubFrames[0] && this.sprite.texture !== f.rubFrames[1];
@@ -1710,7 +1855,48 @@ export class Person {
       this.fxG.rect(-this.facing * 4, -1, 1, 1).fill({ color: 0xb8c2d6, alpha: 0.8 });
       this.fxG.rect(-this.facing * 6, -2, 1, 1).fill({ color: 0xb8c2d6, alpha: 0.5 });
     }
+    this.drawSignals(lift, offX, screen, handUp && this.asking && this.handRaised && !waving, moving);
+    this.drawFinaleStamp();
     this.drawSay(lift - raise);
+  }
+
+  /**
+   * Round-2 status marks, all small and pixel-crisp: the "?" card held up while
+   * asking, the baton in hand during a hand-off, and the per-tool tick / dot.
+   */
+  private drawSignals(lift: number, offX: number, screen: boolean, holdingCard: boolean, moving: boolean): void {
+    const g = this.fxG;
+    const custom = Boolean(this.customTexture || this.gifSprite);
+    if (holdingCard) {
+      // Card held up in the raised hand (built-in sprites: the hand is at x 4..5, y -16).
+      const sway = !custom && this.sprite.texture === this.f.handUp[1] ? 1 : 0;
+      const x = (custom ? 5 : 2) + sway + offX;
+      const y = -24 + lift;
+      g.rect(x, y, 7, 7).fill(0xe8eef6);
+      g.rect(x, y + 6, 7, 1).fill(0xb7c2d4);
+      g.rect(x + 3, y + 7, 1, 2).fill(0x8a9bb8); // the stick down to the hand
+      // "?" in the accent cyan, 3x5.
+      const q: Array<[number, number]> = [[0, 0], [1, 0], [2, 0], [2, 1], [1, 2], [1, 4]];
+      for (const [qx, qy] of q) g.rect(x + 2 + qx, y + 1 + qy, 1, 1).fill(0x1593ad);
+    }
+    if (this.holdingBaton && !moving && !holdingCard) {
+      // A short cyan baton at the hip, held upright.
+      g.rect(5 + offX, -9 + lift, 1, 4).fill(0x4de3ff);
+      g.rect(5 + offX, -9 + lift, 1, 1).fill(0xffffff);
+    }
+    if (this.tickT > 0 && this.tickKind) {
+      const alpha = Math.min(1, this.tickT / 300);
+      // Top-right corner of the monitor when one is shown, else just off the head.
+      const x = screen ? SCR_L + SCR_W - 1 : 5;
+      const y = screen ? SCR_T - 3 : -21 + lift;
+      if (this.tickKind === "ok") {
+        g.rect(x - 1, y - 1, 6, 5).fill({ color: 0x0d1a30, alpha: 0.85 * alpha });
+        for (const [tx, ty] of [[0, 1], [1, 2], [2, 1], [3, 0]] as const) g.rect(x + tx, y + ty, 1, 1).fill({ color: 0x4de3ff, alpha });
+      } else {
+        g.rect(x, y, 4, 4).fill({ color: 0x0d1a30, alpha: 0.85 * alpha });
+        g.rect(x + 1, y + 1, 2, 2).fill({ color: 0xff5c7a, alpha });
+      }
+    }
   }
 
   /** Stars circling the head after one poke too many. */
@@ -1940,6 +2126,27 @@ export class Person {
     g.clear();
     fx.clear();
     this.drawArrival(g, fx);
+    // The personal workstation (desk slab, keyboard, monitor stand and bezel) never moves:
+    // build it once into deskG and only rebuild when it appears / disappears or the glow changes.
+    const desk = screen && !BUILT_IN_SCREEN.has(this.station);
+    const deskKey = desk ? `${asleep ? "z" : SCREEN_TINT[this.station] ?? 0x4de3ff}` : "";
+    if (deskKey !== this.deskKey) {
+      this.deskKey = deskKey;
+      this.deskG.clear();
+      if (desk) {
+        const tint = SCREEN_TINT[this.station] ?? 0x4de3ff;
+        if (!asleep) {
+          // Glow spilling round the bezel.
+          this.deskG.roundRect(-13, -37, 26, 21, 5).fill({ color: tint, alpha: 0.054 });
+          this.deskG.roundRect(-11, -35, 22, 17, 4).fill({ color: tint, alpha: 0.072 });
+        }
+        this.deskG.rect(-10, -18, 20, 2).fill(0x3a4766);
+        this.deskG.rect(-10, -18, 20, 1).fill(0x4d5d85);
+        this.deskG.rect(-4, -18, 8, 1).fill(0x8fa3c8);
+        this.deskG.rect(-1, -21, 2, 3).fill(0x2a3550);
+        this.deskG.rect(SCR_L - 1, SCR_T - 1, SCR_W + 2, SCR_H + 2).fill(0x24304d);
+      }
+    }
     if (screen && BUILT_IN_SCREEN.has(this.station)) {
       // Standing at a counter device / the wall board: only its light on the head and shoulders
       // (built-in sprite only; custom avatars have their head elsewhere, the line would float).
@@ -1953,22 +2160,12 @@ export class Person {
     } else if (screen) {
       const tint = SCREEN_TINT[this.station] ?? 0x4de3ff;
       const flicker = REDUCE_MOTION || asleep ? 1 : 0.8 + 0.2 * hash01(Math.floor(wt / 110));
-      if (!asleep) {
-        // Glow spilling round the bezel.
-        g.roundRect(-13, -37, 26, 21, 5).fill({ color: tint, alpha: 0.06 * flicker });
-        g.roundRect(-11, -35, 22, 17, 4).fill({ color: tint, alpha: 0.08 * flicker });
-      }
-      // Desk slab and keyboard, monitor on its stand.
-      g.rect(-10, -18, 20, 2).fill(0x3a4766);
-      g.rect(-10, -18, 20, 1).fill(0x4d5d85);
-      g.rect(-4, -18, 8, 1).fill(0x8fa3c8);
-      g.rect(-1, -21, 2, 3).fill(0x2a3550);
-      g.rect(SCR_L - 1, SCR_T - 1, SCR_W + 2, SCR_H + 2).fill(0x24304d);
+      // Desk slab, keyboard, stand and bezel live in the cached deskG (above); only the screen animates.
       if (asleep) this.drawStandby(g, wt);
       else if (this.bootT > 0) this.drawBoot(g);
       else this.drawScreen(g, wt);
       // Key flashes on the keyboard while typing.
-      if (!asleep && !REDUCE_MOTION && !this.micro && !this.longWait && (this.station === "terminal" || this.station === "code" || this.station === "desk")) {
+      if (!asleep && !REDUCE_MOTION && !this.micro && !this.longWait && (this.station === "terminal" || this.station === "code" || this.station === "desk" || this.typingReply())) {
         const k = Math.floor(wt / (this.station === "terminal" ? 90 : 150));
         g.rect(-4 + Math.floor(hash01(k) * 8), -18, 1, 1).fill({ color: 0xffffff, alpha: 0.9 });
       }
@@ -2016,6 +2213,10 @@ export class Person {
   private drawScreen(g: Graphics, wt: number): void {
     const L = SCR_L;
     const T = SCR_T;
+    if (this.typingReply()) {
+      this.drawReplyScreen(g, wt);
+      return;
+    }
     switch (this.station) {
       case "terminal": {
         // Green lines scrolling up a black console, the bottom one being typed, blinking cursor.
@@ -2164,6 +2365,39 @@ export class Person {
     }
     // Faint scanline sheen over every screen.
     g.rect(L, T + ((Math.floor(wt / 90) % SCR_H)), SCR_W, 0.5).fill({ color: 0xffffff, alpha: REDUCE_MOTION ? 0 : 0.06 });
+  }
+
+  /** Writing a reply: a chat pane where pale lines of prose grow word by word, cursor blinking at the end. */
+  private drawReplyScreen(g: Graphics, wt: number): void {
+    const L = SCR_L;
+    const T = SCR_T;
+    g.rect(L, T, SCR_W, SCR_H).fill(0x0b1424);
+    g.rect(L, T, 1, SCR_H).fill(0x4de3ff); // the reply's accent rule
+    const step = 1_100;
+    const line = Math.floor(wt / step);
+    const prog = REDUCE_MOTION ? 1 : (wt % step) / step;
+    let cx = L + 2;
+    let cy = T + 1;
+    for (let i = 0; i < 4; i++) {
+      const n = line - 3 + i;
+      const y = T + 1 + i * 2;
+      const len = 6 + Math.floor(hash01(n * 4.7) * 6);
+      const shown = i === 3 ? Math.max(1, Math.floor(prog * len)) : len;
+      // Words: short runs split by one-pixel gaps.
+      let x = L + 2;
+      let left = shown;
+      let word = 0;
+      while (left > 0 && x < L + SCR_W - 1) {
+        const w = Math.min(left, 2 + Math.floor(hash01(n * 9 + word) * 3), L + SCR_W - 1 - x);
+        g.rect(x, y, w, 1).fill({ color: 0xcfe3f7, alpha: 0.45 + i * 0.15 });
+        x += w + 1;
+        left -= w;
+        word += 1;
+      }
+      cx = x;
+      cy = y;
+    }
+    if (REDUCE_MOTION || Math.floor(wt / 300) % 2 === 0) g.rect(Math.min(cx, L + SCR_W - 1), cy - 0.5, 0.8, 1.5).fill(0x4de3ff);
   }
 
   /** Power back: black screen, a small logo and a boot bar, then the work comes back. */

@@ -133,6 +133,8 @@ export type CharacterState = {
   speechAt?: number; // speech 對應事件的 server 時間戳（epoch ms）；重整重播也保留真實時間
   webQuery?: string; // 上網查時的查詢字/網址＝工作小窗抓真實瀏覽器截圖用
   bump: number;
+  /** 這次 bump 是哪一層的結束：tool＝單一工具呼叫回來；turn＝整個回合結束（含 error）。場景據此分層慶祝。 */
+  outcome?: "tool" | "turn";
 };
 
 export type WorkerMeta = {

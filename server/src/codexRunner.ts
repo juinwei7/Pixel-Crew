@@ -514,6 +514,19 @@ export class CodexSession implements AgentSession {
       case "item/plan/delta":
         if (params.delta) this.onEvent({ type: "thinking_delta", text: String(params.delta) });
         break;
+      case "turn/plan/updated": {
+        // Codex 的結構化計畫（update_plan 工具）→ 轉成與 Claude TodoWrite 完全相同的事件形狀
+        // （tool_call_start name="TodoWrite" input.todos[] + tool_call_result），前端待辦紙/進度
+        // 不必分 provider。每次更新都是完整清單快照，跟 TodoWrite 語意一致（後到覆蓋先到）。
+        const todos = codexPlanToTodos(params.plan);
+        if (!todos) break;
+        const id = `codex-plan-${randomUUID()}`;
+        const input: { todos: CodexTodo[]; explanation?: string } = { todos };
+        if (typeof params.explanation === "string" && params.explanation.trim()) input.explanation = params.explanation;
+        this.onEvent({ type: "tool_call_start", id, name: "TodoWrite", input });
+        this.onEvent({ type: "tool_call_result", id, output: CODEX_TODO_RESULT, isError: false });
+        break;
+      }
       case "item/commandExecution/outputDelta":
         if (params.itemId && params.delta) {
           this.onEvent({ type: "tool_call_output_delta", id: String(params.itemId), delta: String(params.delta) });
@@ -753,6 +766,37 @@ export class CodexSession implements AgentSession {
   }
 }
 
+export type CodexTodo = { content: string; status: "pending" | "in_progress" | "completed"; activeForm: string };
+
+const CODEX_TODO_RESULT = "Todos have been modified successfully.";
+
+// Codex 計畫步驟狀態有 camelCase（app-server v2：inProgress）與 snake_case（舊 exec/v1：in_progress）
+// 兩種拼法，一律正規化成 Claude TodoWrite 的 pending / in_progress / completed。
+function codexTodoStatus(value: unknown): CodexTodo["status"] {
+  const raw = String(value ?? "").replace(/[\s_-]/g, "").toLowerCase();
+  if (raw === "completed" || raw === "complete" || raw === "done") return "completed";
+  if (raw === "inprogress" || raw === "active" || raw === "running") return "in_progress";
+  return "pending";
+}
+
+/** Codex plan（turn/plan/updated 的 plan[]、或 exec 的 todo_list items[]）→ Claude TodoWrite 的 todos[]。
+ *  無法辨識/空清單回 null（不發事件，避免前端待辦紙被清成白紙）。 */
+export function codexPlanToTodos(plan: unknown): CodexTodo[] | null {
+  if (!Array.isArray(plan)) return null;
+  const todos: CodexTodo[] = [];
+  for (const entry of plan) {
+    if (!entry || typeof entry !== "object") continue;
+    const step = entry as Record<string, unknown>;
+    const content = String(step.step ?? step.text ?? step.content ?? "").trim();
+    if (!content) continue;
+    const status = step.status !== undefined
+      ? codexTodoStatus(step.status)
+      : step.completed === true ? "completed" : "pending";
+    todos.push({ content, status, activeForm: content });
+  }
+  return todos.length > 0 ? todos : null;
+}
+
 export function codexTurnInput(text: string, imagePaths: string[]): Array<Record<string, string>> {
   const input: Array<Record<string, string>> = [];
   if (text.trim()) input.push({ type: "text", text });
@@ -823,6 +867,10 @@ export function codexTool(item: any): { name: string; input: unknown; output: un
     case "mcp_tool_call": return { name: `mcp__${item.server ?? "unknown"}__${item.tool ?? "tool"}`, input: item.arguments ?? item.input ?? {}, output: item.result ?? item.output ?? item.error ?? "", isError: failed || Boolean(item.error) };
     case "web_search": return { name: "WebSearch", input: item.query ?? {}, output: item.result ?? "", isError: failed };
     case "file_change": return { name: "Edit", input: item.changes ?? item, output: item.status ?? "completed", isError: failed };
+    case "todo_list": {
+      const todos = codexPlanToTodos(item.items);
+      return todos ? { name: "TodoWrite", input: { todos }, output: CODEX_TODO_RESULT, isError: false } : null;
+    }
     default: return null;
   }
 }

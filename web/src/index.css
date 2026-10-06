@@ -16,4 +16,8 @@
 @import "./styles/motion-polish.css";
 /* 最後載入：手機共用版型要贏過各元件自己的桌面規則（media query 不加權重，
    同權重時由順序決定），token 則不受順序影響。 */
+@import "./styles/r2-scene.css";
+@import "./styles/r2-composer.css";
+@import "./styles/r2-app.css";
+@import "./styles/r2-modals.css";
 @import "./styles/responsive.css";
