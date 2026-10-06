@@ -150,6 +150,50 @@ test("踏步訊號（真實回放校準）：空回合、等背景工作、換�
   assert.ok(!busy.some((s) => /waiting on background work/.test(s)));
 });
 
+test("踏步訊號（語意層）：開跑後空等、重做已完成的事；正常進度與 owner 指示不誤報", () => {
+  // 前一則較長、開頭狀態行就說丟去背景跑；這一則只剩在等 → 等待空轉
+  const launchedThenWaiting = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）做一輪真機行為驗證", result: `壓測已重新開跑（三階段，約 8 分鐘，背景執行）：${"每階段量測延遲與錯誤率並截錄 log，".repeat(25)}` },
+    { instruction: "🔁（自動循環）收割三階段結果", result: "第一階段數據已成形，其餘還要約 5 分鐘，跑完的通知會叫醒我，屆時再逐項收割。" },
+  ]);
+  assert.ok(launchedThenWaiting.some((s) => /waiting on background work/.test(s)));
+
+  // 長回覆只在中段順口提到背景、最新一則有實質產出 → 不算
+  const midMention = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）補測試", result: `${"新增邊界測試與修正，".repeat(30)}期間整合測試在背景跑。${"另外整理了錯誤訊息，".repeat(30)}` },
+    { instruction: "🔁（自動循環）修 lint", result: "修掉 12 個 lint 警告並補上型別，全部測試綠燈，已提交。" },
+  ]);
+  assert.ok(!midMention.some((s) => /waiting on background work/.test(s)));
+
+  // 循環派的事 NPC 說早就做完了 → 重做已完成的事
+  const redo = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）移除卡片下方多餘的工具標籤", result: "實機檢查：那個標籤早就移除且已上線，不是待辦；我沒有重做。" },
+  ]);
+  assert.ok(redo.some((s) => /already done earlier/.test(s)));
+  const redoEn = workerAutopilotStallSignals([
+    { instruction: "🔁 (autopilot) add retry to the uploader", result: "Checked the code: retry with backoff was already implemented two commits ago, so there is nothing to add." },
+  ]);
+  assert.ok(redoEn.some((s) => /already done earlier/.test(s)));
+
+  // 一般進度回報的「已完成」不算；owner 自己的指示也不算（是 owner 在問，不是循環繞圈）
+  const progress = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）補上匯出功能", result: "已完成 CSV 匯出與三個測試，全部通過，下一步處理錯誤路徑。" },
+  ]);
+  assert.ok(!progress.some((s) => /already done earlier/.test(s)));
+  const ownerAsk = workerAutopilotStallSignals([
+    { instruction: "那個標籤移掉了嗎？", result: "那個標籤早就移除且已上線了。" },
+  ]);
+  assert.ok(!ownerAsk.some((s) => /already done earlier/.test(s)));
+
+  // 刻意不上的訊號：連續把選擇丟回 owner——回放裡 NPC 常邊等拍板邊產出，文字層分不開
+  const handoff = workerAutopilotStallSignals([
+    { instruction: "🔁（自動循環）量測重試間隔", result: "量了 12 次樣本，最慢 23 秒。要改間隔請你決定：A 維持／B 縮短，你回一個字母。" },
+    { instruction: "🔁（自動循環）補上量測依據", result: "補上分佈圖與排除依據，數據撐得住 B。仍需你拍板：A 還是 B？" },
+    { instruction: "🔁（自動循環）把結論收進報告", result: "結論已寫進報告第三節並附原始數據。A 或 B 等你拍板，回一個字母即可。" },
+  ]);
+  assert.deepEqual(handoff, []);
+});
+
 test("prompt：有踏步訊號才注入區塊；換角度與選最佳候選的規則常駐", () => {
   const withStall = workerAutopilotNextPrompt({ ...base, turns: [], stallSignals: ["The last two instructions overlap ~90%"] });
   assert.match(withStall, /STALL SIGNALS \(server-measured/);

@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { config } from "./config.js";
 import { t } from "./i18n.js";
+import { detectGarbledText, garbledTextError } from "./textIntegrity.js";
 
 export type WorkerExtras = {
   notes: string[];
@@ -82,6 +83,7 @@ function persist(workerId: string, extras: WorkerExtras): void {
 export function addMemoryNote(workerId: string, input: unknown): { ok: true; note: string } | { ok: false; error: string } {
   const note = String(input ?? "").trim().replace(/\s+/g, " ").slice(0, MAX_MEMORY_NOTE_LENGTH);
   if (!note) return { ok: false, error: t("記憶內容不能是空白") };
+  if (detectGarbledText(note)) return { ok: false, error: garbledTextError() };
   const extras = getExtras(workerId);
   if (extras.notes.some((existing) => existing.toLocaleLowerCase() === note.toLocaleLowerCase())) {
     return { ok: false, error: t("這則記憶已經存在") };
@@ -179,7 +181,8 @@ export function composeMemorySection(workerId: string): string {
   }
   lines.push(
     t("【記憶工具】當你得知值得長期記住、而且上面還沒記過的使用者偏好、習慣或專案事實時，靜默執行（不用徵求同意、不用宣布）："),
-    t("curl -s -X POST http://127.0.0.1:{port}/api/workers/{workerId}/memory -H \"Content-Type: application/json\" -d \"{\\\"note\\\":\\\"一句話的繁體中文事實\\\"}\"", { port: config.port, workerId }),
+    t("① 用 Write 工具把 {\"note\":\"一句話的繁體中文事實\"} 寫成工作目錄下的 pc-memory-{workerId}.json（中文別直接放進 curl 命令列，Windows 會變亂碼）", { workerId }),
+    t("② curl -s -X POST http://127.0.0.1:{port}/api/workers/{workerId}/memory -H \"Content-Type: application/json\" --data-binary @pc-memory-{workerId}.json; rm -f pc-memory-{workerId}.json", { port: config.port, workerId }),
     t("一次一則、每則一句話。不要記密碼、金鑰或一次性資訊；同一件事不要重複記。"),
   );
   return lines.join("\n");

@@ -32,7 +32,8 @@ export function composeConsultSection(input: {
   if (!mates.length) return "";
   return [
     t("【小隊商量】你是「{name}」的隊長，隊員：{mates}。當使用者的問題需要隊員的專業意見時，先靜默執行：", { name: dept.name, mates: mates.join("、") }),
-    t("curl -s -X POST http://127.0.0.1:{port}/api/workers/{workerId}/consult -H \"Content-Type: application/json\" -d \"{\\\"question\\\":\\\"要商量的問題\\\"}\"", { port: input.port, workerId: input.workerId }),
+    t("① 用 Write 工具把 {\"question\":\"要商量的問題\"} 寫成工作目錄下的 pc-consult-{workerId}.json（中文別直接放進 curl 命令列，Windows 會變亂碼）", { workerId: input.workerId }),
+    t("② curl -s -X POST http://127.0.0.1:{port}/api/workers/{workerId}/consult -H \"Content-Type: application/json\" --data-binary @pc-consult-{workerId}.json; rm -f pc-consult-{workerId}.json", { port: input.port, workerId: input.workerId }),
     t("然後告訴使用者你正在跟隊員商量、結束這回合。隊員意見稍後會以【隊員商量回報】訊息送回，屆時再整合成你的結論回覆使用者。簡單問題自己答就好，不要事事發起商量。"),
   ].join("\n");
 }

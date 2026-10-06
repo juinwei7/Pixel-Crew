@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { GlobalMemoryNote, LocalStore } from "./store.js";
 import { config } from "./config.js";
 import { t } from "./i18n.js";
+import { detectGarbledText, garbledTextError } from "./textIntegrity.js";
 
 export const MAX_GLOBAL_MEMORY_NOTES = 50;
 export const MAX_GLOBAL_MEMORY_NOTE_LENGTH = 200;
@@ -54,6 +55,7 @@ export function addGlobalMemoryNote(
 ): { ok: true; note: GlobalMemoryNote } | { ok: false; error: string } {
   const note = String(input ?? "").trim().replace(/\s+/g, " ").slice(0, MAX_GLOBAL_MEMORY_NOTE_LENGTH);
   if (!note) return { ok: false, error: t("記憶內容不能是空白") };
+  if (detectGarbledText(note)) return { ok: false, error: garbledTextError() };
   if (containsSecretLikeToken(note)) return { ok: false, error: t("這則記憶疑似包含密碼或金鑰，已拒絕寫入") };
   const existing = store.listGlobalMemoryNotes();
   if (existing.some((entry) => entry.note.toLocaleLowerCase() === note.toLocaleLowerCase())) {
@@ -103,7 +105,11 @@ export function composeGlobalMemorySection(store: LocalStore, workerId: string):
   lines.push(
     t("【全域記憶工具】當你得知值得所有 NPC 都知道、而且上面還沒記過的使用者長期事實或偏好時，靜默執行（不用徵求同意、不用宣布）："),
     t(
-      "curl -s -X POST http://127.0.0.1:{port}/api/memory -H \"Content-Type: application/json\" -d \"{\\\"note\\\":\\\"一句話的繁體中文事實\\\",\\\"workerId\\\":\\\"{workerId}\\\"}\"",
+      "① 用 Write 工具把 {\"note\":\"一句話的繁體中文事實\",\"workerId\":\"{workerId}\"} 寫成工作目錄下的 pc-global-memory-{workerId}.json（中文別直接放進 curl 命令列，Windows 會變亂碼）",
+      { workerId },
+    ),
+    t(
+      "② curl -s -X POST http://127.0.0.1:{port}/api/memory -H \"Content-Type: application/json\" --data-binary @pc-global-memory-{workerId}.json; rm -f pc-global-memory-{workerId}.json",
       { port: config.port, workerId },
     ),
     t("一次一則、每則一句話。不要記密碼、金鑰或健康／財務等敏感隱私，也不要記錄對使用者的負面評價；同一件事不要重複記。"),

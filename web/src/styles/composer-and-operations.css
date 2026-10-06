@@ -310,6 +310,11 @@
 .warroom-running { position: fixed; left: 50%; transform: translateX(-50%); bottom: 92px; z-index: 55; display: flex; align-items: center; gap: 8px; padding: 9px 14px; border: 1px solid rgba(255, 196, 77, 0.4); border-radius: 999px; background: rgba(20, 24, 38, 0.95); color: #ffce7a; font-size: 12px; white-space: nowrap; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); animation: tooltip-fade .25s ease both; }
 .warroom-running__dot { width: 8px; height: 8px; border-radius: 50%; background: #ffc44d; animation: running-dot 1.2s ease-in-out infinite; }
 @keyframes running-dot { 50% { opacity: .3; transform: scale(.7); } }
+/* 作戰室排隊中：等席位，不是在開會——改用單一青色，與開會中的琥珀色區隔 */
+.warroom-running--queued { border-color: rgba(0, 229, 255, 0.4); color: var(--cyan); }
+.warroom-running--queued .warroom-running__dot { background: var(--cyan); animation-duration: 2.4s; }
+.warroom-running__cancel { margin-left: 4px; padding: 2px 10px; border: 1px solid rgba(0, 229, 255, 0.4); border-radius: 999px; background: transparent; color: var(--cyan); font: inherit; font-size: 11px; cursor: pointer; }
+.warroom-running__cancel:hover, .warroom-running__cancel:focus-visible { background: rgba(0, 229, 255, 0.13); }
 
 /* 站點 tooltip：快速淡入（定位由 inline transform 控制，動畫只碰 opacity 避免打架） */
 .station-tooltip { animation: tooltip-fade .15s ease both; }

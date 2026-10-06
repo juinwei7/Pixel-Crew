@@ -23,6 +23,79 @@ export type SelfInstallGateResult =
   | { proceed: true; classification: SelfChangeClassification }
   | { proceed: false; stop: "needs_owner" | "preverify_failed"; reason: string; classification: SelfChangeClassification };
 
+// ───── 自裝比對範圍（「這次要裝的改動」到底是哪些 commit） ─────
+// 2026-10 實際漏洞：觸發器只看 HEAD~1..HEAD。4135377 被擋，接著提交 8fca510（無害）→ 只檢查
+// 8fca510 → 被擋的 4135377 搭便車一起上線。正解：範圍＝「上次上線 commit..HEAD」，範圍內每個
+// commit 都要過閘門。上線紀錄不可信（沒有、或不是 HEAD 的祖先＝歷史被改寫/換分支）時無法知道
+// 哪些已上線，只能退回 HEAD~1..HEAD——這等於可能漏看，所以自動觸發一律回 owner；owner 手動觸發
+// （人在看）才放行退回範圍，並在結果與 log 標明。
+
+export type SelfInstallTrigger = "auto" | "manual";
+
+export type SelfInstallRangeInput = {
+  head: string;
+  /** self-install-shipped.json 記的上次上線 commit（沒有＝空字串）。 */
+  lastShipped: string;
+  /** git merge-base --is-ancestor lastShipped head 的結果（lastShipped 為空時不看）。 */
+  lastShippedIsAncestor: boolean;
+  trigger: SelfInstallTrigger;
+};
+
+export type SelfInstallRange =
+  | { kind: "since_shipped"; base: string; head: string }
+  | { kind: "up_to_date"; head: string }
+  | { kind: "fallback_last_commit"; head: string; blockAsNeedsOwner: boolean; reason: string };
+
+/** 決定自裝要比對的 commit 範圍（純函式）。 */
+export function resolveSelfInstallRange(input: SelfInstallRangeInput): SelfInstallRange {
+  const head = (input.head || "").trim();
+  const shipped = (input.lastShipped || "").trim();
+  if (shipped && head && shipped === head) return { kind: "up_to_date", head };
+  if (shipped && head && input.lastShippedIsAncestor) return { kind: "since_shipped", base: shipped, head };
+  const reason = !shipped
+    ? "沒有上次上線紀錄(self-install-shipped.json)，無法確認哪些 commit 已上線，只能檢查 HEAD~1..HEAD"
+    : `上次上線 commit ${shipped.slice(0, 10)} 不是 HEAD 的祖先（歷史改寫/換分支），只能檢查 HEAD~1..HEAD`;
+  return { kind: "fallback_last_commit", head, blockAsNeedsOwner: input.trigger !== "manual", reason };
+}
+
+export type SelfChangeCommit = { commit: string; changedFiles: readonly string[]; diffText: string };
+export type SelfChangeCommitHit = { commit: string; file: string; reason: string };
+export type SelfChangeRangeClassification = {
+  critical: boolean;
+  /** 實際檢查過的 commit（給 log／實算核對用）。 */
+  checked: string[];
+  /** 被判 critical 的 commit。 */
+  criticalCommits: string[];
+  hits: SelfChangeCommitHit[];
+};
+
+/**
+ * 範圍內逐 commit 過 classifySelfChange，任一 critical 即整批 critical（不准搭便車）。
+ * 逐 commit 而非只看累計 diff：累計 diff 的改動行必出現在某個 commit 的改動行裡，所以逐 commit
+ * 一定不比累計少攔；「先拆剎車、下一個 commit 又補回」這種也會被看到（寧可多攔）。
+ */
+export function classifySelfChangeCommits(commits: readonly SelfChangeCommit[]): SelfChangeRangeClassification {
+  const checked: string[] = [];
+  const criticalCommits: string[] = [];
+  const hits: SelfChangeCommitHit[] = [];
+  for (const c of commits) {
+    checked.push(c.commit);
+    const cls = classifySelfChange(c.changedFiles, c.diffText);
+    if (!cls.critical) continue;
+    criticalCommits.push(c.commit);
+    for (const h of cls.hits) hits.push({ commit: c.commit, file: h.file, reason: h.reason });
+  }
+  return { critical: criticalCommits.length > 0, checked, criticalCommits, hits };
+}
+
+/** 給 owner 看的一行摘要（範圍版）：哪幾個 commit、為什麼。 */
+export function describeSelfChangeRangeBlock(result: SelfChangeRangeClassification): string {
+  if (!result.critical) return "";
+  const reasons = [...new Set(result.hits.map((h) => h.reason))].slice(0, 6).join("；");
+  const commits = result.criticalCommits.map((c) => c.slice(0, 7)).join(", ");
+  return `此自改動到保護機制，需 owner 拍板（不自動冷安裝）：${reasons}（commit：${commits}）`;
+}
+
 /** 上線前閘門：critical(動到剎車) → 回 owner；非 critical 但驗證沒全綠 → 擋下；全綠才放行自裝。 */
 export function evaluateSelfInstallGate(input: SelfInstallGateInput): SelfInstallGateResult {
   const classification = classifySelfChange(input.changedFiles, input.diffText);

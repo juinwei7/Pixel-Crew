@@ -178,6 +178,18 @@ test("removes a foreground or failed Agent when its tool call returns", () => {
   });
   assert.deepEqual(foreground.subagents, []);
 
+  // 前景子代理跑完的真實結果尾巴也帶 agentId:，不能被誤判成背景子代理而留下殘影。
+  const foregroundWithId = applyRunnerEvent(launch("fg-id"), {
+    type: "tool_call_result",
+    id: "fg-id",
+    output: [
+      { type: "text", text: "iPhone 18 Pro Max 重點整理……" },
+      { type: "text", text: "agentId: a6f799ebd2969fa6f (use SendMessage with to: 'a6f799ebd2969fa6f' to continue this agent)\n<usage>subagent_tokens: 24577</usage>" },
+    ],
+    isError: false,
+  });
+  assert.deepEqual(foregroundWithId.subagents, []);
+
   const failed = applyRunnerEvent(launch("failed"), {
     type: "tool_call_result",
     id: "failed",

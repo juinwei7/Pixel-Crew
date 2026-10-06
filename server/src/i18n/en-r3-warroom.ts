@@ -6,6 +6,17 @@ export const enR3Warroom: Record<string, string> = {
   // 臨時席位不足
   "作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。":
     "The war room needs {n} temporary seats, but the office is full. Remove a few idle NPCs, or wait for another war room to wrap up, then try again.",
+  // 臨時席位排隊
+  "作戰室需要 {n} 個臨時席位，但扣掉常駐 NPC 後最多只有 {max} 席，排隊也等不到。請減少自訂角色或移除幾位常駐 NPC。":
+    "The war room needs {n} temporary seats, but with the resident NPCs there can be at most {max}, so queueing would never get it a seat. Use fewer custom roles or remove a few resident NPCs.",
+  "作戰室排隊超過 {minutes} 分鐘仍等不到席位，已自動取消；請稍後再開。":
+    "The war room waited in the queue for over {minutes} minutes without getting seats, so it was cancelled. Please try again later.",
+  "召集的 NPC 已不在，排隊中的作戰室已取消": "The convening NPC is gone, so the queued war room was cancelled",
+  "作戰室排隊已滿（最多 {max} 場），請等前面幾場開完再試。":
+    "The war room queue is full (at most {max}). Wait for the ones ahead to start, then try again.",
+  "找不到這場排隊（伺服器可能已重啟），請重新開場。": "This queued war room can't be found (the server may have restarted). Please start it again.",
+  "這場作戰室已開場或已結束，無法取消排隊": "This war room has already started or finished, so its queue spot can't be cancelled",
+  "已取消排隊": "Queue spot cancelled",
   // 議題背景
   "召集人": "Convener",
   "召集人：{host}{role}；專案：{project}": "Convener: {host}{role}; project: {project}",

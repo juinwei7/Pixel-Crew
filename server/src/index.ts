@@ -33,6 +33,7 @@ import {
   warroomContextBrief, warroomHostConfidenceNote, warroomOthersDigest, warroomRebuttalNeeded, warroomReportExtras, parseWarroomPosition,
 } from "./warroom.js";
 import type { EphemeralWorkerKind } from "./warroom.js";
+import { WarroomQueue, WARROOM_QUEUE_MAX_WAIT_MS } from "./warroomQueue.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
 import { executionBudgetFor, normalizeExecutionProfile } from "./executionBudget.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
@@ -276,8 +277,7 @@ import {
 } from "./workerAutopilot.js";
 import { PendingSelfInstallStore, evaluateBootResolution } from "./selfEvolvePending.js";
 import { planPromoteOnSuccess, checkRollbackReady } from "./selfInstallLifecycle.js";
-import { classifySelfChange, describeSelfChangeBlock } from "./selfEvolveSafety.js";
-import type { PostInstallChecks } from "./selfEvolveInstall.js";
+import { classifySelfChangeCommits, describeSelfChangeRangeBlock, resolveSelfInstallRange, type PostInstallChecks, type SelfChangeCommit } from "./selfEvolveInstall.js";
 import {
   OpenUserRequestStore,
   appendOpenRequest,
@@ -304,6 +304,7 @@ import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
 import { composeConsultAsk, composeConsultDigest, composeConsultSection, selectConsultTargets } from "./consult.js";
+import { detectGarbledText, garbledTextError } from "./textIntegrity.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -375,6 +376,11 @@ function persistentWorkerCount(): number {
 let reservedEphemeralSeats = 0;
 function ephemeralSeatsLeft(): number {
   return MAX_WORKERS + EPHEMERAL_HEADROOM - workers.size - reservedEphemeralSeats;
+}
+// 理論上最多能有幾個臨時席（所有臨時 NPC 都散場、只剩常駐 NPC 時）。作戰室需求超過這個數就永遠
+// 等不到，直接報錯、不排隊。
+function maxEphemeralSeats(): number {
+  return MAX_WORKERS + EPHEMERAL_HEADROOM - persistentWorkerCount();
 }
 // 「為此交辦開專屬部門」建立的臨時團隊部門名稱前綴——用完即散；重啟時靠這個前綴清掉殘留。
 const EPHEMERAL_DEPT_PREFIX = "臨時團隊·";
@@ -7891,9 +7897,15 @@ function deleteWarroomPeer(id: string): void {
   store.deleteWorker(id);
   repairDepartmentAfterMemberLeaves(departmentId, id);
   broadcast({ type: "worker_removed", workerId: id });
+  scheduleWarroomQueuePump(); // 臨時成員離場＝席位釋出，看看排隊的作戰室能不能開場
 }
 
-async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, customStances: WarRoomStance[] = [], context = ""): Promise<WarRoomResult> {
+// 作戰室上桌的角色：使用者有自訂角色（⚙ 面板）就用自訂的，否則依難度配。所需臨時席＝角色數＋主持。
+function resolveWarroomStances(difficulty: WarRoomDifficulty, customStances: WarRoomStance[]): WarRoomStance[] {
+  return customStances.length >= 2 ? customStances : warroomStances(difficulty);
+}
+
+async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, stances: WarRoomStance[], context = ""): Promise<WarRoomResult> {
   const { peer: peerModel, lead: leadModel } = warroomModels(provider, difficulty);
   const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
   const deadlineAt = Date.now() + WARROOM_TOTAL_TIMEOUT_MS;
@@ -7901,10 +7913,10 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   let costMicros = 0;
   let completed = false;
   // 上桌人數與輪數隨難度伸縮：簡單 2 人 1 輪（快又省）、中等 3 人 2 輪、困難 4 人（含查證方）2 輪。
-  // 使用者有自訂角色（⚙ 面板）就用自訂的，輪數仍照難度。
-  const stances = customStances.length >= 2 ? customStances : warroomStances(difficulty);
+  // 使用者有自訂角色（⚙ 面板）就用自訂的（由呼叫端 resolveWarroomStances 決定），輪數仍照難度。
   const rounds = difficulty === "simple" ? 1 : 2;
   // 席位不夠開完整一場（全部成員＋主持）就直接說清楚，不要默默少開人、拿殘缺辯論去裁決。
+  // 正常路徑由 /api/warroom 的排隊閘門保證席位夠了才會走到這裡；這裡是最後一道防線。
   if (ephemeralSeatsLeft() < stances.length + 1) {
     throw new Error(t("作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。", { n: stances.length + 1 }));
   }
@@ -7990,6 +8002,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     return result;
   } finally {
     releaseLeadSeat();
+    scheduleWarroomQueuePump(); // 主持席歸還（失敗時成員也已立即清掉），讓排隊中的下一場有機會開
     // 正常完成才留一小段時間讓畫面播放散會；失敗／整場逾時則立即中止並清掉，避免留下
     // 仍在跑的 CLI session 或卡在桌上的 NPC。server 非正常重啟則由 startup sweep 接手。
     const ids = created.map((worker) => worker.id);
@@ -8083,13 +8096,130 @@ function postToHost(hostWorkerId: string | null, message: string): void {
   } catch { /* host 忙碌或送失敗就略過 */ }
 }
 
+// ===== 作戰室排隊：臨時席位不夠時改排 FIFO 佇列，席位釋出自動開場（純邏輯在 warroomQueue.ts） =====
+// - 排隊中的請求不佔席位；開場那一刻才同步建立成員、預留主持席（runWarroom 開頭到第一個 await 前）。
+// - 排隊的請求 POST 立即回 202 { queued, ticketId, ahead }；前端用 GET /api/warroom/queue/:ticketId
+//   輪詢名次／開場／結果，DELETE 同一路徑取消排隊（已開場就不能取消）。
+// - 佇列與票據只存在記憶體：server 重啟後全部失效，前端輪詢會拿到 404 並請使用者重新開場。
+//   已開場的那場本來就會被重啟中斷（殘留的臨時 NPC 由啟動清理處理），不另外持久化。
+type WarroomJob = {
+  topic: string;
+  difficulty: WarRoomDifficulty;
+  workspacePath: string;
+  provider: ProviderId;
+  hostWorkerId: string;
+  stances: WarRoomStance[];
+  context: string;
+};
+type WarroomTicket =
+  | { state: "queued"; seats: number }
+  | { state: "running"; seats: number }
+  | { state: "done"; seats: number; result: WarRoomResult; difficulty: WarRoomDifficulty; finishedAt: number }
+  | { state: "failed" | "cancelled"; seats: number; error: string; finishedAt: number };
+// 結束的票據留一段時間給前端來拿結果；之後就回收，避免記憶體慢慢長大。
+const WARROOM_TICKET_KEEP_MS = 30 * 60_000;
+const warroomQueue = new WarroomQueue<WarroomJob>();
+const warroomTickets = new Map<string, WarroomTicket>();
+let warroomQueuePumpPending = false;
+let warroomQueueSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+// 一場作戰室從開場到收尾（存檔＋把精簡裁決交回召集人）。立即開場與排隊開場共用。
+async function executeWarroomJob(job: WarroomJob): Promise<WarRoomResult> {
+  const accountId = workers.get(job.hostWorkerId)?.accountId ?? null;
+  const result = await runWarroom(job.topic, job.difficulty, job.workspacePath, job.provider, accountId, job.stances, job.context);
+  const reportPath = saveWarroomReport(job.topic, job.difficulty, result, job.workspacePath); // 自動存檔（人不在也拿得到）
+  // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
+  const hostMessage = formatWarroomVerdictForHost(job.topic, result, workers.get(job.hostWorkerId)?.runner.name ?? t("你"), reportPath);
+  const liveHost = workers.get(job.hostWorkerId);
+  if (liveHost?.runner.busy) {
+    // 開會這幾分鐘召集人可能被派了別的事；以前會直接略過、裁決就此沒送到。改排進它的佇列，忙完自動接手。
+    store.enqueueCommand(randomUUID(), liveHost.id, hostMessage, [], []);
+    broadcastQueue(liveHost.id);
+    scheduleQueueDrain(liveHost);
+  } else {
+    postToHost(job.hostWorkerId, hostMessage);
+  }
+  return result;
+}
+
+function warroomImpossibleMessage(seats: number): string {
+  return t("作戰室需要 {n} 個臨時席位，但扣掉常駐 NPC 後最多只有 {max} 席，排隊也等不到。請減少自訂角色或移除幾位常駐 NPC。", {
+    n: String(seats), max: String(Math.max(0, maxEphemeralSeats())),
+  });
+}
+
+function finishWarroomTicket(id: string, ticket: WarroomTicket): void {
+  warroomTickets.set(id, ticket);
+  const now = Date.now();
+  for (const [key, value] of warroomTickets) {
+    if ((value.state === "done" || value.state === "failed" || value.state === "cancelled") && now - value.finishedAt > WARROOM_TICKET_KEEP_MS) {
+      warroomTickets.delete(key);
+    }
+  }
+}
+
+// 席位可能釋出的時機（成員離場、主持席歸還、整場結束）都會呼叫；延到下一個 tick 再跑，
+// 免得在 runWarroom「歸還主持席→立刻讓主持上桌」之間被排隊的下一場搶走那一席。
+function scheduleWarroomQueuePump(): void {
+  if (warroomQueue.size === 0 || warroomQueuePumpPending) return;
+  warroomQueuePumpPending = true;
+  setImmediate(() => {
+    warroomQueuePumpPending = false;
+    pumpWarroomQueue();
+  });
+}
+
+function pumpWarroomQueue(): void {
+  for (;;) {
+    const step = warroomQueue.next(ephemeralSeatsLeft(), maxEphemeralSeats(), Date.now());
+    for (const { item, reason } of step.dropped) {
+      finishWarroomTicket(item.id, {
+        state: "failed",
+        seats: item.seats,
+        finishedAt: Date.now(),
+        error: reason === "expired"
+          ? t("作戰室排隊超過 {minutes} 分鐘仍等不到席位，已自動取消；請稍後再開。", { minutes: String(WARROOM_QUEUE_MAX_WAIT_MS / 60_000) })
+          : warroomImpossibleMessage(item.seats),
+      });
+    }
+    const next = step.start;
+    if (!next) break;
+    if (!workers.get(next.payload.hostWorkerId)) {
+      finishWarroomTicket(next.id, { state: "failed", seats: next.seats, finishedAt: Date.now(), error: t("召集的 NPC 已不在，排隊中的作戰室已取消") });
+      continue;
+    }
+    const { id: ticketId, seats } = next;
+    const difficulty = next.payload.difficulty;
+    warroomTickets.set(ticketId, { state: "running", seats });
+    appendRuntimeLog(config.dataDirectory, "warroom dequeued", { ticketId, seats, waitedMs: Date.now() - next.enqueuedAt });
+    // runWarroom 在第一個 await 前就同步建好成員、預留主持席，所以下一圈拿到的剩餘席位已扣掉這場。
+    executeWarroomJob(next.payload).then(
+      (result) => finishWarroomTicket(ticketId, { state: "done", seats, result, difficulty, finishedAt: Date.now() }),
+      (error) => finishWarroomTicket(ticketId, { state: "failed", seats, finishedAt: Date.now(), error: error instanceof Error ? error.message : t("作戰室執行失敗") }),
+    );
+  }
+  syncWarroomQueueSweep();
+}
+
+// 保底輪詢：常駐 NPC 被刪除、委派研究員散場等「不經過作戰室」的席位釋出，以及排隊逾時，
+// 都靠這個每 5 秒的檢查接住。佇列空了就停掉，不常駐跑。
+function syncWarroomQueueSweep(): void {
+  if (warroomQueue.size > 0 && !warroomQueueSweepTimer) {
+    warroomQueueSweepTimer = setInterval(pumpWarroomQueue, 5_000);
+    warroomQueueSweepTimer.unref?.();
+  } else if (warroomQueue.size === 0 && warroomQueueSweepTimer) {
+    clearInterval(warroomQueueSweepTimer);
+    warroomQueueSweepTimer = null;
+  }
+}
+
 app.post("/api/warroom", async (req, res) => {
   const topic = String(req.body?.topic ?? "").trim();
   if (!topic) { res.status(400).json({ error: t("請提供討論主題") }); return; }
   const requested = String(req.body?.difficulty);
   const hostWorkerId = typeof req.body?.hostWorkerId === "string" ? req.body.hostWorkerId : null;
   const host = hostWorkerId ? workers.get(hostWorkerId) : null;
-  if (!host) { res.status(400).json({ error: t("請從目前 NPC 開啟作戰室") }); return; }
+  if (!host || !hostWorkerId) { res.status(400).json({ error: t("請從目前 NPC 開啟作戰室") }); return; }
   let workspacePath: string;
   try { workspacePath = normalizeWorkspacePath(req.body?.workspacePath ?? config.targetRepoPath); }
   catch { workspacePath = config.targetRepoPath; }
@@ -8106,27 +8236,63 @@ app.post("/api/warroom", async (req, res) => {
   const difficulty: WarRoomDifficulty = ["simple", "medium", "hard"].includes(requested)
     ? (requested as WarRoomDifficulty)
     : await triageDifficulty(topic, workspacePath, provider, homeForWorker(host));
-  const customStances = sanitizeCustomStances(req.body?.stances);
+  const stances = resolveWarroomStances(difficulty, sanitizeCustomStances(req.body?.stances));
   // 議題背景：召集人＋專案名＋召集人最近幾則對話（封頂 900 字），讓成員不必就字面空談。
   const context = warroomContextBrief({ hostName: host.runner.name, hostRole: host.persona?.role, workspacePath, events: host.history });
+  const job: WarroomJob = { topic, difficulty, workspacePath, provider, hostWorkerId, stances, context };
+  const seats = stances.length + 1; // 全部成員＋主持
+  // 分級要等 LLM 回覆，期間席位可能變動；所以在 await 之後才判定開場／排隊，判定後同步開場。
+  const admission = warroomQueue.admit(seats, ephemeralSeatsLeft(), maxEphemeralSeats());
+  if (admission.kind === "impossible") {
+    res.status(409).json({ error: warroomImpossibleMessage(seats) });
+    return;
+  }
+  if (admission.kind === "full") {
+    res.status(429).json({ error: t("作戰室排隊已滿（最多 {max} 場），請等前面幾場開完再試。", { max: String(warroomQueue.maxQueued) }) });
+    return;
+  }
+  if (admission.kind === "queue") {
+    const ticketId = randomUUID();
+    const ahead = warroomQueue.enqueue(ticketId, seats, job, Date.now());
+    warroomTickets.set(ticketId, { state: "queued", seats });
+    appendRuntimeLog(config.dataDirectory, "warroom queued", { ticketId, seats, ahead, seatsLeft: ephemeralSeatsLeft() });
+    syncWarroomQueueSweep();
+    res.status(202).json({ ok: true, queued: true, ticketId, ahead, seats, difficulty });
+    return;
+  }
   try {
-    const result = await runWarroom(topic, difficulty, workspacePath, provider, host.accountId, customStances, context);
-    const reportPath = saveWarroomReport(topic, difficulty, result, workspacePath); // 自動存檔（人不在也拿得到）
-    // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
-    const hostMessage = formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath);
-    const liveHost = workers.get(hostWorkerId ?? "");
-    if (liveHost?.runner.busy) {
-      // 開會這幾分鐘召集人可能被派了別的事；以前會直接略過、裁決就此沒送到。改排進它的佇列，忙完自動接手。
-      store.enqueueCommand(randomUUID(), liveHost.id, hostMessage, [], []);
-      broadcastQueue(liveHost.id);
-      scheduleQueueDrain(liveHost);
-    } else {
-      postToHost(hostWorkerId, hostMessage);
-    }
+    const result = await executeWarroomJob(job);
     res.json({ ok: true, result, difficulty });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : t("作戰室執行失敗") });
   }
+});
+
+// 排隊票據：前端輪詢名次與結果。state＝queued（附 ahead）／running／done（附 result）／failed／cancelled。
+app.get("/api/warroom/queue/:ticketId", (req, res) => {
+  const ticketId = String(req.params.ticketId);
+  const ticket = warroomTickets.get(ticketId);
+  if (!ticket) { res.status(404).json({ error: t("找不到這場排隊（伺服器可能已重啟），請重新開場。") }); return; }
+  if (ticket.state === "queued") {
+    res.json({ ok: true, state: "queued", ahead: warroomQueue.ahead(ticketId) ?? 0, seats: ticket.seats });
+    return;
+  }
+  res.json({ ok: true, ...ticket });
+});
+
+// 取消排隊：只有還在排的能取消；已開場的照常跑完（散會後裁決仍會交回召集人）。
+app.delete("/api/warroom/queue/:ticketId", (req, res) => {
+  const ticketId = String(req.params.ticketId);
+  const ticket = warroomTickets.get(ticketId);
+  if (!ticket) { res.status(404).json({ error: t("找不到這場排隊（伺服器可能已重啟），請重新開場。") }); return; }
+  if (ticket.state !== "queued" || !warroomQueue.cancel(ticketId)) {
+    res.status(409).json({ error: t("這場作戰室已開場或已結束，無法取消排隊"), state: ticket.state });
+    return;
+  }
+  finishWarroomTicket(ticketId, { state: "cancelled", seats: ticket.seats, error: t("已取消排隊"), finishedAt: Date.now() });
+  syncWarroomQueueSweep();
+  scheduleWarroomQueuePump(); // 取消的若是隊首，後面那場可能已坐得下
+  res.json({ ok: true, state: "cancelled" });
 });
 
 // ===== 作戰室歷史：列出／讀取／刪除 .warroom/ 裡的報告（讓使用者在 app 內回看過往裁決） =====
@@ -8272,6 +8438,7 @@ app.post("/api/workers/:id/consult", (req, res) => {
   if (!dept || dept.leadWorkerId !== worker.id) { res.status(403).json({ error: t("只有部門/小隊的隊長可以發起商量") }); return; }
   const question = String(req.body?.question ?? "").trim();
   if (!question) { res.status(400).json({ error: t("請提供要商量的問題") }); return; }
+  if (detectGarbledText(question)) { res.status(400).json({ error: garbledTextError() }); return; }
   if (consultPending.has(dept.id)) { res.status(409).json({ error: t("這個小隊已有一場商量進行中，等回報送達後再發起") }); return; }
   consultPending.add(dept.id);
   runConsult(dept, worker, question)
@@ -10009,6 +10176,9 @@ async function resolvePendingSelfInstallOnBoot(): Promise<void> {
         }
         for (const op of planPromoteOnSuccess({ staged: stagedExe, rollback: rollbackExe })) copyFileSync(op.from, op.to);
         appendRuntimeLog(dir, "self-install confirmed healthy; promoted rollback point", { prevMtime: marker.prevExeMtimeMs, installedMtime });
+        // 新版驗過健康才記「已上線」，下次閘門從這裡起算。
+        const attempted = lastAttemptedCommit();
+        if (attempted) recordShippedCommit(attempted);
         // 把桌面啟動器也同步成這版好版(納入自動鏈,免得停在舊版、誤點降級)。路徑走環境變數,未設就跳過。
         const launcher = process.env.PIXEL_CREW_DESKTOP_LAUNCHER?.trim();
         if (launcher && existsSync(dirname(launcher))) {
@@ -10047,15 +10217,65 @@ function lastShippedCommit(): string {
 function recordShippedCommit(commit: string): void {
   try { writeFileSync(join(config.dataDirectory, "self-install-shipped.json"), JSON.stringify({ commit })); } catch { /* best-effort */ }
 }
+// 「已上線」只在新版開機驗過健康後才寫（見 resolvePendingSelfInstallOnBoot）；觸發當下只記「嘗試過」。
+// 否則重建失敗時那段範圍會被當成已上線，下次閘門就不再檢查它。嘗試紀錄用來防同一 HEAD 失敗後反覆重試。
+function lastAttemptedCommit(): string {
+  try { return String(JSON.parse(readFileSync(join(config.dataDirectory, "self-install-attempt.json"), "utf8"))?.commit || ""); } catch { return ""; }
+}
+function recordAttemptedCommit(commit: string): void {
+  try { writeFileSync(join(config.dataDirectory, "self-install-attempt.json"), JSON.stringify({ commit, at: new Date().toISOString() })); } catch { /* best-effort */ }
+}
+
+function gitIsAncestor(repo: string, ancestor: string, descendant: string): boolean {
+  try { execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd: repo, stdio: "ignore" }); return true; } catch { return false; }
+}
+// 單一 commit 對其第一個 parent 的改動（root commit 對空樹）。--no-renames：改名拆成刪＋增，舊檔名
+// (例如 toolPolicy.ts 被改名走)也會出現在清單裡被檔名規則看到。取不到 diff → null（呼叫端保守處理）。
+const SELF_INSTALL_MAX_COMMITS = 200;
+function readSelfInstallCommit(repo: string, commit: string): SelfChangeCommit | null {
+  const parents = gitOut(repo, ["rev-list", "--parents", "-n", "1", commit]).trim().split(/\s+/).slice(1);
+  const base = parents[0] || "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // git 空樹
+  const common = ["-c", "core.quotepath=false", "diff", "--no-renames", "--no-color", "--no-ext-diff"];
+  const changedFiles = gitOut(repo, [...common, "--name-only", base, commit]).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const diffText = gitOut(repo, [...common, base, commit]);
+  if (changedFiles.length && !diffText) return null;
+  return { commit, changedFiles, diffText };
+}
 
 function triggerSelfInstall(reason: string): { outcome: string; detail?: string } {
   if (!SELF_REPO || !existsSync(SELF_REPO)) return { outcome: "repo_not_configured", detail: "PIXEL_CREW_SELF_REPO 未設定或不存在" };
   const head = gitOut(SELF_REPO, ["rev-parse", "HEAD"]).trim();
-  // 這次要裝的改動 = 最近一次 commit；動到剎車 → 回 owner，不自裝。
-  const changed = gitOut(SELF_REPO, ["diff", "--name-only", "HEAD~1", "HEAD"]).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const diff = gitOut(SELF_REPO, ["diff", "HEAD~1", "HEAD"]).slice(0, 200_000);
-  const cls = classifySelfChange(changed, diff);
-  if (cls.critical) return { outcome: "needs_owner", detail: describeSelfChangeBlock(cls) };
+  if (!head) return { outcome: "needs_owner", detail: "讀不到 HEAD，無法確認要裝的改動" };
+  // 這次要裝的改動 = 上次上線 commit..HEAD 的每個 commit（不是只看最新一個，否則被擋的會搭便車）；
+  // 任一 commit 動到剎車 → 回 owner，不自裝。上線紀錄不可信 → 退回 HEAD~1..HEAD，自動觸發一律回 owner。
+  const shipped = lastShippedCommit();
+  const range = resolveSelfInstallRange({
+    head,
+    lastShipped: shipped,
+    lastShippedIsAncestor: !!shipped && gitIsAncestor(SELF_REPO, shipped, head),
+    trigger: reason === "auto" ? "auto" : "manual",
+  });
+  let rangeNote = "";
+  if (range.kind === "fallback_last_commit") {
+    appendRuntimeLog(config.dataDirectory, "self-install range fallback", { reason, head, shipped, blockAsNeedsOwner: range.blockAsNeedsOwner, why: range.reason });
+    if (range.blockAsNeedsOwner) return { outcome: "needs_owner", detail: `${range.reason}；自動觸發不冒險，請 owner 確認後手動觸發` };
+    rangeNote = `（注意：${range.reason}）`;
+  }
+  const commitIds = range.kind === "since_shipped"
+    ? gitOut(SELF_REPO, ["rev-list", "--reverse", `${range.base}..${range.head}`]).split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    : range.kind === "fallback_last_commit" ? [head] : [];
+  if (range.kind === "since_shipped" && commitIds.length === 0) return { outcome: "needs_owner", detail: "列不出上線範圍內的 commit，無法確認要裝的改動" };
+  if (commitIds.length > SELF_INSTALL_MAX_COMMITS) return { outcome: "needs_owner", detail: `距上次上線已累積 ${commitIds.length} 個 commit（>${SELF_INSTALL_MAX_COMMITS}），請 owner 確認` };
+  const commits: SelfChangeCommit[] = [];
+  for (const id of commitIds) {
+    const c = readSelfInstallCommit(SELF_REPO, id);
+    if (!c) return { outcome: "needs_owner", detail: `取不到 commit ${id.slice(0, 7)} 的 diff，無法確認是否動到剎車` };
+    commits.push(c);
+  }
+  const cls = classifySelfChangeCommits(commits);
+  appendRuntimeLog(config.dataDirectory, "self-install gate", { reason, range: range.kind, base: range.kind === "since_shipped" ? range.base : undefined, head, checked: cls.checked, criticalCommits: cls.criticalCommits });
+  if (cls.critical) return { outcome: "needs_owner", detail: describeSelfChangeRangeBlock(cls) + rangeNote };
+  const changed = [...new Set(commits.flatMap((c) => c.changedFiles))];
   // 回滾就緒快速檢查（深比對交給 pc-selfrebuild 的 hash 複檢）。
   const stagedExe = join(config.dataDirectory, "coldinstall", "Pixel Crew.exe");
   const rollbackExe = join(config.dataDirectory, "coldinstall", "Pixel Crew.rollback.exe");
@@ -10081,16 +10301,16 @@ function triggerSelfInstall(reason: string): { outcome: string; detail?: string 
   } catch (error) {
     return { outcome: "launch_failed", detail: (error as Error).message };
   }
-  if (head) recordShippedCommit(head);
-  appendRuntimeLog(config.dataDirectory, "self-install triggered: detached self-rebuild launched", { reason, head, changed: changed.slice(0, 20), psExe });
-  return { outcome: "fired" };
+  recordAttemptedCommit(head);
+  appendRuntimeLog(config.dataDirectory, "self-install triggered: detached self-rebuild launched", { reason, head, range: range.kind, checked: cls.checked, changed: changed.slice(0, 20), psExe });
+  return rangeNote ? { outcome: "fired", detail: rangeNote } : { outcome: "fired" };
 }
 
 // 保守自動觸發：僅在開關開、HEAD 未出貨過、且沒有 NPC 正在忙（不打斷你）時才動。節奏閘防頻繁重裝。
 function maybeAutoSelfInstall(): void {
   if (!selfInstallAutoEnabled() || !SELF_REPO) return;
   const head = gitOut(SELF_REPO, ["rev-parse", "HEAD"]).trim();
-  if (!head || head === lastShippedCommit()) return;
+  if (!head || head === lastShippedCommit() || head === lastAttemptedCommit()) return; // 失敗過的同一 HEAD 不自動重試，等新 commit
   for (const w of workers.values()) { if (w.runner.busy) return; } // 有人在忙就不重啟
   const r = triggerSelfInstall("auto");
   appendRuntimeLog(config.dataDirectory, "maybeAutoSelfInstall", { outcome: r.outcome, detail: r.detail });

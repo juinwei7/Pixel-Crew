@@ -35,6 +35,7 @@ import { discussionSubmission, toggleDiscussionMode, type DiscussionMode } from 
 import { roundtablePrompt } from "./roundtablePrompt";
 import { RoundtableFollowUp } from "./components/RoundtableFollowUp";
 import { apiRequest } from "./api";
+import { followWarroomTicket, type WarroomTicketView } from "./warroomQueue";
 import { t } from "./i18n";
 import type { ApprovalDecision, DepartmentMission, WorkerState } from "./types";
 
@@ -151,6 +152,9 @@ export function App() {
   const [warroomRunning, setWarroomRunning] = useState(false);
   // 作戰室開議時間：等待提示顯示「已進行 N 秒」。
   const [warroomStartedAt, setWarroomStartedAt] = useState(0);
+  // 臨時席位不足時後端把這場排進佇列：記住票號與前面還有幾場（null＝沒在排隊）。
+  const [warroomQueued, setWarroomQueued] = useState<{ ticketId: string; ahead: number } | null>(null);
+  const warroomCancelledTicketRef = useRef<string | null>(null);
   // 作戰室歷史面板：列出 .warroom/ 的過往裁決報告，可回看/刪除（null＝面板關閉）。
   const [warroomHistory, setWarroomHistory] = useState<Array<{ file: string; topic: string; difficulty: string }> | null>(null);
   const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
@@ -228,22 +232,67 @@ export function App() {
     // 讓召集人頭上冒「討論中」泡泡（roundtableWorkerIds 的清理 effect 會在它忙過又閒置後自動移除）。
     setRoundtableWorkerIds((current) => (current.includes(hostId) ? current : [...current, hostId]));
     notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
+    // 開議失敗／取消：召集人可能從未 busy，清理 effect 等不到「忙過又閒置」，這裡直接摘掉泡泡。
+    const dropHostBubble = () => {
+      setRoundtableWorkerIds((current) => current.filter((id) => id !== hostId));
+      roundtableSeenBusy.current.delete(hostId);
+    };
     try {
-      const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
+      const resp = await apiRequest<{ ok: boolean; result?: WarRoomResult; queued?: boolean; ticketId?: string; ahead?: number }>("/api/warroom", {
         method: "POST",
         // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
         body: { topic: text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
         timeoutMs: 13 * 60_000,
       });
+      if (resp.queued && resp.ticketId) {
+        // 臨時席位不足：後端已排隊，不佔席位；席位釋出時自動開場，這裡輪詢名次與結果。
+        const ticketId = resp.ticketId;
+        warroomCancelledTicketRef.current = null;
+        setWarroomQueued({ ticketId, ahead: resp.ahead ?? 0 });
+        notify(t("臨時席位不足，作戰室已排隊；席位釋出後自動開場"), "info");
+        const outcome = await followWarroomTicket<WarRoomResult>(
+          () => apiRequest<WarroomTicketView<WarRoomResult>>(`/api/warroom/queue/${encodeURIComponent(ticketId)}`),
+          {
+            onQueued: (ahead) => setWarroomQueued({ ticketId, ahead }),
+            onRunning: () => {
+              setWarroomQueued(null);
+              setWarroomStartedAt(Date.now());
+              notify(t("輪到這場了：作戰室開議"), "info");
+            },
+            isCancelled: () => warroomCancelledTicketRef.current === ticketId,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            now: () => Date.now(),
+            timeoutMessage: t("作戰室等候逾時，請到歷史查看是否已產出裁決"),
+          },
+        );
+        if (outcome.kind === "done") {
+          warroomOriginRef.current = { hostId, topic: text };
+          setWarroomResult(outcome.result);
+        } else {
+          notify(outcome.kind === "cancelled" ? t("已取消排隊") : (outcome.error || t("作戰室失敗")), outcome.kind === "cancelled" ? "info" : "error");
+          dropHostBubble();
+        }
+        return;
+      }
+      if (!resp.result) throw new Error(t("作戰室失敗"));
       warroomOriginRef.current = { hostId, topic: text };
       setWarroomResult(resp.result);
     } catch (error) {
       notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
-      // 開議失敗：召集人可能從未 busy，清理 effect 等不到「忙過又閒置」，這裡直接摘掉泡泡。
-      setRoundtableWorkerIds((current) => current.filter((id) => id !== hostId));
-      roundtableSeenBusy.current.delete(hostId);
+      dropHostBubble();
     } finally {
+      setWarroomQueued(null);
       setWarroomRunning(false);
+    }
+  }
+  // 取消排隊：只有還在排的能取消；已開場的後端會回 409，照常跑完。
+  async function cancelWarroomQueue(ticketId: string): Promise<void> {
+    try {
+      await apiRequest(`/api/warroom/queue/${encodeURIComponent(ticketId)}`, { method: "DELETE" });
+      warroomCancelledTicketRef.current = ticketId;
+      setWarroomQueued(null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("取消排隊失敗"), "error");
     }
   }
   // 結果卡「交給召集人」：走佇列而不是直接送——召集人此刻多半正在消化裁決回報，
@@ -2151,7 +2200,14 @@ export function App() {
         </div>
       </Modal>}
 
-      {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
+      {warroomRunning && warroomQueued && <div className="warroom-running warroom-running--queued" role="status" aria-live="polite">
+        <span className="warroom-running__dot" aria-hidden="true" />
+        {warroomQueued.ahead > 0
+          ? t("作戰室已排隊，前面還有 {n} 場；席位釋出後自動開場", { n: String(warroomQueued.ahead) })
+          : t("作戰室已排隊，下一場就輪到這場；席位釋出後自動開場")}
+        <button type="button" className="warroom-running__cancel" onClick={() => { void cancelWarroomQueue(warroomQueued.ticketId); }}>{t("取消排隊")}</button>
+      </div>}
+      {warroomRunning && !warroomQueued && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />
         {t("作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
         {warroomStartedAt > 0 && <span className="warroom-running__elapsed">· {t("已進行")} <ElapsedSeconds since={warroomStartedAt} /> {t("秒")}</span>}

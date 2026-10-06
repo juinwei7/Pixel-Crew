@@ -97,7 +97,9 @@ const BACKGROUND_SUBAGENT_MAX_MS = 3 * 60 * 60 * 1000;
 
 function isAsyncAgentResult(output: unknown): boolean {
   const text = readableFailureDetail(output);
-  return /async agent launched successfully|agentId:\s*[a-z0-9]+/i.test(text);
+  // 只認「已在背景啟動」字樣；前景子代理跑完的結果尾巴也會附 agentId:，不能當背景訊號，
+  // 否則會被當成背景子代理留在會議桌上成殘影。
+  return /async agent launched successfully/i.test(text);
 }
 
 export const INITIAL_CHARACTER: CharacterState = {

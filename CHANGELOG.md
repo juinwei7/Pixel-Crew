@@ -15,7 +15,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Changed
 
-- War Room peers now use 6 reserved seats outside the 20-NPC limit. When seats run out the War Room refuses with a clear message instead of opening short-handed; the NPC count and add button only count permanent NPCs.
+- War Room peers now use 6 reserved seats outside the 20-NPC limit. When seats run out, a War Room joins a first-come queue (up to 3 waiting, 30-minute limit) and opens automatically when seats free up; the status bar shows its place in line and lets you cancel. Only a War Room that could never fit is refused. The NPC count and add button only count permanent NPCs.
+- The self-update safety gate checks every commit since the last shipped build, not just the newest one, so a blocked change can no longer ride along with a harmless follow-up. Plain documentation files are judged by name only, so a README that mentions the stop rules no longer blocks an update; agent-instruction files such as CLAUDE.md are still scanned. A build is recorded as shipped only after it boots healthy, and a failed build is not retried until there is a new commit.
+- Personal autopilot also flags a step that only re-launches background work and then waits, and a loop instruction the NPC answers by saying the work was already done. In the replay it catches 10 of 12 genuine stalls (4 false alarms, one of which was a real redo loop).
+- NPCs save memories and consult questions by writing a UTF-8 file and sending it with `curl --data-binary`, because Git Bash's curl sends Chinese on the command line in the system code page.
 - The War Room skips its rebuttal round when nobody objects in round 1 and at most one peer agrees conditionally. The challenger states its real bottom line instead of being told to oppose by default, and peers that failed round 1 are not sent a rebuttal.
 - War Room peers now mark "yes, but do it this way" as GO and keep HOLD for a real "wait until we know X", so consensus is recognised and the rebuttal round is skipped when it would add nothing. In testing, a consensus topic dropped from about 90 s and $0.43 to about 55 s and $0.18 with the same disputes still ruled on.
 - Personal autopilot's going-in-circles detection was recalibrated against 198 real loop decisions, where the old thresholds never fired. It now flags back-to-back empty replies, replies that only say the NPC is waiting on background work, and loop instructions that re-issue the same move in different words (owner messages are ignored). In the replay it catches 8 of 12 genuine stalls instead of 0.
@@ -25,6 +28,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Fixed
 
 - Two War Rooms opened back to back can no longer take each other's moderator seat: the seat is reserved when a session starts, so neither falls back to an unsynthesised transcript.
+- Memory and consult endpoints reject garbled text (replacement characters, question-mark runs, mojibake) with a message telling the NPC how to resend, instead of storing unreadable memories.
+- A foreground subagent that has finished is no longer shown as a background subagent still running. Its result ends with an `agentId:` line, which had been mistaken for a background launch.
 - War Room background subagents stay at the table until they actually finish instead of being cleared when the lead's turn ends.
 - Subagent-internal messages are no longer mistaken for the main NPC's turn.
 - NPCs on a mission walk to the station for the tool they are actually using, and mission speech bubbles show the current step instead of old chat.

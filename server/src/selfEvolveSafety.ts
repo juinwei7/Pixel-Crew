@@ -54,6 +54,63 @@ function changedDiffLines(diffText: string): string {
     .join("\n");
 }
 
+// 純文件檔：diff 內容不參與剎車關鍵字比對（只看上面的檔名規則）。2026-10 實際誤擋：4135377 只改
+// README/CHANGELOG/scripts，但 README 內文「說明」了循環 STOP／不可逆守則，就被當成改剎車擋下。
+// 文件不會被裝進 app 執行，描述剎車≠改剎車。程式檔(.ts/.js/.ps1/.mjs…)的內容比對完全不變。
+// 例外（仍照掃內容）：會被代理當成「指令」讀進去的 .md——CLAUDE.md/AGENTS.md/SKILL.md 這類、以及
+// .claude/、.codex/、prompts/、skills/、commands/、agents/ 底下的檔，改它們等於改代理行為，寧可多攔。
+const PURE_DOC_EXT = /\.(md|mdx|markdown|rst|adoc)$/i;
+const AGENT_INSTRUCTION_DOC =
+  /(^|\/)(CLAUDE|AGENTS|GEMINI|SKILL|COPILOT-INSTRUCTIONS)\.md$|(^|\/)\.(claude|codex|cursor|gemini)\/|(^|\/)(prompts?|skills|commands|agents)\//i;
+
+/** 是否為「純文件檔」（diff 內容不做剎車關鍵字比對，只看檔名規則）。 */
+export function isPureDocFile(file: string): boolean {
+  const f = norm(typeof file === "string" ? file : "");
+  if (!f) return false;
+  return PURE_DOC_EXT.test(f) && !AGENT_INSTRUCTION_DOC.test(f);
+}
+
+// 從 `diff --git a/X b/Y` 標頭取出兩側路徑（含 git 對特殊字元加引號的形式）。解析失敗回 null
+// ＝不認得＝不豁免（保守）。
+function diffHeaderPaths(line: string): string[] | null {
+  // 檔名含空白且未加引號時切點有歧義：先試「左右對稱」（非改名的常態），再試以 " b/" 切，最後才通用切法。
+  const rest = line.slice("diff --git ".length);
+  if (!rest.startsWith('"') && rest.length % 2 === 1) {
+    const half = (rest.length - 1) / 2;
+    const a = rest.slice(0, half);
+    const b = rest.slice(half + 1);
+    if (rest[half] === " " && a.replace(/^[^/]*\//, "") === b.replace(/^[^/]*\//, "")) return [a, b];
+  }
+  const m =
+    /^diff --git (?:"((?:[^"\\]|\\.)*)"|(\S.*?)) (?:"((?:[^"\\]|\\.)*)"|(b\/.*))$/.exec(line) ??
+    /^diff --git (?:"((?:[^"\\]|\\.)*)"|(\S.*?)) (?:"((?:[^"\\]|\\.)*)"|([^\s"].*))$/.exec(line);
+  if (!m) return null;
+  const a = m[1] ?? m[2];
+  const b = m[3] ?? m[4];
+  if (!a || !b) return null;
+  return [a, b];
+}
+
+/**
+ * 把 unified diff 裡「純文件檔」那幾段整段拿掉（含其 +/- 行），其餘原樣保留。改名時兩側都得是
+ * 純文件才拿掉（.ts 改名成 .md 不豁免）。檔案內容行一定帶 +/-/空白 前綴，無法偽造 diff --git 標頭。
+ * 不像 unified diff（沒有 diff --git 標頭）的輸入原樣回傳＝整段照掃。
+ */
+export function stripDocOnlyDiffSections(diffText: string): string {
+  const lines = diffText.split(/\r?\n/);
+  if (!lines.some((line) => line.startsWith("diff --git "))) return diffText;
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      const paths = diffHeaderPaths(line);
+      skipping = !!paths && paths.every((p) => isPureDocFile(p));
+    }
+    if (!skipping) kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 /**
  * 判斷一組自改是否動到安全網。
  * - changedFiles：這次自改會動到的檔案路徑清單。
@@ -79,7 +136,7 @@ export function classifySelfChange(changedFiles: readonly string[], diffText?: s
   }
 
   if (typeof diffText === "string" && diffText) {
-    const scanned = changedDiffLines(diffText);
+    const scanned = changedDiffLines(stripDocOnlyDiffSections(diffText));
     for (const { pattern, reason } of SAFETY_RULE_PATTERNS) {
       if (pattern.test(scanned)) add("(diff)", reason);
     }

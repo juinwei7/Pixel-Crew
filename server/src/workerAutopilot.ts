@@ -396,6 +396,12 @@ const STALL_INSTRUCTION_SIMILARITY = 0.6;
 // 等待空轉：回覆很短、結尾只說自己在等背景工作／等人叫醒。
 const STALL_WAIT_MAX_CHARS = 700;
 const STALL_WAIT_TAIL_CHARS = 300;
+// 「開跑→空等」：前一則回覆不短，但開頭狀態行就說自己把工作丟去背景跑（四段回報的「狀態」在最前面），
+// 下一則就只剩在等——兩步合起來也是等待空轉。只看開頭，長回覆中段順口提到背景工作不算。
+const STALL_WAIT_HEAD_CHARS = 160;
+// 重做已完成的事：NPC 明說這步要它做的事「早就做完／不是待辦」——循環在對著做完的事繞圈。
+// 只認「之前就做完」的說法；一般進度回報的「已完成 X」不算（那是這步的新產出）。
+const STALL_ALREADY_DONE_PATTERN = /(早(就|已)(做完|完成|上線|修好|改好|處理)|(之前|先前|稍早|上一?輪)(就)?已(經)?(做完|上線|修好|改好)|不是(新的?)?待辦|重做(已完成|已經?做完|舊)|(was|were|had been|has been|have been) already (done|completed|implemented|fixed|shipped)|already (done|completed|implemented|fixed|shipped) (earlier|before|previously))/iu;
 const STALL_WAIT_PATTERN = /(背景(執行|跑|監看|代理)|叫醒我|還在(跑|建置|進行)|正在跑|待命中|稍候|已掛(上|好)|等.{0,16}(回來|完成|通知|回報|回覆|結果|閒置)|in the background|wake me|still (running|building|in progress)|standing by|waiting (for|on) .{0,30}(finish|complete|return|report|result))/iu;
 const STALL_EMPTY_REPLY = /^no response requested\.?$/iu;
 
@@ -424,9 +430,12 @@ function compactForCompare(text: string | undefined): string {
  * 從最近回合量出原地踏步訊號（英文句子，直接進 prompt）。沒有訊號回空陣列。
  * ①空回合：最近三則回覆中有兩則空話（No response requested.）或任兩則完全相同
  * ②最近三則回覆中任兩則高度相似（含 A→B→A 擺盪）
- * ③最近兩則回覆都只是在等背景工作
+ * ③最近兩則回覆都只是在等背景工作（或前一則開頭就說丟去背景跑、這一則只剩在等）
  * ④最近三則「自動循環」指示中任兩則換句話說的近似重複（owner 自己的訊息不算，
  *   重貼同一段話或固定開頭會誤報）
+ * ⑤最新一步是循環指示，而 NPC 回覆說這件事早就做完了（重做已完成的事）
+ * 未採用：「連續把選擇丟回 owner」——回放 3 則連續都在要拍板時命中 2、誤報 3（NPC 常邊等拍板邊產出），
+ *   文字層分不開，不上。
  */
 export function workerAutopilotStallSignals(turns: ReadonlyArray<WorkerAutopilotTurn>): string[] {
   const signals: string[] = [];
@@ -447,7 +456,9 @@ export function workerAutopilotStallSignals(turns: ReadonlyArray<WorkerAutopilot
     signals.push(`Two of the NPC's last ${results.length} replies are ~${Math.round(bestResult * 100)}% the same text — the work is not moving forward.`);
   }
   const lastTwo = turns.slice(-2).map((turn) => (turn.result ?? "").trim());
-  if (lastTwo.length === 2 && lastTwo.every((text) => text && text.length < STALL_WAIT_MAX_CHARS && STALL_WAIT_PATTERN.test(text.slice(-STALL_WAIT_TAIL_CHARS)))) {
+  const onlyWaiting = (text: string) => Boolean(text) && text.length < STALL_WAIT_MAX_CHARS && STALL_WAIT_PATTERN.test(text.slice(-STALL_WAIT_TAIL_CHARS));
+  const opensWithWaiting = (text: string) => Boolean(text) && STALL_WAIT_PATTERN.test(text.slice(0, STALL_WAIT_HEAD_CHARS));
+  if (lastTwo.length === 2 && onlyWaiting(lastTwo[1]) && (onlyWaiting(lastTwo[0]) || opensWithWaiting(lastTwo[0]))) {
     signals.push("The NPC's last two replies only say it is waiting on background work — another \"check on it\" step just spins. Give it independent useful work meanwhile, or stop and let the background work finish.");
   }
   const instructions = recent
@@ -460,6 +471,10 @@ export function workerAutopilotStallSignals(turns: ReadonlyArray<WorkerAutopilot
   }
   if (bestInstruction >= STALL_INSTRUCTION_SIMILARITY) {
     signals.push(`Two of the last ${instructions.length} loop instructions overlap ~${Math.round(bestInstruction * 100)}% — the same move was re-issued in different words.`);
+  }
+  const last = turns[turns.length - 1];
+  if (last && /^\s*🔁/u.test(last.instruction) && STALL_ALREADY_DONE_PATTERN.test(last.result ?? "")) {
+    signals.push("The NPC's last reply says the work this loop step asked for was already done earlier — the loop is re-issuing finished work. Check the plan and open requests against what is already shipped; pick genuinely new work, or stop.");
   }
   return signals;
 }
