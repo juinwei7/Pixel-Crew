@@ -551,31 +551,44 @@ body {
 .npc-identity-card__ctx--danger .npc-identity-card__ctx-fill { background: #ff3355; box-shadow: 0 0 6px rgba(255, 51, 85, 0.6); }
 .npc-identity-card__ctx--danger .npc-identity-card__ctx-pct { color: #ffb59d !important; }
 
+/* 工作站 tooltip：名稱＋主題色點、一行用途、即時狀態（閒置／使用中＋誰在用什麼）。
+   與 NPC 卡同一套深底面板；主題色只出現在小點、狀態與左側細線，不做發光。 */
 .station-tooltip {
+  --station-accent: #8fb6ff;
   position: absolute;
   z-index: 12;
   top: 0;
   left: 0;
-  min-width: 96px;
+  min-width: 176px;
+  max-width: 264px;
   display: grid;
-  gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 183, 94, 0.22);
-  border-radius: 9px;
-  background: rgba(7, 13, 26, 0.94);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border: 1px solid rgba(143, 184, 232, 0.18);
+  border-radius: 8px;
+  background: rgba(7, 13, 26, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
   color: #c7d6e7;
   pointer-events: none;
 }
-.station-tooltip strong { color: #ffcf8a; font-size: 10px; letter-spacing: .04em; }
-.station-tooltip small { color: #9db0c8; font: 9px/1.5 var(--mono); }
-.station-tooltip__desc { display: block; margin: 2px 0 4px; color: #7d93ab; font: italic 9px/1.4 var(--mono); }
-.station-tooltip__occupant { display: block; width: 100%; margin: 2px 0; padding: 3px 6px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 6px; background: rgba(0, 229, 255,.05); color: #bfe9f7; cursor: pointer; text-align: left; font: 9.5px var(--mono); transition: background .12s ease, border-color .12s ease; }
-.station-tooltip__occupant:hover { background: rgba(0, 229, 255,.14); border-color: rgba(0, 229, 255,.4); }
-.station-tooltip__occupant span { color: #8fd48f; }
+/* 釘選（點工作站）時才可互動：名字按鈕可開工作日誌。 */
+.station-tooltip--pinned { pointer-events: auto; border-color: color-mix(in srgb, var(--station-accent) 34%, rgba(143, 184, 232, 0.18)); }
+.station-tooltip__head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.station-tooltip__dot { flex: none; width: 6px; height: 6px; background: var(--station-accent); }
+.station-tooltip strong { flex: 1; min-width: 0; color: #e6eef8; font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.station-tooltip__status { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid rgba(143, 184, 232, 0.16); border-radius: 4px; color: #7f93ad; font: 600 9px/1.5 var(--mono); letter-spacing: .06em; }
+.station-tooltip--busy .station-tooltip__status { border-color: color-mix(in srgb, var(--station-accent) 40%, transparent); color: var(--station-accent); }
+.station-tooltip__status b { color: #e6eef8; font-weight: 700; }
+.station-tooltip__desc { margin: 0; color: #8ea3bc; font-size: 10.5px; line-height: 1.45; }
+.station-tooltip__list { display: grid; gap: 3px; margin-top: 1px; padding-top: 6px; border-top: 1px solid rgba(143, 184, 232, 0.1); }
+.station-tooltip__occupant { display: grid; gap: 1px; width: 100%; padding: 3px 7px; border: 0; border-left: 2px solid var(--station-accent); border-radius: 0 4px 4px 0; background: rgba(143, 184, 232, 0.05); color: #d6e2f0; cursor: pointer; text-align: left; font: inherit; transition: background .12s ease; }
+.station-tooltip__occupant:hover, .station-tooltip__occupant:focus-visible { background: rgba(143, 184, 232, 0.12); }
+.station-tooltip__who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.station-tooltip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.station-tooltip__tool { flex: none; color: #8ea3bc; font: 9.5px/1.4 var(--mono); }
 /* 「正在查什麼」細節列：搜尋關鍵字/網址/指令，等寬字、暗色、單行截斷 */
-.station-tooltip__detail { display: block; margin-top: 2px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f8bab; font: italic 8.5px/1.4 var(--mono); }
-.station-tooltip__hint { display: block; margin-top: 3px; color: #5f7089; }
+.station-tooltip__detail { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f86a3; font: normal 9px/1.4 var(--mono); }
+.station-tooltip__hint { display: block; color: #5f7089; font: 9px/1.5 var(--mono); }
 
 .npc-menu-anchor {
   position: absolute;

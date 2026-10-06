@@ -7,13 +7,13 @@ const decorSrc = readFileSync(new URL("../src/game/officeDecor.ts", import.meta.
 const sceneSrc = readFileSync(new URL("../src/game/scene.ts", import.meta.url), "utf8");
 
 test("war-room seats alternate front / back from the middle, so 2-3 people already sit across the table", () => {
-  const rows = MEETING_SEATS.slice(0, 12).map((s) => s.row);
-  assert.deepEqual(rows, ["front", "back", "front", "back", "front", "back", "front", "back", "front", "back", "front", "back"]);
-  assert.deepEqual(MEETING_SEATS.slice(0, 2).map((s) => Math.abs(s.ox)), [9, 9]);
+  const rows = MEETING_SEATS.slice(0, 8).map((s) => s.row);
+  assert.deepEqual(rows, ["front", "back", "front", "back", "front", "back", "front", "back"]);
+  assert.deepEqual(MEETING_SEATS.slice(0, 2).map((s) => Math.abs(s.ox)), [11, 11]);
   assert.equal(new Set(MEETING_SEATS.slice(0, 3).map((s) => s.row)).size, 2);
 });
 
-test("every chair is used exactly once (6 front + 6 back), lined up with the drawn chairs", () => {
+test("every chair is used exactly once (4 front + 4 back), lined up with the drawn chairs", () => {
   const seatX = decorSrc.match(/const SEAT_X = \[([^\]]+)\]/);
   assert.ok(seatX);
   const chairs = seatX[1].split(",").map((v) => Number(v.trim())).sort((a, b) => a - b);
@@ -29,7 +29,7 @@ test("back row sits behind the table: torso above the far edge, legs hidden, in 
   // Meeting container at y 306, stand line at 320 (furnitureDefs meeting standY).
   const feet = 320 + MEETING_BACK_OY;
   const farEdge = 306 - 11; // table top back line
-  const backrestTop = 306 - 16; // back-row chair backrest
+  const backrestTop = 306 - 17; // back-row chair backrest
   assert.ok(feet > farEdge && feet - farEdge <= 6, "legs (bottom ~5px of the sprite) tucked under the table top");
   assert.ok(feet - 8 <= backrestTop + 3, "shoulders around the backrest top");
   for (const s of MEETING_SEATS) if (s.row === "back") assert.equal(s.oy, MEETING_BACK_OY);
@@ -44,12 +44,22 @@ test("depth: the table sorts between the back row and the front row", () => {
   assert.ok(320 > tableZ, "front row in front of the table");
   assert.match(sceneSrc, /officeDecor\.meetingTable/);
   // Back-row chairs are drawn with the rug (under everyone), not with the table.
-  assert.match(decorSrc, /rug\.rect\(x - 4, -16, 8, 5\)\.fill\(MEET\.chair\)/);
+  assert.match(decorSrc, /const top = -17 \+ ny;/);
+  assert.match(decorSrc, /rug\.rect\(x - 5, top \+ 1, 10, 5\)\.fill\(MEET\.chair\)/);
 });
 
 test("the war-room label and its plate hide while a debate is seated, and come back when idle", () => {
   assert.match(sceneSrc, /furniture\.setLabelHidden\("meeting", warRoomInSession\)/);
   assert.match(sceneSrc, /label\.text\.visible = !warRoomInSession/);
+});
+
+test("overflow seats stand clear of the table ends, and a full roundtable (lead + 4) gets chairs", () => {
+  const half = Number(decorSrc.match(/tableHalf: (\d+)/)?.[1]);
+  assert.ok(half > 0);
+  const ends = MEETING_SEATS.filter((s) => s.row === "end");
+  assert.equal(ends.length, 2);
+  for (const s of ends) assert.ok(Math.abs(s.ox) > half + 4, "end seat beyond the table end");
+  assert.ok(MEETING_SEATS.filter((s) => s.row !== "end").length >= 5);
 });
 
 test("meetingSeat wraps for very large crews", () => {

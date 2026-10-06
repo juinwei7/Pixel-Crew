@@ -1,7 +1,7 @@
-import { CanvasTextMetrics, Container, Graphics, Sprite, TextStyle } from "pixi.js";
+import { CanvasTextMetrics, Container, Graphics, Rectangle, Sprite, TextStyle } from "pixi.js";
 import type { StationKey } from "../stations";
 import { PAL, texFromMap, type Palette } from "./pixels";
-import { FURNITURE_DEFS, type FurnitureDef } from "./furnitureDefs";
+import { COUNTER_BOTTOM, FURNITURE_DEFS, LABEL_GAP, type FurnitureDef } from "./furnitureDefs";
 import { STATION_THEME } from "../stationTheme";
 
 export { FURNITURE_DEFS, type FurnitureDef };
@@ -16,6 +16,8 @@ const GLOW_MS = 200;
 /** 其他工具 has no STATION_THEME entry; same fallback tint as its NPC activity chip. */
 const DEFAULT_ACCENT = 0x8fb6ff;
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
+/** Hovering an idle station shows its in-use highlight at this intensity (0..1). */
+const HOVER_K = 0.4;
 
 // Shared station kit: one casing / screen palette for every tool station, plus
 // A (accent) and q (dimmed accent) filled in per station.
@@ -34,7 +36,6 @@ function mix(a: number, b: number, t: number): number {
 // on its top surface; their label plates hang just below its front.
 const COUNTER_TOP = 52; // flush with the wall base
 const COUNTER_FRONT = 60;
-const COUNTER_BOTTOM = 68;
 const COUNTER = {
   top: 0x283554,
   edge: 0x3a4b72,
@@ -51,7 +52,7 @@ const SECTION_HALF = 24;
 // screen space (12px, top-anchored at the furniture bottom + 3 art px), so they
 // are sized in screen pixels and re-laid out whenever the camera zoom changes.
 const LABEL_STYLE = new TextStyle({ fontSize: 12, fontFamily: "'PingFang TC', 'Noto Sans TC', sans-serif", letterSpacing: 1 });
-const PLATE = { padL: 15, padR: 7, padY: 2, dot: 3, dotX: 6, fill: 0x0b111e, rule: 0x263452, ruleHover: 0x3a4c72 };
+const PLATE = { padL: 15, padR: 7, padY: 2, dot: 3, dotX: 6, fill: 0x0b111e, rule: 0x263452 };
 
 class FurnitureSprite {
   readonly container = new Container();
@@ -91,6 +92,11 @@ class FurnitureSprite {
     this.container.addChild(this.plate, this.highlight, sprite, this.ledOverlay, this.fxG);
     this.container.position.set(def.x, def.bottom);
     this.container.zIndex = def.key === "home" ? def.bottom - 10 : def.bottom;
+    // Hover / click target = what reads as the station: its stretch of counter
+    // (device + front panel) or the board, plus the name plate just below.
+    const plateRows = LABEL_GAP + 9;
+    if (def.counter) this.container.hitArea = new Rectangle(-SECTION_HALF + 3, -this.h, SECTION_HALF * 2 - 6, this.h + plateRows);
+    else if (def.onWall) this.container.hitArea = new Rectangle(-Math.max(this.w, 32) / 2, -this.h, Math.max(this.w, 32), this.h + plateRows);
     if (def.label) {
       const m = CanvasTextMetrics.measureText(def.label, LABEL_STYLE);
       this.labelSize = { w: m.width, h: m.height };
@@ -118,26 +124,38 @@ class FurnitureSprite {
     g.clear();
     const hl = this.highlight;
     hl.clear();
+    // Hover borrows the in-use look at a lower intensity (static, no motion).
+    const e = Math.max(k, this.hovered ? HOVER_K : 0);
     // Idle stations stay completely still: nothing drawn, nothing moving.
-    if (k <= 0) return;
+    if (e <= 0) return;
     const c = this.accent;
 
     // Status LED in the station's colour, breathing slowly rather than strobing.
-    for (let i = 0; i < this.def.leds.length; i++) {
-      const led = this.def.leds[i];
-      const breath = REDUCE_MOTION ? 1 : 0.75 + 0.25 * Math.sin(tMs / 520 + i * 1.9);
-      g.rect(led.x - this.w / 2, led.y - this.h, 1, 1).fill({ color: c, alpha: k * breath });
+    if (k > 0) {
+      for (let i = 0; i < this.def.leds.length; i++) {
+        const led = this.def.leds[i];
+        const breath = REDUCE_MOTION ? 1 : 0.75 + 0.25 * Math.sin(tMs / 520 + i * 1.9);
+        g.rect(led.x - this.w / 2, led.y - this.h, 1, 1).fill({ color: c, alpha: k * breath });
+      }
     }
 
     if (this.def.counter) {
       // In use: this station's stretch of counter edge takes its colour and the
       // front panel is faintly washed with it. No floor glow, nothing moving.
       const span = SECTION_HALF * 2 - 6;
-      hl.rect(-SECTION_HALF + 3, COUNTER_FRONT - 2 - this.def.bottom, span, 1).fill({ color: c, alpha: 0.85 * k });
-      hl.rect(-SECTION_HALF + 3, COUNTER_FRONT + 2 - this.def.bottom, span, COUNTER_BOTTOM - COUNTER_FRONT - 5).fill({ color: c, alpha: 0.06 * k });
+      hl.rect(-SECTION_HALF + 3, COUNTER_FRONT - 2 - this.def.bottom, span, 1).fill({ color: c, alpha: 0.85 * e });
+      hl.rect(-SECTION_HALF + 3, COUNTER_FRONT + 2 - this.def.bottom, span, COUNTER_BOTTOM - COUNTER_FRONT - 5).fill({ color: c, alpha: 0.06 * e });
     } else if (this.def.onWall) {
       // Wall board in use: its marker-tray edge takes the accent, same language as the counter.
-      hl.rect(-this.w / 2 + 1, -1, this.w - 2, 1).fill({ color: c, alpha: 0.85 * k });
+      hl.rect(-this.w / 2 + 1, -1, this.w - 2, 1).fill({ color: c, alpha: 0.85 * e });
+    } else if (this.hovered) {
+      // The war-room table (drawn by OfficeDecor): corner brackets like the other clickable decor.
+      const x = -this.w / 2, y = -this.h, w = this.w, h = this.h, L = 3;
+      const s = { color: 0xdfe9f8, alpha: 0.6 };
+      for (const [cx, cy, sx, sy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+        hl.rect(sx > 0 ? cx : cx - L, sy > 0 ? cy : cy - 0.5, L, 0.5).fill(s);
+        hl.rect(sx > 0 ? cx : cx - 0.5, sy > 0 ? cy : cy - L, 0.5, L).fill(s);
+      }
     }
     // The war room shows its own in-session state (OfficeDecor), so nothing extra here.
   }
@@ -156,18 +174,19 @@ class FurnitureSprite {
     const half = Math.ceil(size.w / 2);
     const x0 = -(half + PLATE.padL) * px;
     const x1 = (half + PLATE.padR) * px;
-    const y0 = 3 - PLATE.padY * px; // the label text is top-anchored 3 art px below the furniture
+    const y0 = LABEL_GAP - PLATE.padY * px; // the label text is top-anchored LABEL_GAP art px below the furniture
     const hPx = Math.round(size.h + PLATE.padY * 2);
     const hgt = hPx * px;
     const wdt = x1 - x0;
     g.rect(x0, y0, wdt, hgt).fill({ color: PLATE.fill, alpha: 0.86 });
-    const rule = k > 0 ? mix(PLATE.rule, this.accent, 0.6 * k) : this.hovered ? PLATE.ruleHover : PLATE.rule;
+    const e = Math.max(k, this.hovered ? HOVER_K : 0);
+    const rule = e > 0 ? mix(PLATE.rule, this.accent, 0.6 * e) : PLATE.rule;
     g.rect(x0, y0, wdt, px).fill(rule);
     g.rect(x0, y0 + hgt - px, wdt, px).fill(rule);
     g.rect(x0, y0, px, hgt).fill(rule);
     g.rect(x1 - px, y0, px, hgt).fill(rule);
     const dotY = y0 + Math.round((hPx - PLATE.dot) / 2) * px;
-    g.rect(x0 + PLATE.dotX * px, dotY, PLATE.dot * px, PLATE.dot * px).fill({ color: this.accent, alpha: 0.55 + 0.45 * k });
+    g.rect(x0 + PLATE.dotX * px, dotY, PLATE.dot * px, PLATE.dot * px).fill({ color: this.accent, alpha: 0.55 + 0.45 * e });
   }
 
   private drawPoke(dt: number): void {
@@ -175,7 +194,6 @@ class FurnitureSprite {
     g.clear();
     const left = -this.w / 2;
     const top = -this.h;
-    if (this.hovered) g.rect(left - 1, top - 1, this.w + 2, this.h + 2).stroke({ color: 0xdfe9f8, width: 0.5, alpha: 0.5 });
     this.container.scale.y = 1;
     if (this.pokeT <= 0) return;
     this.pokeT -= dt;

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ApprovalDecision, ApprovalItem, CollaborationTask, Department, DepartmentMission, ToolCallItem, WorkerState } from "../types";
 import type { FurnitureScreenPos, SceneHandle, SceneView } from "../game/scene";
 import { SHIRT_COLORS } from "../game/crewLook";
@@ -6,11 +6,12 @@ import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
 import { crowdedView, declutterNameplates, nameplateVisible, type NameplateBox } from "../game/nameplateLod";
 import { bossRoomWorkers } from "../game/bossRoomFilter";
 import { missionCharacter } from "../game/missionScene";
-import { FURNITURE_DEFS } from "../game/furnitureDefs";
+import { FURNITURE_DEFS, stationPlateBoxes, tagTopClearOfPlates } from "../game/furnitureDefs";
 import { roomName } from "../workspace";
 import { milestoneLevel } from "../milestones";
 import { stationForTool, type StationKey } from "../stations";
 import { STATION_THEME } from "../stationTheme";
+import { parseMcpToolName } from "../mcpToolName";
 import { computeCtxGauge, SWAP_THRESHOLD_TOKENS } from "../ctxGauge";
 import { stripMarkdown } from "../speechText";
 import { friendlyToolSpeech } from "../workerState";
@@ -35,6 +36,9 @@ import { Icon, type IconName } from "./Icon";
 const STATION_LABELS: Record<string, string> = Object.fromEntries(
   FURNITURE_DEFS.filter((def) => def.label).map((def) => [def.key, def.label]),
 );
+
+/** 其他工具 has no STATION_THEME entry; same fallback accent as its counter device (furniture.ts). */
+const STATION_DEFAULT_ACCENT = "#8fb6ff";
 
 // 站點用途說明：讓上排工作站的 tooltip 不只是名字，一眼看懂 NPC 來這裡是在做什麼。
 const STATION_DESCRIPTIONS: Record<string, string> = {
@@ -329,8 +333,18 @@ export function GameCanvas({
   const [sceneReady, setSceneReady] = useState(false);
   const [view, setView] = useState<SceneView | null>(null);
   const [furniturePositions, setFurniturePositions] = useState<Map<StationKey, FurnitureScreenPos>>(new Map());
+  // Same positions, readable from the per-frame callback (tags step below the station plates).
+  const furniturePosRef = useRef<Map<StationKey, FurnitureScreenPos>>(new Map());
   const [hoveredStation, setHoveredStation] = useState<StationKey | null>(null);
   const [pinnedStation, setPinnedStation] = useState<StationKey | null>(null);
+  // Station tooltip height, measured after layout, so a tall one (several
+  // occupants) slides down to stay inside the canvas instead of under the top bar.
+  const stationTipRef = useRef<HTMLDivElement | null>(null);
+  const [stationTipH, setStationTipH] = useState(0);
+  useLayoutEffect(() => {
+    const h = stationTipRef.current?.offsetHeight ?? 0;
+    if (h > 0 && Math.abs(h - stationTipH) > 1) setStationTipH(h);
+  });
   // 場景 callbacks 只在掛載時建一次，用 ref 拿最新的 onMeetingTableClick，避免閉包吃到舊值。
   const meetingClickRef = useRef(onMeetingTableClick);
   meetingClickRef.current = onMeetingTableClick;
@@ -458,6 +472,11 @@ export function GameCanvas({
       onPositions: (positions) => {
         const bounds = host.getBoundingClientRect();
         screenPositionsRef.current = new Map(positions.map((position) => [position.id, { x: position.x, y: position.y }]));
+        // Someone working at the counter has their tag land on the station's
+        // name plate; such tags start just below the plate instead.
+        const plates = positions.length > 0 ? stationPlateBoxes(furniturePosRef.current.values(), positions[0].scale) : [];
+        const tagTop = (pos: (typeof positions)[number], height: number, width: number) =>
+          tagTopClearOfPlates(pos.x, nameplateTop(pos, height), width, height, plates);
         // Crowded + zoomed out: keep only tags that don't collide (most important first).
         const crowded = positions.length > 0 && crowdedView(positions[0].scale, positions.length);
         let keep: Set<string> | null = null;
@@ -473,7 +492,7 @@ export function GameCanvas({
             boxes.push({
               id: pos.id,
               x: pos.x,
-              top: nameplateTop(pos, plate.offsetHeight || 18),
+              top: tagTop(pos, plate.offsetHeight || 18, plate.offsetWidth || 80),
               width: plate.offsetWidth || 80,
               height: plate.offsetHeight || 18,
               priority: active ? 3 : hovered ? 2 : 1,
@@ -487,7 +506,7 @@ export function GameCanvas({
             const plate = nameRefs.current.get(pos.id);
             if (!plate) return null;
             if (!plate.classList.contains("npc-nameplate--tight")) plate.dataset.fullw = String(plate.offsetWidth);
-            return { id: pos.id, plate, x: pos.x, top: nameplateTop(pos, plate.offsetHeight || 18), w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
+            return { id: pos.id, plate, x: pos.x, top: tagTop(pos, plate.offsetHeight || 18, plate.offsetWidth || 80), w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
           });
           for (let i = 0; i < wide.length; i++) {
             const a = wide[i];
@@ -520,7 +539,7 @@ export function GameCanvas({
             // Below the sprite's feet (pos.y is 17 art px above them, feet sit
             // 19 below pos.y at head-top anchor) — keeps the desk, monitor and
             // department sign above the head completely clear of DOM chrome.
-            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + nameplateTop(pos, nameplate.offsetHeight || 18)}px)`;
+            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + tagTop(pos, nameplate.offsetHeight || 18, nameplate.offsetWidth || 80)}px)`;
             // Big crew zoomed out: idle tags step back (busy / selected / hovered stay).
             const show = nameplateVisible({
               x: pos.x,
@@ -612,7 +631,11 @@ export function GameCanvas({
         setHoveredId(id);
       },
       onAvatarError: (id, message) => onAvatarErrorRef.current?.(id, message),
-      onFurniturePositions: (list) => setFurniturePositions(new Map(list.map((pos) => [pos.key, pos]))),
+      onFurniturePositions: (list) => {
+        const map = new Map(list.map((pos) => [pos.key, pos]));
+        furniturePosRef.current = map;
+        setFurniturePositions(map);
+      },
       onFurnitureHover: setHoveredStation,
       onFurnitureClick: (key) => {
         setPinnedStation((current) => (current === key ? null : key));
@@ -713,6 +736,8 @@ export function GameCanvas({
     // only needs to close the tooltip for clicks elsewhere on the page.
     const unpin = (event: PointerEvent) => {
       if (hostRef.current?.contains(event.target as Node)) return;
+      // The pinned tooltip's own occupant buttons must stay clickable.
+      if (event.target instanceof Element && event.target.closest(".station-tooltip")) return;
       setPinnedStation(null);
     };
     window.addEventListener("pointerdown", unpin);
@@ -893,7 +918,9 @@ export function GameCanvas({
         const winQuery = w.character.webQuery?.trim() || "";
         const cardOpen = hoveredId === w.id && !w.temporary && menuOpenFor !== w.id;
         const thinkingNow = w.character.activity === "thinking";
-        const bubbleShown = winTheme ? "" : shown;
+        // 作戰室入座的閒置成員只帶「作戰室」佔位字：那不是對話，泡泡反而蓋住後排座位的人——不顯示。
+        const warRoomPlaceholder = w.character.station === "meeting" && speech === t("作戰室");
+        const bubbleShown = winTheme || warRoomPlaceholder ? "" : shown;
         // 脈絡公事包數據（名牌與 hover 身分卡共用，算一次）：扣掉出生底盤後的「可用量」%。
         const full = workersById.get(w.selectId);
         const ctxSeries = full ? full.turns.map((turn) => turn.contextTokens).filter((n): n is number => typeof n === "number") : [];
@@ -1168,16 +1195,30 @@ export function GameCanvas({
           const tool = runningToolOf(w.selectId);
           return tool !== null && stationForTool(tool.name, tool.input) === activeStation;
         });
+        const accent = STATION_THEME[activeStation]?.accent ?? STATION_DEFAULT_ACCENT;
+        const pinned = pinnedStation === activeStation;
+        // Sit just above the station's art (pos.y is its mid-height) instead of over the device.
+        const stationDef = FURNITURE_DEFS.find((def) => def.key === activeStation);
+        const anchorY = pos.y - ((stationDef?.map.length ?? 0) / 2) * (view?.scale ?? 2) - 6;
+        const tipTop = Math.max(4, anchorY - stationTipH);
         return (
           <div
-            className="station-tooltip"
-            style={{ transform: `translate(-50%, -100%) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y}px)` }}
+            ref={stationTipRef}
+            className={`station-tooltip${occupants.length > 0 ? " station-tooltip--busy" : ""}${pinned ? " station-tooltip--pinned" : ""}`}
+            style={{ transform: `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + tipTop}px)`, "--station-accent": accent } as CSSProperties}
           >
-            <strong>{STATION_LABELS[activeStation] ?? activeStation}</strong>
-            <em className="station-tooltip__desc">{STATION_DESCRIPTIONS[activeStation] ?? ""}</em>
-            {occupants.length === 0
-              ? <small>{t("目前沒有人在使用")}</small>
-              : occupants.map((w) => {
+            <div className="station-tooltip__head">
+              <i className="station-tooltip__dot" aria-hidden="true" />
+              <strong>{STATION_LABELS[activeStation] ?? activeStation}</strong>
+              <span className="station-tooltip__status">
+                {occupants.length === 0 ? t("閒置") : t("使用中")}
+                {occupants.length > 1 && <b>{occupants.length}</b>}
+              </span>
+            </div>
+            <p className="station-tooltip__desc">{STATION_DESCRIPTIONS[activeStation] ?? ""}</p>
+            {occupants.length > 0 && (
+              <div className="station-tooltip__list">
+                {occupants.map((w) => {
                   const tool = runningToolOf(w.selectId);
                   // 從工具輸入抽出「正在做什麼」的細節：搜尋關鍵字(query)、網址(url)、
                   // 指令(command)、檔案路徑…讓使用者直接看到「他在查什麼／跑什麼」。
@@ -1190,12 +1231,17 @@ export function GameCanvas({
                   }
                   return (
                     <button key={w.id} type="button" className="station-tooltip__occupant" onClick={() => onOpenLog?.(w.selectId)} title={t("點擊開啟工作日誌")}>
-                      {w.name}{tool ? <span> <Icon name="wrench" size={11} /> {tool.name}</span> : null}
+                      <span className="station-tooltip__who">
+                        <span className="station-tooltip__name">{w.name}</span>
+                        {tool ? <span className="station-tooltip__tool">{parseMcpToolName(tool.name).label}</span> : null}
+                      </span>
                       {detail && <i className="station-tooltip__detail">{detail}</i>}
                     </button>
                   );
                 })}
-            {pinnedStation === activeStation && occupants.length > 0 && <small className="station-tooltip__hint">{t("點名字可開工作日誌")}</small>}
+              </div>
+            )}
+            {pinned && occupants.length > 0 && <small className="station-tooltip__hint">{t("點名字可開工作日誌")}</small>}
           </div>
         );
       })()}

@@ -26,6 +26,7 @@ import type { DepartmentPhase, DepartmentSeat, DepartmentZone } from "./personal
 import { DECOR_SPOTS, OfficeDecor, OutboxShelf, type DecorSpot } from "./officeDecor";
 import { Cat } from "./cat";
 import { meetingSeat } from "./meetingSeats";
+import { isWallStation, wallStandSpot } from "./furnitureDefs";
 import { apiAssetUrl } from "../api";
 import { nightFactor } from "../dayNight";
 import { officeMinScale, responsiveOfficeFitScale } from "./camera";
@@ -774,6 +775,11 @@ export async function createScene(
       return seat ? { x: seat.x, y: seat.y } : { x: ART_W / 2, y: ART_H - 30 };
     }
     const def = furniture.def(station);
+    // 牆邊工作站：index 是「這一站」的排隊序號，沿檯面左右排開、腳都踩同一條線。
+    if (isWallStation(def)) {
+      const spot = wallStandSpot(def, index);
+      return { x: Math.max(8, Math.min(ART_W - 8, spot.x)), y: spot.y };
+    }
     const [ox, oy] = station === "meeting"
       ? [meetingSeat(index).ox, meetingSeat(index).oy]
       : SPOT_OFFSETS[index % SPOT_OFFSETS.length];
@@ -786,11 +792,11 @@ export async function createScene(
   function applyCharacter(entry: PersonEntry, next: CharacterState, id: string): void {
     const prev = entry.last;
     entry.last = next;
-    const { person, index } = entry;
+    const { person } = entry;
 
     if ((!prev || prev.station !== next.station) && entry.transition === "ready") {
-      const spot = standSpot(next.station, index, id);
-      person.setTarget(spot.x, spot.y);
+      // setWorkers 已把這一站的排位算進 targetX/Y（含同站排隊序號），直接用它。
+      person.setTarget(entry.targetX, entry.targetY);
       // Off to a tool station: grab the laptop (screens) or a stack of papers (reading, board, tools).
       if (next.station !== "home" && next.station !== "meeting") {
         person.walkProp = next.station === "books" || next.station === "board" || next.station === "desk" ? "papers" : "laptop";
@@ -1721,9 +1727,17 @@ export async function createScene(
       // 會議桌座位要跨「常駐（作戰室成員）／臨時（子代理）」兩類共用一條序號——兩類各自從 0
       // 起算的話，兩邊的 0 號都會坐到 MEETING_SEATS[0]，精靈完全疊在同一格。
       let meetingIndex = 0;
+      // 工作站同理：用「在這一站的第幾位」排位，不用全隊序號——否則單獨一人也可能被推到標籤牌上。
+      const stationRank = new Map<StationKey, number>();
       for (const w of list) {
         const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
-        const spotIndex = w.character.station === "meeting" ? meetingIndex++ : workerIndex;
+        const station = w.character.station;
+        let spotIndex = workerIndex;
+        if (station === "meeting") spotIndex = meetingIndex++;
+        else if (station !== "home") {
+          spotIndex = stationRank.get(station) ?? 0;
+          stationRank.set(station, spotIndex + 1);
+        }
         seen.add(w.id);
         let entry = entries.get(w.id);
         const desiredSpot = standSpot(w.character.station, spotIndex, w.id);

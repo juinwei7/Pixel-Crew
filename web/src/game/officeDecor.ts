@@ -4,36 +4,64 @@ import type { Seasonal } from "./officeLife";
 import { STATION_THEME } from "../stationTheme";
 
 // War room (作戰室) geometry, relative to the meeting container at (120, 306).
-// SEAT_X lines the chairs up with scene.ts MEETING_SEATS (standX 120 + ox), so
-// NPCs gathering at the table stand at a chair rather than between two.
-const SEAT_X = [-45, -27, -9, 9, 27, 45];
-const MEETING = { rugX: -62, rugY: -24, rugW: 124, rugH: 52, tableHalf: 54 };
+// SEAT_X lines the chairs up with meetingSeats.ts MEETING_SEATS (standX 120 + ox),
+// so NPCs gathering at the table sit on a drawn chair rather than between two.
+const SEAT_X = [-33, -11, 11, 33];
+// Back-row chairs are nudged a pixel here and there so the row is not a rigid grid
+// (the NPC sitting there covers the backrest, so a 1px nudge never shows as a gap).
+const BACK_NUDGE: Array<[number, number]> = [[-1, 0], [0, 1], [1, 0], [0, 1]];
+const MEETING = { rugX: -66, rugY: -24, rugW: 132, rugH: 52, tableHalf: 44 };
 const MEET_ACCENT = parseInt((STATION_THEME.meeting?.accent ?? "#8fd0ff").slice(1), 16);
-// Same family as the station counter (furniture.ts COUNTER / KIT) and the desk chairs (person.ts).
 const MEET = {
-  rug: 0x131a2c,
-  rugEdge: 0x2a3654,
-  rugLine: 0x1b2438,
-  top: 0x2f3d60,
-  topBack: 0x3d4e78,
-  topSide: 0x283554,
-  runner: 0x27345a,
-  edge: 0x3a4b72,
-  lip: 0x141c30,
-  face: 0x1b253f,
-  toe: 0x121a2c,
-  leg: 0x111829,
-  chair: 0x1f2840,
-  chairTop: 0x34436a,
-  chairSide: 0x29344f,
-  chairShade: 0x182034,
-  casing: 0x3a4a72,
+  // Rug: muted deep teal field, darker bound edge, one low-contrast inner line, faint weave.
+  rugEdge: 0x14232a,
+  rug: 0x1b2e36,
+  rugLine: 0x263e46,
+  rugWeave: 0x20353d,
+  // Dark walnut table.
+  topBack: 0x6c4b36,
+  top: 0x523828,
+  grain: 0x4a3224,
+  sheen: 0x5e412f,
+  edge: 0x7c5a40,
+  lip: 0x26180f,
+  face: 0x3b2519,
+  toe: 0x2a1a11,
+  leg: 0x21150e,
+  // Chairs: same fabric as the desk chairs (person.ts drawChair) so a seated NPC's
+  // own chair lands on the drawn one without a seam.
+  chair: 0x2a3550,
+  chairTop: 0x3d4d75,
+  chairSide: 0x334166,
+  chairBase: 0x1a2238,
+  caster: 0x0f1526,
+  // Table-top things.
+  lidBack: 0x8b94a8,
+  lidEdge: 0x5d667c,
+  casing: 0x4a556f,
   screen: 0x0c1322,
   screenLine: mixRgb(MEET_ACCENT, 0x0c1322, 0.55),
   screenLineDim: 0x24344c,
-  paper: 0xa7b2c6,
-  paperBack: 0x7d89a1,
+  paper: 0xb9c1cf,
+  paperBack: 0x8590a6,
   ink: 0x6c7891,
+  glass: 0x7fa6c9,
+  glassHi: 0xc9dcef,
+  water: 0x4f7fae,
+  cup: 0xd8dde6,
+  cupShade: 0x9ea7b6,
+  // Whiteboard on a stand + a plant.
+  standMetal: 0x4a5673,
+  standDark: 0x252e45,
+  board: 0x9aa4b5,
+  boardShade: 0x838da0,
+  markerBlue: 0x4f6d99,
+  markerRed: 0x96605a,
+  pot: 0x4a3b33,
+  potTop: 0x5d4a3f,
+  leaf: 0x2f8a6d,
+  leafHi: 0x3fae86,
+  leafDark: 0x236852,
 };
 
 function mixRgb(a: number, b: number, t: number): number {
@@ -294,63 +322,142 @@ export class OfficeDecor {
   }
 
   private drawMeetingArea(): void {
-    // 作戰室：跟後牆工作站同一套語彙——深色低調地毯＋細框、深金屬長桌（色票同共用工作檯）、
-    // 統一的辦公椅、桌上兩台小螢幕和一疊文件。全部整數像素、閒置時完全靜止；
-    // 唯一的強調色是 STATION_THEME.meeting，只在作戰室開會時點亮（setWorkerCount 控制）。
+    // 作戰室：讀起來要是「一間會議室」而不是平面圖——低彩度深青地毯（有布邊、內框與淡織紋）、
+    // 深胡桃木會議桌（看得到桌面、亮桌緣、桌裙與落地陰影，兩端收圓）、跟工位同款的辦公椅
+    // （椅背＋椅腳，塞在桌邊，後排略有錯落），左端一座立架白板、右上角一盆植物。
+    // 全部整數像素、閒置時完全靜止；唯一的強調色是 STATION_THEME.meeting，只在開會時點亮。
     const M = MEETING;
     const rug = new Graphics();
-    rug.rect(M.rugX, M.rugY, M.rugW, M.rugH).fill(MEET.rug);
-    frameRect(rug, M.rugX, M.rugY, M.rugW, M.rugH, MEET.rugEdge);
-    frameRect(rug, M.rugX + 3, M.rugY + 3, M.rugW - 6, M.rugH - 6, MEET.rugLine);
+    // Bound edge (corners clipped), field, a low-contrast inner line and a faint diamond weave.
+    rug.rect(M.rugX + 1, M.rugY, M.rugW - 2, M.rugH).fill(MEET.rugEdge);
+    rug.rect(M.rugX, M.rugY + 1, M.rugW, M.rugH - 2).fill(MEET.rugEdge);
+    rug.rect(M.rugX + 2, M.rugY + 2, M.rugW - 4, M.rugH - 4).fill(MEET.rug);
+    frameRect(rug, M.rugX + 4, M.rugY + 4, M.rugW - 8, M.rugH - 8, MEET.rugLine);
+    for (let y = M.rugY + 7; y < M.rugY + M.rugH - 6; y += 2) {
+      for (let x = M.rugX + 7; x < M.rugX + M.rugW - 6; x += 2) {
+        if ((x + y) % 8 === 0) rug.rect(x, y, 1, 1).fill(MEET.rugWeave);
+      }
+    }
 
-    // Back row: chairs facing us, backrests peeking over the far edge of the table.
+    // Back row: chairs facing us, backrests over the far edge of the table.
     // Drawn with the rug (below everyone) so a back-row NPC sits in front of the backrest.
-    for (const x of SEAT_X) {
-      rug.rect(x - 4, -16, 8, 5).fill(MEET.chair);
-      rug.rect(x - 4, -16, 8, 1).fill(MEET.chairTop);
-      rug.rect(x + 3, -15, 1, 4).fill(MEET.chairShade);
-    }
-    const g = new Graphics();
-    // Contact shadow, legs, then the table: top surface, lit front edge, lip, front face.
-    const { x0, w } = { x0: -M.tableHalf, w: M.tableHalf * 2 };
-    g.rect(x0 + 1, 9, w - 2, 1).fill({ color: 0x050810, alpha: 0.45 });
-    for (const lx of [x0 + 2, x0 + w - 4]) g.rect(lx, 8, 2, 2).fill(MEET.leg);
-    g.rect(x0 + 1, -11, w - 2, 1).fill(MEET.topBack);
-    g.rect(x0, -10, w, 12).fill(MEET.top);
-    g.rect(x0, -10, 1, 12).fill(MEET.topSide);
-    g.rect(x0 + w - 1, -10, 1, 12).fill(MEET.topSide);
-    g.rect(x0 + 4, -5, w - 8, 3).fill(MEET.runner); // centre runner / cable channel
-    g.rect(x0, 2, w, 1).fill(MEET.edge);
-    g.rect(x0, 3, w, 1).fill(MEET.lip);
-    g.rect(x0, 4, w, 4).fill(MEET.face);
-    g.rect(x0, 7, w, 1).fill(MEET.toe);
-    // Two small screens (casing + dark screen + a dimmed accent line) and a stack of papers.
-    for (const sx of [-40, 28]) {
-      g.rect(sx, -10, 10, 7).fill(MEET.casing);
-      g.rect(sx + 1, -9, 8, 5).fill(MEET.screen);
-      g.rect(sx + 2, -8, 4, 1).fill(MEET.screenLine);
-      g.rect(sx + 2, -6, 6, 1).fill(MEET.screenLineDim);
-      g.rect(sx + 4, -3, 2, 1).fill(MEET.casing);
-    }
-    g.rect(-13, -8, 7, 5).fill(MEET.paperBack);
-    g.rect(-12, -9, 7, 5).fill(MEET.paper);
-    g.rect(-11, -7, 4, 1).fill(MEET.ink);
-    g.rect(-11, -5, 5, 1).fill(MEET.ink);
-    // Front row: chairs with their backs to us, tucked in against the table front.
-    for (const x of SEAT_X) {
-      g.rect(x - 4, 6, 8, 6).fill(MEET.chair);
-      g.rect(x - 4, 6, 8, 1).fill(MEET.chairTop);
-      g.rect(x - 4, 7, 1, 5).fill(MEET.chairSide);
-      g.rect(x - 3, 12, 6, 1).fill({ color: 0x050810, alpha: 0.4 });
-    }
+    SEAT_X.forEach((sx, i) => {
+      const [nx, ny] = BACK_NUDGE[i];
+      const x = sx + nx;
+      const top = -17 + ny;
+      rug.rect(x - 4, top, 8, 1).fill(MEET.chairTop);
+      rug.rect(x - 5, top + 1, 10, 5).fill(MEET.chair);
+      rug.rect(x - 4, top + 1, 8, 1).fill(MEET.chairSide);
+      rug.rect(x + 4, top + 1, 1, 5).fill(MEET.chairBase);
+    });
 
-    // ---- 開會中（地毯框與桌緣換成作戰室主題色；靜態，不閃不動） ----
+    // Whiteboard on a stand at the left end of the table (a couple of muted marker strokes).
+    const cx = -57;
+    rug.rect(cx - 5, 0, 11, 1).fill({ color: 0x050810, alpha: 0.4 });
+    rug.rect(cx - 5, -1, 4, 1).fill(MEET.standDark);
+    rug.rect(cx + 2, -1, 4, 1).fill(MEET.standDark);
+    rug.rect(cx - 4, -2, 9, 1).fill(MEET.standMetal);
+    rug.rect(cx, -15, 1, 13).fill(MEET.standMetal);
+    rug.rect(cx + 1, -15, 1, 13).fill(MEET.standDark);
+    rug.rect(cx - 8, -24, 17, 10).fill(MEET.standMetal);
+    rug.rect(cx - 7, -23, 15, 8).fill(MEET.board);
+    rug.rect(cx - 7, -16, 15, 1).fill(MEET.boardShade);
+    rug.rect(cx - 6, -14, 13, 1).fill(MEET.standDark);
+    rug.rect(cx - 5, -21, 6, 1).fill(MEET.markerBlue);
+    rug.rect(cx - 5, -19, 4, 1).fill(MEET.markerBlue);
+    rug.rect(cx + 2, -21, 1, 4).fill(MEET.markerRed);
+    rug.rect(cx + 3, -18, 3, 1).fill(MEET.markerRed);
+
+    // Potted plant in the far right corner of the rug.
+    const px = 58;
+    const pb = -12; // pot rim
+    rug.rect(px - 3, pb + 6, 7, 1).fill({ color: 0x050810, alpha: 0.4 });
+    rug.rect(px - 3, pb + 1, 7, 5).fill(MEET.pot);
+    rug.rect(px - 4, pb, 9, 1).fill(MEET.potTop);
+    rug.rect(px + 3, pb + 1, 1, 5).fill(MEET.toe);
+    rug.rect(px, pb - 6, 1, 6).fill(MEET.leafDark);
+    rug.rect(px - 4, pb - 5, 4, 3).fill(MEET.leaf);
+    rug.rect(px + 1, pb - 8, 4, 3).fill(MEET.leaf);
+    rug.rect(px - 2, pb - 10, 3, 3).fill(MEET.leafHi);
+    rug.rect(px + 2, pb - 3, 3, 2).fill(MEET.leafDark);
+    rug.rect(px - 3, pb - 5, 2, 1).fill(MEET.leafHi);
+
+    const g = new Graphics();
+    const x0 = -M.tableHalf;
+    const w = M.tableHalf * 2;
+    const row = (y: number, inset: number, color: number) => g.rect(x0 + inset, y, w - inset * 2, 1).fill(color);
+    // Contact shadow on the rug and the two end pedestals.
+    g.rect(x0 + 2, 8, w - 4, 1).fill({ color: 0x050810, alpha: 0.45 });
+    g.rect(x0 + 5, 9, w - 10, 1).fill({ color: 0x050810, alpha: 0.22 });
+    g.rect(x0 + 3, 7, 3, 2).fill(MEET.leg);
+    g.rect(x0 + w - 6, 7, 3, 2).fill(MEET.leg);
+    // Walnut top with rounded ends: far edge catches the light, a soft sheen, a little grain.
+    row(-11, 4, MEET.topBack);
+    row(-10, 2, MEET.top);
+    row(-9, 1, MEET.top);
+    g.rect(x0, -8, w, 10).fill(MEET.top);
+    g.rect(x0, -8, 1, 10).fill(MEET.sheen);
+    g.rect(x0 + 1, -9, 1, 1).fill(MEET.sheen);
+    g.rect(x0 + 2, -10, 1, 1).fill(MEET.sheen);
+    g.rect(x0 + w - 1, -8, 1, 10).fill(MEET.grain);
+    g.rect(-30, -9, 40, 1).fill(MEET.sheen);
+    for (const [gx, gy, gw] of [[-38, -6, 16], [-4, -3, 24], [18, 0, 18]] as Array<[number, number, number]>) {
+      g.rect(gx, gy, gw, 1).fill(MEET.grain);
+    }
+    // Lit bullnose edge, shadowed lip, apron, toe line.
+    row(2, 1, MEET.edge);
+    row(3, 1, MEET.lip);
+    g.rect(x0 + 2, 4, w - 4, 3).fill(MEET.face);
+    row(7, 3, MEET.toe);
+
+    // On the table: papers, a carafe and cups, one laptop facing the back row, one facing the front.
+    g.rect(-37, -8, 8, 5).fill(MEET.paperBack);
+    g.rect(-36, -9, 8, 5).fill(MEET.paper);
+    g.rect(-35, -7, 5, 1).fill(MEET.ink);
+    g.rect(-35, -5, 4, 1).fill(MEET.ink);
+    g.rect(1, -11, 3, 1).fill(MEET.lidEdge);
+    g.rect(1, -10, 3, 6).fill(MEET.glass);
+    g.rect(1, -7, 3, 3).fill(MEET.water);
+    g.rect(1, -9, 1, 4).fill(MEET.glassHi);
+    for (const [ux, uy] of [[-3, -6], [6, -7]] as Array<[number, number]>) {
+      g.rect(ux, uy, 2, 1).fill(MEET.cup);
+      g.rect(ux, uy + 1, 2, 1).fill(MEET.cupShade);
+    }
+    g.rect(28, -12, 10, 6).fill(MEET.casing);
+    g.rect(29, -11, 8, 4).fill(MEET.screen);
+    g.rect(30, -10, 4, 1).fill(MEET.screenLine);
+    g.rect(30, -8, 5, 1).fill(MEET.screenLineDim);
+    g.rect(28, -6, 10, 2).fill(MEET.lidBack);
+    g.rect(29, -6, 8, 1).fill(MEET.lidEdge);
+    g.rect(-16, -4, 10, 5).fill(MEET.lidBack);
+    g.rect(-16, -4, 10, 1).fill(MEET.lidEdge);
+    g.rect(-12, -2, 2, 1).fill(MEET.lidEdge);
+    g.rect(29, -2, 6, 3).fill(MEET.paper);
+    g.rect(30, -1, 4, 1).fill(MEET.ink);
+
+    // Front row: chairs with their backs to us, tucked in against the table front.
+    // Same pixels as person.ts drawChair at the seat, so a seated NPC's chair covers it exactly;
+    // the two outer chairs are pulled out a pixel.
+    SEAT_X.forEach((x, i) => {
+      const y = i === 0 || i === SEAT_X.length - 1 ? 8 : 7;
+      g.rect(x - 3, y, 6, 1).fill(MEET.chairTop);
+      g.rect(x - 4, y + 1, 8, 4).fill(MEET.chair);
+      g.rect(x - 4, y + 1, 1, 4).fill(MEET.chairSide);
+      g.rect(x, y + 5, 1, 1).fill(MEET.chairBase);
+      g.rect(x - 4, y + 6, 8, 1).fill(MEET.chairBase);
+      g.rect(x - 3, y + 7, 6, 1).fill({ color: 0x050810, alpha: 0.35 });
+      g.rect(x - 4, y + 7, 1, 1).fill(MEET.caster);
+      g.rect(x + 3, y + 7, 1, 1).fill(MEET.caster);
+    });
+
+    // ---- 開會中（地毯布邊、桌緣與螢幕換成作戰室主題色；靜態，不閃不動） ----
     const glow = this.meetingGlow;
-    frameRect(glow, M.rugX, M.rugY, M.rugW, M.rugH, MEET_ACCENT, 0.45);
+    frameRect(glow, M.rugX + 1, M.rugY + 1, M.rugW - 2, M.rugH - 2, MEET_ACCENT, 0.35);
+    glow.rect(cx - 5, -21, 6, 1).fill(MEET_ACCENT);
     glow.visible = false;
     const tableGlow = this.meetingTableGlow;
-    tableGlow.rect(x0, 2, w, 1).fill({ color: MEET_ACCENT, alpha: 0.85 });
-    for (const sx of [-40, 28]) tableGlow.rect(sx + 2, -8, 4, 1).fill(MEET_ACCENT);
+    tableGlow.rect(x0 + 1, 2, w - 2, 1).fill({ color: MEET_ACCENT, alpha: 0.6 });
+    tableGlow.rect(30, -10, 4, 1).fill(MEET_ACCENT);
     tableGlow.visible = false;
 
     // 放到畫面最底下的空地，NPC 會走過來圍著它討論（避開上方部門排，才不會擠在一起）。

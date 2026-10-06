@@ -62,6 +62,8 @@ export const enModalsC: Record<string, string> = {
   "本次皆允許": "Allow all this time",
   "允許": "Allow",
   "目前沒有人在使用": "No one is using this right now",
+  "閒置": "Idle",
+  "使用中": "In use",
   "點擊開啟工作日誌": "Click to open the work log",
   "點名字可開工作日誌": "Click a name to open its work log",
 

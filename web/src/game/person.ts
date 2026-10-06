@@ -532,6 +532,12 @@ const SCENE_MICROS = new Set<MicroAct>(["water", "pet"]);
 
 /** Stations worked at a monitor on a desk (everything except reading and the meeting table). */
 const SCREEN_STATIONS = new Set<StationKey>(["terminal", "code", "web", "check", "board", "desk", "home"]);
+/**
+ * Back-wall stations whose own furniture is the screen (devices on the shared
+ * counter, the wall board): the worker stands right at it, so no personal desk
+ * slab, monitor or chair is drawn - just the light it throws on their head.
+ */
+const BUILT_IN_SCREEN = new Set<StationKey>(["terminal", "code", "web", "check", "board", "desk"]);
 /** Colour each station's screen throws on the worker. */
 const SCREEN_TINT: Partial<Record<StationKey, number>> = {
   terminal: 0x5dff9c, code: 0x4de3ff, web: 0x8fc4ff, check: 0x37d6a3, board: 0xffd166, desk: 0xf29e4c, home: 0x4de3ff,
@@ -1817,7 +1823,17 @@ export class Person {
     g.clear();
     fx.clear();
     this.drawArrival(g, fx);
-    if (screen) {
+    if (screen && BUILT_IN_SCREEN.has(this.station)) {
+      // Standing at a counter device / the wall board: only its light on the head and shoulders
+      // (built-in sprite only; custom avatars have their head elsewhere, the line would float).
+      if (!asleep && view === "back" && !this.gifSprite && !this.customTexture) {
+        const tint = SCREEN_TINT[this.station] ?? 0x4de3ff;
+        const flicker = REDUCE_MOTION ? 1 : 0.8 + 0.2 * hash01(Math.floor(wt / 110));
+        fx.rect(-2, -16 + lift, 4, 1).fill({ color: tint, alpha: 0.5 * flicker });
+        fx.rect(-3, -15 + lift, 1, 1).fill({ color: tint, alpha: 0.35 * flicker });
+        fx.rect(2, -15 + lift, 1, 1).fill({ color: tint, alpha: 0.35 * flicker });
+      }
+    } else if (screen) {
       const tint = SCREEN_TINT[this.station] ?? 0x4de3ff;
       const flicker = REDUCE_MOTION || asleep ? 1 : 0.8 + 0.2 * hash01(Math.floor(wt / 110));
       if (!asleep) {
