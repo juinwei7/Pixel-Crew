@@ -2214,6 +2214,63 @@ body {
 /* 工具列「自動循環」（單一 NPC）：composer 在畫面底部，設定框改成從按鈕往上彈。 */
 .worker-autopilot-control { position: relative; display: inline-flex; }
 .autopilot-config--up { top: auto; bottom: calc(100% + 6px); }
+.worker-autopilot-control { align-items: center; gap: 6px; min-width: 0; }
+.autopilot-config__row--goal textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 4px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 8px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.autopilot-config__row--goal textarea::placeholder { color: #66788c; }
+/* 循環中的目標一行：省略號截斷，完整內容放 title。 */
+.worker-autopilot-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 260px;
+  font-size: 10.5px;
+  color: #9fb2c6;
+}
+.worker-autopilot-goal__text,
+.worker-autopilot-goal__paused {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worker-autopilot-goal__paused { color: #e6c26e; }
+.worker-autopilot-goal__input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  padding: 2px 6px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 6px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font-size: 11px;
+}
+.worker-autopilot-goal__btn {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: #9fb2c6;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.worker-autopilot-goal__btn:hover:not(:disabled) { color: #eaf2fb; border-color: rgba(70, 176, 255, 0.5); }
+.worker-autopilot-goal__btn:disabled { opacity: 0.55; cursor: progress; }
 
 .holo-panel__eyebrow {
   color: rgba(0, 229, 255, 0.68);

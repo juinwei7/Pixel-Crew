@@ -13,4 +13,13 @@ export const enR3Autopilot: Record<string, string> = {
   "🅿️ 自動循環卡住而停：{reason}。給個方向或選一個選項，就能換路接著做。": "🅿️ Autopilot stopped because it is stuck: {reason}. Give a direction or pick an option and it can take another route.",
   "卡點：{blocker}": "Blocker: {blocker}",
   "🅿️ 自動循環停下來等你拍板：{reason}。回覆選項或直接下指示即可接續。": "🅿️ Autopilot paused for your decision: {reason}. Reply with an option or give an instruction to continue.",
+  "（問題：{question}）": " (question: {question})",
+  "——{why}": " — {why}",
+  "🤖 循環自選：{picked}{why}{question}。想改直接回我一句，循環會照你的改。": "🤖 Autopilot picked: {picked}{why}{question}. Reply with one line to change it and the loop will follow you.",
+  "需要只有你有的資料": "needs data only you have",
+  "這步會花錢／不可逆／對外送出，需要你本人點頭": "this step spends money / is irreversible / sends something out, so it needs your own OK",
+  "⏸ 自動循環暫停等你（{why}）：{reason}。回覆後循環會自動接著跑，不用重開開關。": "⏸ Autopilot paused for you ({why}): {reason}. Reply and the loop continues by itself, no need to switch it back on.",
+  "🎯 自動循環目標已改為：{goal}": "🎯 Autopilot goal changed to: {goal}",
+  "目標不能是空的": "The goal cannot be empty",
+  "自動循環沒有開著": "Autopilot is not on",
 };

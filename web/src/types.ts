@@ -576,7 +576,15 @@ export type WorkerState = {
       自己的獨立房間。以前是比對名字的 emoji 字首，現在由 server 明講。 */
   ephemeralKind?: "warroom" | "research" | "dedicated" | null;
   /** 個人自動循環：有值＝開著（server 端 workerAutopilot），null/undefined＝關。 */
-  autopilot?: { stepsRemaining: number; deadlineAt: number | null; proactive?: boolean } | null;
+  autopilot?: {
+    stepsRemaining: number;
+    deadlineAt: number | null;
+    proactive?: boolean;
+    /** 循環鎖定的目標（老闆原話）；null/空＝server 自動取最近一則指示。 */
+    goal?: string | null;
+    /** 遇到花錢/不可逆/對外送出的問題時暫停等老闆回覆；老闆對這位 NPC 發任何訊息就自動接續。 */
+    paused?: { question: string; options: string[]; at: number } | null;
+  } | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

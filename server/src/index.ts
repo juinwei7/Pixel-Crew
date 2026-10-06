@@ -263,6 +263,10 @@ import {
   WORKER_AUTOPILOT_IDLE_STOP,
   workerAutopilotStepNotice,
   workerAutopilotStopNote,
+  workerAutopilotShouldAutoPick,
+  workerAutopilotAutoPickPrompt,
+  workerAutopilotChoiceNotice,
+  workerAutopilotPausedNote,
   workerAutopilotInstructionWithCriterion,
   isWorkerAutopilotPlanEmpty,
   mergeWorkerAutopilotPlan,
@@ -6162,7 +6166,7 @@ app.post("/api/autopilot", (req, res) => {
 // ===== 個人自動循環（worker autopilot）======================================
 // 單一 NPC 做完一回合後，決策模型看它最近在做什麼、決定下一句指示送回給它，形成個人循環。
 // 與 BOSS 層循環的分工見 workerAutopilot.ts。開關按 workerId 記，檔案式 JSON 持久化。
-const workerAutopilotByWorker = new Map<string, { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal?: string | null }>();
+const workerAutopilotByWorker = new Map<string, PersistedWorkerAutopilotState>();
 const workerAutopilotStateStore = new WorkerAutopilotStateStore(config.dataDirectory);
 for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
   workerAutopilotByWorker.set(key, { ...state });
@@ -6224,9 +6228,41 @@ function persistWorkerAutopilotStates(): void {
   workerAutopilotStateStore.save(snapshot);
 }
 
-function workerAutopilotSnapshot(workerId: string): { stepsRemaining: number; deadlineAt: number | null; proactive: boolean } | null {
+function workerAutopilotSnapshot(workerId: string): { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal: string | null; paused: { question: string; options: string[]; at: number } | null } | null {
   const state = workerAutopilotByWorker.get(workerId);
-  return state ? { stepsRemaining: state.stepsRemaining, deadlineAt: state.deadlineAt, proactive: state.proactive } : null;
+  return state ? {
+    stepsRemaining: state.stepsRemaining,
+    deadlineAt: state.deadlineAt,
+    proactive: state.proactive,
+    goal: state.goal ?? null,
+    paused: state.paused ? { question: state.paused.question, options: state.paused.options, at: state.paused.at } : null,
+  } : null;
+}
+
+// owner 對暫停中的循環發話＝回答了它的問題：解除暫停、時限順延暫停的時長（人不在的時間不算），
+// 這則回覆跑完的 turn_end 會照常觸發教練想下一步（教練在最近回合裡看得到 owner 的回答）。
+function resumeWorkerAutopilotIfPaused(worker: Worker): void {
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (!state?.paused) return;
+  const pausedFor = Math.max(0, Date.now() - state.paused.at);
+  if (state.deadlineAt) state.deadlineAt += pausedFor;
+  state.paused = null;
+  persistWorkerAutopilotStates();
+  appendRuntimeLog(config.dataDirectory, "autopilot resumed by owner reply", { worker: worker.runner.name, pausedMs: pausedFor });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 循環開著時改目標：換根錨並重種計畫（舊計畫以舊目標為錨，留著只會拉回舊方向）。
+function updateWorkerAutopilotGoal(worker: Worker, goalText: string): boolean {
+  const state = workerAutopilotByWorker.get(worker.id);
+  const goal = goalText.trim().slice(0, 800);
+  if (!state || !goal) return false;
+  state.goal = goal;
+  saveWorkerAutopilotPlan(worker.id, seedWorkerAutopilotPlan(goal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse()));
+  persistWorkerAutopilotStates();
+  record(worker, { type: "user_message", text: t("🎯 自動循環目標已改為：{goal}", { goal }), notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  return true;
 }
 
 function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number, maxMinutes?: number, proactive?: boolean, goalText?: string): void {
@@ -6354,6 +6390,8 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   const state = workerAutopilotByWorker.get(worker.id);
   if (!state) return;
   if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
+  // 暫停等 owner 回覆中：什麼都不做（owner 發話時 resumeWorkerAutopilotIfPaused 會先解除暫停）。
+  if (state.paused) return;
   if (event.isError) {
     disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
     return;
@@ -6377,7 +6415,7 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   void advanceWorkerAutopilot(worker, state);
 }
 
-async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal?: string | null }): Promise<void> {
+async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAutopilotState): Promise<void> {
   workerAutopilotAdvancing.add(worker.id);
   try {
     const runtime = resolveWorkerDecisionRuntime(worker);
@@ -6420,6 +6458,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (idleStreak > 0) {
       stallSignals.push(`The last loop step produced NO new output (server-checked: no file changed, no commit, no research). ${WORKER_AUTOPILOT_IDLE_STOP - idleStreak} more empty step and the server stops the loop — make this step produce something concrete toward the owner's goal, or STOP honestly now.`);
     }
+    let lastPrompt = "";
     for (;;) {
       const canExplore = exploreRounds < WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP;
       const prompt = workerAutopilotNextPrompt({
@@ -6439,6 +6478,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
         explorationFindings: findingsThisStep,
         stallSignals,
       });
+      lastPrompt = prompt;
       try {
         // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
         const decisionStart = Date.now();
@@ -6515,7 +6555,41 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     if (decision) decision = workerAutopilotPlanProgressGuard(decision, plan);
     // 教練回報「已真正處理完」的使用者請求即結案（resolve 語義 (a)）——指的是先前回合已完成的工作，
     // 與這步是否送出無關，故在此committed decision 一有就結案。
+    // owner 授權：循環開著時，可逆的選項分岔由教練自己分析選最佳、繼續跑（不停下來等人）。
+    // 只重問一次；花錢／不可逆／owner 私有資料（gate authorization/owner_data）不在此列，照樣暫停等回覆。
+    if (decision && workerAutopilotShouldAutoPick(decision) && decision.action === "stop" && lastPrompt) {
+      appendRuntimeLog(config.dataDirectory, "autopilot auto-pick", { worker: worker.runner.name, gate: decision.gate ?? null });
+      try {
+        const pickedText = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotAutoPickPrompt(lastPrompt, decision.reason), 150_000, { kind: "no_tools" }, workerHome)).text;
+        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        const picked = parseWorkerAutopilotDecision(pickedText);
+        if (picked && picked.action !== "explore") {
+          if (picked.planUpdate !== undefined) {
+            plan = mergeWorkerAutopilotPlan(plan, picked.planUpdate, plan.updatedRound + 1).plan;
+            saveWorkerAutopilotPlan(worker.id, plan);
+          }
+          decision = workerAutopilotPlanProgressGuard(workerAutopilotProgressGuard(picked, turns), plan);
+          appendRuntimeLog(config.dataDirectory, "autopilot auto-pick result", { worker: worker.runner.name, action: decision.action, picked: decision.action === "continue" ? decision.choice?.picked ?? null : null });
+        }
+      } catch (error) {
+        // 自選呼叫失敗：退回原本的「問 owner」→ 下面會暫停等回覆，不熄火。
+        appendRuntimeLog(config.dataDirectory, "autopilot auto-pick failed", { worker: worker.runner.name, error: (error as Error).message });
+      }
+    }
     if (decision && decision.action !== "explore") resolveCapturedRequests(worker.id, decision.resolvedRequestIds);
+    // 真的需要 owner（花錢／不可逆／對外／私有資料）：暫停而非結束——開關留著、不扣步數、不補收尾回合，
+    // owner 一回覆就自動接著跑（目標、計畫、剩餘步數都保留）。
+    if (decision && decision.action === "stop" && decision.kind === "ask") {
+      const live2 = workerAutopilotByWorker.get(worker.id);
+      if (!live2) return;
+      const options = parseAutopilotAskOptions(decision.reason);
+      live2.paused = { question: decision.reason, options, at: Date.now(), ...(decision.gate ? { gate: decision.gate } : {}) };
+      persistWorkerAutopilotStates();
+      appendRuntimeLog(config.dataDirectory, "autopilot paused for owner", { worker: worker.runner.name, gate: decision.gate ?? null });
+      record(worker, { type: "user_message", text: workerAutopilotPausedNote(decision.reason, decision.gate), notice: true, autopilotAsk: true, askOptions: options });
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      return;
+    }
     if (!decision || decision.action !== "continue") {
       if (decision && decision.action === "stop" && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
       const reason = decision && decision.action === "stop" ? decision.reason : "";
@@ -6549,6 +6623,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     // 階梯可見化：教練每步都判斷「工作站在哪一階」，只進決策不給主人看太可惜。
     // notice 型訊息只顯示、不進 NPC session、也不進 recentWorkerAutopilotTurns 的回合彙整。
     // 一句話進度：上一步驗收 · 所在階 · 這步推進什麼 · 完成標準（見 workerAutopilotStepNotice）。
+    // 教練替 owner 選了分岔：留一則看得懂的紀錄（選了什麼、為什麼），owner 回來想改直接回一句。
+    if (decision.choice) record(worker, { type: "user_message", text: workerAutopilotChoiceNotice(decision.choice), notice: true });
     const stepNotice = workerAutopilotStepNotice(decision);
     if (stepNotice) record(worker, { type: "user_message", text: stepNotice, notice: true });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -6566,6 +6642,7 @@ function sweepWorkerAutopilot(): void {
     const worker = workers.get(workerId);
     const action = workerAutopilotSweepAction({
       present: !!worker,
+      paused: !!state.paused,
       busy: worker?.runner.busy ?? false,
       queued: worker ? store.listQueue(workerId).length > 0 : false,
       yielding: worker
@@ -6651,6 +6728,16 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
     && !pendingSwapSummaries.has(worker.id) && store.listQueue(worker.id).length === 0) {
     void advanceWorkerAutopilot(worker, state);
   }
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
+
+app.post("/api/workers/:id/autopilot/goal", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
+  if (!goal) { res.status(400).json({ error: t("目標不能是空的") }); return; }
+  if (!workerAutopilotByWorker.has(worker.id)) { res.status(409).json({ error: t("自動循環沒有開著") }); return; }
+  updateWorkerAutopilotGoal(worker, goal);
   res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
 });
 
@@ -8551,6 +8638,7 @@ function drainWorkerQueue(worker: Worker): void {
   const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
   record(worker, { type: "user_message", text });
   captureOpenUserRequest(worker, text); // 真人佇列訊息（循環武裝時）落帳，防換腦／議程蒸發
+  resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
   try {
     worker.runner.send(next.message, images, documents);
     limitTurnText.set(worker.id, text);
@@ -8698,6 +8786,7 @@ app.post("/api/workers/:id/message", (req, res) => {
   const userText = [message, imageLabels, documentLabels].filter(Boolean).join("\n");
   record(worker, { type: "user_message", text: userText });
   captureOpenUserRequest(worker, userText); // 真人直送訊息（循環武裝時）落帳，防換腦／議程蒸發
+  resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
   try {
     worker.runner.send(message, images, documents);
   } catch (error) {

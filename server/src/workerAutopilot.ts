@@ -56,10 +56,20 @@ export type WorkerAutopilotCriterionVerdict = "met" | "partial" | "missed";
 /** 停止類型：done＝目標達成無事待決、ask＝要 owner 的資料／偏好／授權、stuck＝多角度都撞牆需 owner 指方向。 */
 export type WorkerAutopilotStopKind = "done" | "ask" | "stuck";
 
+/**
+ * 「問 owner」的性質：choice＝可逆的選項分岔（owner 授權：循環開著時教練自己分析選最佳、繼續跑）；
+ * authorization＝花錢／不可逆／對外送出（必須 owner 本人點頭，循環暫停等回覆）；
+ * owner_data＝只有 owner 有的資料（帳密、私人資訊），查不到也猜不得（暫停等回覆）。
+ */
+export type WorkerAutopilotAskGate = "choice" | "authorization" | "owner_data";
+
+/** 教練替 owner 做的選擇（可逆分岔），留紀錄讓 owner 回來能一眼看懂、想改直接回一句。 */
+export type WorkerAutopilotChoice = { question: string; options: string[]; picked: string; why: string };
+
 export type WorkerAutopilotDecision =
-  | { action: "continue"; instruction: string; reason: string; rung?: string; doneWhen?: string; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown }
+  | { action: "continue"; instruction: string; reason: string; rung?: string; doneWhen?: string; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown; choice?: WorkerAutopilotChoice }
   | { action: "explore"; query: string; reason: string; planUpdate?: unknown }
-  | { action: "stop"; reason: string; kind?: WorkerAutopilotStopKind; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown };
+  | { action: "stop"; reason: string; kind?: WorkerAutopilotStopKind; gate?: WorkerAutopilotAskGate; prevMet?: WorkerAutopilotCriterionVerdict; retro?: string; resolvedRequestIds?: string[]; planUpdate?: unknown };
 
 /** 支柱 B · 探索：決策每一步最多先查幾次再定稿——花錢/延遲防呆，用盡就逼它用現有資訊決定。 */
 export const WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP = 2;
@@ -305,7 +315,7 @@ export function workerAutopilotNextPrompt(input: {
 - DIFFERENT ANGLE, SAME GOAL — act as the owner's second brain: changing the GOAL is drift and is forbidden, but changing the APPROACH is exactly what you should do when the obvious path stalls. If the recent turns show the work going in circles — repeating a move, re-reading the same material, re-stating the same plan, or stuck on one blocked approach — do NOT loop that same path again and do NOT stop prematurely. Pick a genuinely DIFFERENT angle on the SAME original goal: a new entry point, a different method, a smaller decomposable sub-step, another source or line of attack. Real forward motion from a fresh angle is the whole point. Spinning the same lap is a failure — and so is stopping early while a genuinely valuable, reachable rung toward the goal still exists. As long as a real higher rung can be found, keep climbing from a fresh angle rather than stopping.
 - KEEP EVOLVING — the step count is a SAFETY CEILING, not a quota: the owner switched the loop on so the work keeps advancing toward their goal while they are away. After each result, pick the next step that would make a real, verifiable difference to the goal — deepen it, harden it against real failure modes, verify it against reality, generalize it, find what is missing, or leverage it toward the bigger aim. Producing the first deliverable is not automatically "done" while a clearly valuable next step remains. But NEVER invent work to use up the count: lateral polishing, re-verifying what is already verified, repeated wrap-ups, and drift to another goal are padding — padding burns the owner's money for nothing and is a failure.
 - DECIDE FOR THE OWNER whatever you can get right by thinking + investigating: you are the owner's second brain, not an assistant who raises a hand at every fork. If a fork can be settled by reasoning it through or by investigating (explore, or the NPC reading / searching / testing), then DECIDE it and continue — do NOT bounce an answerable question back to the owner. Which approach, which version, how to structure, resolving an ambiguity, picking between two paths: these are yours to settle.
-- STOP (steps may still be left — that is fine) in these cases: (a) information or a preference that ONLY the owner holds and no investigation can recover (their private data, a credential, a taste only in their head); (b) an action that spends money, is irreversible, or sends something outward (deploy, external send, deletion); or (c) DONE FOR NOW — you looked for the next step from several different angles (deepen / harden against real failure modes / verify against reality / generalize / find what is missing / connect to the bigger aim) and none would make a real difference worth its cost. Stopping honestly at (c) is a good outcome, not a failure. For (c), the "reason" names what this loop achieved and the angles you checked, plus the single most useful direction the owner could point the next loop at. For (a) and (b), first do ALL the thinking and investigating, THEN stop with the "reason" written as a concrete recommendation the owner can confirm in one word — never a bare "waiting for you".`
+- STOP (steps may still be left — that is fine) in these cases: (a) data that ONLY the owner holds and no investigation can recover (their private data, a credential) — a mere preference or an A/B/C fork is NOT this, see PICK FORKS YOURSELF; (b) an action that spends money, is irreversible, or sends something outward (deploy, external send, deletion); or (c) DONE FOR NOW — you looked for the next step from several different angles (deepen / harden against real failure modes / verify against reality / generalize / find what is missing / connect to the bigger aim) and none would make a real difference worth its cost. Stopping honestly at (c) is a good outcome, not a failure. For (c), the "reason" names what this loop achieved and the angles you checked, plus the single most useful direction the owner could point the next loop at. For (a) and (b), first do ALL the thinking and investigating, THEN stop with the "reason" written as a concrete recommendation the owner can confirm in one word — never a bare "waiting for you".`
     : `- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
 - If the current thread clearly has remaining parts, or obvious immediate follow-ups (finishing a started deliverable, fixing a found problem, verifying fresh output), continue with those FIRST before considering STOP. STOP when the thread has reached a natural conclusion, when the next step needs the owner's input/decision/data, or when the work would be speculative busywork. A good STOP beats a filler step — but do not stop while clearly valuable follow-through remains.`;
 
@@ -327,14 +337,16 @@ ${scopeRule}
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
 - ANCHOR IN THE LATEST REPLY, don't run generic: the "最新回覆（完整據此診斷）" block is the full latest result — read it and make the diagnosis quote or point at something CONCRETE in it (a specific claim, number, file, gap, or contradiction). A diagnosis that could be pasted onto any turn is a failure; if you cannot cite a specific from the latest reply, you have not read it closely enough.
 - KEEP THE BIG PICTURE: read the "Owner's goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}${planRule}${exploreRule}
-- ASK ONLY WHAT YOU TRULY CANNOT SETTLE — and ask it well: do NOT stop for a fork you could resolve by thinking or investigating; decide that yourself and keep going. Stop for the owner only when progress needs (a) data/a preference only the owner holds that no investigation can recover, or (b) a money / irreversible / outward action. When you do stop for one of these, write the "reason" AS a prepared recommendation: name the fork in one line, give your recommended option (plus 1–2 alternatives) with what each implies, phrased so the owner confirms in a single letter or word. Think about how to ask so the owner barely has to type.
+- PICK FORKS YOURSELF — the owner's standing order: while this loop is on, every REVERSIBLE fork (A/B/C options, which approach, which direction, a trade-off, a style or preference the owner has not stated) is YOURS to settle. Analyze the options against the owner's goal, pick the best one, and "continue" with it; put the fork in the "choice" field ({"question","options","picked","why"}) so the owner sees what you chose and can override with one reply when back. Never stop the loop just to ask which option the owner prefers.
+- ASK ONLY WHAT YOU TRULY CANNOT SETTLE — and ask it well: stop for the owner only when progress needs (a) data only the owner holds that no investigation can recover (set "gate":"owner_data"), or (b) a money / irreversible / outward action (set "gate":"authorization"). The loop then PAUSES and resumes by itself as soon as the owner replies. When you do stop for one of these, write the "reason" AS a prepared recommendation: name the fork in one line, give your recommended option (plus 1–2 alternatives) with what each implies, phrased so the owner confirms in a single letter or word. Think about how to ask so the owner barely has to type.
+- FINISH UNBLOCKED WORK BEFORE ASKING: if part of the goal is blocked on such a question but other parts are not, "continue" with the unblocked parts first and record the question in the plan's "blockers"; stop to ask only when nothing useful remains that does not depend on the answer.
 - NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS: you ARE authorized to decide and act on the owner's behalf for anything reversible you can get right by thinking or investigating — that is the job. But an action that spends money, cannot be undone, or sends something outward (deploy, cold-install, external send, deletion) needs the owner's OWN words — a past "yes / 好" to one thing does not authorize a different money/irreversible action. For those, stop with a prepared recommendation rather than proceeding on an assumption.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
 - Retro: when you STOP, or when you issue the FINAL step, also include "retro" — one line with the most useful lesson from this loop (what worked, where it got stuck, what to do differently next time). It is saved and carried into this NPC's future loops.
 - PICK, DON'T DEFAULT: before choosing, weigh 2–3 candidate moves (the top of the plan's "toTry" plus any fresh idea) by how far each moves the ORIGINAL GOAL versus what it costs this turn, and choose the highest-leverage one. In "reason", add one clause on why it beats the runner-up.
 - DONE-WHEN FOR EVERY STEP: on "continue", put in "doneWhen" one concrete, checkable acceptance criterion for THIS step (what the NPC's reply or files must show). The server appends it to the instruction the NPC sees as a "完成標準" line, so do not repeat it inside "instruction".
 - CHECK THE LAST CRITERION FIRST: if the previous instruction in "Recent turns" ends with a "完成標準" / "Done when" line, judge the latest reply against it and set "prevMet" to "met", "partial", or "missed". A missed or partial criterion is what your diagnosis opens with — close that gap or re-approach it before stacking a new rung on top of it.
-- STOP KIND: on "stop", set "kind" — "done" (the goal is reached and nothing is left for the owner to decide), "ask" (you need the owner's data, preference, or authorization; "reason" is the prepared A/B/C question), or "stuck" (a wall you could not get around from several angles; "reason" names the angles tried and offers directions). If any decision is left for the owner, use "ask", never "done".
+- STOP KIND: on "stop", set "kind" — "done" (the goal is reached and nothing is left for the owner to decide), "ask" (you need the owner's data or authorization; "reason" is the prepared A/B/C question; also set "gate"), or "stuck" (a wall you could not get around from several angles; "reason" names the angles tried and offers directions). If any decision is left for the owner, use "ask", never "done".
 
 Worker: ${JSON.stringify(input.workerName)}${input.role ? `\nRole: ${JSON.stringify(input.role)}` : ""}
 Workspace: ${JSON.stringify(input.workspaceLabel)}
@@ -344,9 +356,9 @@ Recent turns (oldest first):
 ${turnsBlock}${retroBlock}${factsBlock}${openBlock}
 
 Return only one marked JSON block, no Markdown fences. The "plan" field is the UPDATED living plan (single source of truth) — always include it, on both continue and stop:
-<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done, and why it beats the runner-up","rung":"one line: which rung the work stands on right now","doneWhen":"one checkable acceptance criterion for this step","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor — keep stable","hypotheses":["open questions / bets"],"tried":[{"text":"what has been done","outcome":"result or lesson"}],"toTry":[{"text":"next candidate","need":"capability e.g. 讀碼/上網/跑測試/某專長"}],"blockers":["stuck points"]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
+<worker_autopilot_next>{"action":"continue","instruction":"the single next instruction for this NPC","reason":"one line: what this step advances beyond what is already done, and why it beats the runner-up","rung":"one line: which rung the work stands on right now","doneWhen":"one checkable acceptance criterion for this step","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor — keep stable","hypotheses":["open questions / bets"],"tried":[{"text":"what has been done","outcome":"result or lesson"}],"toTry":[{"text":"next candidate","need":"capability e.g. 讀碼/上網/跑測試/某專長"}],"blockers":["stuck points"]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — omit or leave empty if none / still in progress"],"choice":{"question":"only when this step settles a fork on the owner's behalf — the fork in one line","options":["A …","B …"],"picked":"the option you chose","why":"one line: why it best serves the goal"},"retro":"only on the FINAL step: one-line lesson for future loops"}</worker_autopilot_next>
 or
-<worker_autopilot_next>{"action":"stop","kind":"done | ask | stuck","reason":"one line: why stopping now is right","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor","hypotheses":[],"tried":[{"text":"...","outcome":"..."}],"toTry":[],"blockers":[]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>${input.canExplore ? `
+<worker_autopilot_next>{"action":"stop","kind":"done | ask | stuck","gate":"only for kind ask: authorization | owner_data","reason":"one line: why stopping now is right","prevMet":"met | partial | missed — only if the previous instruction carried a 完成標準 line","plan":{"goal":"root anchor","hypotheses":[],"tried":[{"text":"...","outcome":"..."}],"toTry":[],"blockers":[]},"resolvedRequestIds":["ids of any OPEN USER REQUESTS now genuinely completed — empty if none"],"retro":"one line: the most useful lesson from this loop"}</worker_autopilot_next>${input.canExplore ? `
 or (when you must check current reality before deciding well):
 <worker_autopilot_next>{"action":"explore","query":"precisely what to find out — a question a read-only investigator can answer with web search, reading files, or running read-only commands","reason":"one line: why this fact blocks a good decision right now","plan":{"goal":"root anchor","hypotheses":[],"tried":[],"toTry":[],"blockers":[]}}</worker_autopilot_next>` : ""}`;
 }
@@ -391,7 +403,10 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
     const kind = value.kind === "done" || value.kind === "ask" || value.kind === "stuck"
       ? { kind: value.kind as WorkerAutopilotStopKind }
       : {};
-    return { ok: true, decision: { action: "stop", reason, ...kind, ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
+    const gate = value.gate === "choice" || value.gate === "authorization" || value.gate === "owner_data"
+      ? { gate: value.gate as WorkerAutopilotAskGate }
+      : {};
+    return { ok: true, decision: { action: "stop", reason, ...kind, ...gate, ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   }
   if (value.action !== "continue") {
     return { ok: false, reason: `"action" must be exactly "continue" or "stop", got ${JSON.stringify(value.action)}.` };
@@ -401,7 +416,8 @@ function evaluateWorkerAutopilotDecision(text: string): WorkerAutopilotParse {
   if (!instruction) return { ok: true, decision: { action: "stop", reason: reason || "No concrete next instruction was produced.", ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
   const rung = bounded(value.rung, 300);
   const doneWhen = bounded(value.doneWhen, 400).replace(/[。．.\s]+$/u, "");
-  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(doneWhen ? { doneWhen } : {}), ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate } };
+  const choice = parseWorkerAutopilotChoice(value.choice);
+  return { ok: true, decision: { action: "continue", instruction, reason, ...(rung ? { rung } : {}), ...(doneWhen ? { doneWhen } : {}), ...prevMet, ...(retro ? { retro } : {}), ...resolved, ...planUpdate, ...(choice ? { choice } : {}) } };
 }
 
 // ── 進步護欄（機制三的程式面）──────────────────────────────────────────────
@@ -680,6 +696,50 @@ export function parseAutopilotAskOptions(reason: string): string[] {
   return found.length >= 2 ? found : [];
 }
 
+/** 教練回報的「替 owner 選了哪個」：沒給選中項就當沒有（不留半截紀錄）。 */
+function parseWorkerAutopilotChoice(raw: unknown): WorkerAutopilotChoice | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const picked = bounded(value.picked, 200);
+  if (!picked) return null;
+  const options = Array.isArray(value.options) ? value.options.map((o) => bounded(o, 200)).filter(Boolean).slice(0, 5) : [];
+  return { question: bounded(value.question, 300), options, picked, why: bounded(value.why, 300).replace(/[。．.\s]+$/u, "") };
+}
+
+/**
+ * 要不要先讓教練自己選（owner 授權：循環開著時可逆的選項分岔由教練分析選最佳）。
+ * 只有「問 owner」且不是花錢／不可逆／owner 私有資料才自選；沒標 gate 但理由帶 ≥2 個選項的也算選項題。
+ */
+export function workerAutopilotShouldAutoPick(decision: WorkerAutopilotDecision): boolean {
+  if (decision.action !== "stop" || decision.kind !== "ask") return false;
+  if (decision.gate === "authorization" || decision.gate === "owner_data") return false;
+  return decision.gate === "choice" || parseAutopilotAskOptions(decision.reason).length >= 2;
+}
+
+/** 自選重問：把教練剛剛想問 owner 的分岔丟回去，要它自己分析選最佳並 continue；真的是花錢／不可逆才准再停。 */
+export function workerAutopilotAutoPickPrompt(basePrompt: string, question: string): string {
+  return `${basePrompt}
+
+You just tried to stop and ask the owner this:
+${bounded(question, 600)}
+
+The owner's standing order for this loop: reversible forks like this are YOURS to decide — do not wait for them. Analyze each option against the owner's goal, pick the best one, and return action "continue" with the instruction that carries it out, filling the "choice" field ({"question","options","picked","why"}). Only if carrying out ANY option would itself spend money, be irreversible, or send something outward may you stop again — then set "kind":"ask" and "gate":"authorization".
+Reply with ONLY the single marked <worker_autopilot_next> JSON block.`;
+}
+
+/** 循環替 owner 做了選擇時的通知（notice，不進 NPC session）。 */
+export function workerAutopilotChoiceNotice(choice: WorkerAutopilotChoice): string {
+  const question = choice.question ? t("（問題：{question}）", { question: choice.question }) : "";
+  const why = choice.why ? t("——{why}", { why: choice.why }) : "";
+  return t("🤖 循環自選：{picked}{why}{question}。想改直接回我一句，循環會照你的改。", { picked: choice.picked, why, question });
+}
+
+/** 循環暫停等 owner 的通知：開關仍開著，owner 一回覆就自動接著跑。 */
+export function workerAutopilotPausedNote(reason: string, gate?: WorkerAutopilotAskGate): string {
+  const why = gate === "owner_data" ? t("需要只有你有的資料") : t("這步會花錢／不可逆／對外送出，需要你本人點頭");
+  return t("⏸ 自動循環暫停等你（{why}）：{reason}。回覆後循環會自動接著跑，不用重開開關。", { why, reason: bounded(reason, 500) });
+}
+
 /** 格式修復重問（一次）：把上一次回覆被拒的具體原因附回去，只再要一次標記 JSON 區塊。 */
 export function workerAutopilotRepairPrompt(basePrompt: string, failure: string): string {
   return `${basePrompt}
@@ -695,6 +755,8 @@ Reply again with ONLY the single marked <worker_autopilot_next> JSON block — n
 // 發「已達上限」通知搶走 turn_end 收尾的時機。
 export type WorkerAutopilotSweepView = {
   present: boolean;
+  /** 暫停等 owner 回覆：不推進、不因時限／步數收掉（owner 回覆時由發話入口解除暫停）。 */
+  paused?: boolean;
   busy: boolean;
   queued: boolean;
   yielding: boolean;
@@ -714,6 +776,7 @@ export type WorkerAutopilotSweepAction =
 
 export function workerAutopilotSweepAction(view: WorkerAutopilotSweepView): WorkerAutopilotSweepAction {
   if (!view.present) return "drop";
+  if (view.paused) return "wait";
   if (view.busy || view.queued || view.yielding || view.advancing) return "wait";
   if (view.stepsRemaining <= 0) return "disable_steps";
   if (view.deadlinePassed) return "disable_deadline";
@@ -742,7 +805,19 @@ export type PersistedWorkerAutopilotState = {
   proactive: boolean;
   /** owner 開循環當下交代的那句話（原文）＝整輪固定的目標；模型不得改寫（見 mergeWorkerAutopilotPlan）。 */
   goal?: string | null;
+  /** 暫停等 owner 回覆（花錢／不可逆／私有資料）：開關仍開著、不扣步數；owner 一發話就清掉並接著跑。 */
+  paused?: { question: string; options: string[]; at: number; gate?: WorkerAutopilotAskGate } | null;
 };
+
+function normalizePausedEntry(raw: unknown): { paused?: PersistedWorkerAutopilotState["paused"] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const value = raw as Record<string, unknown>;
+  const question = bounded(value.question, 600);
+  if (!question || typeof value.at !== "number" || !Number.isFinite(value.at)) return {};
+  const options = Array.isArray(value.options) ? value.options.map((o) => bounded(o, 20)).filter(Boolean).slice(0, 4) : [];
+  const gate = value.gate === "authorization" || value.gate === "owner_data" || value.gate === "choice" ? { gate: value.gate as WorkerAutopilotAskGate } : {};
+  return { paused: { question, options, at: value.at, ...gate } };
+}
 
 /** 逐條驗證還原內容：steps 夾回合法範圍、deadline 非數字一律 null、壞條目整條丟棄。 */
 export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, PersistedWorkerAutopilotState> {
@@ -760,6 +835,7 @@ export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, Per
       deadlineAt,
       proactive: entry.proactive === true,
       ...(typeof entry.goal === "string" && entry.goal.trim() ? { goal: entry.goal.trim().slice(0, 800) } : {}),
+      ...normalizePausedEntry(entry.paused),
     };
   }
   return out;

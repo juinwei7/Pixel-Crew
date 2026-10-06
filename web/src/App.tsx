@@ -310,6 +310,27 @@ export function App() {
   const [workerAutopilotMinutesInput, setWorkerAutopilotMinutesInput] = useState("");
   // 主動模式預設開：開循環的本意就是「教練持續思考下一步發展」；取消勾選才是「只收尾當前線」。
   const [workerAutopilotProactiveInput, setWorkerAutopilotProactiveInput] = useState(true);
+  // 鎖定目標：留空＝server 用老闆最近一則真指示。
+  const [workerAutopilotGoalInput, setWorkerAutopilotGoalInput] = useState("");
+  // 循環進行中改目標：null＝沒在編輯。
+  const [workerAutopilotGoalDraft, setWorkerAutopilotGoalDraft] = useState<string | null>(null);
+  const [workerAutopilotGoalSaving, setWorkerAutopilotGoalSaving] = useState(false);
+  useEffect(() => { setWorkerAutopilotGoalDraft(null); }, [activeId]);
+  async function saveWorkerAutopilotGoal(): Promise<void> {
+    if (!activeId || workerAutopilotGoalDraft == null) return;
+    const goal = workerAutopilotGoalDraft.trim();
+    if (!goal) { notify(t("目標不能空白"), "error"); return; }
+    setWorkerAutopilotGoalSaving(true);
+    try {
+      await apiRequest(`/api/workers/${activeId}/autopilot/goal`, { method: "POST", body: { goal } });
+      setWorkerAutopilotGoalDraft(null);
+      notify(t("已更新自動循環目標"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("更新目標失敗"), "error");
+    } finally {
+      setWorkerAutopilotGoalSaving(false);
+    }
+  }
   async function setWorkerAutopilotEnabled(enabled: boolean): Promise<void> {
     if (!activeId) return;
     const body: Record<string, unknown> = { enabled };
@@ -320,13 +341,16 @@ export function App() {
       const minutes = Math.floor(Number(workerAutopilotMinutesInput));
       if (Number.isFinite(minutes) && minutes > 0) body.maxMinutes = minutes;
       body.proactive = workerAutopilotProactiveInput;
+      const goal = workerAutopilotGoalInput.trim().slice(0, 800);
+      if (goal) body.goal = goal;
     }
     try {
       await apiRequest(`/api/workers/${activeId}/autopilot`, { method: "POST", body });
       setWorkerAutopilotConfigOpen(false);
+      if (enabled) setWorkerAutopilotGoalInput("");
       notify(enabled
         ? (workerAutopilotProactiveInput
-          ? t("自動循環已開啟（主動）：教練會持續思考下一步發展、自己接著做，最多 {n} 步；只有需要你拍板/花錢/不可逆時才停下來問你", { n: steps })
+          ? t("自動循環已開啟（主動）：教練會持續推進目標、一般選擇自己分析後選最佳；只有花錢/不可逆/對外送出才暫停等你，最多 {n} 步", { n: steps })
           : t("自動循環已開啟（收尾）：把當前工作做完收尾就停，最多 {n} 步", { n: steps }))
         : t("自動循環已關閉"), "info");
     } catch (error) {
@@ -1997,8 +2021,45 @@ export function App() {
               disabled={Boolean(active?.ephemeralKind)}
               title={t("自動循環：這位 NPC 做完一回合後，由教練持續思考下一步發展、自己接著做；只有需要你拍板/花錢/不可逆的決定才停下來問你。再點一下關閉。")}
               onClick={() => { if (active?.autopilot) void setWorkerAutopilotEnabled(false); else setWorkerAutopilotConfigOpen((open) => !open); }}
-            >{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}{active?.autopilot?.proactive ? t("・主動") : ""}</button>
+            >{active?.autopilot?.paused
+              ? t("自動循環・暫停等你回覆")
+              : <>{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}{active?.autopilot?.proactive ? t("・主動") : ""}</>}</button>
+            {active?.autopilot && <div className="worker-autopilot-goal">
+              {active.autopilot.paused
+                ? <span className="worker-autopilot-goal__paused" title={active.autopilot.paused.question}>{t("循環暫停中：回覆後會自動接著跑")}</span>
+                : workerAutopilotGoalDraft != null
+                  ? <>
+                    <input
+                      type="text"
+                      className="worker-autopilot-goal__input"
+                      maxLength={800}
+                      autoFocus
+                      value={workerAutopilotGoalDraft}
+                      aria-label={t("自動循環目標")}
+                      onChange={(event) => setWorkerAutopilotGoalDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void saveWorkerAutopilotGoal(); }
+                        else if (event.key === "Escape") { event.preventDefault(); setWorkerAutopilotGoalDraft(null); }
+                      }}
+                    />
+                    <button type="button" className="worker-autopilot-goal__btn" disabled={workerAutopilotGoalSaving} onClick={() => void saveWorkerAutopilotGoal()}>{t("儲存")}</button>
+                    <button type="button" className="worker-autopilot-goal__btn" disabled={workerAutopilotGoalSaving} onClick={() => setWorkerAutopilotGoalDraft(null)}>{t("取消")}</button>
+                  </>
+                  : <>
+                    <span className="worker-autopilot-goal__text" title={active.autopilot.goal?.trim() || undefined}>
+                      {active.autopilot.goal?.trim()
+                        ? t("目標：{goal}", { goal: active.autopilot.goal.trim() })
+                        : t("目標：（自動取最近一則指示）")}
+                    </span>
+                    <button type="button" className="worker-autopilot-goal__btn" title={t("修改自動循環目標")} onClick={() => setWorkerAutopilotGoalDraft(active.autopilot?.goal?.trim() ?? "")}>{t("改")}</button>
+                  </>}
+            </div>}
             {workerAutopilotConfigOpen && !active?.autopilot && <div className="autopilot-config autopilot-config--up" role="dialog" aria-label={t("自動循環設定")}>
+              <div className="autopilot-config__row autopilot-config__row--goal">
+                <label htmlFor="worker-autopilot-goal-input">{t("目標")}</label>
+                <textarea id="worker-autopilot-goal-input" rows={2} maxLength={800} placeholder={t("留空＝用你最近一則指示")} value={workerAutopilotGoalInput}
+                  onChange={(event) => setWorkerAutopilotGoalInput(event.target.value)} />
+              </div>
               <div className="autopilot-config__row">
                 <label>{t("步數上限")}<input type="number" min={1} max={20} value={workerAutopilotStepInput}
                   onChange={(event) => setWorkerAutopilotStepInput(event.target.value)} /></label>
