@@ -81,6 +81,74 @@ export type WorkerAutopilotTurn = {
   doneWhen?: string;
 };
 
+/**
+ * owner 開循環當下最近一則真人指示（非 notice／system／循環自己送的指示）＝這輪循環的目標原文。
+ * 以前用「史上第一則真實指示」，常是好幾天前、早就不相干的舊任務。
+ */
+export function latestOwnerInstruction(history: ReadonlyArray<{ type: string; text?: string; notice?: boolean; system?: boolean; autopilot?: boolean }>): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const event = history[i];
+    if (event.type !== "user_message" || event.notice || event.system || event.autopilot) continue;
+    const text = typeof event.text === "string" ? event.text.trim() : "";
+    if (text && !text.startsWith("🔁")) return text.slice(0, 800);
+  }
+  return null;
+}
+
+// ── 空轉偵測（伺服器實測，不靠模型自述）────────────────────────────────────
+// 每個循環步驟有沒有「實際產出」：改了檔、commit、或查了資料（上網／派子代理）。研究類步驟不算空轉
+//——循環在想下一步方向時常需要先查。連續 WORKER_AUTOPILOT_IDLE_STOP 步都沒有就由 server 停下，
+// 量化依據：47 輪真實紀錄中「連 2 步沒產出」後續步驟多半仍無產出，約佔總成本兩成。
+export const WORKER_AUTOPILOT_IDLE_STOP = 2;
+export type WorkerAutopilotStepActivity = { owner: boolean; startAt: number | null; endAt: number | null; wrote: boolean; researched: boolean; finished: boolean };
+const WRITE_TOOLS = /^(write|edit|multiedit|notebookedit|apply_patch|file_change|filechange)$/i;
+const RESEARCH_TOOLS = /^(websearch|webfetch|web_search|agent|task)$/i;
+const COMMIT_COMMAND = /\bgit\b[^\n|;&]*\bcommit\b/;
+
+type ActivityHistoryEvent = { type: string; text?: string; notice?: boolean; system?: boolean; autopilot?: boolean; name?: string; input?: unknown; at?: number };
+/** 從歷史切出最近的循環步驟（owner 插話也記一筆 owner=true，空轉連數遇到它就中斷）。 */
+export function workerAutopilotStepActivity(history: ReadonlyArray<ActivityHistoryEvent>, max = 6): WorkerAutopilotStepActivity[] {
+  const steps: WorkerAutopilotStepActivity[] = [];
+  let current: WorkerAutopilotStepActivity | null = null;
+  for (const event of history) {
+    if (event.type === "user_message") {
+      if (event.notice) continue;
+      if (event.system) { current = null; continue; }
+      const auto = event.autopilot === true || (typeof event.text === "string" && event.text.startsWith("🔁"));
+      current = { owner: !auto, startAt: typeof event.at === "number" ? event.at : null, endAt: null, wrote: false, researched: false, finished: false };
+      steps.push(current);
+    } else if (event.type === "tool_call_start" && current) {
+      const name = typeof event.name === "string" ? event.name.replace(/^.*__/, "") : "";
+      if (WRITE_TOOLS.test(name)) current.wrote = true;
+      else if (RESEARCH_TOOLS.test(name)) current.researched = true;
+      else if (/^bash$/i.test(name)) {
+        const command = event.input && typeof event.input === "object" ? (event.input as { command?: unknown }).command : undefined;
+        if (typeof command === "string" && COMMIT_COMMAND.test(command)) current.wrote = true;
+      }
+    } else if (event.type === "turn_end" && current) {
+      current.endAt = typeof event.at === "number" ? event.at : null;
+      current.finished = true;
+      current = null;
+    }
+  }
+  return steps.slice(-max);
+}
+
+/**
+ * 最近連續幾個「已完成、沒產出」的循環步驟。touchedFiles 讓呼叫端補實測（例如工作區有檔案在
+ * 那段時間被改過——Bash 跑腳本產檔不會出現 Write 工具）。遇到有產出的步驟或 owner 插話就停止計數。
+ */
+export function workerAutopilotIdleStreak(steps: ReadonlyArray<WorkerAutopilotStepActivity>, touchedFiles: (step: WorkerAutopilotStepActivity) => boolean = () => false): number {
+  let streak = 0;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
+    if (step.owner || !step.finished) break;
+    if (step.wrote || step.researched || touchedFiles(step)) break;
+    streak += 1;
+  }
+  return streak;
+}
+
 /** 教練決策要的脈絡：近期真實回合＋大局目標＋換腦帶來的背景摘要。 */
 export type WorkerAutopilotContext = {
   turns: WorkerAutopilotTurn[];
@@ -218,11 +286,11 @@ export function workerAutopilotNextPrompt(input: {
     : "";
 
   const planBlock = input.plan ? workerAutopilotPlanBlock(input.plan) : "";
-  const planRule = `\n- MAINTAIN THE LIVING PLAN: the "Living plan" block (below, when shown) is the single evolving source of truth across rounds — it already folds in the original goal and past lessons, so do NOT keep a second mental plan. Read it, then return an UPDATED plan in the "plan" field of your JSON: fold what the LATEST turn established into "tried" (with its outcome), confirm or refute "hypotheses", re-rank "toTry", and refresh "blockers". Never re-list something already in "tried" as a fresh "toTry" — that is exactly the circling to avoid. If no plan block is shown yet, create the initial plan from the original goal. Keep every list tight: a working plan, not a transcript.`;
+  const planRule = `\n- MAINTAIN THE LIVING PLAN: the "Living plan" block (below, when shown) is the single evolving source of truth across rounds — it already folds in the original goal and past lessons, so do NOT keep a second mental plan. Read it, then return an UPDATED plan in the "plan" field of your JSON: fold what the LATEST turn established into "tried" (with its outcome), confirm or refute "hypotheses", re-rank "toTry", and refresh "blockers". Never re-list something already in "tried" as a fresh "toTry" — that is exactly the circling to avoid. If no plan block is shown yet, create the initial plan from the owner's goal. The plan's "goal" is the owner's goal VERBATIM — never rewrite, broaden, or merge other tasks into it (the server keeps the owner's words regardless); a new direction you open goes into "toTry" with one clause on how it serves that goal. Keep every list tight: a working plan, not a transcript.`;
 
   const goal = bounded(input.originalGoal, 800);
   const goalBlock = goal
-    ? `\n\nOriginal goal (this NPC's very first real instruction — the big-picture aim every step must still serve; the recent turns are only how far it has got):\n${goal}`
+    ? `\n\nOwner's goal (the owner's own words when they switched this loop on — FIXED for the whole loop; every step must serve it; the recent turns are only how far it has got):\n${goal}`
     : "";
   const carried = bounded(input.carriedSummary, 1800);
   const carriedBlock = carried
@@ -234,10 +302,10 @@ export function workerAutopilotNextPrompt(input: {
 
   const scopeRule = input.proactive
     ? `- GOAL-ANCHORED, not keep-busy: the owner turned on proactive mode to keep the project ADVANCING TOWARD ITS GOAL and arriving at a clear final decision — NOT to generate motion. Every step must measurably move the ORIGINAL GOAL (see its block) forward: deepen, verify-ONCE, harden, or conclude the thing the owner actually wants. Drifting to an adjacent/tangential GOAL, or re-doing / re-verifying something already shipped or already verified, is busywork — forbidden.
-- DIFFERENT ANGLE, SAME GOAL — act as the owner's second brain: changing the GOAL is drift and is forbidden, but changing the APPROACH is exactly what you should do when the obvious path stalls. If the recent turns show the work going in circles — repeating a move, re-reading the same material, re-stating the same plan, or stuck on one blocked approach — do NOT loop that same path again and do NOT stop prematurely. Pick a genuinely DIFFERENT angle on the SAME original goal: a new entry point, a different method, a smaller decomposable sub-step, another source or line of attack. Real forward motion from a fresh angle is the whole point. Spinning the same lap is a failure — and so is stopping early while a genuinely valuable, reachable rung toward the goal still exists. As long as the owner's steps remain and a real higher rung can be found, keep climbing from a fresh angle rather than stopping.
-- KEEP EVOLVING — USE THE STEP BUDGET the owner set: the owner chose the number of steps on purpose — it is a TARGET amount of real forward motion to deliver, NOT a ceiling to quit under. Producing the first deliverable is NOT "done": while steps remain, keep climbing to the next GENUINELY HIGHER rung that serves the original goal — deepen it, harden it against real failure modes, verify it against reality, generalize it, stress it adversarially, hunt for what is missing, or leverage it toward the bigger aim. For real or open-ended work there is almost ALWAYS a valuable next rung — do NOT quit early, and do NOT treat "the deliverable exists" as a reason to stop. Evolution means verifiable upward progress (new capability, deeper understanding, harder-tested, higher leverage); it is NOT lateral polishing, NOT re-verifying work already verified, NOT drift to another goal, and NOT filler invented only to use up the count — those stay forbidden. The budget is spent on REAL climbing, never on padding.
+- DIFFERENT ANGLE, SAME GOAL — act as the owner's second brain: changing the GOAL is drift and is forbidden, but changing the APPROACH is exactly what you should do when the obvious path stalls. If the recent turns show the work going in circles — repeating a move, re-reading the same material, re-stating the same plan, or stuck on one blocked approach — do NOT loop that same path again and do NOT stop prematurely. Pick a genuinely DIFFERENT angle on the SAME original goal: a new entry point, a different method, a smaller decomposable sub-step, another source or line of attack. Real forward motion from a fresh angle is the whole point. Spinning the same lap is a failure — and so is stopping early while a genuinely valuable, reachable rung toward the goal still exists. As long as a real higher rung can be found, keep climbing from a fresh angle rather than stopping.
+- KEEP EVOLVING — the step count is a SAFETY CEILING, not a quota: the owner switched the loop on so the work keeps advancing toward their goal while they are away. After each result, pick the next step that would make a real, verifiable difference to the goal — deepen it, harden it against real failure modes, verify it against reality, generalize it, find what is missing, or leverage it toward the bigger aim. Producing the first deliverable is not automatically "done" while a clearly valuable next step remains. But NEVER invent work to use up the count: lateral polishing, re-verifying what is already verified, repeated wrap-ups, and drift to another goal are padding — padding burns the owner's money for nothing and is a failure.
 - DECIDE FOR THE OWNER whatever you can get right by thinking + investigating: you are the owner's second brain, not an assistant who raises a hand at every fork. If a fork can be settled by reasoning it through or by investigating (explore, or the NPC reading / searching / testing), then DECIDE it and continue — do NOT bounce an answerable question back to the owner. Which approach, which version, how to structure, resolving an ambiguity, picking between two paths: these are yours to settle.
-- STOP EARLY (with the owner's steps still left) only in these cases — running out of the allocated steps is the normal, expected stop: (a) information or a preference that ONLY the owner holds and no investigation can recover (their private data, a credential, a taste only in their head); (b) an action that spends money, is irreversible, or sends something outward (deploy, external send, deletion); or (c) GENUINE EXHAUSTION — a true LAST RESORT, never a convenient exit: ONLY after you have actively hunted across MULTIPLE DIFFERENT angles (deepen / harden against real failure modes / verify against reality / generalize / adversarially stress / find what is missing / connect to the bigger aim) and still cannot find even ONE more genuinely valuable rung reachable this turn. Treat "nothing valuable left" as a RED FLAG of weak imagination, NOT a reason to quit while steps remain — WHEN IN DOUBT, CLIMB, do not stop; a lazy "done" that abandons a still-reachable possibility is a failure. If you do stop for (c), the "reason" MUST name the distinct angles you already tried and why each is genuinely exhausted, so the owner can see you did not quit early or erase a live possibility. For (a) and (b), first do ALL the thinking and investigating, THEN stop with the "reason" written as a concrete recommendation the owner can confirm in one word — never a bare "waiting for you".`
+- STOP (steps may still be left — that is fine) in these cases: (a) information or a preference that ONLY the owner holds and no investigation can recover (their private data, a credential, a taste only in their head); (b) an action that spends money, is irreversible, or sends something outward (deploy, external send, deletion); or (c) DONE FOR NOW — you looked for the next step from several different angles (deepen / harden against real failure modes / verify against reality / generalize / find what is missing / connect to the bigger aim) and none would make a real difference worth its cost. Stopping honestly at (c) is a good outcome, not a failure. For (c), the "reason" names what this loop achieved and the angles you checked, plus the single most useful direction the owner could point the next loop at. For (a) and (b), first do ALL the thinking and investigating, THEN stop with the "reason" written as a concrete recommendation the owner can confirm in one word — never a bare "waiting for you".`
     : `- The instruction must continue the NPC's CURRENT thread of work with a genuinely valuable, concrete next step: deepen, verify, fix, extend, or conclude what it was just doing. Never busywork, never a restatement of the previous instruction, never "keep going" filler.
 - If the current thread clearly has remaining parts, or obvious immediate follow-ups (finishing a started deliverable, fixing a found problem, verifying fresh output), continue with those FIRST before considering STOP. STOP when the thread has reached a natural conclusion, when the next step needs the owner's input/decision/data, or when the work would be speculative busywork. A good STOP beats a filler step — but do not stop while clearly valuable follow-through remains.`;
 
@@ -255,10 +323,10 @@ ${scopeRule}
 - Working files: drafts and intermediate files stay in the workspace — never tell the NPC to put work-in-progress into outbox/. Only a finished, final deliverable (typically at the loop's last step) goes into outbox/.${input.stepsRemaining <= 0 ? `\n- FINAL STEP: this is the loop's last step. The instruction MUST tell the NPC to wrap up — close out the current thread (no new work that cannot finish in this one turn) and end its reply with a short wrap-up report for the owner: current status, what got done during this loop, what remains, and any risks.` : ""}
 - Write the instruction in the same language the owner has been using with this NPC (Traditional Chinese unless the recent turns clearly show otherwise).
 - Be honest: do not invent progress or manufacture a goal just to keep the loop alive.
-- LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung. While the owner's steps remain there is almost always a real next rung — aim for it; only stop early if you have genuinely exhausted every angle (see STOP).
+- LADDER, not laps: first judge in one line which rung the work currently stands on (e.g. produced → verified → hardened → generalized → leveraged into a bigger goal), and put that judgment in the "rung" field. Then aim the instruction ONE RUNG HIGHER than where it stands — deepen, verify, harden, generalize, or build on the result — never a lateral repeat of the same rung. If no higher rung would make a real difference, STOP instead (see STOP) — never invent a rung just to keep going.
 - COACH like an expert, don't just command: open the instruction with a one-sentence expert diagnosis of the latest result — the specific weakness, gap, or risk a seasoned professional in this field would flag first — then direct the next move with the concrete standard to hit (what "done well" looks like). The NPC should learn WHY from the diagnosis, not just obey WHAT. Skip flattery; if the work is genuinely solid, say so in one phrase and raise the bar instead.
 - ANCHOR IN THE LATEST REPLY, don't run generic: the "最新回覆（完整據此診斷）" block is the full latest result — read it and make the diagnosis quote or point at something CONCRETE in it (a specific claim, number, file, gap, or contradiction). A diagnosis that could be pasted onto any turn is a failure; if you cannot cite a specific from the latest reply, you have not read it closely enough.
-- KEEP THE BIG PICTURE: read the "Original goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}${planRule}${exploreRule}
+- KEEP THE BIG PICTURE: read the "Owner's goal" block and make sure the next step still bends toward it — the recent turns are just the latest leg, not the whole journey. A step that polishes a detail while drifting from the original goal is a failure.${carriedRule}${planRule}${exploreRule}
 - ASK ONLY WHAT YOU TRULY CANNOT SETTLE — and ask it well: do NOT stop for a fork you could resolve by thinking or investigating; decide that yourself and keep going. Stop for the owner only when progress needs (a) data/a preference only the owner holds that no investigation can recover, or (b) a money / irreversible / outward action. When you do stop for one of these, write the "reason" AS a prepared recommendation: name the fork in one line, give your recommended option (plus 1–2 alternatives) with what each implies, phrased so the owner confirms in a single letter or word. Think about how to ask so the owner barely has to type.
 - NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS: you ARE authorized to decide and act on the owner's behalf for anything reversible you can get right by thinking or investigating — that is the job. But an action that spends money, cannot be undone, or sends something outward (deploy, cold-install, external send, deletion) needs the owner's OWN words — a past "yes / 好" to one thing does not authorize a different money/irreversible action. For those, stop with a prepared recommendation rather than proceeding on an assumption.
 - Progress self-check: using the recent turns AND the carried-over lessons, state in the "reason" field what this step advances beyond what is already done. If you cannot name real progress in one concrete sentence, switch to a different rung or angle; if none exists, STOP honestly. Never spend remaining steps on filler.${factsRule}
@@ -672,6 +740,8 @@ export type PersistedWorkerAutopilotState = {
   deadlineAt: number | null;
   /** 主動模式：原任務收尾後仍主動找優化／延伸研究，STOP 門檻大幅調低。 */
   proactive: boolean;
+  /** owner 開循環當下交代的那句話（原文）＝整輪固定的目標；模型不得改寫（見 mergeWorkerAutopilotPlan）。 */
+  goal?: string | null;
 };
 
 /** 逐條驗證還原內容：steps 夾回合法範圍、deadline 非數字一律 null、壞條目整條丟棄。 */
@@ -689,6 +759,7 @@ export function normalizeWorkerAutopilotStates(raw: unknown): Record<string, Per
       stepsRemaining: clampWorkerAutopilotSteps(entry.stepsRemaining),
       deadlineAt,
       proactive: entry.proactive === true,
+      ...(typeof entry.goal === "string" && entry.goal.trim() ? { goal: entry.goal.trim().slice(0, 800) } : {}),
     };
   }
   return out;
@@ -912,7 +983,9 @@ export function mergeWorkerAutopilotPlan(
   round: number,
 ): { plan: WorkerAutopilotPlan; changed: boolean } {
   const next = normalizeWorkerAutopilotPlan(update);
-  if (!next.goal && previous.goal) next.goal = previous.goal; // 根錨不被改空
+  // 根錨鎖死：goal 是 owner 開循環時的原話，模型回傳什麼都不能改寫或擴大它（以前只防改空，
+  // 實測一路被吸附成「五件事併一句」的待辦大雜燴，每步對照的就不再是 owner 真正要的）。
+  if (previous.goal) next.goal = previous.goal;
   next.updatedRound = Math.max(previous.updatedRound, Number.isFinite(round) && round >= 0 ? Math.floor(round) : previous.updatedRound);
   const changed = !samePlanContent(previous, next);
   return { plan: next, changed };

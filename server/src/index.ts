@@ -257,6 +257,10 @@ import {
   parseExplorationFindings,
   parseAutopilotAskOptions,
   workerAutopilotStallSignals,
+  workerAutopilotStepActivity,
+  workerAutopilotIdleStreak,
+  latestOwnerInstruction,
+  WORKER_AUTOPILOT_IDLE_STOP,
   workerAutopilotStepNotice,
   workerAutopilotStopNote,
   workerAutopilotInstructionWithCriterion,
@@ -6158,7 +6162,7 @@ app.post("/api/autopilot", (req, res) => {
 // ===== 個人自動循環（worker autopilot）======================================
 // 單一 NPC 做完一回合後，決策模型看它最近在做什麼、決定下一句指示送回給它，形成個人循環。
 // 與 BOSS 層循環的分工見 workerAutopilot.ts。開關按 workerId 記，檔案式 JSON 持久化。
-const workerAutopilotByWorker = new Map<string, { stepsRemaining: number; deadlineAt: number | null; proactive: boolean }>();
+const workerAutopilotByWorker = new Map<string, { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal?: string | null }>();
 const workerAutopilotStateStore = new WorkerAutopilotStateStore(config.dataDirectory);
 for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
   workerAutopilotByWorker.set(key, { ...state });
@@ -6225,14 +6229,22 @@ function workerAutopilotSnapshot(workerId: string): { stepsRemaining: number; de
   return state ? { stepsRemaining: state.stepsRemaining, deadlineAt: state.deadlineAt, proactive: state.proactive } : null;
 }
 
-function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number, maxMinutes?: number, proactive?: boolean): void {
+function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number, maxMinutes?: number, proactive?: boolean, goalText?: string): void {
   if (enabled) {
     const minutes = clampWorkerAutopilotMinutes(maxMinutes);
+    // 這輪的目標＝owner 開循環當下的原話（明給的優先，否則取最近一則真人指示），整輪固定不讓模型改寫。
+    const goal = goalText?.trim().slice(0, 800) || latestOwnerInstruction(worker.history) || null;
     workerAutopilotByWorker.set(worker.id, {
       stepsRemaining: clampWorkerAutopilotSteps(maxSteps),
       deadlineAt: minutes ? Date.now() + minutes * 60_000 : null,
       proactive: proactive === true,
+      goal,
     });
+    // 換了目標：舊計畫（以舊目標為根錨的已試／待試）歸零重種，過往教訓仍由 retros 帶入新計畫。
+    const existing = workerAutopilotPlans[worker.id];
+    if (goal && existing && existing.goal !== goal) {
+      saveWorkerAutopilotPlan(worker.id, seedWorkerAutopilotPlan(goal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse()));
+    }
   } else {
     workerAutopilotByWorker.delete(worker.id);
     workerAutopilotRetry.resolve(worker.id);
@@ -6311,6 +6323,32 @@ function collectWorkerWorkspaceFacts(workspacePath: string): { outbox: string[];
   }
 }
 
+// 某段時間內工作區有沒有檔案被改過（空轉偵測的補充實測：Bash 跑腳本產檔不會出現 Write 工具）。
+// 有界遞迴（略過 node_modules/.git/dist 等、最多掃 4000 個項目），IO 失敗一律當「沒看到改動」。
+const WORKSPACE_SCAN_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", ".venv", "__pycache__", ".cache"]);
+function workspaceChangedBetween(workspacePath: string, startAt: number | null, endAt: number | null): boolean {
+  if (startAt == null) return false;
+  const until = (endAt ?? Date.now()) + 2_000;
+  let budget = 4_000;
+  const walk = (dir: string, depth: number): boolean => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+    for (const entry of entries) {
+      if (--budget <= 0) return false;
+      if (entry.isDirectory()) {
+        if (depth < 6 && !WORKSPACE_SCAN_SKIP.has(entry.name) && walk(join(dir, entry.name), depth + 1)) return true;
+      } else if (entry.isFile()) {
+        try {
+          const mtime = statSync(join(dir, entry.name)).mtimeMs;
+          if (mtime >= startAt && mtime <= until) return true;
+        } catch { /* 讀不到就略過 */ }
+      }
+    }
+    return false;
+  };
+  return walk(workspacePath, 0);
+}
+
 function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   if (event.type !== "turn_end") return;
   const state = workerAutopilotByWorker.get(worker.id);
@@ -6339,7 +6377,7 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   void advanceWorkerAutopilot(worker, state);
 }
 
-async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: number; deadlineAt: number | null; proactive: boolean }): Promise<void> {
+async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal?: string | null }): Promise<void> {
   workerAutopilotAdvancing.add(worker.id);
   try {
     const runtime = resolveWorkerDecisionRuntime(worker);
@@ -6349,7 +6387,20 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     }
     // 決策/探索/修復三通呼叫都跑在這位 NPC 指定帳號的 home 上（而非共用登入的預設 home）。
     const workerHome = homeForWorker(worker) ?? undefined;
-    const { turns, originalGoal, carriedSummary } = recentWorkerAutopilotTurns(worker);
+    const context = recentWorkerAutopilotTurns(worker);
+    const { turns, carriedSummary } = context;
+    // 目標用 owner 開循環時的原話（state.goal）；舊版持久化沒有 goal 的才退回歷史推得的目標。
+    const originalGoal = state.goal || context.originalGoal;
+    // 空轉偵測（伺服器實測）：連 N 步沒改檔／commit／查資料就停，不再花決策呼叫；差一步就先警告教練。
+    const idleStreak = workerAutopilotIdleStreak(
+      workerAutopilotStepActivity(worker.history),
+      (step) => workspaceChangedBetween(worker.runner.workspacePath, step.startAt, step.endAt),
+    );
+    if (idleStreak >= WORKER_AUTOPILOT_IDLE_STOP) {
+      appendRuntimeLog(config.dataDirectory, "autopilot idle stop", { worker: worker.runner.name, idleStreak });
+      concludeWorkerAutopilotWithHandoff(worker, t("⏸ 自動循環：連續 {n} 步沒有新產出（沒改檔、沒 commit、也沒查資料），先停下來避免空轉。要繼續就再打開開關。", { n: idleStreak }));
+      return;
+    }
     // 活計畫（支柱 A）：載入既有計畫；空則用大局目標＋過往教訓種入一份（吃掉既有狀態、不並存）。
     let plan = workerAutopilotPlans[worker.id];
     if (!plan || isWorkerAutopilotPlanEmpty(plan)) {
@@ -6366,6 +6417,9 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     let exploreRounds = 0;
     // 原地踏步軟訊號（純字串比對、零額外呼叫）：有才注入 prompt 逼教練換角度。
     const stallSignals = workerAutopilotStallSignals(turns);
+    if (idleStreak > 0) {
+      stallSignals.push(`The last loop step produced NO new output (server-checked: no file changed, no commit, no research). ${WORKER_AUTOPILOT_IDLE_STOP - idleStreak} more empty step and the server stops the loop — make this step produce something concrete toward the owner's goal, or STOP honestly now.`);
+    }
     for (;;) {
       const canExplore = exploreRounds < WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP;
       const prompt = workerAutopilotNextPrompt({
@@ -6484,7 +6538,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: { stepsRemaining: n
     // 收尾、為了在上限前交東西而非真推進。步數只留在引擎內部當安全界限；NPC 靠教練判斷真完成才停。
     // 完成標準附在指示尾端：NPC 知道做到什麼算完成，下一步教練據此驗收（prevMet）。
     const text = t("🔁（自動循環）{instruction}", { instruction: workerAutopilotInstructionWithCriterion(decision.instruction, decision.doneWhen) });
-    record(worker, { type: "user_message", text });
+    record(worker, { type: "user_message", text, autopilot: true });
     try {
       worker.runner.send(text, [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
@@ -6588,7 +6642,8 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   // 主動模式預設開（owner 回饋：開循環的本意就是「持續思考下一步發展」，不是把當前線收尾就停）。
   // 非主動（收尾型）改成明確傳 proactive:false 才啟用。
   const proactive = enabled && req.body?.proactive !== false;
-  setWorkerAutopilot(worker, enabled, maxSteps, maxMinutes, proactive);
+  const goalText = enabled && typeof req.body?.goal === "string" ? req.body.goal : undefined;
+  setWorkerAutopilot(worker, enabled, maxSteps, maxMinutes, proactive, goalText);
   // 開啟當下 NPC 若閒著：立即想第一步（只靠 turn_end 觸發的話，開了會毫無反應）。
   const state = workerAutopilotByWorker.get(worker.id);
   if (enabled && state && !worker.runner.busy && !workerAutopilotAdvancing.has(worker.id)

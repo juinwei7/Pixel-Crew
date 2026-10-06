@@ -99,7 +99,7 @@ test("stripWorkerAutopilotPrefix removes copied 🔁 prefixes (repeated, both pa
   assert.deepEqual(parsed, { action: "continue", instruction: "驗證輸出", reason: "接續" });
 });
 
-test("proactive prompt：用滿步數持續進化(乙)，早停只限 owner-input/花錢不可逆/真榨不出(高門檻)", () => {
+test("proactive prompt：步數是上限不是配額，持續進化但不灌水，做完就誠實停", () => {
   const prompt = workerAutopilotNextPrompt({
     workerName: "探路阿蒐",
     role: null,
@@ -109,18 +109,19 @@ test("proactive prompt：用滿步數持續進化(乙)，早停只限 owner-inpu
     proactive: true,
   });
   assert.match(prompt, /GOAL-ANCHORED, not keep-busy/);
-  // 乙核心：步數是承諾不是天花板，用滿步數持續往更高階爬、幾乎永遠有下一階
-  assert.match(prompt, /KEEP EVOLVING — USE THE STEP BUDGET/);
-  assert.match(prompt, /there is almost ALWAYS a valuable next rung/);
-  // 但不准灌水湊步數
-  assert.match(prompt, /NOT filler invented only to use up the count/);
+  // 步數是安全上限、不是配額：有價值的下一步就繼續，絕不為了湊步數找事做
+  assert.match(prompt, /KEEP EVOLVING — the step count is a SAFETY CEILING, not a quota/);
+  assert.match(prompt, /NEVER invent work to use up the count/);
+  assert.doesNotMatch(prompt, /USE THE STEP BUDGET/);
+  assert.doesNotMatch(prompt, /TARGET amount/);
   // 替 owner 決定：能靠想＋查得出的自己拍，不丟回去
   assert.match(prompt, /DECIDE FOR THE OWNER whatever you can get right/);
-  // 早停門檻：真榨不出＝最後手段，拿捏不準就爬、且要列出試過的角度(防抹除可能性)
-  assert.match(prompt, /GENUINE EXHAUSTION — a true LAST RESORT/);
-  assert.match(prompt, /WHEN IN DOUBT, CLIMB/);
-  assert.match(prompt, /MUST name the distinct angles you already tried/);
-  assert.match(prompt, /running out of the allocated steps is the normal, expected stop/);
+  // 做完就停是好結果：看過幾個角度都沒有值得做的下一步就誠實停，並交代做到哪、建議下一輪方向
+  assert.match(prompt, /DONE FOR NOW/);
+  assert.match(prompt, /Stopping honestly at \(c\) is a good outcome, not a failure/);
+  assert.match(prompt, /the angles you checked/);
+  assert.doesNotMatch(prompt, /WHEN IN DOUBT, CLIMB/);
+  assert.doesNotMatch(prompt, /running out of the allocated steps is the normal, expected stop/);
   // 舊「達成就主動收工」字樣已移除（那是上一版、與乙相反）
   assert.doesNotMatch(prompt, /the correct move is to STOP and hand back/);
   assert.doesNotMatch(prompt, /THE ORIGINAL GOAL \/ REQUEST IS GENUINELY SATISFIED/);
@@ -460,7 +461,7 @@ test("prompt 契約：原始目標與換腦帶來的摘要被釘住，且摘要�
     originalGoal: "大局目標：打造多代理辦公室",
     carriedSummary: "先前工作摘要：已完成終端機美化與活動徽章",
   });
-  assert.match(prompt, /Original goal .*very first real instruction/);
+  assert.match(prompt, /Owner's goal .*FIXED for the whole loop/);
   assert.match(prompt, /大局目標：打造多代理辦公室/);
   assert.match(prompt, /KEEP THE BIG PICTURE/);
   assert.match(prompt, /BACKGROUND ONLY/);
@@ -469,7 +470,7 @@ test("prompt 契約：原始目標與換腦帶來的摘要被釘住，且摘要�
   // 沒帶背景時不得出現空區塊與 carried 規則（KEEP THE BIG PICTURE 規則行無條件存在，
   // 反向斷言只釘條件式區塊的專屬字樣）
   const bare = workerAutopilotNextPrompt({ workerName: "總管小揮", role: null, workspaceLabel: "d:/測試", turns: [], stepsRemaining: 2 });
-  assert.doesNotMatch(bare, /very first real instruction/);
+  assert.doesNotMatch(bare, /FIXED for the whole loop/);
   assert.doesNotMatch(bare, /BACKGROUND ONLY/);
 });
 
@@ -489,7 +490,7 @@ test("解析契約：真實乾跑的 STOP 好問題回覆（A/B 標號＋一字�
 
 // ── 循環邏輯校正鎖（owner：讓項目進步/離目標更近/最後留簡單決定，別硬找活、別假設同意） ──
 
-test("prompt 契約(proactive)：用滿步數進化(乙)＋替 owner 決定＋早停高門檻，花錢/不可逆仍不假設同意", () => {
+test("prompt 契約(proactive)：上限非配額＋替 owner 決定＋做完誠實停，花錢/不可逆仍不假設同意", () => {
   const p = workerAutopilotNextPrompt({
     workerName: "總管小揮", role: null, workspaceLabel: "d:/測試",
     turns: [{ instruction: "上一步", result: "已完成並驗證" }], stepsRemaining: 3, proactive: true,
@@ -497,11 +498,11 @@ test("prompt 契約(proactive)：用滿步數進化(乙)＋替 owner 決定＋�
   });
   assert.match(p, /GOAL-ANCHORED, not keep-busy/);
   assert.match(p, /re-doing \/ re-verifying something already shipped or already verified, is busywork/);
-  // 乙：用滿步數爬、替 owner 決定、早停只限真榨不出(高門檻)＋列角度防抹除
-  assert.match(p, /KEEP EVOLVING — USE THE STEP BUDGET/);
+  // 上限非配額、替 owner 決定、做完誠實停（交代看過的角度）
+  assert.match(p, /KEEP EVOLVING — the step count is a SAFETY CEILING/);
   assert.match(p, /DECIDE FOR THE OWNER whatever you can get right/);
-  assert.match(p, /GENUINE EXHAUSTION — a true LAST RESORT/);
-  assert.match(p, /MUST name the distinct angles you already tried/);
+  assert.match(p, /DONE FOR NOW/);
+  assert.match(p, /the angles you checked/);
   // 花錢/不可逆仍要 owner 本人授權（保護 owner，不被「替你決定」沖掉）
   assert.match(p, /NEVER PRESUME CONSENT FOR MONEY OR IRREVERSIBLE ACTIONS/);
   assert.match(p, /spends money, cannot be undone, or sends something outward/);
@@ -522,8 +523,8 @@ test("prompt 契約(proactive)：卡住要換角度推進、不繞圈不早停�
   assert.match(p, /changing the APPROACH is exactly what you should do when the obvious path stalls/);
   assert.match(p, /going in circles/);
   assert.match(p, /do NOT stop prematurely/);
-  // 卡住時換角度而非停：拿捏不準就爬
-  assert.match(p, /WHEN IN DOUBT, CLIMB/);
+  // 卡住時換角度而非停；但不准為了續命硬編下一階
+  assert.match(p, /never invent a rung just to keep going/);
 });
 
 test("prompt 契約(非 proactive 也有不假設同意的守則)", () => {
