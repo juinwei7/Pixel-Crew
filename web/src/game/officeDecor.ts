@@ -207,6 +207,16 @@ export class OfficeDecor {
   private slices = 6;
   private readonly meeting = new Container();
   private readonly meetingGlow = new Graphics();
+  /**
+   * The war-room table itself (plus the front-row chairs and anything on the
+   * table top). Not part of `container` (zIndex 132): the scene adds it straight
+   * to the world at the table's front line, so back-row NPCs sit behind it and
+   * front-row NPCs in front of it. The rug and back-row chairs stay low in
+   * `meeting`, under everyone.
+   */
+  readonly meetingTable = new Container();
+  private readonly meetingTableTop = new Container();
+  private readonly meetingTableGlow = new Graphics();
   private readonly coffee = new Container();
 
   private readonly milestones: Container[] = [new Container(), new Container(), new Container()];
@@ -228,8 +238,10 @@ export class OfficeDecor {
     // 會議桌已搬到最底部的專屬空地（不再跟部門桌搶位置），所以永遠顯示——
     // 它同時是可點擊的「作戰室」傢俱，常駐才有可發現性。
     this.meeting.visible = true;
+    this.meetingTable.visible = true;
     // 開會光暈：有人在會議桌（圓桌進行中）才亮起，散會就熄燈。
     this.meetingGlow.visible = roundtableActive;
+    this.meetingTableGlow.visible = roundtableActive;
   }
 
   /** Office growth unlocked by all-time completed turns — levels stack. */
@@ -291,13 +303,14 @@ export class OfficeDecor {
     frameRect(rug, M.rugX, M.rugY, M.rugW, M.rugH, MEET.rugEdge);
     frameRect(rug, M.rugX + 3, M.rugY + 3, M.rugW - 6, M.rugH - 6, MEET.rugLine);
 
-    const g = new Graphics();
     // Back row: chairs facing us, backrests peeking over the far edge of the table.
+    // Drawn with the rug (below everyone) so a back-row NPC sits in front of the backrest.
     for (const x of SEAT_X) {
-      g.rect(x - 4, -16, 8, 5).fill(MEET.chair);
-      g.rect(x - 4, -16, 8, 1).fill(MEET.chairTop);
-      g.rect(x + 3, -15, 1, 4).fill(MEET.chairShade);
+      rug.rect(x - 4, -16, 8, 5).fill(MEET.chair);
+      rug.rect(x - 4, -16, 8, 1).fill(MEET.chairTop);
+      rug.rect(x + 3, -15, 1, 4).fill(MEET.chairShade);
     }
+    const g = new Graphics();
     // Contact shadow, legs, then the table: top surface, lit front edge, lip, front face.
     const { x0, w } = { x0: -M.tableHalf, w: M.tableHalf * 2 };
     g.rect(x0 + 1, 9, w - 2, 1).fill({ color: 0x050810, alpha: 0.45 });
@@ -334,13 +347,21 @@ export class OfficeDecor {
     // ---- 開會中（地毯框與桌緣換成作戰室主題色；靜態，不閃不動） ----
     const glow = this.meetingGlow;
     frameRect(glow, M.rugX, M.rugY, M.rugW, M.rugH, MEET_ACCENT, 0.45);
-    glow.rect(x0, 2, w, 1).fill({ color: MEET_ACCENT, alpha: 0.85 });
-    for (const sx of [-40, 28]) glow.rect(sx + 2, -8, 4, 1).fill(MEET_ACCENT);
     glow.visible = false;
+    const tableGlow = this.meetingTableGlow;
+    tableGlow.rect(x0, 2, w, 1).fill({ color: MEET_ACCENT, alpha: 0.85 });
+    for (const sx of [-40, 28]) tableGlow.rect(sx + 2, -8, 4, 1).fill(MEET_ACCENT);
+    tableGlow.visible = false;
 
     // 放到畫面最底下的空地，NPC 會走過來圍著它討論（避開上方部門排，才不會擠在一起）。
     this.meeting.position.set(120, 306);
-    this.meeting.addChild(rug, g, glow);
+    this.meeting.addChild(rug, glow);
+    this.meetingTableTop.position.set(120, 306);
+    this.meetingTableTop.addChild(g, tableGlow);
+    // Depth line = the table's front face (306 + 8): back row (feet at 300) sorts
+    // behind it, front row (feet at 320) in front.
+    this.meetingTable.zIndex = 306 + 8;
+    this.meetingTable.addChild(this.meetingTableTop);
   }
 
   private drawCoffeeArea(): void {
@@ -437,7 +458,9 @@ export class OfficeDecor {
     }
     this.pizzaG.visible = false;
     this.drawPizza();
-    this.seasonG.addChild(this.treeG, this.pizzaG, ...this.lanterns);
+    this.seasonG.addChild(this.treeG, ...this.lanterns);
+    // The pizza box sits on the war-room table, so it lives (and depth-sorts) with the table.
+    this.meetingTable.addChild(this.pizzaG);
   }
 
   private drawPizza(): void {

@@ -39,3 +39,16 @@ export function pickMicro<K extends string>(
   if (opts.needsGlasses !== undefined && kind === opts.needsGlasses && !opts.wearsGlasses) return opts.fallback;
   return kind;
 }
+
+/**
+ * Chance a coffee sip spills a drop. Was 0.05 with a hop and a "啊！" bubble;
+ * now 5x rarer and quiet (a 1px flinch and one drip, no speech, no hop).
+ */
+export const SPILL_CHANCE = 0.01;
+/** The same NPC never spills again within this window (also counts from spawn). */
+export const SPILL_COOLDOWN_MS = 8 * 60_000;
+
+/** Does this sip spill? `roll` is a uniform [0, 1) draw. */
+export function maySpill(nowMs: number, lastSpillAtMs: number, roll: number): boolean {
+  return nowMs - lastSpillAtMs >= SPILL_COOLDOWN_MS && roll < SPILL_CHANCE;
+}

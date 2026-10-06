@@ -25,6 +25,7 @@ import { PersonalDeskLayer } from "./personalDesks";
 import type { DepartmentPhase, DepartmentSeat, DepartmentZone } from "./personalDesks";
 import { DECOR_SPOTS, OfficeDecor, OutboxShelf, type DecorSpot } from "./officeDecor";
 import { Cat } from "./cat";
+import { meetingSeat } from "./meetingSeats";
 import { apiAssetUrl } from "../api";
 import { nightFactor } from "../dayNight";
 import { officeMinScale, responsiveOfficeFitScale } from "./camera";
@@ -56,18 +57,7 @@ const SPOT_OFFSETS: Array<[number, number]> = [
   [35, 30],
 ];
 
-/** 會議桌專屬座位：讓 NPC 分坐在長桌上下兩側、沿桌長分散，像真的圍桌開會，而不是擠在同一側。
- *  位移相對於 meeting 站點 (standX, standY)；oy 負得多＝桌子上方（後排），接近 0＝桌子下方（前排）。 */
-const MEETING_SEATS: Array<[number, number]> = [
-  [-45, 0],
-  [-27, 0],
-  [-9, 0],
-  [9, 0],
-  [27, 0],
-  [45, 0],
-  [-18, 9],
-  [18, 9],
-];
+// 會議桌座位（前後兩排交錯）見 ./meetingSeats。
 
 export type WorkerSceneState = {
   id: string;
@@ -100,7 +90,18 @@ export type WorkerSceneState = {
   ctxPct?: number | null;
 };
 
-export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
+export type PersonScreenPos = {
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  /**
+   * Seated behind furniture (war-room back row): a tag below the feet would land
+   * on the table top and the front row's heads, so it belongs above the head.
+   */
+  tagAbove?: boolean;
+};
 export type FurnitureScreenPos = { key: StationKey; x: number; y: number };
 
 export type SceneView = { scale: number; minScale: number; maxScale: number; isDefault: boolean };
@@ -302,7 +303,7 @@ export async function createScene(
   const cues = new SystemCues();
   // Konami-code dance party.
   const party = new DiscoParty({ x: 0, y: 0, w: ART_W, h: ART_H }, { x: ART_W / 2, y: 0 });
-  world.addChild(room.container, personalDesks.container, officeDecor.container, shelf.container, particles.g, cat.container, fx.air, power.view, cues.g, party.view);
+  world.addChild(room.container, personalDesks.container, officeDecor.container, officeDecor.meetingTable, shelf.container, particles.g, cat.container, fx.air, power.view, cues.g, party.view);
 
   // Clickable decor: purely visual reactions, hover shows corner brackets.
   // A tap on decor still counts as "tapped the room" for the UI (closes the log).
@@ -773,8 +774,9 @@ export async function createScene(
       return seat ? { x: seat.x, y: seat.y } : { x: ART_W / 2, y: ART_H - 30 };
     }
     const def = furniture.def(station);
-    const seats = station === "meeting" ? MEETING_SEATS : SPOT_OFFSETS;
-    const [ox, oy] = seats[index % seats.length];
+    const [ox, oy] = station === "meeting"
+      ? [meetingSeat(index).ox, meetingSeat(index).oy]
+      : SPOT_OFFSETS[index % SPOT_OFFSETS.length];
     return {
       x: Math.max(8, Math.min(ART_W - 8, def.standX + ox)),
       y: Math.max(52, Math.min(ART_H - 6, def.standY + oy)),
@@ -1654,6 +1656,7 @@ export async function createScene(
         y: world.position.y + (entry.person.y - 17) * scale,
         scale,
         opacity: entry.person.container.alpha,
+        ...(entry.person.meetingRow === "back" && !entry.person.isMoving ? { tagAbove: true } : {}),
       });
     }
     callbacks.onPositions(positions);
@@ -1673,7 +1676,11 @@ export async function createScene(
         applyView();
       }
       // 圓桌進行時（有 NPC 站到 meeting 會議桌），強制顯示會議桌，即使目前人數 >4。
-      officeDecor.setWorkerCount(permanentWorkers.length, list.some((w) => w.character.station === "meeting"));
+      const warRoomInSession = list.some((w) => w.character.station === "meeting");
+      officeDecor.setWorkerCount(permanentWorkers.length, warRoomInSession);
+      // 開會中：桌邊坐滿人，「作戰室」站名牌（文字＋底板）會跟名牌疊在一起——收起來，散會再放回。
+      furniture.setLabelHidden("meeting", warRoomInSession);
+      for (const label of labels) if (label.def.key === "meeting") label.text.visible = !warRoomInSession;
       // Department mission step done → the team thumbs up; last step → everyone cheers.
       const missionDiff = missionCheers(missionSeen, list);
       missionSeen = missionDiff.seen;
@@ -1876,6 +1883,8 @@ export async function createScene(
         entry.ctxPct = w.ctxPct ?? null;
         if (!w.waiting && entry.person.emoting === "alert") entry.person.emote("alert", 0);
         if (entry.last !== w.character) applyCharacter(entry, w.character, w.id);
+        // 作戰室座位分前後排：前排背對鏡頭坐在桌前，後排坐在桌後面向鏡頭（person.ts 據此換姿勢）。
+        entry.person.meetingRow = w.character.station === "meeting" ? meetingSeat(spotIndex).row : null;
         // home 會持續回座位；meeting（作戰室圍桌）也要持續把 NPC 拉到會議桌邊——否則非 home 站點
         // 只有在「station 剛改變且已 ready」那一瞬間才會移動，剛建立的 NPC 還在 entering、錯過那瞬間
         // 就永遠不會走過去（這就是先前「沒有過去」的原因）。

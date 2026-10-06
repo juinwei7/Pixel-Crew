@@ -5,7 +5,7 @@ import { SHIRT_COLORS } from "../game/crewLook";
 import { chooseBubblePlacement, type BubbleRect } from "../game/bubbleLayout";
 import { crowdedView, declutterNameplates, nameplateVisible, type NameplateBox } from "../game/nameplateLod";
 import { bossRoomWorkers } from "../game/bossRoomFilter";
-import { latestMissionSpeech, missionStationOverride } from "../game/missionScene";
+import { missionCharacter } from "../game/missionScene";
 import { FURNITURE_DEFS } from "../game/furnitureDefs";
 import { roomName } from "../workspace";
 import { milestoneLevel } from "../milestones";
@@ -151,6 +151,11 @@ export function radialMenuDirection(x: number, width: number): "left" | "right" 
 // 穩定的空集合預設值：避免每次 render 都 new Set() 造成參照改變、白白觸發下游重算。
 const EMPTY_ROUNDTABLE_IDS: ReadonlySet<string> = new Set();
 
+// 名牌頂端：平常在腳下；作戰室後排坐在桌後，名牌改放頭上，免得蓋住同 x 前排的頭。
+function nameplateTop(pos: { y: number; scale: number; tagAbove?: boolean }, plateHeight: number): number {
+  return pos.tagAbove ? pos.y - plateHeight - 2 * pos.scale : pos.y + 22 * pos.scale;
+}
+
 function visualWorkers(workers: WorkerState[], activeId: string | null, collaborations: CollaborationTask[], missions: DepartmentMission[], departments: Department[] = [], roundtableIds: ReadonlySet<string> = EMPTY_ROUNDTABLE_IDS, bossRoom = false, bossTaskDepartmentIds?: ReadonlySet<string>): VisualWorker[] {
   const departmentById = new Map(departments.map((department) => [department.id, department]));
   // 兩間房：主辦公室（原本的房間）只住常駐夥伴；BOSS 交辦房住「正在做這張交辦的那群人」
@@ -176,12 +181,11 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
     //   得把那顆 emoji 顯示出來。現在協定寫在欄位上，名字純粹是名字。）
     const isWarRoomPeer = worker.ephemeralKind === "warroom";
     const roundtabling = !handingOff && (isWarRoomPeer || (roundtableIds.has(worker.id) && worker.busy));
-    // Mission 場景生命力（missionScene.ts）：有工具在跑但角色還停在自家桌 → 走去對應
-    // 工作站；討論類步驟輪到他發言、沒有工具在跑 → 把最新講的話截成對話泡。
-    const stationOverride = !handingOff && !roundtabling ? missionStationOverride(worker, mission?.executionEvents) : null;
-    const missionTalking = !handingOff && !roundtabling && !stationOverride && worker.busy
-      && missionStep != null && missionStep.assigneeWorkerId === worker.id
-      ? latestMissionSpeech(mission?.executionEvents, worker.id)
+    // Mission 場景生命力（missionScene.ts missionCharacter）：有工具在跑但角色還停在自家桌 → 走去對應
+    // 工作站；Mission 期間對話泡一律吃 mission.executionEvents 的當下活動（工具短句／最新發言），
+    // 絕不顯示他自己上次私聊的舊字（Mission 走獨立 runner，worker.character.speech 整場不會更新）。
+    const missionShown = !handingOff && !roundtabling
+      ? missionCharacter(worker, mission, missionStep != null && missionStep.assigneeWorkerId === worker.id)
       : null;
     const parent: VisualWorker = {
       id: worker.id,
@@ -189,9 +193,7 @@ function visualWorkers(workers: WorkerState[], activeId: string | null, collabor
       name: worker.name,
       character: handingOff ? { ...worker.character, activity: "thinking", station: "home", speech: t("LLM 交接中…") }
         : roundtabling ? { ...worker.character, activity: "thinking", station: "meeting", speech: worker.busy ? t("作戰室辯論中…") : t("作戰室") }
-        : stationOverride ? { ...worker.character, station: stationOverride }
-        : missionTalking ? { ...worker.character, activity: "thinking", speech: missionTalking }
-        : worker.character,
+        : missionShown ?? worker.character,
       active: worker.id === activeId,
       colorIndex: worker.colorIndex,
       avatarId: worker.avatarId,
@@ -339,21 +341,29 @@ export function GameCanvas({
   // 工作小窗多行歷史：speech 每次變化就進每人滾動緩衝（收工清空）；終端機小窗用它演出像真 shell 的最近幾條指令。
   // 每行帶時間戳；cmds＝本回合累計指令數（標題列顯示）。
   const speechLogRef = useRef(new Map<string, { last: string; lines: Array<{ text: string; at: number }>; cmds: number }>());
+  // 吃「畫面上實際顯示」的角色狀態（visualWorkers）：Mission NPC 的 speech 來自 mission.executionEvents，
+  // 直接讀 worker.character 會把他自己上次私聊的舊字灌進工作小窗。
   useEffect(() => {
+    const shownById = new Map(
+      visualWorkers(workers, activeId, collaborations, missions, departments, roundtableIds, bossRoom, bossTaskDepartmentIds)
+        .filter((v) => !v.temporary)
+        .map((v) => [v.id, v.character] as const),
+    );
     for (const w of workers) {
       const log = speechLogRef.current.get(w.id) ?? { last: "", lines: [], cmds: 0 };
       speechLogRef.current.set(w.id, log);
       if (!w.busy) { log.last = ""; log.lines.length = 0; log.cmds = 0; continue; }
-      const sp = stripMarkdown(w.character.speech);
+      const shown = shownById.get(w.id) ?? w.character;
+      const sp = stripMarkdown(shown.speech);
       if (sp && sp !== log.last) {
         log.last = sp;
         // 時間戳用 server 蓋章的事件時間（speechAt），不用 render 當下——重整/重連重播歷史時才不會全變成「現在」
-        log.lines.push({ text: sp, at: w.character.speechAt ?? Date.now() });
+        log.lines.push({ text: sp, at: shown.speechAt ?? Date.now() });
         if (/^執行指令[:：]/.test(sp)) log.cmds += 1;
         if (log.lines.length > 7) log.lines.shift();
       }
     }
-  }, [workers]);
+  }, [workers, missions, collaborations, activeId, departments, roundtableIds, bossRoom, bossTaskDepartmentIds]);
 
   // ── 脈絡公事包：把 token 負載畫成名牌內的手提箱（填充＝佔用），換腦（context 驟降）時播一次「瘦身」脈動。
   // 純前端、只吃既有 ctxGauge 數據；不動後端與換腦邏輯。整合進名牌實體，刻意不做頭上飄浮卡。
@@ -463,7 +473,7 @@ export function GameCanvas({
             boxes.push({
               id: pos.id,
               x: pos.x,
-              top: pos.y + 22 * pos.scale,
+              top: nameplateTop(pos, plate.offsetHeight || 18),
               width: plate.offsetWidth || 80,
               height: plate.offsetHeight || 18,
               priority: active ? 3 : hovered ? 2 : 1,
@@ -477,7 +487,7 @@ export function GameCanvas({
             const plate = nameRefs.current.get(pos.id);
             if (!plate) return null;
             if (!plate.classList.contains("npc-nameplate--tight")) plate.dataset.fullw = String(plate.offsetWidth);
-            return { id: pos.id, plate, x: pos.x, top: pos.y + 22 * pos.scale, w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
+            return { id: pos.id, plate, x: pos.x, top: nameplateTop(pos, plate.offsetHeight || 18), w: Number(plate.dataset.fullw) || plate.offsetWidth, h: plate.offsetHeight || 18 };
           });
           for (let i = 0; i < wide.length; i++) {
             const a = wide[i];
@@ -510,7 +520,7 @@ export function GameCanvas({
             // Below the sprite's feet (pos.y is 17 art px above them, feet sit
             // 19 below pos.y at head-top anchor) — keeps the desk, monitor and
             // department sign above the head completely clear of DOM chrome.
-            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + pos.y + 22 * pos.scale}px)`;
+            nameplate.style.transform = `translate(-50%, 0) translate(${bounds.left + pos.x}px, ${bounds.top + nameplateTop(pos, nameplate.offsetHeight || 18)}px)`;
             // Big crew zoomed out: idle tags step back (busy / selected / hovered stay).
             const show = nameplateVisible({
               x: pos.x,

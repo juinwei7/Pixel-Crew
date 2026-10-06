@@ -58,6 +58,10 @@ class FurnitureSprite {
   private readonly ledOverlay = new Graphics();
   private readonly highlight = new Graphics();
   private readonly plate = new Graphics();
+  /** Hide the label plate (the scene hides the matching label text at the same time). */
+  set labelHidden(hidden: boolean) {
+    this.plate.visible = !hidden;
+  }
   /** Click reactions + the hover outline. */
   private readonly fxG = new Graphics();
   active = false;
@@ -289,6 +293,12 @@ export class FurnitureLayer {
 
   def(key: StationKey): FurnitureDef {
     return this.sprites.get(key)?.def ?? FURNITURE_DEFS[FURNITURE_DEFS.length - 1];
+  }
+
+  /** Hide / restore a station's label plate (e.g. the war room while a debate is seated at the table). */
+  setLabelHidden(key: StationKey, hidden: boolean): void {
+    const sprite = this.sprites.get(key);
+    if (sprite) sprite.labelHidden = hidden;
   }
 
   setActive(keys: ReadonlySet<StationKey>): void {

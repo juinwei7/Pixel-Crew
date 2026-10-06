@@ -7,7 +7,8 @@ import { t } from "../i18n";
 import type { StationKey } from "../stations";
 import type { Trait } from "./officeLife";
 import { FRONT_IDLE_0, SHIRT_COLORS } from "./crewLook";
-import { pickMicro } from "./microLife";
+import { maySpill, pickMicro } from "./microLife";
+import type { MeetingRow } from "./meetingSeats";
 
 // Re-exported for existing importers inside the scene; UI code imports ./crewLook directly.
 export { FRONT_IDLE_0, SHIRT_COLORS };
@@ -595,6 +596,12 @@ export class Person {
 
   /** Where the worker is standing — picks the body language while working. */
   station: StationKey = "home";
+  /**
+   * War-room seat row (set by the scene while station is "meeting"): the front
+   * row sits at the table with their backs to us, the back row sits behind it
+   * facing us (the table hides their legs), "end" stands at a short end.
+   */
+  meetingRow: MeetingRow | null = null;
   /** Waiting on the owner (tool approval): hand up, small hops. Set by the scene. */
   handRaised = false;
   /** Something is being dragged over this NPC: arms open, ring on the floor. */
@@ -650,11 +657,14 @@ export class Person {
   private errT = 0;
   private comboN = 0;
   private comboT = 0;
-  /** One-shot beat inside a micro-action (the coffee-spill reaction fires once). */
+  /** One-shot beat inside a micro-action (the sneeze's small dip fires once). */
   private sneezeBeat = 0;
   /** animT of the last sneeze; starts at 0 so nobody sneezes in their first few minutes either. */
   private lastSneezeAt = 0;
+  /** This sip spills a drop (rare, quiet: a 1px flinch and one drip, see microLife maySpill). */
   private spill = false;
+  /** animT of the last spill; same per-NPC cooldown pattern as the sneeze. */
+  private lastSpillAt = 0;
   private danceT = 0;
   private fistT = 0;
   private highFiveT = 0;
@@ -727,8 +737,9 @@ export class Person {
     this.microT = MICRO_MS[kind];
     this.microDir = dir;
     if (kind === "pet") this.emote("heart", MICRO_MS.pet);
-    // Now and then the coffee goes everywhere.
-    this.spill = kind === "sip" && Math.random() < 0.05;
+    // Very rarely a drop of coffee goes over the rim (quiet; per-NPC cooldown).
+    this.spill = kind === "sip" && maySpill(this.animT, this.lastSpillAt, Math.random());
+    if (this.spill) this.lastSpillAt = this.animT;
     this.sneezeBeat = 0;
     if (kind === "sneeze") this.lastSneezeAt = this.animT;
     this.nextMicroAt = this.animT + this.microGap();
@@ -1419,12 +1430,22 @@ export class Person {
       flip = m.flip;
       view = m.view;
       screen = this.facesScreen();
+    } else if (thinking && this.station === "meeting" && this.meetingRow === "front") {
+      // Front row of the war room: back to us, facing the table; a small listening nod now and then.
+      this.sprite.texture = f.workFrames[0];
+      view = "back";
+      bobY = (wt % 3_600) > 3_380 ? 1 : 0;
     } else if (thinking) {
       const idx = bulb >= 0 ? 1 : Math.floor(this.animT / 1400) % 2;
       this.sprite.texture = idx === 0 && blinking ? f.thinkBlink : f.thinkFrames[idx];
       breathe = true;
     } else if (this.activity === "working") {
-      if (this.station === "books") {
+      if (this.station === "meeting" && this.meetingRow !== null && this.meetingRow !== "front") {
+        // Behind the war-room table (or at its end) they face us, not a monitor.
+        const idx = Math.floor((this.animT + this.seed * 1_100) / 1_100) % 2;
+        this.sprite.texture = (blinking ? f.idleBlink : f.idleFrames)[idx];
+        breathe = true;
+      } else if (this.station === "books") {
         // Reading: eyes run along the lines, a little nod as each page turns.
         const c = wt % 2_600;
         this.sprite.texture = f.readFrames[Math.floor(wt / 650) % 2];
@@ -1535,7 +1556,10 @@ export class Person {
     const resultHere = this.resultT > 0 &&
       Math.abs(this.resultX - Math.round(this.x)) < 6 && Math.abs(this.resultY - Math.round(this.y)) < 6;
     const raise = screen || resultHere ? SCREEN_LIFT : 0;
-    this.drawStation(wt, screen, view, lift, asleep, reading);
+    // Front row of the war room: their own chair back in front of the body hides the legs (seated).
+    const meetingChair = still && !leaving && !materialising && view === "back" &&
+      this.station === "meeting" && this.meetingRow === "front";
+    this.drawStation(wt, screen, view, lift, asleep, reading, meetingChair);
     if (!moving && this.wasMovingProp) this.walkProp = null; // arrived: put it down
     this.wasMovingProp = moving;
     this.drawProps(moving ? this.gaitFor(dx, dy) : "front", lift, moving);
@@ -1682,7 +1706,8 @@ export class Person {
         return { tex: up ? f.backStretch : f.workFrames[0], bobY: up ? -1 : 0, offX: 0, flip: 1, view: "back" };
       }
       case "sip":
-        return { tex: p > 0.12 && p < 0.88 ? f.backSip : f.workFrames[0], bobY: 0, offX: 0, flip: 1, view: "back" };
+        // A spilled drop: a 1px flinch for a moment, nothing more.
+        return { tex: p > 0.12 && p < 0.88 ? f.backSip : f.workFrames[0], bobY: this.spill && p > 0.45 && p < 0.52 ? 1 : 0, offX: 0, flip: 1, view: "back" };
       case "knuckles":
         return { tex: Math.floor(this.microT / 110) % 2 ? f.backArmsIn : f.typeFrames[0], bobY: 0, offX: 0, flip: 1, view: "back" };
       case "swivel": {
@@ -1786,7 +1811,7 @@ export class Person {
    * the office chair (in front, when seen from behind), the book in their
    * hands, small props for micro-actions, result screens, the beam-in column.
    */
-  private drawStation(wt: number, screen: boolean, view: View, lift: number, asleep: boolean, reading: boolean): void {
+  private drawStation(wt: number, screen: boolean, view: View, lift: number, asleep: boolean, reading: boolean, meetingChair = false): void {
     const g = this.stationG;
     const fx = this.fxG;
     g.clear();
@@ -1823,6 +1848,8 @@ export class Person {
         fx.rect(2, -15 + lift, 1, 1).fill({ color: tint, alpha: 0.35 * flicker });
       }
       this.drawChair(view === "back" ? fx : g, view);
+    } else if (meetingChair) {
+      this.drawChair(fx, "back");
     }
     if (reading || (this.activity === "working" && this.station === "books" && this.micro)) this.drawBooks(g, fx, wt, lift, reading);
     this.drawMicroProps(fx, lift, asleep);
@@ -2075,14 +2102,7 @@ export class Person {
     if ((asleep || kind === "doze") && this.snoreVisible) this.drawSnore(fx, lift);
     if (!kind) return;
     const p = 1 - this.microT / MICRO_MS[kind];
-    if (kind === "sip" && this.spill && p > 0.45) {
-      // Fumble: the mug tips over, coffee spreads across the desk, a startled hop.
-      if (this.sneezeBeat === 0) { this.sneezeBeat = 1; this.hop(); this.say("啊！", 900); }
-      const q = Math.min(1, (p - 0.45) / 0.3);
-      fx.rect(3, -19, 3, 2).fill(0xb56f2f);
-      fx.rect(2 - q * 4, -18, 3 + q * 7, 1).fill({ color: 0x6e4218, alpha: 0.9 });
-      if (q < 1) fx.rect(6 + q * 2, -17 + q * 4, 1, 1).fill(0x6e4218);
-    } else if (kind === "sip" && p > 0.12 && p < 0.88) {
+    if (kind === "sip" && p > 0.12 && p < 0.88) {
       fx.rect(4, -13 + lift, 3, 3).fill(0xb56f2f);
       fx.rect(4, -13 + lift, 3, 0.8).fill(0x6e4218);
       fx.rect(7, -12 + lift, 1, 1.4).fill(0xb56f2f);
@@ -2090,6 +2110,11 @@ export class Person {
         const s = Math.floor(this.microT / 220) % 3;
         fx.rect(5, -15 - s + lift, 1, 1).fill({ color: 0xcfe3f7, alpha: 0.75 });
         fx.rect(6, -16 - ((s + 1) % 3) + lift, 1, 1).fill({ color: 0xcfe3f7, alpha: 0.55 });
+      }
+      if (this.spill && p > 0.45 && p < 0.75 && !REDUCE_MOTION) {
+        // The whole "spill": one drop runs off the rim and falls a few pixels. No speech, no hop.
+        const q = (p - 0.45) / 0.3;
+        fx.rect(4, -10 + lift + Math.round(q * 6), 1, 1).fill({ color: 0x6e4218, alpha: 0.85 * (1 - q * 0.6) });
       }
     } else if (kind === "knuckles" && Math.floor(this.microT / 220) % 2 === 0) {
       // "crack!" — little white ticks flying off the hands.

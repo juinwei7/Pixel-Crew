@@ -38,7 +38,7 @@ export function friendlyToolSpeech(name: string, input: unknown): string {
 }
 
 // 從 WebSearch/WebFetch(及 firecrawl 等)的工具輸入撈出查詢字或網址，給工作小窗抓真實截圖用。
-function webQueryFromInput(input: unknown): string | undefined {
+export function webQueryFromInput(input: unknown): string | undefined {
   if (typeof input === "string") return input.trim() || undefined;
   if (!input || typeof input !== "object") return undefined;
   const o = input as Record<string, unknown>;
