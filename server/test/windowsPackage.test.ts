@@ -131,7 +131,8 @@ test("Windows self-update verifies the published single-file app before handing 
   assert.match(source, /SHA256SUMS\.txt/);
   assert.match(source, /Get-FileHash[\s\S]*SHA256/);
   assert.match(source, /Pixel Crew\.exe/);
-  assert.match(source, /EscapeDataString/);
+  assert.match(source, /\$releaseBase\/\$ReleaseAsset/);
+  assert.match(source, /ReleaseAsset = "Pixel\.Crew\.exe"/);
   assert.match(source, /Start-Process -FilePath \$installer/);
   assert.match(source, /update\.pending/);
   assert.match(source, /Get-Process -Name "Pixel Crew"/);
