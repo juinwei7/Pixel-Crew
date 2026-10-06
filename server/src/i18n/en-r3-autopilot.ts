@@ -1,5 +1,7 @@
 /** 第三輪（R3）autopilot 新增字串的英文翻譯。 */
 export const enR3Autopilot: Record<string, string> = {
+  "✅ 自動循環已達步數上限，自動停止；收尾報告在上一則回覆。要繼續就再打開開關。":
+    "✅ Autopilot reached its step limit and stopped; the wrap-up report is in the previous reply. Turn the switch back on to continue.",
   "完成標準：{doneWhen}": "Done when: {doneWhen}",
   "（回覆結尾請用一句話對照這條完成標準，說明達成與否）": "(End your reply with one sentence stating whether this criterion was met.)",
   "上一步達標": "Previous step met its criterion",

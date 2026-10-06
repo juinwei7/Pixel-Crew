@@ -57,6 +57,10 @@ test("rebuttal round is skipped only on unanimous, fully-signalled openings with
   const go = "理由\n<position>GO</position>";
   assert.equal(warroomRebuttalNeeded(three, [go, go, go]), false);
   assert.equal(warroomRebuttalNeeded(three, [go, go, "<position>NO</position>"]), true);
+  // 只有一位有條件（HOLD）、沒人反對：方向一致，省略反駁輪；兩位以上 HOLD 就照開。
+  assert.equal(warroomRebuttalNeeded(three, [go, go, "<position>HOLD</position>"]), false);
+  assert.equal(warroomRebuttalNeeded(three, [go, "<position>HOLD</position>", "<position>HOLD</position>"]), true);
+  assert.equal(warroomRebuttalNeeded(three, ["<position>NO</position>", "<position>NO</position>", "<position>NO</position>"]), false);
   assert.equal(warroomRebuttalNeeded(three, [go, go, ""]), true); // 有人沒發言成功
   assert.equal(warroomRebuttalNeeded(three, [go, go, "沒標信號"]), true);
   assert.equal(warroomRebuttalNeeded([...three, { key: "verify" }], [go, go, go, go]), true); // 查證席要看別人主張

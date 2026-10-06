@@ -30,7 +30,7 @@ import { claudeChildEnv } from "./claudeEnv.js";
 import {
   isLegacyEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
-  warroomContextBrief, warroomHostConfidenceNote, warroomOthersDigest, warroomRebuttalNeeded, warroomReportExtras,
+  warroomContextBrief, warroomHostConfidenceNote, warroomOthersDigest, warroomRebuttalNeeded, warroomReportExtras, parseWarroomPosition,
 } from "./warroom.js";
 import type { EphemeralWorkerKind } from "./warroom.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
@@ -360,6 +360,18 @@ const deltaCoalescer = new DeltaCoalescer((workerId, event) => sendToAllClients(
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
+// 作戰室成員、委派研究員這類「用完即刪」的臨時 NPC 另有保留名額，不跟常駐 NPC 搶上限：
+// 以前共用 20 人上限，辦公室 19 人時作戰室只開得出 1 位成員、沒有主持，還會把單人發言當裁決交出。
+// 6 席＝作戰室最多 4 位成員＋1 位主持，再留 1 席給委派研究員。
+const EPHEMERAL_HEADROOM = 6;
+function persistentWorkerCount(): number {
+  let count = 0;
+  for (const worker of workers.values()) if (!worker.ephemeralKind) count += 1;
+  return count;
+}
+function ephemeralSeatsLeft(): number {
+  return MAX_WORKERS + EPHEMERAL_HEADROOM - workers.size;
+}
 // 「為此交辦開專屬部門」建立的臨時團隊部門名稱前綴——用完即散；重啟時靠這個前綴清掉殘留。
 const EPHEMERAL_DEPT_PREFIX = "臨時團隊·";
 const MAX_ACTIVE_COLLABORATIONS = 5;
@@ -3506,7 +3518,7 @@ app.post("/api/providers/:provider/install", (req, res) => {
 });
 
 app.post("/api/workers", (req, res) => {
-  if (workers.size >= MAX_WORKERS) {
+  if (persistentWorkerCount() >= MAX_WORKERS) {
     res.status(409).json({ error: t("NPC 已達上限（最多 {max} 位）", { max: MAX_WORKERS }) });
     return;
   }
@@ -6283,7 +6295,9 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
     return;
   }
   if (state.stepsRemaining <= 0) {
-    concludeWorkerAutopilotWithHandoff(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。"));
+    // 步數用完時，最後一步的指示本來就要求 NPC 收尾並附收尾報告（見 workerAutopilot.ts 的 FINAL STEP），
+    // 不再補送收尾交接回合——實測會產出兩份重複的收尾、白花一個回合。時間上限則照舊補送（教練事先不知道）。
+    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止；收尾報告在上一則回覆。要繼續就再打開開關。"));
     return;
   }
   if (state.deadlineAt && Date.now() >= state.deadlineAt) {
@@ -7886,9 +7900,13 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   // 使用者有自訂角色（⚙ 面板）就用自訂的，輪數仍照難度。
   const stances = customStances.length >= 2 ? customStances : warroomStances(difficulty);
   const rounds = difficulty === "simple" ? 1 : 2;
+  // 席位不夠開完整一場（全部成員＋主持）就直接說清楚，不要默默少開人、拿殘缺辯論去裁決。
+  if (ephemeralSeatsLeft() < stances.length + 1) {
+    throw new Error(t("作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。", { n: stances.length + 1 }));
+  }
   try {
     for (const stance of stances) {
-      if (workers.size >= MAX_WORKERS) break;
+      if (ephemeralSeatsLeft() <= 1) break; // 至少留一席給主持
       const peer = createWorker(stance.name, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
       // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
@@ -7914,10 +7932,18 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     let r2texts: string[] = peers.map(() => "");
     const seated = stances.slice(0, peers.length);
     const earlyConsensus = rounds >= 2 && !warroomRebuttalNeeded(seated, r1texts);
+    // 各方第 1 輪的底線落檔，事後才查得出「為什麼這場沒省到反駁輪」。
+    appendRuntimeLog(config.dataDirectory, "warroom round-1 positions", {
+      positions: seated.map((stance, i) => `${stance.key}:${parseWarroomPosition(r1texts[i]) ?? "-"}`).join(" "),
+      earlyConsensus,
+    });
     if (rounds >= 2 && !earlyConsensus) {
       // 每人只看「別人」的第 1 輪：自己的主張已在同一個 session 裡，不重送。
-      const r2 = await Promise.allSettled(peers.map((worker, i) =>
-        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: warroomOthersDigest(seated, r1texts, i) }), warroomTurnTimeout(timeoutMs, deadlineAt))));
+      // 第 1 輪沒發言成功（多半是逾時、還在跑）的成員不送反駁：它手上那回合還沒結束，
+      // 再送只會撞忙碌或白等到逾時，實測會把整場拖過 5 分鐘。
+      const r2 = await Promise.allSettled(peers.map((worker, i) => !r1texts[i].trim()
+        ? Promise.reject(new Error("skipped: no opening"))
+        : warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: warroomOthersDigest(seated, r1texts, i) }), warroomTurnTimeout(timeoutMs, deadlineAt))));
       r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
       for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
       warroomTurnTimeout(1, deadlineAt);
@@ -7929,7 +7955,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     })).join("\n\n");
     // 主持裁決（可見的臨時 lead，用較強模型）
     let result: WarRoomResult | null = null;
-    if (workers.size < MAX_WORKERS) {
+    if (ephemeralSeatsLeft() > 0) {
       const lead = createWorker(t("主持"), leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       lead.autoApproveMode = "safe";
       created.push(lead);
@@ -8155,7 +8181,7 @@ app.delete("/api/warroom/history/:file", (req, res) => {
 // ===== 委派（Delegate）：派工給一個「可見的臨時 NPC」查/分析，結果回傳給 host、NPC 用完即刪。 =====
 // 跟作戰室同一套精神：工作在委派對象的 context 做，只有結果回到 host，省 host 的 context。
 async function runDelegate(task: string, workspacePath: string): Promise<string> {
-  if (workers.size >= MAX_WORKERS) throw new Error(t("已達 NPC 上限，無法派工"));
+  if (ephemeralSeatsLeft() <= 0) throw new Error(t("已達 NPC 上限，無法派工"));
   const worker = createWorker(t("研究員"), "sonnet", "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "research" });
   worker.autoApproveMode = "safe"; // 研究員可自行跑唯讀工具（WebSearch/Read）查證，不彈確認窗
   try {

@@ -1,5 +1,11 @@
 /** 第三輪（R3）warroom 新增字串的英文翻譯。 */
 export const enR3Warroom: Record<string, string> = {
+  // 挑戰方立場說明
+  "魔鬼代言人：專挑風險／成本／技術債／為何不該做，戳破過度樂觀；但最後的總體判斷要誠實，風險都可控就別為反對而反對。":
+    "Devil's advocate: hunt for risks, costs, tech debt and reasons not to do it, and puncture over-optimism — but keep your overall call honest; if every risk is manageable, don't oppose just for the sake of it.",
+  // 臨時席位不足
+  "作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。":
+    "The war room needs {n} temporary seats, but the office is full. Remove a few idle NPCs, or wait for another war room to wrap up, then try again.",
   // 議題背景
   "召集人": "Convener",
   "召集人：{host}{role}；專案：{project}": "Convener: {host}{role}; project: {project}",
@@ -8,8 +14,8 @@ export const enR3Warroom: Record<string, string> = {
   "使用者": "User",
   "\n\n【背景】\n{context}": "\n\n[Background]\n{context}",
   // 總體判斷信號與反駁輪
-  "\n\n最後單獨一行標出你對主題的總體判斷：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。":
-    "\n\nOn the last line, on its own, mark your overall call on the topic: <position>GO</position> (do it / bullish), <position>HOLD</position> (conditional / wait and see) or <position>NO</position> (don't / bearish) — pick exactly one.",
+  "\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。":
+    "\n\nOn the last line, on its own, mark your honest bottom line (not your assigned stance): <position>GO</position> (do it / bullish), <position>HOLD</position> (conditional / wait and see) or <position>NO</position> (don't / bearish) — pick exactly one. Even if your job is to argue against it, mark GO when every risk you raised has a workable fix and you would not block it; mark NO only if you truly think it should not be done.",
   "\n對照你自己第 1 輪的主張：被說服而修正的點要明講，堅持的點補上更強的理由。最後一行同樣標出你現在的 <position>GO|HOLD|NO</position>。":
     "\nCompare against your own round-1 position: say plainly which points you revised because you were persuaded, and give stronger reasons for the ones you keep. End with your current <position>GO|HOLD|NO</position> on the last line as well.",
   // 主持裁決

@@ -47,7 +47,7 @@ export function warroomModels(provider: ProviderId, difficulty: WarRoomDifficult
 // 這裡維持模組載入期常數是安全的，因為它們從不被直接顯示，一律經過 warroomStances() 轉譯。
 export const WARROOM_STANCES = [
   { key: "propose", name: "提案", brief: "提案方：積極提出最有價值的改進，敢想、敢賭大的。" },
-  { key: "challenge", name: "挑戰", brief: "魔鬼代言人：專門反對，挑風險／成本／技術債／為何不該做，戳破過度樂觀。" },
+  { key: "challenge", name: "挑戰", brief: "魔鬼代言人：專挑風險／成本／技術債／為何不該做，戳破過度樂觀；但最後的總體判斷要誠實，風險都可控就別為反對而反對。" },
   { key: "weigh", name: "權衡", brief: "務實權衡方：在提案與反對間找可行取捨與優先序，做裁判。" },
 ] as const;
 
@@ -144,7 +144,11 @@ export function warroomRebuttalNeeded(stances: Array<{ key: string }>, openings:
   if (stances.some((stance) => stance.key === "verify")) return true;
   const positions = openings.map(parseWarroomPosition);
   if (positions.length < 2 || positions.some((position) => position === null)) return true;
-  return !positions.every((position) => position === positions[0]);
+  if (positions.every((position) => position === positions[0])) return false;
+  // 方向一致、只差一位「有條件」：沒有人反對、至多一位 HOLD 時也省略。實測挑戰方誠實標底線後
+  // 多半是 HOLD（「可以做但要配套」），若硬要全員相同，這個省錢條件幾乎永遠不成立；
+  // 那位的條件會原文進到主持裁決，主持本來就被要求點出挑戰方的風險。
+  return positions.includes("NO") || positions.filter((position) => position === "HOLD").length > 1;
 }
 
 // 反駁輪給每位成員看的「其他人」意見：排除自己那段——自己的主張已在同一個 session 裡，
@@ -162,7 +166,9 @@ export function warroomOpeningPrompt(input: { topic: string; stanceBrief: string
     "你正在 Pixel Crew 參加一場「圓桌辯論」。主題：{topic}\n你的立場：{stanceBrief}\n\n請鮮明表態，用 3–5 點給出你的主張與理由（可具體到檔案／做法）。只講你這個立場，別替別人打圓場。\n防幻覺護欄：若主題涉及「即時資訊」（今日行情、最新新聞、現價…），先用 WebSearch 查證再表態；查不到就明講「缺即時數據」，嚴禁憑記憶編造具體數字（點位、價格、日期）。",
     { topic: collaborationText(input.topic, 2_000), stanceBrief: collaborationText(input.stanceBrief, 400) },
   ) + contextSection(input.context)
-    + t("\n\n最後單獨一行標出你對主題的總體判斷：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。");
+    // 標的是「真實底線」而非角色立場：挑戰方的職責是唱反調，若照角色標，它永遠是 NO，
+    // 「第 1 輪已共識就省反駁輪」就永遠不會觸發（實測中等難度兩場都沒省到）。
+    + t("\n\n最後單獨一行標出你的真實底線（不是角色立場）：<position>GO</position>（該做／看好）、<position>HOLD</position>（有條件／再觀察）或 <position>NO</position>（不該做／看壞），三選一。就算你負責唱反調，只要你提的風險都有配套可解、你不會因此否決，就標 GO；真的認為不該做才標 NO。");
 }
 
 // 第 2 輪：看到其他人的意見後反駁／補強——這一輪才是「真辯論」。

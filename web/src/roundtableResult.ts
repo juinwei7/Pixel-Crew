@@ -72,7 +72,8 @@ function bullets(block: string | undefined): string[] {
 }
 
 function plain(block: string | undefined): string {
-  return (block ?? "").replace(/\*\*/g, "").replace(/\s*\n\s*/g, " ").trim();
+  // 結論小卡是純文字顯示，行內程式碼的反引號會原樣露出（實測卡上出現 `add`），一併拿掉。
+  return (block ?? "").replace(/\*\*/g, "").replace(/`/g, "").replace(/\s*\n\s*/g, " ").trim();
 }
 
 export function parseConfidence(text: string): RoundtableConfidence | null {

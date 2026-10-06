@@ -338,14 +338,17 @@ function WorkerTabsImpl({ workers, activeId, departments = [], missions = [], se
     );
   }
 
+  // 上限只算常駐 NPC：作戰室成員、委派研究員是臨時的，server 另有保留名額，不該讓新增鈕在開會時被鎖住。
+  const crewCount = workers.filter((worker) => !worker.ephemeralKind).length;
+
   const railBody = <>
       <div className="crew-rail__head">
-        {!collapsed && <strong>CREW <span>{workers.length}/{MAX_WORKERS}</span></strong>}
+        {!collapsed && <strong>CREW <span>{crewCount}/{MAX_WORKERS}</span></strong>}
         <button type="button" className="crew-rail__collapse" onClick={() => onCollapsed(!collapsed)} aria-label={collapsed ? t("展開人員列") : t("收合人員列")} title={collapsed ? t("展開人員列") : t("收合人員列")}><svg viewBox="0 0 24 24" aria-hidden="true">{collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="M15 6 9 12l6 6" />}</svg></button>
         {!collapsed && <button type="button" className={searchOpen ? "crew-rail__filter-active" : ""} onClick={() => setSearchOpen((open) => !open)} aria-label={t("搜尋人員")} title={t("搜尋人員")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></svg></button>}
         {!collapsed && <button type="button" onClick={() => setFiltersOpen((open) => !open)} aria-label={t("篩選人員")} title={t("篩選人員")} className={filter !== "all" ? "crew-rail__filter-active" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg></button>}
         {!collapsed && onCreateDepartment && <button type="button" className="crew-rail__department-add" onClick={onCreateDepartment} disabled={workers.length > MAX_WORKERS - 2} aria-label={t("建立部門")} title={t("AI 建立部門")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="2.5" /><circle cx="16" cy="8" r="2.5" /><path d="M3.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7M11.5 18c.4-3 1.9-4.7 4.5-4.7s4.1 1.7 4.5 4.7" /></svg></button>}
-        <button type="button" className="crew-rail__add" onClick={onCreate} disabled={workers.length >= MAX_WORKERS} aria-label={t("新增人員")} title={t("新增人員")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
+        <button type="button" className="crew-rail__add" onClick={onCreate} disabled={crewCount >= MAX_WORKERS} aria-label={t("新增人員")} title={t("新增人員")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
       </div>
       {!collapsed && searchOpen && <input className="crew-rail__search" value={query} autoFocus placeholder={t("搜尋名字或房間")} aria-label={t("搜尋人員")} onChange={(event) => setQuery(event.target.value)} />}
       {!collapsed && filtersOpen && <div className="crew-filters">{FILTERS.map((option) => <button key={option.id} type="button" className={filter === option.id ? "crew-filters__active" : ""} onClick={() => onFilter(option.id)}>{option.label}</button>)}</div>}
