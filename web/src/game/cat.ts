@@ -2,7 +2,9 @@ import { Container, Graphics, Text } from "pixi.js";
 import { ART_W, ART_H } from "./room";
 import { sessionFlag, setSessionFlag } from "./officeLife";
 
-type CatState = "wander" | "pause" | "sit" | "sleep";
+type CatState = "wander" | "pause" | "sit" | "sleep" | "stretch";
+/** Waking from a nap: a long, low stretch before it pads off. */
+const STRETCH_MS = 900;
 
 /** Purely decorative pixel office cat: wanders the floor, sometimes sits or
  *  curls up for a nap. Never intercepts pointer events. */
@@ -142,7 +144,9 @@ export class Cat {
     } else if (this.stateMs <= 0) {
       if (this.state === "sit" && Math.random() < 0.4) {
         this.enter("sleep");
-      } else if (this.state === "sleep" || Math.random() < 0.7) {
+      } else if (this.state === "sleep") {
+        this.enter("stretch");
+      } else if (this.state === "stretch" || Math.random() < 0.7) {
         this.targetX = 12 + Math.random() * (ART_W - 24);
         this.targetY = 62 + Math.random() * (ART_H - 74);
         this.enter("wander");
@@ -179,6 +183,7 @@ export class Cat {
     const f = this.facing;
     const [hx, hy] = this.state === "sleep" ? [2 * f, -3.2]
       : this.state === "sit" ? [-1.4 * f, -6.4]
+      : this.state === "stretch" ? [3.6 * f, -4.4]
       : [2.2 * f, -5.6];
     g.y = this.g.y;
     g.poly([hx - 1.6, hy, hx + 1.6, hy, hx, hy - 4]).fill(0xff4dd8);
@@ -213,7 +218,9 @@ export class Cat {
 
   private enter(state: CatState): void {
     this.state = state;
-    this.stateMs = state === "sleep"
+    this.stateMs = state === "stretch"
+      ? STRETCH_MS
+      : state === "sleep"
       ? 6_000 + Math.random() * 8_000
       : state === "sit"
         ? 2_500 + Math.random() * 3_500
@@ -248,9 +255,28 @@ export class Cat {
       g.rect(-1.6 * f - 1, -5.4, 2.6, 2.6).fill(BODY);
       g.rect(-2.4 * f - 0.5, -6.6, 1.2, 1.6).fill(BODY);
       g.rect(-0.4 * f - 0.5, -6.6, 1.2, 1.6).fill(BODY);
-      const blink = Math.floor(tMs / 2_600) % 8 === 0;
+      // A slow cat-blink (short, every ~8 s) rather than eyes shut for seconds.
+      const blink = tMs % 8_300 < 260;
       if (!blink) g.rect(-2 * f - 0.4, -4.6, 0.9, 0.9).fill(EYE);
-      g.moveTo(2.2, -1).quadraticCurveTo(4.4, -2.4, 3.4, -4.2).stroke({ color: BODY, width: 1 });
+      // Tail curls up behind it, on the side away from the head; the tip flicks
+      // once every few seconds — the only motion while it sits.
+      const flick = tMs % 4_700 < 380 ? 1 : 0;
+      g.moveTo(2.2 * f, -1).quadraticCurveTo(4.4 * f, -2.4, (3.4 + flick * 0.8) * f, -4.2 - flick * 0.6).stroke({ color: BODY, width: 1 });
+      return;
+    }
+
+    if (this.state === "stretch") {
+      // Front paws reaching out, chest low, rear up, tail high — then it pads off.
+      const X = (x: number, w: number) => (f > 0 ? x : -x - w);
+      g.rect(X(-3, 3), -3.6, 3, 2.4).fill(BODY);
+      g.rect(X(0, 3), -2.4, 3, 1.6).fill(BODY);
+      g.rect(X(2.4, 2.4), -3.2, 2.4, 2.2).fill(BODY);
+      g.rect(X(2.5, 1.1), -4.3, 1.1, 1.2).fill(BODY);
+      g.rect(X(3.9, 1.1), -4.3, 1.1, 1.2).fill(BODY);
+      g.rect(X(3.6, 0.8), -2.2, 0.8, 0.4).fill(DARK); // eyes squeezed shut
+      g.rect(X(3.4, 2.6), -0.8, 2.6, 0.8).fill(DARK);
+      g.rect(X(-2.6, 1), -1.2, 1, 1.2).fill(DARK);
+      g.rect(X(-3.8, 1), -6.2, 1, 2.8).fill(BODY);
       return;
     }
 
@@ -262,7 +288,8 @@ export class Cat {
     g.rect(2.6 * f - 0.4, -4, 0.8, 0.8).fill(EYE);
     g.rect(-2.6, -0.8, 1, 1 + (walking && step === 0 ? 0.4 : 0)).fill(DARK);
     g.rect(1.6, -0.8, 1, 1 + (walking && step === 1 ? 0.4 : 0)).fill(DARK);
-    const tailUp = Math.floor(tMs / 400) % 2;
+    // Tail swishes with the gait while walking; standing still it sways lazily.
+    const tailUp = Math.floor(tMs / (walking ? 400 : 1_300)) % 2;
     g.rect(-3.8 * f - 0.5, -4.6 - tailUp * 0.5, 1, 2.4).fill(BODY);
   }
 }

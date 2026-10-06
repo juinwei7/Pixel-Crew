@@ -71,24 +71,50 @@ export class Hotspots {
 
   update(): void {
     for (const { spot, c } of this.items) c.eventMode = !spot.enabled || spot.enabled() ? "static" : "none";
+    const h = this.hovered;
+    if (h !== this.drawnFor) {
+      this.drawnFor = h;
+      this.hoverAt = performance.now();
+    }
     const g = this.hoverG;
     g.clear();
-    const h = this.hovered;
     if (!h || (h.enabled && !h.enabled())) return;
     // Corner brackets rather than a full box: reads as "this is clickable" without boxing the art in.
-    const { x, y, w, h: hh } = h.rect;
-    const c = { color: 0xdfe9f8, alpha: 0.6 };
-    const L = 3;
-    for (const [cx, cy, sx, sy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + hh, 1, -1], [x + w, y + hh, -1, -1]]) {
-      g.rect(sx > 0 ? cx : cx - L, sy > 0 ? cy : cy - 0.5, L, 0.5).fill(c);
-      g.rect(sx > 0 ? cx : cx - 0.5, sy > 0 ? cy : cy - L, 0.5, L).fill(c);
-    }
+    hoverBrackets(g, h.rect, performance.now() - this.hoverAt);
   }
+
+  private drawnFor: Hotspot | null = null;
+  private hoverAt = 0;
 
   destroy(): void {
     for (const { c } of this.items) c.destroy();
     this.hoverG.destroy();
   }
+}
+
+/** Brackets slide in from 2px out and fade up over this long, then sit still. */
+const HOVER_IN_MS = 140;
+
+/**
+ * Hover corner brackets on whole art pixels (crisp, like the rest of the art).
+ * `sinceMs` is how long the pointer has been over the thing: the brackets
+ * close in from a couple of pixels out and fade up once, then stay put.
+ */
+export function hoverBrackets(g: Graphics, rect: Rect, sinceMs: number): void {
+  const p = REDUCE_MOTION ? 1 : Math.min(1, Math.max(0, sinceMs) / HOVER_IN_MS);
+  const e = 1 - (1 - p) * (1 - p);
+  const off = Math.round((1 - e) * 2);
+  const x = rect.x - 1 - off;
+  const y = rect.y - 1 - off;
+  const w = rect.w + 2 + off * 2;
+  const h = rect.h + 2 + off * 2;
+  const c = { color: 0xdfe9f8, alpha: 0.5 * e };
+  const L = 3;
+  // Each corner: a 3px arm along each edge, sharing the corner pixel.
+  g.rect(x, y, L, 1).fill(c).rect(x, y + 1, 1, L - 1).fill(c);
+  g.rect(x + w - L, y, L, 1).fill(c).rect(x + w - 1, y + 1, 1, L - 1).fill(c);
+  g.rect(x, y + h - 1, L, 1).fill(c).rect(x, y + h - L, 1, L - 1).fill(c);
+  g.rect(x + w - L, y + h - 1, L, 1).fill(c).rect(x + w - 1, y + h - L, 1, L - 1).fill(c);
 }
 
 type Ripple = { x: number; y: number; t: number };

@@ -488,6 +488,37 @@ const REDUCE_MOTION =
 
 type Gait = "side" | "front" | "back";
 
+/** A walk reaches full speed this long after setting off. */
+export const WALK_EASE_IN_MS = 220;
+/** …and slows down over this last stretch (art px) into the spot. */
+export const WALK_EASE_OUT_PX = 6;
+
+/**
+ * Walking speed factor (0-1]: starts at ~40% and eases up to full speed over
+ * the first steps, then eases down to ~45% over the last few pixels. Never 0,
+ * so a walk always finishes.
+ */
+export function walkEase(msSinceStart: number, pxLeft: number): number {
+  const a = Math.max(0, Math.min(1, msSinceStart / WALK_EASE_IN_MS));
+  const easeIn = 0.4 + 0.6 * (1 - (1 - a) * (1 - a));
+  const b = Math.max(0, Math.min(1, pxLeft / WALK_EASE_OUT_PX));
+  const easeOut = 0.45 + 0.55 * b;
+  return Math.min(easeIn, easeOut);
+}
+
+/** Turning between facing us and facing the desk passes through the profile for this long. */
+const PIVOT_MS = 110;
+/**
+ * Calm resting breath: a slow exhale (the one-pixel dip held) and a longer
+ * inhale, ~3.4 s a cycle — the old even 1.1 s flip read as fidgeting.
+ */
+export const BREATH_MS = 3_400;
+export const BREATH_DIP_MS = 1_300;
+/** 0 = chest up, 1 = the dip frame, on a per-NPC phase. */
+export function breathFrame(tMs: number, seed: number): 0 | 1 {
+  return (tMs + seed * BREATH_MS) % BREATH_MS < BREATH_MS - BREATH_DIP_MS ? 0 : 1;
+}
+
 
 export type EmoteKind = "question" | "cloud" | "chat" | "coffee" | "spark" | "alert" | "bang" | "heart" | "hi" | "bye" | "angry" | "thumb" | "moon";
 
@@ -593,6 +624,11 @@ export class Person {
   private path: Array<{ x: number; y: number }> = [];
   private facing = 1;
   private walkCycleT = 0;
+  /** ms since this walk set off (capped), for the ease-in. */
+  private walkRamp = 0;
+  /** Last body view drawn while standing, to turn through the profile between facing us / the desk. */
+  private lastView: View | null = null;
+  private pivotT = 0;
 
   activity: CharacterActivity = "idle";
   private animT = 0;
@@ -952,6 +988,21 @@ export class Person {
     return this.path.length > 0;
   }
 
+  /** Speed factor for this frame of a walk (see walkEase); advances the ease-in clock. */
+  private walkPace(dtMs: number): number {
+    if (REDUCE_MOTION) return 1;
+    this.walkRamp = Math.min(WALK_EASE_IN_MS, this.walkRamp + dtMs);
+    let left = 0;
+    let fromX = this.x;
+    let fromY = this.y;
+    for (const wp of this.path) {
+      left += Math.hypot(wp.x - fromX, wp.y - fromY);
+      fromX = wp.x;
+      fromY = wp.y;
+    }
+    return walkEase(this.walkRamp, left);
+  }
+
   flash(color: number, cheer: boolean): void {
     this.flashColor = color;
     this.flashT = 650;
@@ -1084,10 +1135,16 @@ export class Person {
         });
         const gif = new GifSprite({ source, autoPlay: true, loop: true, autoUpdate: true });
         if (!this.destroyed && version === this.avatarLoadVersion) {
-          gif.anchor.set(0.5, 1);
+          // Union of a couple of frames, so a figure that moves around inside the GIF still fits.
+          const frames = source.textures;
+          const fit = fitAvatar(source.width, source.height, unionBox(
+            measureOpaque(frames[0]?.source.resource),
+            measureOpaque(frames[Math.floor(frames.length / 2)]?.source.resource),
+          ));
+          gif.anchor.set(fit.ax, fit.ay);
           this.gifSprite = gif;
           this.avatarUrl = url;
-          this.customScale = Math.min(12 / source.width, 16 / source.height);
+          this.customScale = fit.scale;
           this.sprite.visible = false;
           this.container.addChildAt(gif, this.container.getChildIndex(this.sprite));
         } else {
@@ -1097,9 +1154,11 @@ export class Person {
       } else {
         const texture = await Assets.load<Texture>(url);
         if (!this.destroyed && version === this.avatarLoadVersion) {
+          const fit = fitAvatar(texture.width, texture.height, measureOpaque(texture.source.resource));
+          this.sprite.anchor.set(fit.ax, fit.ay);
           this.customTexture = texture;
           this.avatarUrl = url;
-          this.customScale = Math.min(12 / texture.width, 16 / texture.height);
+          this.customScale = fit.scale;
         } else {
           await unloadAvatar(url);
         }
@@ -1144,6 +1203,7 @@ export class Person {
     this.avatarUrl = null;
     this.clearGifSprite();
     this.sprite.texture = this.f.idleFrames[0];
+    this.sprite.anchor.set(0.5, 1);
     this.sprite.visible = true;
     this.customTexture = null;
     this.customScale = 1;
@@ -1163,7 +1223,11 @@ export class Person {
     let moving = false;
 
     if (this.rushT > 0) this.rushT -= dtMs;
-    let budget = Person.SPEED * TRAIT_PACE[this.trait] * (this.rushT > 0 ? 1.9 : this.tired ? 0.8 : 1) * dtMs;
+    // Ease in and out instead of jumping straight to full speed and stopping dead:
+    // a couple of shorter first steps, a slower last one into the spot.
+    const gaitPace = this.path.length > 0 ? this.walkPace(dtMs) : 1;
+    if (this.path.length === 0) this.walkRamp = 0;
+    let budget = Person.SPEED * TRAIT_PACE[this.trait] * (this.rushT > 0 ? 1.9 : this.tired ? 0.8 : 1) * gaitPace * dtMs;
     while (budget > 0 && this.path.length > 0) {
       const wp = this.path[0];
       dx = wp.x - this.x;
@@ -1190,7 +1254,8 @@ export class Person {
         if (nextFacing !== this.facing) this.turnT = Person.TURN_MS;
         this.facing = nextFacing;
       }
-      this.walkCycleT += dtMs * (this.rushT > 0 ? 1.7 : 1) * TRAIT_PACE[this.trait];
+      // Legs keep time with the actual speed, so the feet don't skate while easing.
+      this.walkCycleT += dtMs * (this.rushT > 0 ? 1.7 : 1) * TRAIT_PACE[this.trait] * Math.max(0.6, gaitPace);
     } else {
       this.walkCycleT = 0;
       this.lastStepIdx = -1;
@@ -1448,7 +1513,7 @@ export class Person {
     } else if (this.activity === "working") {
       if (this.station === "meeting" && this.meetingRow !== null && this.meetingRow !== "front") {
         // Behind the war-room table (or at its end) they face us, not a monitor.
-        const idx = Math.floor((this.animT + this.seed * 1_100) / 1_100) % 2;
+        const idx = breathFrame(this.animT, this.seed);
         this.sprite.texture = (blinking ? f.idleBlink : f.idleFrames)[idx];
         breathe = true;
       } else if (this.station === "books") {
@@ -1468,13 +1533,30 @@ export class Person {
       }
     } else {
       // Calm resting breath (the dip frame is a whole pixel; quicker reads as jittery bouncing).
-      const idx = Math.floor((this.animT + this.seed * 1_100) / 1_100) % 2;
+      const idx = breathFrame(this.animT, this.seed);
       const frames = blinking ? f.idleBlink
         : this.gaze < 0 ? f.lookLeft
         : this.gaze > 0 ? f.lookRight
         : f.idleFrames;
       this.sprite.texture = frames[idx];
       breathe = true;
+    }
+
+    // Turning between facing us and facing the desk (sitting down to work, swinging round
+    // to cheer, walking down and turning to the screen): one beat in profile instead of
+    // a snap from front to back. Micro-acts and the dance choreograph their own turns.
+    const custom = Boolean(this.customTexture || this.gifSprite);
+    if (this.pivotT > 0) this.pivotT -= dtMs;
+    const turnable = still && !this.micro && this.danceT <= 0 && !materialising && !leaving && !asleep && !custom && !REDUCE_MOTION;
+    if (!turnable) this.pivotT = 0;
+    else if (this.lastView !== null && this.lastView !== "side" && view !== "side" && this.lastView !== view) this.pivotT = PIVOT_MS;
+    this.lastView = view;
+    if (this.pivotT > 0) {
+      this.sprite.texture = f.sidePass;
+      flip = this.facing;
+      bobY = 0;
+      offX = 0;
+      view = "side";
     }
 
     if (this.hopT > 0) {
@@ -1506,7 +1588,7 @@ export class Person {
       if (jump > 0) sy *= 1 + jump * 0.015; // stretch in the air
       // Pixel crew already breathe through their two-frame dip; a fractional stretch on top only
       // makes rows shimmer. Uploaded avatars have no such frames, so they keep the soft stretch.
-      if (breathe && (this.customTexture || this.gifSprite)) sy *= 1 + Math.sin((this.animT / 2600) * Math.PI * 2) * 0.022;
+      if (breathe && custom) sy *= 1 + Math.sin(((this.animT + this.seed * BREATH_MS) / BREATH_MS) * Math.PI * 2) * 0.022;
       if (this.turnT > 0) {
         // -1 -> 1 across the turn; never quite 0 so the sprite doesn't vanish.
         const v = 1 - 2 * (this.turnT / Person.TURN_MS);
@@ -1539,6 +1621,9 @@ export class Person {
     const avatarScale = this.customTexture || this.gifSprite ? this.customScale : 1;
     visual.scale.set(flip * avatarScale * sx, avatarScale * sy);
     visual.position.set(offX, bobY - jump);
+    // Uploaded avatars have no leg frames: a small side-to-side waddle on each step (pivoting
+    // on the feet) so they walk instead of gliding. A few degrees, nothing more.
+    visual.rotation = custom && moving && !REDUCE_MOTION ? Math.sin((this.walkCycleT / 260) * Math.PI) * 0.06 : 0;
     visual.tint = this.flashT > 0 ? this.flashColor : 0xffffff;
     visual.alpha = bodyAlpha;
     // The shadow stays on the floor and shrinks while airborne.
@@ -2758,6 +2843,83 @@ export function buildPresetFrames<T extends object>(presetId: string, make: (row
 function createPresetFrames(presetId: string, colorIndex: number) {
   const pal = avatarPresetPalette(presetId, colorIndex, SHIRT_COLORS);
   return buildPresetFrames(presetId, (rows) => texFromMap(rows, pal));
+}
+
+/** A box in fractions (0-1) of an image's width / height. */
+export type UnitBox = { x: number; y: number; w: number; h: number };
+
+/** Uploaded avatars stand this tall (art px) — the crew's own figure is 15 rows from hair to shoes. */
+export const AVATAR_FIGURE_H = 15;
+/** …and no wider than this, so a wide image doesn't block its neighbours. */
+export const AVATAR_FIGURE_MAX_W = 14;
+
+/**
+ * Bounds of the visible (alpha >= minAlpha) pixels of an RGBA buffer, as
+ * fractions of the buffer; null when nothing is visible.
+ */
+export function opaqueBounds(data: ArrayLike<number>, w: number, h: number, minAlpha = 24): UnitBox | null {
+  let x0 = w;
+  let y0 = h;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] < minAlpha) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  return { x: x0 / w, y: y0 / h, w: (x1 - x0 + 1) / w, h: (y1 - y0 + 1) / h };
+}
+
+export function unionBox(a: UnitBox | null, b: UnitBox | null): UnitBox | null {
+  if (!a || !b) return a ?? b;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+}
+
+/**
+ * Scale + anchor for an uploaded avatar: the visible figure (transparent
+ * padding ignored) stands on the floor at the crew's height, centred on its
+ * feet. Many uploads carry a wide transparent margin, which used to shrink
+ * them to a few pixels next to everyone else.
+ */
+export function fitAvatar(texW: number, texH: number, box: UnitBox | null): { scale: number; ax: number; ay: number } {
+  const b = box && box.w > 0 && box.h > 0 ? box : { x: 0, y: 0, w: 1, h: 1 };
+  const figW = Math.max(1, b.w * texW);
+  const figH = Math.max(1, b.h * texH);
+  return {
+    scale: Math.min(AVATAR_FIGURE_H / figH, AVATAR_FIGURE_MAX_W / figW),
+    ax: b.x + b.w / 2,
+    ay: b.y + b.h,
+  };
+}
+
+/** Visible-pixel box of an image / canvas (sampled at <= 128 px); null when it can't be read. */
+function measureOpaque(resource: unknown): UnitBox | null {
+  if (!resource || typeof document === "undefined") return null;
+  const img = resource as CanvasImageSource & { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
+  const w = Number(img.naturalWidth || img.width) || 0;
+  const h = Number(img.naturalHeight || img.height) || 0;
+  if (w <= 0 || h <= 0) return null;
+  const k = Math.min(1, 128 / Math.max(w, h));
+  const cw = Math.max(1, Math.round(w * k));
+  const ch = Math.max(1, Math.round(h * k));
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, cw, ch);
+    return opaqueBounds(ctx.getImageData(0, 0, cw, ch).data, cw, ch);
+  } catch {
+    return null; // e.g. a cross-origin image without CORS: keep the whole frame
+  }
 }
 
 async function unloadAvatar(url: string): Promise<void> {

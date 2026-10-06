@@ -110,9 +110,21 @@
   backdrop-filter: blur(14px);
 }
 .command-composer:focus-within { border-color: rgba(0, 229, 255,.46); }
+/* 輸入框聚焦時，整個指令列的外框（上面那條 :focus-within）就是焦點指示。
+   textarea 一律命中 :focus-visible，全站那條直角 outline 會在圓角外框裡再
+   畫一個方框，變成雙重框線——這裡只收掉 textarea 本身的，按鈕的保留。 */
+.command-composer textarea:focus-visible { outline-color: transparent !important; }
 .unified-composer-host { display: contents; }
 .command-composer__toolbar { position: absolute; bottom: calc(100% + 8px); left: 0; max-width: 100%; display: flex; align-items: center; gap: 8px; }
 .command-composer--attachments .command-composer__toolbar { bottom: calc(100% + 78px); }
+/* 工具鈕的底色只有 4–5% 的淡色，螢幕一窄（≤1440）就直接疊在辦公室像素圖上，
+   字會跟後面的桌椅混在一起。不改各鈕自己的配色（hover／開啟態都還在），
+   改給整排墊一層深底托盤。不能用 backdrop-filter：指令列本身有 backdrop-filter，
+   子元素的背景濾鏡只看得到指令列框內，對浮在框外的這排無效。
+   負 margin 抵掉 padding，鈕的位置跟以前一樣。手機這排已排進版位，不需要。 */
+@media (min-width: 601px) {
+  .command-composer__toolbar:not(:empty) { margin: 0 0 -4px -4px; padding: 4px; border-radius: 11px; background: rgba(6, 10, 20, .86); }
+}
 .command-composer__toolbar > .boss-task-composer__setup { margin-bottom: 0; }
 .command-composer__toolbar .department-chat__reply-context { max-width: min(360px, 44vw); }
 .command-composer__target { flex: 0 0 auto; padding: 6px 8px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 7px; background: rgba(0, 229, 255,.045); color: #7fddec; font: 700 8px var(--mono); letter-spacing: .08em; white-space: nowrap; }
@@ -155,7 +167,11 @@
    overlay is active, and previously rendered invisibly behind it. */
 .warroom-result { position: fixed; inset: 0; z-index: 25010; display: grid; place-items: center; background: rgba(4,8,16,.66); backdrop-filter: blur(3px); animation: fadeIn .15s ease; }
 .warroom-result__card { position: relative; width: min(640px, 92vw); max-height: 84vh; overflow: auto; padding: 22px 24px; border: 1px solid rgba(255,196,77,.3); border-radius: 16px; background: linear-gradient(180deg, rgba(20,26,40,.99), rgba(12,17,28,.99)); box-shadow: 0 30px 80px rgba(0,0,0,.6); color: #cdd8e6; }
-.warroom-result__close { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border: 0; background: transparent; color: #7d8ea3; font-size: 20px; cursor: pointer; }
+.warroom-result__close { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #7d8ea3; font-size: 20px; line-height: 1; cursor: pointer; transition: color .14s ease, background-color .14s ease, border-color .14s ease; }
+/* 關閉鈕跟其他 modal（MCP、備份…）同一套手感：圓角、hover 有底色，鍵盤焦點環
+   跟著圓角走，不再是貼在透明方塊外的直角框。 */
+.warroom-result__close:hover { border-color: rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: #e6edf6; }
+.warroom-result__close:active { background: rgba(255,255,255,.08); }
 .warroom-result__card header span { color: #ffce7a; font: 700 9px var(--mono); letter-spacing: .18em; }
 .warroom-result__card h2 { margin: 4px 0 12px; font-size: 18px; color: #fff0d0; }
 .warroom-result__verdict { margin: 0 0 16px; padding: 12px 14px; border-left: 3px solid #ffc44d; border-radius: 6px; background: rgba(255,196,77,.07); line-height: 1.6; font-size: 13.5px; color: #e6edf5; white-space: pre-wrap; }
@@ -627,14 +643,20 @@
    手機不走這一段——手機的 .game-root 是 bar / scene / dock 三列 grid
    （styles/responsive.css），面板不需要也不可以再自己算偏移。 */
 @media (min-width: 601px) and (max-width: 1023px) {
-  .crew-rail { top: 62px; bottom: 82px; }
-  .game-root:not(.game-root--task-log-open) .crew-rail { bottom: 138px; }
-  .holo-panel { top: 58px; right: 8px; bottom: 78px; width: min(var(--log-panel-width), calc(100% - 16px)); }
+  /* 面板頂端跟著量出來的頂欄高度（--top-bar-h，TopBar.tsx 寫入）走：頂欄
+     換成兩排時面板自動往下讓，不會再被壓住。
+     左欄底部要讓出指令列上方那排工具鈕（圓桌/作戰室/⋯，約 composer 上緣
+     再高 40px）與「工作中／待命」彙總條，否則三者在左下角疊成一團。 */
+  .crew-rail { top: calc(var(--top-bar-h) + 8px); bottom: 154px; }
+  .npc-aggbar { bottom: 122px; }
+  .holo-panel { top: calc(var(--top-bar-h) + 4px); right: 8px; bottom: 78px; width: min(var(--log-panel-width), calc(100% - 16px)); }
   .panel-toggle--open { right: auto; left: 2px; }
-  /* 這個寬度以下用量條排不進 bar，改釘在右上角（縮在 ••• / 狀態燈下方）。
-     ▶ 開關再往下讓一階，否則正好被用量條壓住。 */
-  .energy-hud { top: 54px; left: auto; right: 10px; transform: none; scale: .9; transform-origin: top right; z-index: 60; }
-  .panel-toggle { top: 106px; }
+  /* 用量條留在頂欄裡（不再相對位移到第二排——那會正好壓在任務日誌標題上）。
+     「WORK ENERGY」標題在這個寬度收掉，兩條百分比留著；真的還是排不下，
+     TopBar 的 --compact-2 會讓它自己換一整排，上面的 --top-bar-h 跟著變。 */
+  .energy-hud { z-index: 60; }
+  .top-bar .energy-hud__title { display: none; }
+  .panel-toggle { top: calc(var(--top-bar-h) + 10px); }
   /* 縮放列搬到右下角：指令列的工具列（圓桌/作戰室/⋯）是從左邊長出來的，
      兩者原本在左下角疊在一起。 */
   .canvas-zoom { bottom: 82px; right: 10px; left: auto; transform: scale(.88); transform-origin: right bottom; }

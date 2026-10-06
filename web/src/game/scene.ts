@@ -825,20 +825,23 @@ export async function createScene(
       }
       // The monitor where the turn ended shows the verdict: big check (+ confetti if big), or red glitch + smoke.
       person.showResult(success, big);
-      particles.burst(person.x, person.y - 8, success ? GREEN : RED, success ? 14 : 18, 0.045);
+      // Kept small: a turn ending is routine, the monitor verdict and the pose already say it.
+      particles.burst(person.x, person.y - 8, success ? GREEN : RED, big ? 14 : 8, big ? 0.045 : 0.035);
       if (success) {
         entry.lastSuccessAt = performance.now();
         // A lingering "✓" spark makes a finished turn as readable as the
         // "cloud" that marks a failed one, not just a single-frame flash.
         person.emote("spark", 2_600);
-        // The nearest teammate or two gives a thumbs up (a big win gets everyone close cheering).
+        // The nearest free teammate gives a thumbs up (a big win gets up to three close by
+        // cheering). Someone heads-down at work or mid-walk doesn't drop everything for it.
         const near = [...entries.values()]
-          .filter((other) => other !== entry && !other.temporary && other.transition === "ready" && !other.person.asleep)
+          .filter((other) => other !== entry && !other.temporary && other.transition === "ready" && !other.person.asleep &&
+            !other.person.isMoving && other.last?.activity !== "working")
           .map((other) => ({ other, d: Math.hypot(other.person.x - person.x, other.person.y - person.y) }))
           .filter(({ d }) => d <= 60)
           .sort((a, b) => a.d - b.d);
-        near.slice(0, big ? 4 : 2).forEach(({ other }) => (big ? other.person.cheer() : other.person.thumbsUp()));
-        if (Math.random() < 0.5) trySay(entry, talkLine({ kind: "success" }));
+        near.slice(0, big ? 3 : 1).forEach(({ other }) => (big ? other.person.cheer() : other.person.thumbsUp()));
+        if (Math.random() < 0.35) trySay(entry, talkLine({ kind: "success" }));
       } else {
         // Facepalm / desk kick / scratch; failing again soon after earns a glare.
         entry.errors = entry.errors.filter((t) => elapsed - t < 120_000);

@@ -3,6 +3,7 @@ import type { StationKey } from "../stations";
 import { PAL, texFromMap, type Palette } from "./pixels";
 import { COUNTER_BOTTOM, FURNITURE_DEFS, LABEL_GAP, type FurnitureDef } from "./furnitureDefs";
 import { STATION_THEME } from "../stationTheme";
+import { hoverBrackets } from "./officeInteract";
 
 export { FURNITURE_DEFS, type FurnitureDef };
 
@@ -75,6 +76,8 @@ class FurnitureSprite {
   /** The accent dimmed toward the screen colour (the kit q). */
   private readonly dim: number;
   private lastT = 0;
+  private wasHovered = false;
+  private hoverAt = 0;
   private readonly w: number;
   private readonly h: number;
   private readonly labelSize: { w: number; h: number } | null;
@@ -112,6 +115,10 @@ class FurnitureSprite {
     const dt = Math.min(100, Math.max(0, tMs - this.lastT));
     this.lastT = tMs;
     this.drawPoke(dt);
+    if (this.hovered !== this.wasHovered) {
+      this.wasHovered = this.hovered;
+      this.hoverAt = tMs;
+    }
 
     const target = this.active ? 1 : 0;
     if (REDUCE_MOTION) this.glow = target;
@@ -150,12 +157,7 @@ class FurnitureSprite {
       hl.rect(-this.w / 2 + 1, -1, this.w - 2, 1).fill({ color: c, alpha: 0.85 * e });
     } else if (this.hovered) {
       // The war-room table (drawn by OfficeDecor): corner brackets like the other clickable decor.
-      const x = -this.w / 2, y = -this.h, w = this.w, h = this.h, L = 3;
-      const s = { color: 0xdfe9f8, alpha: 0.6 };
-      for (const [cx, cy, sx, sy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
-        hl.rect(sx > 0 ? cx : cx - L, sy > 0 ? cy : cy - 0.5, L, 0.5).fill(s);
-        hl.rect(sx > 0 ? cx : cx - 0.5, sy > 0 ? cy : cy - L, 0.5, L).fill(s);
-      }
+      hoverBrackets(hl, { x: -Math.floor(this.w / 2), y: -this.h, w: this.w, h: this.h }, tMs - this.hoverAt);
     }
     // The war room shows its own in-session state (OfficeDecor), so nothing extra here.
   }

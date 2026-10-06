@@ -578,18 +578,33 @@ export class PersonalDeskLayer {
     const effect = new Graphics();
     const color = SHIRT_COLORS[worker.colorIndex % SHIRT_COLORS.length]?.[0] ?? 0x4de3ff;
 
+    // Contact shadow under the desk ties it to the floor; the legs carry a 1px
+    // shaded inner edge so they read as posts, not flat bars.
     const legs = new Graphics()
+      .rect(-13, 6, 26, 1).fill({ color: 0x050810, alpha: 0.45 })
+      .rect(-11, 7, 22, 1).fill({ color: 0x050810, alpha: 0.18 })
       .rect(-12, -1, 3, 7).fill(0x293956)
-      .rect(9, -1, 3, 7).fill(0x293956);
+      .rect(9, -1, 3, 7).fill(0x293956)
+      .rect(-10, -1, 1, 7).fill(0x1f2c45)
+      .rect(11, -1, 1, 7).fill(0x1f2c45);
+    // Desk top with a lit front edge and a shaded underside, plus a little keyboard.
     const desktop = new Graphics()
       .rect(-14, -5, 28, 4).fill(0x405274)
+      .rect(-14, -2, 28, 1).fill(0x4b5f85)
+      .rect(-14, -1, 28, 1).fill(0x2c3b59)
+      .rect(-5, -4, 8, 1).fill(0x566a91)
+      .rect(-5, -3, 8, 1).fill(0x34446a)
       .rect(10, -4, 2, 1).fill(color);
     const monitorStand = new Graphics()
       .rect(-1, -9, 2, 3).fill(0x415477)
-      .rect(-4, -6, 8, 2).fill(0x415477);
+      .rect(-4, -6, 8, 2).fill(0x415477)
+      .rect(-4, -6, 8, 1).fill(0x4b5f85);
+    // Bezel with a lighter top lip and a tiny dim power LED.
     const monitor = new Graphics()
       .rect(-8, -19, 16, 10).fill(0x334468)
-      .rect(-6, -17, 12, 6).fill(0x08101f);
+      .rect(-8, -19, 16, 1).fill(0x3f5480)
+      .rect(-6, -17, 12, 6).fill(0x08101f)
+      .rect(6, -10, 1, 1).fill({ color: 0x37d6a3, alpha: 0.55 });
     const screen = new Graphics()
       .rect(-4, -15, 5, 2).fill({ color, alpha: 0.9 })
       .rect(2, -15, 2, 2).fill(0x37d6a3);

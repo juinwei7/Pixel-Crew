@@ -334,6 +334,31 @@ export function App() {
   // 都以為資料變了，就重跑 visualWorkers() 並呼叫 pixi setWorkers()，造成畫面持續無謂重算。改用 useMemo
   // 讓「內容沒變時陣列參照就不變」，這些效果只在真的有變動時才觸發。
   const workerList = useMemo(() => order.map((id) => workers[id]).filter(Boolean), [order, workers]);
+  // 主管唯讀回答（部門對話）走伺服器的背景回合，不會把主管標成忙碌；等回應期間在場景裡
+  // 讓主管做思考動作，否則畫面上看不出有人在回答。只影響場景，不改其他地方的狀態。
+  const [answeringLeadIds, setAnsweringLeadIds] = useState<ReadonlySet<string>>(() => new Set());
+  const sceneWorkerList = useMemo(() => {
+    if (answeringLeadIds.size === 0) return workerList;
+    return workerList.map((worker) => (
+      answeringLeadIds.has(worker.id) && !worker.busy && worker.character.activity === "idle"
+        ? { ...worker, character: { ...worker.character, activity: "thinking" as const } }
+        : worker
+    ));
+  }, [workerList, answeringLeadIds]);
+  const messageDepartmentWithLead = useCallback(async (...args: Parameters<typeof messageDepartment>) => {
+    const leadId = departments[args[0]]?.leadWorkerId;
+    if (!leadId) return messageDepartment(...args);
+    setAnsweringLeadIds((current) => new Set(current).add(leadId));
+    try {
+      return await messageDepartment(...args);
+    } finally {
+      setAnsweringLeadIds((current) => {
+        const next = new Set(current);
+        next.delete(leadId);
+        return next;
+      });
+    }
+  }, [departments, messageDepartment]);
   // 全域「執行中」計數：不分工作區（workerList 是所有 NPC），頂欄燈號用——讓你在聊天／
   // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
   const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
@@ -1362,7 +1387,7 @@ export function App() {
     } as CSSProperties}>
       <div ref={officeRef} className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
       <GameCanvas
-        workers={workerList}
+        workers={sceneWorkerList}
         activeId={activeId}
         completedTurns={stats.completedTurns}
         collaborations={collaborationList}
@@ -1684,7 +1709,7 @@ export function App() {
           onPrepare={prepareMission}
           onStart={startMission}
           onLoadThread={loadDepartmentThread}
-          onMessageDepartment={messageDepartment}
+          onMessageDepartment={messageDepartmentWithLead}
           onResetSessions={resetDepartmentSessions}
           onCancel={cancelMission}
           onRetryReview={retryMissionReview}

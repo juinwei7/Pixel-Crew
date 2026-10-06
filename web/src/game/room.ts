@@ -84,6 +84,11 @@ export class Room {
   private readonly hangL = new Graphics();
   private readonly hangR = new Graphics();
   private readonly weatherG = new Graphics();
+  /** Static glass over the window (inner shadow, two faint glare streaks, sill) — above sky and weather. */
+  private readonly glassG = new Graphics();
+  /** Faint pool of window light on the floor below the counter (redrawn only on day/night/rain change). */
+  private readonly floorLightG = new Graphics();
+  private floorLightKey = "";
   /** Extra floor below the main office for big crews (redrawn only when its height changes). */
   private readonly annexG = new Graphics();
   private floorHeight = ART_H;
@@ -224,11 +229,14 @@ export class Room {
     this.moon.circle(317.6, 19.4, 0.9).fill(0xd9d2a8);
     this.moon.visible = false;
 
+    drawGlass(this.glassG);
+
     this.setSky(WINDOW_SKY);
     this.setClock(new Date());
+    this.drawFloorLight();
     this.container.addChild(
-      g, this.annexG, this.poster, this.frameA, this.frameB, this.sky, this.stars, this.sun, this.moon, this.weatherG,
-      this.clockHands, this.rackLeds, this.tank, this.doodle, this.hangL, this.hangR, this.fxG,
+      g, this.floorLightG, this.annexG, this.poster, this.frameA, this.frameB, this.sky, this.stars, this.sun, this.moon, this.weatherG,
+      this.glassG, this.clockHands, this.rackLeds, this.tank, this.doodle, this.hangL, this.hangR, this.fxG,
     );
   }
 
@@ -332,6 +340,31 @@ export class Room {
     this.stars.visible = night;
     this.moon.visible = night;
     this.sun.visible = !night;
+    this.drawFloorLight();
+  }
+
+  /**
+   * Window light falling on the floor past the counter: a slanted pool in 2px
+   * steps, warm by day, cool by night, barely there when it rains. Static —
+   * only rebuilt when one of those changes.
+   */
+  private drawFloorLight(): void {
+    const key = `${this.night}|${this.raining}`;
+    if (key === this.floorLightKey) return;
+    this.floorLightKey = key;
+    const g = this.floorLightG;
+    g.clear();
+    const color = this.night ? 0x9fc4ff : 0xffe7b0;
+    const peak = (this.night ? 0.03 : 0.045) * (this.raining ? 0.45 : 1);
+    const top = 70;
+    const depth = 30;
+    for (let d = 0; d < depth; d += 2) {
+      const shift = Math.round(d * 0.5);
+      const fade = 1 - d / depth;
+      // Two panes, split by the window's middle bar, like the glass above.
+      g.rect(252 - shift, top + d, 36, 2).fill({ color, alpha: peak * fade });
+      g.rect(294 - shift, top + d, 38, 2).fill({ color, alpha: peak * fade });
+    }
   }
 
   update(tMs: number): void {
@@ -420,6 +453,7 @@ export class Room {
     if (this.weatherCheck <= 0) {
       this.weatherCheck = 120_000 + Math.random() * 120_000;
       this.raining = Math.random() < 0.2;
+      this.drawFloorLight();
     }
     const t = REDUCE_MOTION ? 0 : tMs;
     if (!this.night) {
@@ -561,6 +595,20 @@ function drawHanging(g: Graphics, w: number): void {
     g.rect(x - 1, 5 + len / 2, 1, 1).fill(0x27967a);
     g.rect(x + 1, 3 + len - 2, 1, 1).fill(0x27967a);
   }
+}
+
+/** Glass over the sky: a shadow under the top frame, two faint diagonal glare streaks, a lit sill. */
+function drawGlass(g: Graphics): void {
+  for (const [x0, w] of [[248, 42], [292, 44]] as Array<[number, number]>) {
+    g.rect(x0, 6, w, 1).fill({ color: 0x050816, alpha: 0.35 });
+    g.rect(x0, 7, w, 1).fill({ color: 0x050816, alpha: 0.12 });
+    // Glare: short 1px diagonals near the top-left of each pane.
+    for (const [ox, len] of [[6, 9], [10, 5]] as Array<[number, number]>) {
+      for (let k = 0; k < len; k++) g.rect(x0 + ox + len - k, 10 + k, 1, 1).fill({ color: 0xffffff, alpha: 0.07 });
+    }
+  }
+  g.rect(246, 44, 92, 1).fill(0x3a4d78); // sill catches the light
+  g.rect(246, 45, 92, 1).fill({ color: 0x050816, alpha: 0.3 });
 }
 
 /** Rect clipped to the window glass (so weather never spills onto the wall). */

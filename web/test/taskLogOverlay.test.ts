@@ -24,7 +24,9 @@ test("side panels remain overlays while map controls avoid the visible task pane
   assert.match(css, /\.canvas-zoom\s*\{[\s\S]*?bottom:\s*16px[\s\S]*?left:\s*16px/);
   assert.match(app, /game-root--task-log-open/);
   assert.match(app, /game-root--crew-collapsed/);
-  assert.match(css, /\.game-root:not\(\.game-root--task-log-open\) \.crew-rail\s*\{\s*bottom:\s*138px/);
+  // 平板（601–1023）：左欄底部不論任務日誌開關都讓出指令列工具鈕與「工作中／待命」彙總條。
+  assert.match(css, /@media \(min-width:\s*601px\) and \(max-width:\s*1023px\)\s*\{[\s\S]*?\.crew-rail\s*\{[^}]*bottom:\s*154px/);
+  assert.match(css, /@media \(min-width:\s*601px\) and \(max-width:\s*1023px\)\s*\{[\s\S]*?\.npc-aggbar\s*\{\s*bottom:\s*122px/);
   // 手機（≤600）直接把整條縮放列收掉——雙指縮放已經夠用（見 game/scene.ts）。
   assert.match(css, /@media \(max-width:\s*600px\)[\s\S]*?\.canvas-zoom\s*\{\s*display:\s*none/);
   assert.match(css, /\.game-root--focus \.canvas-zoom\s*\{[\s\S]*?display:\s*none/);
