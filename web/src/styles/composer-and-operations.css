@@ -180,6 +180,10 @@
 .warroom-result__card ul, .warroom-result__card ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 .warroom-result__card li { line-height: 1.55; font-size: 12.5px; }
 .warroom-result__card li small { display: block; margin-top: 2px; color: #8093a8; font-size: 11px; line-height: 1.5; }
+/* 一般彈窗（成品匣／營運／看板／下班報告／確認／遠端／名冊）沿用這張卡，但金色只留給作戰室裁決；其餘改回全站青色強調色 */
+:is(.outbox-modal, .ops-modal, .kanban-modal, .confirm-dialog__card, .remote-access-modal__card, .crew-roster__card).warroom-result__card { border-color: rgba(0,229,255,.2); }
+:is(.outbox-modal, .ops-modal, .kanban-modal, .confirm-dialog__card, .remote-access-modal__card, .crew-roster__card).warroom-result__card header span { color: var(--cyan); }
+:is(.outbox-modal, .ops-modal, .kanban-modal, .confirm-dialog__card, .remote-access-modal__card, .crew-roster__card).warroom-result__card h2 { color: #eef4ff; }
 .warroom-result__prio { display: inline-block; min-width: 26px; padding: 1px 5px; border-radius: 5px; font: 700 10px var(--mono); text-align: center; }
 .warroom-result__prio--P1 { background: rgba(255, 46, 136,.18); color: #ff8fa5; }
 .warroom-result__prio--P2 { background: rgba(255,196,77,.18); color: #ffce7a; }

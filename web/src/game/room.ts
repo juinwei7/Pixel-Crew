@@ -602,10 +602,6 @@ function drawGlass(g: Graphics): void {
   for (const [x0, w] of [[248, 42], [292, 44]] as Array<[number, number]>) {
     g.rect(x0, 6, w, 1).fill({ color: 0x050816, alpha: 0.35 });
     g.rect(x0, 7, w, 1).fill({ color: 0x050816, alpha: 0.12 });
-    // Glare: short 1px diagonals near the top-left of each pane.
-    for (const [ox, len] of [[6, 9], [10, 5]] as Array<[number, number]>) {
-      for (let k = 0; k < len; k++) g.rect(x0 + ox + len - k, 10 + k, 1, 1).fill({ color: 0xffffff, alpha: 0.07 });
-    }
   }
   g.rect(246, 44, 92, 1).fill(0x3a4d78); // sill catches the light
   g.rect(246, 45, 92, 1).fill({ color: 0x050816, alpha: 0.3 });
