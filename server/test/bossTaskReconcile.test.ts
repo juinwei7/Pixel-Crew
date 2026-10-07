@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BossTaskWorkCounter,
+  newCrewOrphaned,
+  pendingQuestionUnchanged,
   restartBlockedByActiveWork,
+  snapshotStillCurrent,
   synthesizingZombieAction,
 } from "../src/bossTaskReconcile.js";
 
@@ -90,4 +93,41 @@ test("BossTaskWorkCounter: 遞迴進出（decideBossTask 降級重決策）不�
   // 不同 task 互不影響。
   counter.enter("a");
   assert.equal(counter.inFlight("b"), false);
+});
+
+test("snapshotStillCurrent: 長流程回來後只有同一階段、沒被終結的交辦能套用快照", () => {
+  assert.equal(snapshotStillCurrent("discovering", { status: "discovering" }), true);
+  // 期間被刪除：寫回會被 upsert 復活。
+  assert.equal(snapshotStillCurrent("discovering", null), false);
+  assert.equal(snapshotStillCurrent("discovering", undefined), false);
+  // 期間被取消／判失敗：寫回會把取消蓋掉、甚至真的派工。
+  assert.equal(snapshotStillCurrent("discovering", { status: "cancelled" }), false);
+  assert.equal(snapshotStillCurrent("needs_attention", { status: "failed" }), false);
+  // 期間被別條路徑接手（老闆回覆、另一輪重試把它推進）：不能拿舊快照再走一遍。
+  assert.equal(snapshotStillCurrent("needs_attention", { status: "discovering" }), false);
+  assert.equal(snapshotStillCurrent("needs_attention", { status: "needs_attention" }), true);
+});
+
+test("pendingQuestionUnchanged: 代答只送給當初那一題", () => {
+  const asked = { status: "needs_input", messages: [{ id: "m1", role: "boss" }, { id: "q1", role: "decision_model" }] };
+  assert.equal(pendingQuestionUnchanged(asked, structuredClone(asked)), true);
+  assert.equal(pendingQuestionUnchanged(asked, null), false);
+  // 老闆已親自回覆，交辦回到探索中。
+  assert.equal(pendingQuestionUnchanged(asked, { ...asked, status: "discovering" }), false);
+  // 老闆回覆後決策模型又問了新的一題：狀態一樣是 needs_input，但那已是另一題。
+  assert.equal(pendingQuestionUnchanged(asked, {
+    status: "needs_input",
+    messages: [...asked.messages, { id: "r1", role: "boss" }, { id: "q2", role: "decision_model" }],
+  }), false);
+});
+
+test("newCrewOrphaned: 第二輪決策沒把工作交給新隊就要收掉", () => {
+  const routed = { status: "running", stages: [{ departmentId: "crew" }] };
+  assert.equal(newCrewOrphaned(routed, "crew"), false);
+  assert.equal(newCrewOrphaned(null, "crew"), true);
+  assert.equal(newCrewOrphaned({ ...routed, status: "cancelled" }, "crew"), true);
+  // 決策失敗或改問老闆：沒有 stage 指向它，取消／刪除／封存的清理都找不到它。
+  assert.equal(newCrewOrphaned({ status: "failed", stages: [] }, "crew"), true);
+  assert.equal(newCrewOrphaned({ status: "needs_input", stages: [] }, "crew"), true);
+  assert.equal(newCrewOrphaned({ status: "running", stages: [{ departmentId: "standing" }] }, "crew"), true);
 });

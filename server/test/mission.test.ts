@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   applyMissionActivityEvent,
   createMissionActivity,
   missionActiveWorkerId,
   missionLocksWorkspace,
+  missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -300,4 +304,33 @@ test("routes Mission phases to exactly one active worker and finds correction ta
   assert.equal(missionLocksWorkspace(mission), true);
   mission.status = "completed";
   assert.equal(missionLocksWorkspace(mission), false);
+});
+
+test("boss Missions lift an off member to safe only on the Mission runner", () => {
+  assert.equal(missionRunnerApproveMode("off", "boss"), "safe");
+  // 成員自己設的模式（含更寬的 full／無敵）照舊，部門自己開的 Mission 也不升級。
+  assert.equal(missionRunnerApproveMode("safe", "boss"), "safe");
+  assert.equal(missionRunnerApproveMode("full", "boss"), "full");
+  assert.equal(missionRunnerApproveMode("invincible", "boss"), "invincible");
+  assert.equal(missionRunnerApproveMode("off", "department"), "off");
+  assert.equal(missionRunnerApproveMode("off", undefined), "off");
+});
+
+test("a boss task never rewrites a member's own approval mode", () => {
+  // 以前派工時直接把成員的 autoApproveMode 從 off 改成 safe，turn_end 就持久化、沒人改回來，
+  // 交辦結束後成員的直接對話也一路自動放行。升級只能留在 Mission runner 的 getter 裡。
+  const source = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(source, /member\.autoApproveMode\s*=\s*"safe"/);
+  const runnerFactory = source.slice(source.indexOf("function missionRunnerFor("), source.indexOf("function sendMissionRunner("));
+  assert.doesNotMatch(runnerFactory, /\(\) => worker\.autoApproveMode,/);
+  assert.equal(runnerFactory.match(/missionRunnerApproveMode\(worker\.autoApproveMode, mission\.origin\)/g)?.length, 2);
+});
+
+test("the prepare API reports the correction budget missions actually get", () => {
+  // launchDepartmentMission 早已改成 0（依老闆指示不做自動修正回合），prepare API 卻還回 2 並寫著
+  // 「最多自動退回修正兩輪」——兩邊都要讀同一個常數，警語也要跟著它講。
+  const source = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(source, /maxCorrections: \d/);
+  assert.equal(source.match(/maxCorrections: MISSION_MAX_CORRECTIONS,/g)?.length, 2);
+  if (MISSION_MAX_CORRECTIONS === 0) assert.doesNotMatch(source, /退回修正兩輪/);
 });

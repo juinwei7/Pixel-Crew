@@ -254,7 +254,7 @@ export const enServerA: Record<string, string> = {
   "這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。": "This assignment is itself the work authorization; the department lead will divide the work in read-only mode and start right away, without asking you to approve a general plan first.",
   "NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。": "NPCs execute according to their own roles, the department runs one step at a time, and the lead compiles a final report at the end.",
   "Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。": "Execute uses each NPC's own permission and approval settings; Consult/Review are always read-only.",
-  "Review 最多自動退回修正兩輪，超過後會停下來請你決定。": "Review can automatically send work back for correction up to two rounds; beyond that it stops and asks for your decision.",
+  "Review 要求修改時不會自動退回重做，會直接停下來請你決定（重試、帶指示重跑或接受風險）。": "When Review requests changes, the work is not sent back for automatic correction; the Mission stops and asks you to decide (retry, rerun with guidance, or accept the risk).",
   "Mission 不會自動 commit、push、merge、tag、publish 或 release。": "The Mission will never automatically commit, push, merge, tag, publish, or release.",
   "Mission 確認已過期，請重新檢查": "The Mission confirmation has expired, please recheck",
   "必須先確認 Mission 權限與 Git 邊界": "You must confirm the Mission's permissions and Git boundaries first",

@@ -145,6 +145,8 @@ import {
   isAsyncAgentLaunch,
   missionActiveWorkerId,
   missionLocksWorkspace,
+  missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -163,7 +165,7 @@ import {
   parseDepartmentPlan,
   type DepartmentPlan,
 } from "./departmentPlan.js";
-import { normalizeDepartmentName, type Department } from "./department.js";
+import { normalizeDepartmentName, routableDepartment, type Department } from "./department.js";
 import {
   assignmentDecisionPrompt,
   normalizeAssignmentClarifications,
@@ -182,6 +184,7 @@ import {
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   reconcileBossTaskStall,
+  shareGuestBossTaskError,
   type BossTask,
   type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
@@ -196,8 +199,12 @@ import {
 } from "./expertAdvisor.js";
 import {
   autopilotNextPrompt,
+  autopilotTriggerRearms,
   clampAutopilotSteps,
   clampAutopilotMinutes,
+  decideWithFormatRepair,
+  DeferredAutopilotTriggers,
+  explainAutopilotFailure,
   parseAutopilotDecision,
   type AutopilotHistoryEntry,
 } from "./autopilot.js";
@@ -205,6 +212,8 @@ import {
   AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
   autopilotAnswerPrompt,
   autopilotResolvePrompt,
+  explainAutopilotAnswerFailure,
+  explainAutopilotResolveFailure,
   parseAutopilotAnswerDecision,
   parseAutopilotResolveDecision,
 } from "./autopilotResolve.js";
@@ -238,7 +247,10 @@ import {
 } from "./missionStepRetry.js";
 import {
   BossTaskWorkCounter,
+  newCrewOrphaned,
+  pendingQuestionUnchanged,
   restartBlockedByActiveWork,
+  snapshotStillCurrent,
   synthesizingZombieAction,
 } from "./bossTaskReconcile.js";
 import {
@@ -2242,7 +2254,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         onEvent,
         mission.workspacePath,
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       )
@@ -2251,7 +2263,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         mission.workspacePath,
         () => claudeCapabilitiesFor(mission.workspacePath).getAllowedTools(),
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       );
@@ -4303,9 +4315,8 @@ function launchDepartmentMission(
     steps: [],
     currentStepIndex: null,
     correctionCount: 0,
-    // 依老闆指示不做查證回合（execute→review→correct 的來回是慢的另一主因）：research 本就是 0，
-    // project 也改成 0——只跑一次執行、不再自我 review/修正，換取速度。要恢復查證把 project 調回 2。
-    maxCorrections: 0,
+    // 依老闆指示不做自動修正回合（research 本就是 0，project 也改成 0），理由與恢復方式見常數註解。
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     error: null,
     createdAt: now,
     startedAt: now,
@@ -4838,6 +4849,7 @@ app.post("/api/assignments", async (req, res) => {
   const eligible = new Map<string, { coordinator: Worker; members: Worker[] }>();
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments)) continue; // 別張交辦的臨時團隊，派進去會跟著它解散
     const departmentMembers = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const coordinator = workers.get(department.leadWorkerId) ?? departmentMembers[0];
     if (!coordinator) continue;
@@ -4961,9 +4973,12 @@ function bossTaskMessage(
   };
 }
 
-function bossTaskCandidates(): AssignmentDecisionCandidate[] {
+// ownCrewIds：這張交辦自己的臨時團隊（剛為它開的、重新交辦前原本在用的）；別張交辦的臨時團隊
+// 一律不列入——那張交辦收工就整支解散，派進去的 Mission 會失去全部成員、卡死工作區鎖。
+function bossTaskCandidates(ownCrewIds: readonly string[] = []): AssignmentDecisionCandidate[] {
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments, ownCrewIds)) continue;
     const members = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const lead = workers.get(department.leadWorkerId) ?? members[0];
     if (!lead || members.length === 0) continue;
@@ -4990,6 +5005,9 @@ function persistBossTask(task: BossTask, created = false): void {
   // 寫入點改寫時在這裡統一清掉結構化停滯標記——散落各處的 error 寫入點不必各自維護。
   task.stall = reconcileBossTaskStall(task);
   task.updatedAt = new Date().toISOString();
+  // 同一個中央寫入點順手重新武裝自動循環：交辦回到進行中（老闆回覆、解卡、重派…）就清掉上一個
+  // 終態的觸發標記，否則它下一次完成／卡住都會被 hook 當成重複而略過，開關亮著卻不再推進。
+  if (autopilotTriggerRearms(task.status)) autopilotFired.delete(task.id);
   store.saveBossTask(task);
   broadcastBossTask(task, created);
 }
@@ -5071,6 +5089,10 @@ async function createDepartmentForObjective(input: {
 function disbandEphemeralDepartment(departmentId: string): void {
   if (!ephemeralDepartments.has(departmentId)) return;
   ephemeralDepartments.delete(departmentId);
+  // 先收掉還跑在這支隊上的 Mission：成員一移除，Mission 就再也收不到事件，卻仍佔著工作區鎖
+  //（重啟後照樣被還原）。runner 一併停掉；解散完再讓引用它的交辦依 Mission 終態誠實收尾。
+  const orphanedMissions = [...activeMissions.values()].filter((mission) => mission.departmentId === departmentId && missionLocksWorkspace(mission));
+  for (const mission of orphanedMissions) cancelMissionForScopedRestart(mission);
   const memberIds = [...workers.values()].filter((worker) => worker.departmentId === departmentId).map((worker) => worker.id);
   for (const workerId of memberIds) {
     const worker = workers.get(workerId);
@@ -5087,6 +5109,7 @@ function disbandEphemeralDepartment(departmentId: string): void {
     store.deleteDepartment(departmentId);
     broadcast({ type: "department_removed", departmentId });
   }
+  for (const mission of orphanedMissions) advanceBossTasksForMission(mission.id);
 }
 
 // 解散一個交辦底下所有臨時部門。idempotent。
@@ -5153,9 +5176,9 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
   });
   // 建部門要跑最長 90s 的規劃 LLM：期間老闆可能已取消／刪除這張交辦，手上是舊快照
   // （decide 路徑既有同款護欄；自動重試讓這條競態更容易踩到——交互自審補上）。
-  // 套用結果前重讀權威狀態，已終結就放手，剛建好的臨時部門一併解散不留孤兒。
-  const liveAfterCreate = store.getBossTask(task.id);
-  if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+  // 套用結果前重讀權威狀態，已終結（或已被重新交辦等別條路徑接手）就放手，剛建好的臨時部門
+  // 一併解散不留孤兒。
+  if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
     if (department) disbandEphemeralDepartment(department.id);
     return;
   }
@@ -5216,8 +5239,7 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
       count: task.executionBudget?.maxAgents ?? 3,
     });
     // 與 dedicated 路徑同款取消護欄：重建部門的長流程期間交辦被終結就放手（交互自審補上）。
-    const liveAfterCreate = store.getBossTask(task.id);
-    if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
       if (department) disbandEphemeralDepartment(department.id);
       return;
     }
@@ -5254,17 +5276,17 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
   advanceBossTask(task);
 }
 
-async function decideBossTask(task: BossTask, allowCreateDepartment = true): Promise<void> {
+async function decideBossTask(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
   bossTaskDiscoveryWork.enter(task.id);
   try {
-    return await decideBossTaskInner(task, allowCreateDepartment);
+    return await decideBossTaskInner(task, allowCreateDepartment, ownCrewIds);
   } finally {
     bossTaskDiscoveryWork.exit(task.id);
   }
 }
 
-async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true): Promise<void> {
-  const candidates = bossTaskCandidates();
+async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
+  const candidates = bossTaskCandidates(ownCrewIds);
   if (candidates.length === 0 && !allowCreateDepartment) {
     task.status = "needs_attention";
     task.error = t("目前沒有可用的部門；請先建立具有職務的部門");
@@ -5306,9 +5328,9 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
       throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
     }
     // 探索是背景長流程（LLM 最長 150s×2）：期間老闆可能已取消或刪除這張交辦，而手上是舊快照。
-    // 套用決策前重讀權威狀態，已終結就直接放手——否則已取消的交辦會被蓋回 ready 並真的派工復活。
-    const current = store.getBossTask(task.id);
-    if (!current || current.status === "cancelled" || current.status === "failed") return;
+    // 套用決策前重讀權威狀態，已終結（或已被別條路徑接手）就直接放手——否則已取消的交辦會被
+    // 蓋回 ready 並真的派工復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.error = null;
     if (decision.status === "clarification") {
       task.status = "needs_input";
@@ -5332,6 +5354,12 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
         provider: task.decisionProvider,
         count: decision.memberCount,
       });
+      // 建部門又跑了最長 90s 的規劃 LLM：與 dedicated 路徑同款護欄，套用前重讀，作廢就放手；
+      // 剛建好的隊一併解散——它還不在任何 stage 上，取消／刪除的清理掃不到它。
+      if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
+        if (department) disbandEphemeralDepartment(department.id);
+        return;
+      }
       if (!department) {
         const failure = deptCreateFailureError.decide();
         task.status = "needs_attention";
@@ -5345,7 +5373,10 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
       }
       task.messages.push(bossTaskMessage("system", t("已建立「{name}」，交給它繼續規劃與執行。", { name: department.name })));
       persistBossTask(task);
-      await decideBossTask(task, false);
+      await decideBossTask(task, false, [department.id]);
+      // 第二輪決策期間交辦被取消／刪除，或決策最後沒把工作交給這支新隊（失敗、改問老闆）：
+      // 沒有 stage 指向它就沒人會解散它，在這裡收掉，不留佔位的孤兒臨時部門。
+      if (newCrewOrphaned(store.getBossTask(task.id), department.id)) disbandEphemeralDepartment(department.id);
       return;
     }
     const byDepartment = new Map(candidates.map((candidate) => [candidate.departmentId, candidate]));
@@ -5371,10 +5402,15 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
     persistBossTask(task);
     advanceBossTask(task);
   } catch (error) {
+    // LLM 逾時／出錯常發生在等了好一陣之後：期間被取消或刪除的交辦不能被這份舊快照改判失敗或復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.status = "failed";
     task.error = (error as Error).message || t("無法完成 Boss Task 判斷");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
+    // 探索就失敗的交辦不會再經過 advanceBossTask：直接通知自動循環，否則自動開出的下一張在
+    // 這裡失敗時，開關會一直亮著、循環卻再也沒有下一步，也沒有任何說明。
+    autopilotHook(task);
   }
 }
 
@@ -5527,11 +5563,9 @@ function advanceBossTaskStages(task: BossTask): void {
   }).slice(0, 30_000);
   // Boss 交辦跑在「既有部門」時，成員的自動核准預設是 "off"，每個唯讀工具（WebSearch/
   // WebFetch/Read…）都會停下來等老闆點核准，整張交辦被拖到極慢（使用者實際回報）。交辦
-  // 本來就是「授權這支部隊去把事做完」，這裡把參與成員從 off 升到 safe：只自動放行唯讀
-  // 工具，寫檔／危險 Bash 仍照擋。dedicated 專屬部隊建立時已設 full，不受此影響。
-  for (const member of [lead, ...eligibility.members]) {
-    if (member.autoApproveMode === "off") member.autoApproveMode = "safe";
-  }
+  // 本來就是「授權這支部隊去把事做完」，所以 origin: "boss" 的 Mission runner 一律以
+  // missionRunnerApproveMode 從 off 升到 safe——只在這支 Mission 的 runner 上，不改成員本身
+  // 的設定，交辦一結束、成員回到直接對話就還是原本的 off。dedicated 專屬部隊建立時已設 full。
   const launched = launchDepartmentMission(lead, eligibility.members, objective, next.acceptanceCriteria, {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
@@ -5827,6 +5861,8 @@ function persistAutopilotStates(): void {
 const autopilotFired = new Set<string>();
 // 全域鎖：一次只推進一步，杜絕並發生出多張交辦。
 let autopilotAdvancing = false;
+// 撞到全域鎖而讓出的觸發（見 autopilotHook）：鎖釋放時由 replayDeferredAutopilotTriggers 重播。
+const autopilotDeferred = new DeferredAutopilotTriggers();
 // 自動接手：每張交辦已嘗試次數（護欄：超過 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 就停下等人）。
 const autopilotResolveAttempts = new Map<string, number>();
 // 全域鎖：一次只自動接手一個卡點，避免並發對同一 Mission 重複派工。
@@ -5868,11 +5904,42 @@ function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number
   broadcastAutopilot(workspacePath);
 }
 
+// 鎖一釋放就重播先前讓出的觸發。重讀權威狀態再進 hook：期間被回覆、取消或刪除的交辦，
+// hook 依新狀態自己放行或略過；又撞到鎖的會再讓出，留給下一次釋放。
+function replayDeferredAutopilotTriggers(): void {
+  for (const taskId of autopilotDeferred.drain()) {
+    try {
+      const live = store.getBossTask(taskId);
+      if (live) autopilotHook(live);
+    } catch (error) {
+      console.error(`[autopilot] 重播讓出的觸發失敗 ${taskId}:`, error);
+    }
+  }
+}
+
+// 背景推進（下一步／代答／解卡）意外丟錯：記錄並誠實停下留言——不讓 unhandledRejection 拖垮
+// 整台伺服器，也不讓開關亮著、循環卻已無聲熄火。
+function autopilotCrashed(task: BossTask, error: unknown): void {
+  console.error(`[autopilot] 背景推進意外失敗 ${task.id}:`, error);
+  try {
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：{error}", { error: (error as Error)?.message || String(error) }));
+  } catch (noteError) {
+    console.error("[autopilot] 無法留下停止說明:", noteError);
+  }
+}
+
 function disableAutopilotWithNote(task: BossTask, note: string): void {
   const had = autopilotByWorkspace.delete(autopilotKey(task.workspacePath));
   if (!had) return;
-  task.messages.push(bossTaskMessage("system", note));
-  persistBossTask(task);
+  // 呼叫端多半剛等完一兩分鐘的 LLM，手上 task 可能是舊快照：說明掛到重讀的權威版本上，
+  // 已刪除就不寫（saveBossTask 是 upsert，寫回會讓刪掉的交辦復活、蓋掉期間的取消或回覆）。
+  const message = bossTaskMessage("system", note);
+  task.messages.push(message);
+  const live = store.getBossTask(task.id);
+  if (live) {
+    live.messages.push(message);
+    persistBossTask(live);
+  }
   broadcastAutopilot(task.workspacePath);
 }
 
@@ -5910,7 +5977,19 @@ async function spawnBossTask(workspacePath: string, objective: string, note?: st
   };
   if (!store.saveBossTask(task)) return null;
   broadcastBossTask(task, true);
-  await decideBossTask(task);
+  try {
+    await decideBossTask(task);
+  } catch (error) {
+    // 比照 POST /api/boss-tasks 的兜底：探索意外丟錯不能讓新交辦永遠卡在 discovering；
+    // 錯誤照樣往外丟，讓自動循環把「開不出下一張」誠實回報出來。
+    if (task.status === "discovering") {
+      task.status = "needs_attention";
+      task.error = (error as Error).message || t("探索失敗");
+      task.messages.push(bossTaskMessage("system", t("⛔ 探索失敗：{error}", { error: task.error })));
+      persistBossTask(task);
+    }
+    throw error;
+  }
   return task;
 }
 
@@ -5928,12 +6007,14 @@ function autopilotHook(task: BossTask): void {
   if (answerable) {
     const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
     if (autopilotResolving) {
-      // 另一件自動接手正在進行：把觸發權還回去，之後的事件會再進來。
+      // 另一件自動接手正在進行：把觸發權還回去並登記重播——needs_input 之後不會再有事件
+      // 把這張送回 hook，只「還回去」等於永遠沒人代答。
       autopilotFired.delete(task.id);
+      autopilotDeferred.defer(task.id);
       return;
     }
     if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
-      void autoAnswerBossTask(task, attempts);
+      void autoAnswerBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
       return;
     }
     disableAutopilotWithNote(task, t("⛔ 自動循環已停止：代答次數已用完，這個問題需要你親自回答；回覆後可再打開開關。"));
@@ -5945,13 +6026,15 @@ function autopilotHook(task: BossTask): void {
     if (state.autoResolve && task.status === "needs_attention") {
       if (autopilotResolving) {
         // 另一件自動接手正在進行（可能是別的 workspace 的）：比照 needs_input 分支把觸發權
-        // 還回去等下一個事件，不能直接把這條循環關掉——它根本還沒嘗試過。
+        // 還回去並登記重播，不能直接把這條循環關掉——它根本還沒嘗試過；暫停中的 Mission
+        // 也不一定還會有事件把它送回來。
         autopilotFired.delete(task.id);
+        autopilotDeferred.defer(task.id);
         return;
       }
       const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
       if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
-        void autoResolveBossTask(task, attempts);
+        void autoResolveBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
         return;
       }
     }
@@ -5961,12 +6044,23 @@ function autopilotHook(task: BossTask): void {
   }
   autopilotResolveAttempts.delete(task.id);
   if (state.running || autopilotAdvancing) {
-    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去，讓之後的事件能重新進來，
-    // 否則這張 completed 永遠留在 autopilotFired、這條循環無聲熄火。
+    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去並登記重播。completed 之後
+    // 不會再有任何事件把這張送回 hook——只還回去不重播，這條循環就無聲熄火。
     autopilotFired.delete(task.id);
+    autopilotDeferred.defer(task.id);
     return;
   }
-  void advanceAutopilot(task, state);
+  void advanceAutopilot(task, state).catch((error) => autopilotCrashed(task, error));
+}
+
+// 自動循環的決策呼叫（不用工具、150s 上限）；格式修復重問也走同一條。
+function autopilotDecisionRunner(provider: ProviderId, workspacePath: string, model: string | null): (prompt: string) => Promise<string> {
+  return async (prompt) => (await runDetachedTurn(provider, workspacePath, model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+}
+
+// 格式修了一次仍壞：誠實標成失敗（不是正常結束），附上最後一次被拒的原因。
+function autopilotFormatFailureNote(failure: string): string {
+  return t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: failure });
 }
 
 // 自動接手代答：決策模型在 discovery 問了 clarification、老闆不在時，讓幕僚長用安全
@@ -5974,6 +6068,7 @@ function autopilotHook(task: BossTask): void {
 // 真的需要老闆本人的資訊（實體資料、憑證、不可逆決定）就停下等人。
 async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<void> {
   autopilotResolving = true;
+  let answered: BossTask | null = null;
   try {
     const question = [...task.messages].reverse().find((message) => message.role === "decision_model")?.text ?? "";
     const runtime = resolveDecisionRuntime(undefined, undefined, task.workspacePath);
@@ -5992,41 +6087,55 @@ async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<voi
       attemptNumber: attempts + 1,
       maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
     });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, task.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotAnswerDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_answer",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotAnswerDecision,
+        explain: explainAutopilotAnswerFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
-    // 開關可能在生成期間被關掉；老闆也可能已親自回覆——都不再動任何東西。
+    // 開關可能在生成期間被關掉；老闆也可能已親自回覆、取消或刪除——都不再動任何東西。
     if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
-    if (task.status !== "needs_input") return;
-    if (!decision || decision.action === "wait") {
-      const reason = decision?.action === "wait" ? decision.reason : "";
-      disableAutopilotWithNote(task, reason
+    // 手上 task 是 hook 當下的快照（代答 LLM 可跑兩分鐘）：重讀權威狀態，那一題已不再懸著就放手，
+    // 後續變更全掛在重讀的版本上——舊快照整列寫回會蓋掉期間的回覆／取消，刪掉的交辦還會復活。
+    const live = store.getBossTask(task.id);
+    if (!pendingQuestionUnchanged(task, live)) return;
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
+      disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
       return;
     }
     autopilotResolveAttempts.set(task.id, attempts + 1);
     autopilotFired.delete(task.id);
-    task.messages.push(bossTaskMessage("boss", t("🤝（自動接手代答，第 {n}/{max} 次，可隨時修正）{reply}", {
+    live.messages.push(bossTaskMessage("boss", t("🤝（自動接手代答，第 {n}/{max} 次，可隨時修正）{reply}", {
       n: attempts + 1,
       max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
       reply: decision.reply,
     })));
-    task.status = "discovering";
-    task.error = null;
-    persistBossTask(task);
-    // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答
-    //（遞迴深度由 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。
-    autopilotResolving = false;
-    await decideBossTask(task);
+    live.status = "discovering";
+    live.error = null;
+    persistBossTask(live);
+    answered = live;
   } finally {
     autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
   }
+  // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答（遞迴深度由
+  // AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。決策放在 finally 之外，跑完後也不會把期間別人剛拿到的鎖清掉。
+  if (answered) await decideBossTask(answered);
 }
 
 // 自動接手一張卡在 needs_attention 的交辦：找出中斷的部門 Mission，讓決策模型讀中斷
@@ -6070,28 +6179,44 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
       attemptNumber: attempts + 1,
       maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
     });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, task.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotResolveDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_resolve",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotResolveDecision,
+        explain: explainAutopilotResolveFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
     // 使用者可能在生成期間關掉了開關——關了就不再動任何東西。
     if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
-    if (!decision || decision.action === "wait") {
-      const reason = decision?.action === "wait" ? decision.reason : "";
-      disableAutopilotWithNote(task, reason
+    // 解卡 LLM 可跑兩分鐘：老闆可能已親自從 Mission 面板解卡、取消或刪除交辦。交辦與 Mission 都
+    // 重讀權威狀態，已不再卡著就放手；後續變更掛在重讀的版本上，不拿舊快照整列寫回。
+    const live = store.getBossTask(task.id);
+    if (!snapshotStillCurrent(task.status, live)) return;
+    const liveMission = activeMissions.get(mission.id) ?? store.getDepartmentMission(mission.id);
+    if (!liveMission || liveMission.status !== "needs_attention") return;
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
+      disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : stopNote);
       return;
     }
     autopilotResolveAttempts.set(task.id, attempts + 1);
     const guidance = decision.action === "retry" ? "" : decision.guidance;
-    const outcome = applyMissionResolution(mission, decision.action, guidance);
+    const outcome = applyMissionResolution(liveMission, decision.action, guidance);
     if (outcome.error) {
-      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：自動接手失敗（{error}）。", { error: outcome.error }));
+      disableAutopilotWithNote(live, t("⛔ 自動循環已停止：自動接手失敗（{error}）。", { error: outcome.error }));
       return;
     }
     // 解卡已派工：把這張交辦移出「已觸發」集合，讓下一次終態（完成→續循環、
@@ -6102,15 +6227,16 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
       : decision.action === "retry_execute"
         ? t("帶指示重跑 Execute")
         : t("原步驟重試");
-    task.messages.push(bossTaskMessage("system", t("🤝 自動接手（第 {n}/{max} 次）：{action}{guidance}", {
+    live.messages.push(bossTaskMessage("system", t("🤝 自動接手（第 {n}/{max} 次）：{action}{guidance}", {
       n: attempts + 1,
       max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
       action: actionLabel,
       guidance: guidance ? t("——{guidance}", { guidance }) : "",
     })));
-    advanceBossTaskStages(task);
+    advanceBossTaskStages(live);
   } finally {
     autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
   }
 }
 
@@ -6140,33 +6266,53 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
       .slice(-8)
       .map((item) => ({ objective: item.objective, report: item.finalReport ? collaborationText(item.finalReport, 600) : undefined }));
     const prompt = autopilotNextPrompt({ workspaceLabel: autopilotWorkspaceLabel(workspacePath), history, stepsRemaining: state.stepsRemaining - 1 });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_next",
+        run: autopilotDecisionRunner(runtime.provider, workspacePath, runtime.model),
+        parse: parseAutopilotDecision,
+        explain: explainAutopilotFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
-    if (!decision || decision.action === "stop") {
-      const reason = decision?.action === "stop" ? decision.reason : "";
+    // 格式修了一次仍壞是失敗，不能跟模型自己選擇 stop 一樣標成「正常結束」。
+    if (!parsed.ok) {
+      disableAutopilotWithNote(justFinished, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "stop") {
+      const reason = decision.reason;
       disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要接著討論或調整，直接在這張交辦回覆即可（有專屬團隊會由同一隊接手）；要再自動接續就重開開關。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
     }
     // 使用者可能在生成期間關掉了開關——關了就不再推進。
     if (!autopilotByWorkspace.has(autopilotKey(workspacePath))) return;
     state.stepsRemaining -= 1;
-    const spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+    // 巡迴推進到下一步＝上一個交辦收工，先把它的臨時團隊解散（不會再手動追問）——要在開下一張
+    // 之前：下一張的決策若把工作派進這支隊，接著一解散就會把它的 Mission 連同成員一起抽走。
+    disbandTaskEphemeralDepartments(justFinished);
+    let spawned: BossTask | null;
+    try {
+      spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+    } catch (error) {
+      // 以前這裡沒有 catch：探索意外丟錯會變成 unhandledRejection，循環既沒回報也沒停。
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦（{error}）。", { error: (error as Error).message || String(error) }));
+      return;
+    }
     if (!spawned) {
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
       return;
     }
-    // 巡迴推進到下一步＝上一個交辦收工，把它的臨時團隊解散（不會再手動追問）。
-    disbandTaskEphemeralDepartments(justFinished);
     broadcastAutopilot(workspacePath);
   } finally {
     state.running = false;
     autopilotAdvancing = false;
+    replayDeferredAutopilotTriggers();
   }
 }
 
@@ -6797,6 +6943,9 @@ app.get("/api/boss-tasks/:id", (req, res) => {
 app.post("/api/boss-tasks", async (req, res) => {
   const objective = collaborationText(req.body?.message, 4_000);
   if (!objective) { res.status(400).json({ error: t("請輸入要交辦的工作") }); return; }
+  // 這條在轉接站的分享訪客安全寫入白名單上：會拉高核准模式的輸入（專屬部門＝full）不能讓訪客自己開。
+  const shareGuestError = shareGuestBossTaskError(req.headers["x-pc-access"], req.body);
+  if (shareGuestError) { res.status(403).json({ error: shareGuestError }); return; }
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || null;
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200) || clientMessageId;
   if (idempotencyKey) {
@@ -6904,6 +7053,9 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
     res.status(409).json({ error: t("進行中的 Boss Task 不能刪除；請等它完成或先取消") });
     return;
   }
+  // needs_attention 的交辦底下常有一支暫停中的部門 Mission：它仍佔著工作區＋部門鎖（重啟後
+  // 照樣被還原），交辦一刪就再也沒有入口能取消它。比照 /cancel 先把進行中的 Mission 收掉。
+  for (const mission of bossTaskRestartScope(task).activeMissions) cancelMissionForScopedRestart(mission);
   disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉
   autopilotFired.delete(task.id); // 任務不存在了，觸發標記與接手計數一併回收
   autopilotResolveAttempts.delete(task.id);
@@ -6927,6 +7079,8 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
     synthesisInFlight: bossTaskFinalizing.has(task.id),
   })) { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
   const restartScope = bossTaskRestartScope(task);
+  // 重新規劃前記下這張交辦自己的臨時團隊：清空 stages 後決策仍可把工作交回同一隊，不另開新隊。
+  const ownCrewIds = task.stages.map((stage) => stage.departmentId).filter((id) => ephemeralDepartments.has(id));
   const preflightError = restartScope.members.length > 0
     ? await scopedRestartPreflightError(restartScope.members, restartScope.activeMissions)
     : null;
@@ -6962,7 +7116,7 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   autopilotResolveAttempts.delete(task.id);
   task.messages.push(bossTaskMessage("system", t("已清空原本交辦並重新規劃；附件與稽核紀錄已保留。"), [], null, null, timestampAfter(clearedAt)));
   persistBossTask(task);
-  await decideBossTask(task);
+  await decideBossTask(task, true, ownCrewIds);
   res.json({ bossTask: bossTaskForDisplay(task), ...preview });
 });
 
@@ -7200,12 +7354,12 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
     members: eligibility.members.map(workerSummary),
     objective,
     acceptanceCriteria,
-    maxCorrections: 2,
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     warnings: [
       t("這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。"),
       t("NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。"),
       t("Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。"),
-      t("Review 最多自動退回修正兩輪，超過後會停下來請你決定。"),
+      t("Review 要求修改時不會自動退回重做，會直接停下來請你決定（重試、帶指示重跑或接受風險）。"),
       t("Mission 不會自動 commit、push、merge、tag、publish 或 release。"),
     ],
   });
