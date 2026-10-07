@@ -594,6 +594,7 @@ const SHARE_SAFE_WRITES = [
   ['POST', /^\/api\/assignments$/],                         // 建立指派
   ['POST', /^\/api\/schedules$/],                           // 建立排程
   ['POST', /^\/api\/workers\/[^/]+\/(consult|message|interrupt)$/], // 找隊員商量／傳訊／暫停
+  ['POST', /^\/api\/workers\/[^/]+\/queue$/],              // NPC 忙碌時排隊（等同傳訊；撤回自己排的見 itemKey）
   // 純狀態重整（不動任何資料，前端每 3 秒自動輪詢）：不放行會讓訪客一直被監護密碼框轟炸。
   ['POST', /^\/api\/auth\/refresh$/],                       // 重新檢查各 provider 登入狀態
   ['POST', /^\/api\/usage\/refresh$/],                      // 重新抓用量數字
@@ -659,9 +660,22 @@ function sessionSet(sid) {
   return e;
 }
 const pathSegs = (p) => p.split('/').filter(Boolean);
+// 壞掉的 %-編碼（例如 %E0%A4%A）會讓 decodeURIComponent 丟錯；在 request handler 裡沒接住＝
+// 整個轉接站行程掛掉，等於任何訪客一個請求就能把手機連線打斷。解不開＝不認得＝不算自己的。
+function safeDecode(seg) {
+  try { return decodeURIComponent(seg); } catch { return null; }
+}
+// 個別 NPC 的排隊訊息比一般 /api/<collection>/<id> 深一層：POST /api/workers/<wid>/queue 建立、
+// DELETE /api/workers/<wid>/queue/<qid> 撤回。key 用 'queue:<wid>/<qid>'（raw 路徑段，不會跟
+// 一般 '<段>/<id>' 撞名），訪客只能免密碼撤回自己排的；重新排序（PATCH 整條 order）會動到
+// 別人的項目，不走這條、維持監護密碼。
+const QUEUE_CREATE = /^\/api\/workers\/([^/]+)\/queue$/;
+const QUEUE_ITEM = /^\/api\/workers\/([^/]+)\/queue\/([^/]+)$/;
 // 建立類：POST /api/<collection>（剛好兩段）→ 回傳成功且含 id 就記下 'collection/id'。
 function createCollection(method, p) {
   if (String(method).toUpperCase() !== 'POST') return null;
+  const queue = QUEUE_CREATE.exec(p);
+  if (queue) return `queue:${queue[1]}`;
   const s = pathSegs(p);
   return (s.length === 2 && s[0] === 'api') ? s[1] : null;
 }
@@ -669,8 +683,12 @@ function createCollection(method, p) {
 function itemKey(method, p) {
   const m = String(method).toUpperCase();
   if (m !== 'DELETE' && m !== 'PATCH' && m !== 'PUT') return null;
+  const queue = m === 'DELETE' && QUEUE_ITEM.exec(p);
+  if (queue) return `queue:${queue[1]}/${queue[2]}`;
   const s = pathSegs(p);
-  return (s.length === 3 && s[0] === 'api') ? `${s[1]}/${decodeURIComponent(s[2])}` : null;
+  if (s.length !== 3 || s[0] !== 'api') return null;
+  const id = safeDecode(s[2]);
+  return id === null ? null : `${s[1]}/${id}`;
 }
 function ownsItem(sid, method, p) {
   const key = sid && itemKey(method, p);

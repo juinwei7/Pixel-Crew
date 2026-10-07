@@ -447,3 +447,74 @@ test("源碼 checkout（旁邊沒有 runtime）維持舊位置", async (t) => {
   assert.ok(await login(relay.api, "src-passcode"));
   assert.equal(existsSync(join(tmpdir(), "_tsproxy.secret.json")), false, "不可往上一層亂寫");
 });
+
+// ── 分享訪客的個別 NPC 排隊訊息 ──────────────────────────────────────────────
+
+/** 假的本體：排隊建立回傳新項目 id，其他請求原樣回報。 */
+function queueUpstream(): Promise<{ server: Server; port: number }> {
+  let n = 0;
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (req.method === "POST" && /^\/api\/workers\/[^/]+\/queue$/.test(req.url || "")) {
+      n += 1;
+      res.end(JSON.stringify({ ok: true, id: `q${n}`, queue: [] }));
+      return;
+    }
+    res.end(JSON.stringify({ method: req.method, url: req.url }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port }));
+  });
+}
+
+test("分享訪客：NPC 忙碌時可以排隊，也能撤回自己排的；別人排的與重新排序仍要監護密碼", async (t) => {
+  const ws = makeWorkspace();
+  const upstream = await queueUpstream();
+  const relay = await startRelay({
+    PC_TSPROXY_CONFIG: ws.config,
+    PC_CLOUDFLARED_EXE: ws.exe,
+    PC_TSPROXY_TARGET_PORT: String(upstream.port),
+  });
+  t.after(() => { relay.child.kill(); upstream.server.close(); ws.cleanup(); });
+
+  await relay.api("/__gate/api/share", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, hours: 1, passcode: "share-passcode" }),
+  });
+  const guest = await login(relay.api, "share-passcode");
+  const as = (path: string, init?: RequestInit) => relay.api(path, { ...init, headers: { ...(init?.headers || {}), cookie: guest! } });
+
+  const queued = await as("/api/workers/w1/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"message":"hi"}' });
+  assert.equal(queued.status, 200, "排隊跟直接傳訊一樣是安全互動");
+  assert.equal((await queued.json()).id, "q1");
+
+  assert.equal((await as("/api/workers/w1/queue/q1", { method: "DELETE" })).status, 200, "撤回自己排的不用監護密碼");
+  const others = await as("/api/workers/w1/queue/someone-elses", { method: "DELETE" });
+  assert.equal(others.status, 403);
+  assert.equal((await others.json()).error, "guardian_required");
+  // 同一個 id 換到別的 NPC 底下不算自己的。
+  assert.equal((await as("/api/workers/w2/queue/q1", { method: "DELETE" })).status, 403);
+  // 重新排序會動到別人的項目，維持監護密碼。
+  const reorder = await as("/api/workers/w1/queue", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: '{"order":["q1"]}' });
+  assert.equal(reorder.status, 403);
+});
+
+test("分享訪客送來壞掉的 URL 編碼不會把轉接站弄掛", async (t) => {
+  const ws = makeWorkspace();
+  const upstream = await echoUpstream();
+  const relay = await startRelay({
+    PC_TSPROXY_CONFIG: ws.config,
+    PC_CLOUDFLARED_EXE: ws.exe,
+    PC_TSPROXY_TARGET_PORT: String(upstream.port),
+  });
+  t.after(() => { relay.child.kill(); upstream.server.close(); ws.cleanup(); });
+
+  await relay.api("/__gate/api/share", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, hours: 1, passcode: "share-passcode" }),
+  });
+  const guest = await login(relay.api, "share-passcode");
+  const bad = await relay.api("/api/boss-tasks/%E0%A4%A", { method: "DELETE", headers: { cookie: guest! } });
+  assert.equal(bad.status, 403);
+  assert.equal((await relay.api("/__gate/api/state")).status, 200, "轉接站要還活著");
+});

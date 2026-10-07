@@ -8733,10 +8733,12 @@ app.post("/api/workers/:id/queue", (req, res) => {
     return;
   }
   // 存原始 images/documents（drain 時再用 parseMessage* 驗一次，與 /message 一致）。
-  store.enqueueCommand(randomUUID(), worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
+  const queueId = randomUUID();
+  store.enqueueCommand(queueId, worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
   broadcastQueue(worker.id);
   scheduleQueueDrain(worker); // 若其實現在就空閒，立刻開跑
-  res.json({ ok: true, queue: store.listQueue(worker.id) });
+  // 回傳新項目 id：遠端轉接站靠它記「這是這位分享訪客排的」，讓訪客能免監護密碼撤回自己的。
+  res.json({ ok: true, id: queueId, queue: store.listQueue(worker.id) });
 });
 
 app.patch("/api/workers/:id/queue", (req, res) => {
