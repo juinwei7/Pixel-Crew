@@ -36,6 +36,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - Autopilot tells you to sign in again when the Claude login has expired, instead of reporting a generic decision-model failure.
 - The self-update safety gate only scans added and removed lines of a diff, so unchanged context no longer blocks a front-end-only change.
 - The bundle budget check matches the new chunk layout (entry shell, app chunk, lazily loaded English catalog).
+- One-click update on Windows downloads `Pixel.Crew.exe`, the name GitHub actually gives the release asset. Copies installed from v2.5.2 or earlier still request the old name and get a 404, so they need one manual download of the new release before one-click update works again.
+- A queued message is no longer lost when sending it fails: it stays queued until a send succeeds (giving up after 3 failed tries), instead of being removed first and dropped with its attachments.
+- Windows department task logs, assignment lists, and mission lists no longer come back empty: workspace paths are normalized when written as well as when queried, and existing rows are migrated.
+- Disbanding a dedicated team no longer deletes the mission records it ran, and leftover team members are recognised at startup by a stored marker instead of the team's (renamable) name.
+- A failed automatic retry after a lost `--resume` conversation no longer takes down every worker, and a later unrelated failure in a resumed session no longer silently discards the conversation.
+- The initial snapshot has a hard size ceiling again; one very long turn could make it send a worker's entire history.
+- A finished mission's "department discussion" can be opened again after a reload: its activity is fetched when you expand it, since the initial snapshot leaves it out.
+- Self-install only ships a clean working tree at the exact commit the safety gate reviewed; uncommitted or untracked files, or a commit landing mid-build, abort it. The trigger, the rebuild/install scripts, the gate's own range and promotion logic, and remote-access auth are now protected files, an NPC's shell command that reaches for the self-install switch or trigger needs your confirmation even under full auto-approve, and remote share guests can never trigger it.
+- A pasted video link that resolves to a loopback or private address is refused before `yt-dlp` runs, the same server-side request check the web screenshot tool already used.
 
 ## [2.5.2] - 2026-10-05
 
