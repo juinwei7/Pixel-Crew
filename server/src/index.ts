@@ -6907,6 +6907,9 @@ app.delete("/api/boss-tasks/:id", (req, res) => {
     res.status(409).json({ error: t("進行中的 Boss Task 不能刪除；請等它完成或先取消") });
     return;
   }
+  // needs_attention 的交辦底下常有一支暫停中的部門 Mission：它仍佔著工作區＋部門鎖（重啟後
+  // 照樣被還原），交辦一刪就再也沒有入口能取消它。比照 /cancel 先把進行中的 Mission 收掉。
+  for (const mission of bossTaskRestartScope(task).activeMissions) cancelMissionForScopedRestart(mission);
   disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉
   autopilotFired.delete(task.id); // 任務不存在了，觸發標記與接手計數一併回收
   autopilotResolveAttempts.delete(task.id);
