@@ -237,6 +237,20 @@ export function applyBossTaskRecordPatch(
   return null;
 }
 
+/**
+ * 遠端分享訪客（轉接站對 shr 連線蓋上 x-pc-access: shr，並先刪掉用戶端自帶的同名 header）
+ * 建交辦時，擋下會把核准模式拉高的輸入：「專屬部門」的臨時成員一律 full 自動核准，等於讓訪客
+ * 不經監護解鎖就拿到一支會自己放行寫檔／Bash 的團隊。轉接站對監護解鎖前後都只蓋 shr，本體
+ * 分不出來，所以一律擋——訪客照樣能建一般交辦（路由到既有部門）。回傳錯誤訊息，放行回 null。
+ */
+export function shareGuestBossTaskError(accessLevel: unknown, body: { dedicatedDepartment?: unknown } | null | undefined): string | null {
+  if (String(accessLevel ?? "") !== "shr") return null;
+  if (body?.dedicatedDepartment) {
+    return t("遠端分享訪客不能為交辦開「專屬部門」：專屬部門的臨時成員會自動核准所有非毀滅性指令。請關掉「專屬部門」改用既有部門路由，或請主人在本機操作。");
+  }
+  return null;
+}
+
 type BossTaskDecisionResult =
   | { ok: true; decision: BossTaskDecision }
   | { ok: false; reason: string };

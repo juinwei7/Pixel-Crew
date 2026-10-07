@@ -9,6 +9,7 @@ import {
   parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
+  shareGuestBossTaskError,
   type BossTask,
 } from "../src/bossTask.js";
 import type { AssignmentDecisionCandidate } from "../src/assignmentDecision.js";
@@ -440,4 +441,14 @@ test("record metadata can be renamed, while only terminal Boss tasks can be arch
   assert.equal(running.archivedAt, "2026-01-02");
   assert.equal(applyBossTaskRecordPatch(running, { archived: false }), null);
   assert.equal(running.archivedAt, null);
+});
+
+test("share guests cannot ask for a dedicated (full auto-approve) crew", () => {
+  // 轉接站對分享訪客蓋 x-pc-access: shr；owner 是 own，本機直連沒有這個 header。
+  assert.match(shareGuestBossTaskError("shr", { dedicatedDepartment: true }) ?? "", /專屬部門/);
+  assert.equal(shareGuestBossTaskError("shr", { dedicatedDepartment: false }), null);
+  assert.equal(shareGuestBossTaskError("shr", {}), null);
+  assert.equal(shareGuestBossTaskError("shr", null), null);
+  assert.equal(shareGuestBossTaskError("own", { dedicatedDepartment: true }), null);
+  assert.equal(shareGuestBossTaskError(undefined, { dedicatedDepartment: true }), null);
 });

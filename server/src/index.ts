@@ -183,6 +183,7 @@ import {
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   reconcileBossTaskStall,
+  shareGuestBossTaskError,
   type BossTask,
   type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
@@ -6796,6 +6797,9 @@ app.get("/api/boss-tasks/:id", (req, res) => {
 app.post("/api/boss-tasks", async (req, res) => {
   const objective = collaborationText(req.body?.message, 4_000);
   if (!objective) { res.status(400).json({ error: t("請輸入要交辦的工作") }); return; }
+  // 這條在轉接站的分享訪客安全寫入白名單上：會拉高核准模式的輸入（專屬部門＝full）不能讓訪客自己開。
+  const shareGuestError = shareGuestBossTaskError(req.headers["x-pc-access"], req.body);
+  if (shareGuestError) { res.status(403).json({ error: shareGuestError }); return; }
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || null;
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200) || clientMessageId;
   if (idempotencyKey) {
