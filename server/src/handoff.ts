@@ -85,6 +85,14 @@ export function parseHandoffSummary(raw: string): HandoffSummary | null {
   }
 }
 
+/**
+ * 用帳本原文權威覆寫摘要裡的未結案請求（不信任摘要 LLM 有沒有逐字複製），但照樣走遮蔽與
+ * 尺寸上限——原文可能夾著 token，12 筆各 2,000 字也能撐爆交接大綱。
+ */
+export function withOpenUserRequests(summary: HandoffSummary, openUserRequests: string[]): HandoffSummary {
+  return boundSummarySize({ ...summary, openUserRequests: cleanList(openUserRequests) });
+}
+
 function boundSummarySize(summary: HandoffSummary): HandoffSummary {
   const result: HandoffSummary = { ...summary };
   const arrays: Array<keyof Pick<HandoffSummary, "completed" | "currentState" | "changedFiles" | "constraints" | "pending" | "risks" | "nextActions">> = [

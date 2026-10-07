@@ -17,6 +17,29 @@ function normalizeInterval(value: unknown): { ok: true; value: number | null | u
   return { ok: true, value: Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.floor(n))) };
 }
 
+// 排程也要守每日預算（/message 與排隊 drain 都擋，排程以前漏了：每 5 分鐘的排程一天可多跑 288 個
+// 付費回合）。沒設上限＝不擋。
+export function scheduleOverDailyBudget(budgetUsd: number | null | undefined, spentTodayUsd: number): boolean {
+  return budgetUsd != null && spentTodayUsd >= budgetUsd;
+}
+
+// 撞預算的排程不標記為已執行（比照 drain 留著下次再試：當天調高上限就會補跑），所以掃描每 30 秒
+// 都會再撞一次——說明節流成同一個排程每天只留一則。
+export class ScheduleBudgetNotices {
+  private day = "";
+  private readonly noted = new Set<string>();
+
+  shouldNote(scheduleId: string, day: string): boolean {
+    if (day !== this.day) {
+      this.day = day;
+      this.noted.clear();
+    }
+    if (this.noted.has(scheduleId)) return false;
+    this.noted.add(scheduleId);
+    return true;
+  }
+}
+
 export function registerScheduleRoutes(input: {
   app: Express;
   store: LocalStore;

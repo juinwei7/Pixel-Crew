@@ -1966,7 +1966,15 @@ export function App() {
         busy={activeTurnBusy}
         queueEnabled
         serverQueue={active?.queue ?? []}
-        onEnqueue={active ? ((submission) => enqueueCommand(active.id, submission)) : undefined}
+        onEnqueue={active ? ((submission) => {
+          // NPC 忙碌時的送出走佇列，討論模式也要跟著走，否則題目會被當成一般工作指示排隊：快速圓桌是
+          // 同一位 NPC 的單一回合，包成圓桌 prompt 照樣排；作戰室是另開的多人會議、不是它的回合，
+          // 不經佇列——擋下並保留草稿，等它空下來再開。
+          const submissionMode = discussionSubmission(discussionMode, submission.text);
+          if (submissionMode === "roundtable") return enqueueCommand(active.id, { ...submission, text: roundtablePrompt(submission.text) });
+          if (submissionMode === "warroom") return Promise.resolve(t("作戰室不經過佇列：等 {name} 這回合結束再開，或先關掉作戰室改排一般指示", { name: active.name }));
+          return enqueueCommand(active.id, submission);
+        }) : undefined}
         onRemoveQueued={active ? ((id) => { void removeQueued(active.id, id); }) : undefined}
         onReorderQueued={active ? ((ids) => { void reorderQueued(active.id, ids); }) : undefined}
         persistExtras

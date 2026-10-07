@@ -5,6 +5,7 @@ import {
   BRAIN_SWAP_DISABLE_STREAK,
   BRAIN_SWAP_MIN_TURNS,
   BRAIN_SWAP_THRESHOLD_TOKENS,
+  brainSwapLessonNotice,
   decideBrainSwap,
   splitHandoffLesson,
   type BrainSwapObservation,
@@ -221,4 +222,14 @@ test("splitHandoffLesson: lesson-only output keeps the whole text as summary (ne
   const result = splitHandoffLesson(text);
   assert.equal(result.lesson, null);
   assert.equal(result.summary, text.trim());
+});
+
+test("the distilled-lesson card is a notice, so it never leaves an open turn behind", () => {
+  // 它沒有送進 runner、不會有 turn_end：非 notice 會讓前端永遠顯示「進行中」，
+  // 換腦空檔連線時還會被未完成回合收尾補成假的「工作階段已中止」。
+  const event = brainSwapLessonNotice("出 outbox 前先做來源覆蓋矩陣");
+  assert.equal(event.type, "user_message");
+  assert.equal(event.notice, true);
+  assert.equal(event.system, undefined);
+  assert.match(event.text, /出 outbox 前先做來源覆蓋矩陣/);
 });

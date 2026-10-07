@@ -131,7 +131,11 @@ export const enServerC: Record<string, string> = {
   "每份文件不可超過 {mib} MiB": "Each document cannot exceed {mib} MiB",
   "第 {n} 份文件內容與格式不符": "Document #{n} content does not match its format",
   "文件總大小不可超過 {mib} MiB": "Total document size cannot exceed {mib} MiB",
+  "送出的內容太大：圖片合計最多 {images} MiB、文件合計最多 {documents} MiB，請減少附件後再試。": "The request is too large: images can total at most {images} MiB and documents at most {documents} MiB. Remove some attachments and try again.",
   "Pixel Crew 已將使用者附加的文件暫存為以下唯讀檔案。請把它們視為本次訊息的附件，依使用者要求用讀檔工具檢視；不要修改或刪除附件：\n{list}": "Pixel Crew has staged the user's attached documents as the following read-only files. Treat them as attachments to this message and use a file-reading tool to view them as the user requests; do not modify or delete the attachments:\n{list}",
+
+  // snapshotHistory.ts
+  "（這個回合開頭的訊息已超出保留上限，以下是後段紀錄）": "(This turn's opening message is past the retention limit; showing its later events)",
 
   // mcpLogin.ts
   "登入逾時（4 分鐘內未完成瀏覽器授權），已自動取消": "Login timed out (browser authorization wasn't completed within 4 minutes), automatically cancelled",
@@ -301,6 +305,7 @@ export const enServerC: Record<string, string> = {
   "每 {minutes} 分鐘": "Every {minutes} minutes",
   "每日 {time}": "Daily at {time}",
   "⏰ 排程（{label}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後會自動恢復。": "⏰ Schedule ({label}) skipped: this NPC is in ⚡ unrestricted mode (all approvals bypassed), so it does not run unattended. It resumes automatically once approvals are set back to Full trust or Safe.",
+  "⏰ 排程（{label}）未執行：{name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。": "⏰ Schedule ({label}) skipped: {name} has spent ${spent} today, reaching the daily cap of ${cap}. It resumes automatically tomorrow, or raise the cap under 📊 Operations.",
   "⏰ 排程任務（{label}）：{prompt}": "⏰ Scheduled task ({label}): {prompt}",
   "【排程任務，{label} 自動觸發】{prompt}": "[Scheduled task, auto-triggered by {label}] {prompt}",
   "找不到指定的帳號": "The specified account was not found",
@@ -350,6 +355,10 @@ export const enServerC: Record<string, string> = {
   "找不到 NPC": "Worker not found",
   "臨時 NPC 不能開自動循環": "Temporary NPCs cannot use autopilot",
   "⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。": "⛔ Autopilot stopped: the last turn ended with an error; fix it and switch it back on.",
+  "⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。": "⏹ Autopilot stopped because you pressed Stop. Switch it back on to continue.",
+  "⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。": "⏹ Autopilot stopped: the workspace moved to {path}, and the previous goal and plan belong to the old location. Switch it back on to continue in the new workspace.",
+  "⛔ 自動循環已停止：此 NPC 處於⚡無限制模式（跳過所有審批），不給自動循環無人看管地驅動。審批改為「完全信任」或「安全」後可再打開開關。": "⛔ Autopilot stopped: this NPC is in ⚡ unrestricted mode (all approvals bypassed), which autopilot does not drive unattended. Set approvals back to Full trust or Safe, then switch it back on.",
+  "此 NPC 處於⚡無限制模式（跳過所有審批），不能開自動循環；審批改為「完全信任」或「安全」後再開。": "This NPC is in ⚡ unrestricted mode (all approvals bypassed), so autopilot can't be turned on. Set approvals back to Full trust or Safe first.",
   "✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。": "✅ Autopilot reached its step limit and stopped. Switch it back on to continue.",
   "✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。": "✅ Autopilot reached its time limit and stopped. Switch it back on to continue.",
   "🅿️ 自動循環正常結束{reason}。要繼續就再打開開關或直接下指示。": "🅿️ Autopilot finished normally{reason}. Switch it back on or give an instruction to continue.",

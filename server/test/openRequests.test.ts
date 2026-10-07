@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   MAX_OPEN_REQUESTS_PER_WORKER,
   appendOpenRequest,
+  clearOpenRequests,
+  lastSuccessfulTurnAt,
   listOpenRequests,
+  openRequestsForHandoff,
   normalizeOpenRequests,
   openRequestsCoachSection,
   openRequestsHandoffSection,
@@ -126,4 +129,37 @@ test("handoff 區塊：逐字原文、不得壓縮字樣；空則空字串", () 
   const section = openRequestsHandoffSection(listOpenRequests(ledger, "w1"));
   assert.match(section, /未結案使用者請求/);
   assert.match(section, /把影片機制搬進來/);
+});
+
+test("clearOpenRequests 丟掉整本帳（/clear、換工作位置、刪除 NPC），只影響該 NPC", () => {
+  const ledger = {};
+  appendOpenRequest(ledger, "w1", "幫我修登入", 1, "r1");
+  appendOpenRequest(ledger, "w2", "幫我寫測試", 2, "r2");
+  assert.equal(clearOpenRequests(ledger, "w1"), true);
+  assert.deepEqual(listOpenRequests(ledger, "w1"), []);
+  assert.equal(listOpenRequests(ledger, "w2").length, 1);
+  assert.equal(clearOpenRequests(ledger, "w1"), false, "沒有帳就回 false，不必存檔");
+});
+
+test("lastSuccessfulTurnAt 只看成功收尾的 turn_end", () => {
+  assert.equal(lastSuccessfulTurnAt([]), null);
+  assert.equal(lastSuccessfulTurnAt([
+    { type: "user_message", text: "a", at: 1 },
+    { type: "turn_end", resultText: "", costUsd: 0, durationMs: 0, isError: false, permissionDenials: [], at: 5 },
+    { type: "user_message", text: "b", at: 6 },
+    { type: "turn_end", resultText: "", costUsd: 0, durationMs: 0, isError: true, permissionDenials: [], at: 9 },
+  ]), 5);
+});
+
+test("交接只帶還算數的請求：沒開循環時只帶最後一次成功收尾之後的", () => {
+  const open = [
+    { id: "old", text: "早就回覆過的請求", at: 1, status: "open" as const },
+    { id: "new", text: "上一回合中途失敗的請求", at: 10, status: "open" as const },
+  ];
+  // 沒開循環：帳本不會被結案，成功收尾之前的請求已在互動對話裡回覆過。
+  assert.deepEqual(openRequestsForHandoff(open, { autopilotArmed: false, lastCompletedAt: 5 }).map((entry) => entry.id), ["new"]);
+  // 循環開著：教練逐筆結案，帳上還 open 的都算數。
+  assert.deepEqual(openRequestsForHandoff(open, { autopilotArmed: true, lastCompletedAt: 5 }).map((entry) => entry.id), ["old", "new"]);
+  // 從沒成功收尾過：全部都還沒得到回覆。
+  assert.deepEqual(openRequestsForHandoff(open, { autopilotArmed: false, lastCompletedAt: null }).map((entry) => entry.id), ["old", "new"]);
 });

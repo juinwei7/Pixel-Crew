@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { t } from "./i18n.js";
+import type { RunnerEvent } from "./protocol.js";
 
 /** 一筆未結案的真人請求。text 為原文（截斷但不摘要），status 只有 open/resolved 兩態。 */
 export type OpenUserRequest = {
@@ -108,6 +109,35 @@ export function resolveOpenRequests(
 /** 只回傳仍 open 的請求（時間序，最舊在前）。 */
 export function listOpenRequests(ledger: Record<string, OpenUserRequest[]>, workerId: string): OpenUserRequest[] {
   return (ledger[workerId] ?? []).filter((entry) => entry.status === "open");
+}
+
+/** 對話重來（/clear、換工作位置）或 NPC 被刪：整本帳一起丟，舊請求不能再被當成未結案帶進新對話。回傳是否有東西被清掉。 */
+export function clearOpenRequests(ledger: Record<string, OpenUserRequest[]>, workerId: string): boolean {
+  if (!ledger[workerId]) return false;
+  delete ledger[workerId];
+  return true;
+}
+
+/** 最後一次成功收尾的時間（沒有就 null）。互動對話裡，這之前進帳的請求都已經得到回覆。 */
+export function lastSuccessfulTurnAt(events: RunnerEvent[]): number | null {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!;
+    if (event.type === "turn_end" && !event.isError) return event.at ?? null;
+  }
+  return null;
+}
+
+/**
+ * 跨 LLM 交接要帶哪些未結案請求。帳本只有自動循環的教練會結案：循環開著就全帶；沒開循環時帳本
+ * 永遠不會結案，只帶「最後一次成功收尾之後」才進來的請求（之前的已在互動對話裡回覆過，帶進去
+ * 會被新 LLM 當成最高優先的未完成工作）。
+ */
+export function openRequestsForHandoff(
+  open: OpenUserRequest[],
+  context: { autopilotArmed: boolean; lastCompletedAt: number | null },
+): OpenUserRequest[] {
+  if (context.autopilotArmed || context.lastCompletedAt == null) return open;
+  return open.filter((entry) => entry.at > context.lastCompletedAt!);
 }
 
 /** 清掉已結案項目、避免帳本無限成長；每個 worker 至少保留最近幾筆 resolved 供追溯。 */

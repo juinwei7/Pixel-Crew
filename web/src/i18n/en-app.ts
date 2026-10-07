@@ -159,6 +159,7 @@ export const enApp: Record<string, string> = {
   "目前使用預設角色": "Currently using default roles",
   "沒有可用的人員": "No NPC available",
   "作戰室討論中，請等這場結束…": "War room discussion in progress, please wait for it to finish…",
+  "作戰室不經過佇列：等 {name} 這回合結束再開，或先關掉作戰室改排一般指示": "The war room doesn't go through the queue: start it once {name} finishes this turn, or turn the war room off to queue a normal instruction",
   "作戰室開議：成員正走向會議桌辯論，約需幾分鐘…": "War room convened: members are heading to the table to debate, this takes a few minutes…",
   "作戰室失敗": "War room failed",
   "臨時席位不足，作戰室已排隊；席位釋出後自動開場": "Not enough temporary seats, so the war room is queued; it will start automatically once seats free up",

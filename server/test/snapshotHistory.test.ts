@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { snapshotHistory, SNAPSHOT_HARD_MAX_EVENTS, SNAPSHOT_MAX_EVENTS, SNAPSHOT_MIN_TURNS } from "../src/snapshotHistory.js";
+import { snapshotHistory, SNAPSHOT_HARD_MAX_EVENTS, SNAPSHOT_MAX_EVENTS, SNAPSHOT_MIN_TURNS, trimRetainedHistory } from "../src/snapshotHistory.js";
 import type { RunnerEvent } from "../src/claudeRunner.js";
 
 // 造一個「turn」：user_message 開頭，接著 n 筆 text_delta。
@@ -79,11 +79,14 @@ test("換腦系統卡不佔真實結果名額：最近 N 個真實工作結果�
   assert.equal(out[0].type, "user_message", "切點落在某個 turn 開頭");
 });
 
-test("完全沒有 user_message（只有孤兒事件）時保留尾段、不爆量", () => {
+test("完全沒有 user_message（只有孤兒事件）時保留尾段、不爆量，並補一張開頭卡讓前端開得出 turn", () => {
   const history: RunnerEvent[] = [];
   for (let i = 0; i < SNAPSHOT_MAX_EVENTS + 300; i++) history.push({ type: "text_delta", text: "x" } as RunnerEvent);
   const out = snapshotHistory(history);
   assert.equal(out.length, SNAPSHOT_MAX_EVENTS);
+  // 重啟後從 SQLite 載回的超長 turn 可能已沒有 user_message：沒有開頭卡，前端會渲染 0 個 turn。
+  assert.equal(out[0].type, "user_message");
+  assert.equal(commandsOf(out).length, 1);
 });
 
 // 核心回歸：上限要真的是上限。舊版 start = min(視窗邊界, 最近 N turn 起點) 可以退回 index 0，
@@ -101,4 +104,61 @@ test("單一超長 turn 超過硬上限時，保留 user_message ＋尾段（有
   const out = snapshotHistory(history);
   assert.ok(out.length <= SNAPSHOT_HARD_MAX_EVENTS, `不得超過硬上限，實際 ${out.length}`);
   assert.equal(out[0].type, "user_message", "開頭必須是 user_message，否則前端整個日誌空白");
+});
+
+// 保留歷史裁切（record() 的 MAX_HISTORY）：單一 turn 超過上限時，舊版會把它的 user_message
+// 一起丟掉，snapshot 只剩孤兒事件。
+test("trimRetainedHistory 在 turn 還開著時把它的 user_message 釘在開頭", () => {
+  const history = turn("huge", 10);
+  for (let i = 0; i < 5; i++) {
+    history.push({ type: "text_delta", text: "y" } as RunnerEvent);
+    trimRetainedHistory(history, 8);
+    assert.equal(history.length, 8);
+    assert.equal(history[0].type, "user_message");
+    assert.deepEqual(commandsOf(history), ["huge"]);
+  }
+  assert.equal((history.at(-1) as { text: string }).text, "y", "最新的事件一定留著");
+});
+
+test("trimRetainedHistory 不會替已收尾的 turn 留開頭（否則它會被當成沒結束）", () => {
+  const history: RunnerEvent[] = [
+    ...turn("a", 3),
+    { type: "turn_end", resultText: "", costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] } as RunnerEvent,
+    ...turn("b", 3),
+  ];
+  // 丟到 a 的 turn_end 剛好是保留段開頭：a 已收尾，照常丟掉它的開頭。
+  trimRetainedHistory(history, history.length - 4);
+  assert.equal(history[0].type, "turn_end");
+  assert.deepEqual(commandsOf(history), ["b"]);
+  // 再丟一筆：保留段從 b 的 user_message 開始，本來就是 turn 邊界。
+  trimRetainedHistory(history, history.length - 1);
+  assert.deepEqual(commandsOf(history), ["b"]);
+  assert.equal(history[0].type, "user_message");
+});
+
+test("trimRetainedHistory 只認真的 turn 開頭：notice 不算，結束後的孤兒事件也不補開頭", () => {
+  const history: RunnerEvent[] = [
+    ...turn("work", 2),
+    { type: "user_message", text: "🔎 查證", notice: true } as RunnerEvent,
+    { type: "text_delta", text: "z" } as RunnerEvent,
+    { type: "text_delta", text: "z" } as RunnerEvent,
+  ];
+  trimRetainedHistory(history, 3); // 切掉 work、兩筆 delta 與 notice
+  assert.deepEqual(commandsOf(history), ["work"]);
+  assert.equal(history.length, 3);
+  const ended: RunnerEvent[] = [
+    ...turn("done", 1),
+    { type: "error", message: "boom" } as RunnerEvent,
+    { type: "text_delta", text: "late" } as RunnerEvent,
+    { type: "text_delta", text: "late" } as RunnerEvent,
+  ];
+  trimRetainedHistory(ended, 2);
+  assert.deepEqual(commandsOf(ended), []);
+  assert.equal(ended.length, 2);
+});
+
+test("trimRetainedHistory 沒超過上限時不動", () => {
+  const history = turn("a", 3);
+  trimRetainedHistory(history, 10);
+  assert.equal(history.length, 4);
 });

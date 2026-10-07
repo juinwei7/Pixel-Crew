@@ -63,7 +63,7 @@ import { registerBackupImportTransport } from "./backupImportTransport.js";
 import { commitBackupRestore } from "./backupRestoreCommit.js";
 import { registerOperationalSettingsRoutes } from "./operationalSettingsRoutes.js";
 import { registerReportingRoutes } from "./reportingRoutes.js";
-import { registerScheduleRoutes } from "./scheduleRoutes.js";
+import { registerScheduleRoutes, ScheduleBudgetNotices, scheduleOverDailyBudget } from "./scheduleRoutes.js";
 import { registerAccountRoutes } from "./accountRoutes.js";
 import { registerApprovalRoutes } from "./approvalRoutes.js";
 import { VoiceModelManager } from "./voice/voiceModel.js";
@@ -74,7 +74,7 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import multer from "multer";
 import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
 import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
-import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot } from "./snapshotHistory.js";
+import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot, trimRetainedHistory } from "./snapshotHistory.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { wsPerMessageDeflate } from "./wsCompression.js";
 import {
@@ -109,7 +109,7 @@ import {
 } from "./globalMemory.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
-import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
+import { isRequestBodyTooLarge, MESSAGE_JSON_BODY_LIMIT_BYTES, MessageDocumentValidationError, parseMessageDocuments, requestBodyTooLargeMessage } from "./messageDocuments.js";
 import {
   bootstrapPrompt,
   buildLocalHandoff,
@@ -118,6 +118,7 @@ import {
   summaryMarkdown,
   summaryPrompt,
   usageBlockReason,
+  withOpenUserRequests,
   type HandoffProgress,
   type HandoffSummary,
 } from "./handoff.js";
@@ -172,8 +173,8 @@ import {
   parseAssignmentDecision,
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
-import { replaceWithFreshSession } from "./freshSession.js";
-import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
+import { replaceWithFreshSession, switchAccountWithReset } from "./freshSession.js";
+import { cleanWorkerSession, interceptedAppCommand, isClearCommand, matchNativeCommand, type AppCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
   bossTaskDecisionPrompt,
@@ -309,7 +310,10 @@ import {
 import {
   OpenUserRequestStore,
   appendOpenRequest,
+  clearOpenRequests,
+  lastSuccessfulTurnAt,
   listOpenRequests,
+  openRequestsForHandoff,
   pruneResolved,
   resolveOpenRequests,
   type OpenUserRequest,
@@ -327,7 +331,7 @@ import {
 import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
 import { localDay } from "./dayReport.js";
-import { decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
+import { brainSwapLessonNotice, decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
@@ -357,10 +361,10 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self' http://localhost:8790 http://127.0.0.1:8790");
   next();
 });
-// Four documents (20 MiB total) plus images (10 MiB total) expand by roughly
-// one third when transported as base64. Keep the HTTP ceiling just above the
-// validated attachment budget; individual parsers still enforce tighter caps.
-app.use(express.json({ limit: "44mb" }));
+// The HTTP ceiling is derived from the validated image + document budgets
+// (base64 expands them by a third); individual parsers still enforce tighter
+// caps. An oversized body gets a 413 from the terminal error handler below.
+app.use(express.json({ limit: MESSAGE_JSON_BODY_LIMIT_BYTES }));
 // A backup restore in progress means the DB is being swapped out from under
 // this process — every write API except the backup routes themselves must
 // be rejected until the process exits and relaunches against the new data.
@@ -1708,9 +1712,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   } else {
     worker.history.push(event);
   }
-  if (worker.history.length > MAX_HISTORY) {
-    worker.history.splice(0, worker.history.length - MAX_HISTORY);
-  }
+  trimRetainedHistory(worker.history, MAX_HISTORY); // 超長 turn 也保留它的 user_message（見 snapshotHistory.ts）
   if (worker.persistent && event.type !== "tool_call_output_delta") {
     store.appendEvent(worker.id, event, MAX_HISTORY);
   }
@@ -1855,7 +1857,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
       const stored = addLesson(worker.id, lesson);
       if (stored.ok) {
         learnedLesson = stored.lesson;
-        record(worker, { type: "user_message", system: true, text: t("🧠 換腦蒸餾出一條做事心法，已沉澱進長期記憶：{lesson}", { lesson: stored.lesson }) });
+        record(worker, brainSwapLessonNotice(stored.lesson));
       }
     }
     // 只在 complete_swap 路徑發這個事件，不污染其他流程；前端拿 learned 決定閃現內容。
@@ -2172,6 +2174,7 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
   // Goals belong to a conversation, unlike long-term memory notes and daily
   // budgets. A fresh `/clear` session must not inherit its old objective.
   setWorkerGoal(worker.id, null);
+  clearCapturedRequests(worker.id); // 對話重來：舊請求不能再被當成未結案帶進教練 prompt 或交接
   clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
   workerActivities.delete(worker.id); // 舊 session 的背景代理隨行程結束；歷史已清空，不必補記 subagent_done
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
@@ -2217,6 +2220,17 @@ function announceClaudeGoal(worker: Worker, command: GoalCommand): void {
     isError: false,
     permissionDenials: [],
   });
+}
+
+// 執行 interceptedAppCommand 攔下的指令（/message 與排隊 drain 共用）。兩者都會補一個 turn_end，
+// 所以排隊的下一則會照常接著 drain。
+function runAppCommand(worker: Worker, command: AppCommand): { ok: true; cleaned?: true; goal?: string | null } | { ok: false; error: string } {
+  if (command.type === "clean") {
+    const result = cleanWorkerAndAnnounce(worker);
+    return result.ok ? { ok: true, cleaned: true } : result;
+  }
+  announceClaudeGoal(worker, command.command);
+  return { ok: true, goal: getExtras(worker.id).goal };
 }
 
 function missionRunnerKey(missionId: string, workerId: string): string {
@@ -2553,7 +2567,7 @@ function reconcileDanglingTurn(worker: Worker): boolean {
   if (worker.runner.busy || !hasUnfinishedTurn(worker.history)) return false;
   const event: RunnerEvent = { type: "error", message: t("工作階段已中止；請重新下指令"), at: Date.now() };
   worker.history.push(event);
-  if (worker.history.length > MAX_HISTORY) worker.history.splice(0, worker.history.length - MAX_HISTORY);
+  trimRetainedHistory(worker.history, MAX_HISTORY);
   if (worker.persistent) store.appendEvent(worker.id, event, MAX_HISTORY);
   broadcastWorkerEvent(worker.id, event);
   return true;
@@ -2754,7 +2768,11 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
 
     const gitState = await workspaceGitState(workspacePath);
     // 未結案使用者請求：從帳本取原文，餵進本機備援＋摘要後權威覆寫，確保逐字跨換腦、不被 LLM 壓縮掉。
-    const openRequestTexts = listOpenRequests(openUserRequests, worker.id).map((entry) => entry.text);
+    // 只帶還算數的（見 openRequestsForHandoff：沒開循環時帳本不會結案）。
+    const openRequestTexts = openRequestsForHandoff(listOpenRequests(openUserRequests, worker.id), {
+      autopilotArmed: workerAutopilotByWorker.has(worker.id),
+      lastCompletedAt: lastSuccessfulTurnAt(worker.history),
+    }).map((entry) => entry.text);
     const localSummary = buildLocalHandoff(worker.history, gitState, openRequestTexts);
     source = "agent";
     setHandoff(worker, { ...progress, stage: "summarizing", message: t("請 {provider} 整理工作大綱", { provider: providerLabel(sourceProvider) }), source: null });
@@ -2773,8 +2791,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       sourceState = result.state;
       summary = parseHandoffSummary(result.text);
       if (!summary) throw new Error(t("來源 LLM 沒有回傳有效的交接格式"));
-      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）。
-      summary.openUserRequests = openRequestTexts;
+      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）；
+      // 仍走遮蔽與尺寸上限。
+      summary = withOpenUserRequests(summary, openRequestTexts);
     } catch (error) {
       source = "local_fallback";
       summary = localSummary;
@@ -3512,6 +3531,7 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
 
 // 每 30 秒掃一次：到點、今天沒跑過、NPC 空檔 → 送出排程指示。
 // NPC 在忙就先不標記，30 秒後再試（同一天內補跑）。
+const scheduleBudgetNotices = new ScheduleBudgetNotices();
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -3541,6 +3561,20 @@ setInterval(() => {
       continue;
     }
     if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
+    // 每日預算用完：比照排隊 drain 留著不標記（當天調高上限就補跑、否則明天恢復），說明每個排程每天一則。
+    const budget = getExtras(worker.id).dailyBudgetUsd;
+    const spentUsd = todayCostUsd(worker.id);
+    if (scheduleOverDailyBudget(budget, spentUsd)) {
+      if (scheduleBudgetNotices.shouldNote(schedule.id, today)) {
+        record(worker, { type: "user_message", notice: true, text: t("⏰ 排程（{label}）未執行：{name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。", {
+          label: scheduleLabel,
+          name: worker.runner.name,
+          spent: spentUsd.toFixed(2),
+          cap: (budget ?? 0).toFixed(2),
+        }) });
+      }
+      continue;
+    }
     store.markScheduleRun(schedule.id, today, now.toISOString());
     record(worker, { type: "user_message", text: t("⏰ 排程任務（{label}）：{prompt}", { label: scheduleLabel, prompt: schedule.prompt }) });
     try {
@@ -3734,15 +3768,24 @@ app.patch("/api/workers/:id/account", (req, res) => {
   // that silently — but when the owner passes force:true they've already
   // confirmed the reset in the UI, so we fold the clear INTO the switch (one
   // click) instead of making them clear the session as a separate step first.
+  const previousAccountId = worker.accountId;
+  let respawned = false;
   if (worker.runner.getPersistenceState().completedTurns > 0) {
     if (req.body?.force !== true) {
       res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
       return;
     }
-    const cleared = cleanWorkerAndAnnounce(worker);
-    if (!cleared.ok) { res.status(409).json({ error: cleared.error }); return; }
+    // 先換帳號再清：清除會當場暖機新 runner，得讓它生在新帳號的 home（見 switchAccountWithReset）。
+    const cleared = switchAccountWithReset(worker, accountId, () => cleanWorkerAndAnnounce(worker));
+    if (!cleared.ok) { persistWorker(worker); res.status(409).json({ error: cleared.error }); return; }
+    respawned = true;
   }
   worker.accountId = accountId;
+  // 沒有對話紀錄就不必清除，但已暖機的 CLI 仍是用舊帳號的 home 生出來的：重生一次，第一回合才會跑在新帳號上。
+  if (!respawned && previousAccountId !== accountId) {
+    worker.runner.stop();
+    if (workerProviderReady(worker)) worker.runner.warmup();
+  }
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
@@ -6402,6 +6445,10 @@ function captureOpenUserRequest(worker: Worker, text: string): void {
   }
 }
 
+function clearCapturedRequests(workerId: string): void {
+  if (clearOpenRequests(openUserRequests, workerId)) openUserRequestStore.save(openUserRequests);
+}
+
 function resolveCapturedRequests(workerId: string, ids: string[] | undefined): void {
   if (!ids?.length) return;
   if (resolveOpenRequests(openUserRequests, workerId, ids, Date.now()) > 0) {
@@ -6485,6 +6532,30 @@ function disableWorkerAutopilotWithNote(worker: Worker, note: string, ask?: { op
   // askOptions 給一鍵回答按鈕。owner 之後對這位 NPC 發話即視為已回答(UI 由訊息流自行判定，不需額外 server 狀態)。
   record(worker, { type: "user_message", text: note, notice: true, ...(ask ? { autopilotAsk: true, askOptions: ask.options } : {}) });
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 由外部動作撤掉循環（按停止、切成無限制模式…）：立即撤掉武裝（決策進行中的那步也會因狀態不在
+// 而作廢），註記則等 NPC 正在跑的回合真的收尾才貼——回合還開著時插 notice 卡，前端會把那張卡當成
+// 最後一個 turn，正在跑的回合就永遠掛著「進行中」。
+const workerAutopilotStopNotes = new Map<string, string>();
+
+function disarmWorkerAutopilot(worker: Worker, note: string): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  if (worker.runner.busy) workerAutopilotStopNotes.set(worker.id, note);
+  else record(worker, { type: "user_message", text: note, notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// ⚡無限制模式（--dangerously-skip-permissions、不掛核准橋）不給無人看管的自動循環驅動，
+// 比照排程（見排程掃描）與隊員商量（consult.ts）。開啟時拒絕；之後才切成無限制則在每個入口撤掉。
+function workerAutopilotInvincibleNote(): string {
+  return t("⛔ 自動循環已停止：此 NPC 處於⚡無限制模式（跳過所有審批），不給自動循環無人看管地驅動。審批改為「完全信任」或「安全」後可再打開開關。");
+}
+// 每次都現讀（別讓 TS 的型別收窄跨 await 沿用）：決策期間 owner 可能才切成無限制模式。
+function workerAutopilotForbidden(worker: Worker): boolean {
+  return worker.autoApproveMode === "invincible";
 }
 
 // 循環撞到步數／時間上限而停時用：除了貼停止註記，再補送一個「收尾交接」回合，讓 NPC 主動給擁有者
@@ -6574,10 +6645,16 @@ function workspaceChangedBetween(workspacePath: string, startAt: number | null, 
 }
 
 function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
+  const stopNote = event.type === "turn_end" || event.type === "error" ? workerAutopilotStopNotes.get(worker.id) : undefined;
+  if (stopNote) {
+    workerAutopilotStopNotes.delete(worker.id);
+    record(worker, { type: "user_message", text: stopNote, notice: true });
+  }
   if (event.type !== "turn_end") return;
   const state = workerAutopilotByWorker.get(worker.id);
   if (!state) return;
   if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
+  if (workerAutopilotForbidden(worker)) { disableWorkerAutopilotWithNote(worker, workerAutopilotInvincibleNote()); return; }
   // 暫停等 owner 回覆中：什麼都不做（owner 發話時 resumeWorkerAutopilotIfPaused 會先解除暫停）。
   if (state.paused) return;
   if (event.isError && lastTurnWasSystem(worker.history)) {
@@ -6608,7 +6685,12 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
 }
 
 async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAutopilotState): Promise<void> {
+  if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
   workerAutopilotAdvancing.add(worker.id);
+  // 決策要跑上分鐘：期間 owner 可能關掉循環、刪掉 NPC，或把它搬到別的工作位置——搬走後這步是
+  // 針對舊 repo 想的，即使循環又被重新打開也不能送進新位置的 runner。
+  const decisionWorkspace = worker.runner.workspacePath;
+  const decisionStale = () => !workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id) || worker.runner.workspacePath !== decisionWorkspace;
   try {
     const runtime = resolveWorkerDecisionRuntime(worker);
     if ("error" in runtime) {
@@ -6688,7 +6770,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
           const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" }, workerHome)).text;
           decision = parseWorkerAutopilotDecision(repaired);
           if (!decision) {
-            if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+            if (decisionStale()) return;
             disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
             return;
           }
@@ -6696,7 +6778,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
       } catch (error) {
         // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
         // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
-        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        if (decisionStale()) return;
         const firstFailure = !workerAutopilotRetry.get(worker.id);
         workerAutopilotRetry.note(worker.id, null, Date.now());
         if (firstFailure) {
@@ -6711,7 +6793,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
         return;
       }
       // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
-      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+      if (decisionStale()) return;
       // 活計畫（支柱 A）：把教練回傳的更新後計畫併回並落盤（探索輪與定稿輪都併，跨回合不歸零）。
       if (decision.planUpdate !== undefined) {
         plan = mergeWorkerAutopilotPlan(plan, decision.planUpdate, plan.updatedRound + 1).plan;
@@ -6738,10 +6820,10 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
         finding = { query: decision.query, summary: t("（探索失敗：{error}）", { error: (error as Error).message }), confidence: "low", sources: [] };
       }
       findingsThisStep.push(finding);
-      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+      if (decisionStale()) return;
     }
     const live = workerAutopilotByWorker.get(worker.id);
-    if (!live || !workers.has(worker.id)) return;
+    if (!live || decisionStale()) return;
     // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
     if (decision) decision = workerAutopilotProgressGuard(decision, turns);
     // 計畫感知護欄（支柱 A 結構面）：用完整 tried 清單抓長程繞圈——第 N 回合又提早已試過的做法即停。
@@ -6754,7 +6836,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
       appendRuntimeLog(config.dataDirectory, "autopilot auto-pick", { worker: worker.runner.name, gate: decision.gate ?? null });
       try {
         const pickedText = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotAutoPickPrompt(lastPrompt, decision.reason), 150_000, { kind: "no_tools" }, workerHome)).text;
-        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        if (decisionStale()) return;
         const picked = parseWorkerAutopilotDecision(pickedText);
         if (picked && picked.action !== "explore") {
           if (picked.planUpdate !== undefined) {
@@ -6797,6 +6879,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
     }
     // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
     if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
+    // 決策期間被切成⚡無限制模式：這步不送。
+    if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
     live.stepsRemaining -= 1;
     persistWorkerAutopilotStates();
     // 最後一步的決策帶著整輪復盤——存起來讓下一輪循環從這裡往上爬（機制一）。
@@ -6835,6 +6919,7 @@ function sweepWorkerAutopilot(): void {
     const worker = workers.get(workerId);
     const action = workerAutopilotSweepAction({
       present: !!worker,
+      unattendedForbidden: worker ? workerAutopilotForbidden(worker) : false,
       paused: !!state.paused,
       busy: worker?.runner.busy ?? false,
       queued: worker ? store.listQueue(workerId).length > 0 : false,
@@ -6858,6 +6943,7 @@ function sweepWorkerAutopilot(): void {
       persistWorkerAutopilotStates();
       continue;
     }
+    if (action === "disable_unattended") { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); continue; }
     if (action === "disable_steps") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。")); continue; }
     if (action === "disable_deadline") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。")); continue; }
     if (action === "exhausted") {
@@ -6902,6 +6988,10 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   const enabled = Boolean(req.body?.enabled);
   if (enabled) {
     if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開自動循環") }); return; }
+    if (workerAutopilotForbidden(worker)) {
+      res.status(409).json({ error: t("此 NPC 處於⚡無限制模式（跳過所有審批），不能開自動循環；審批改為「完全信任」或「安全」後再開。") });
+      return;
+    }
     // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
     // 用 account-aware 版本：指定帳號可用時就能開，不被共用登入狀態綁死。
     const runtime = resolveWorkerDecisionRuntime(worker);
@@ -8123,8 +8213,13 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     broadcast({ type: "department_created", department: newDepartment });
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
+    broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
+    // 個人自動循環的目標與活計畫都以舊 repo 為錨：搬到新位置後不能接著驅動它（進行中的決策也會因
+    // 位置變了而作廢，見 advanceWorkerAutopilot）。過往教訓（retros）是通用心法，留著。
+    disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。", { path: workspacePath }));
+    if (workerAutopilotPlans[worker.id]) { delete workerAutopilotPlans[worker.id]; workerAutopilotPlanStore.save(workerAutopilotPlans); }
+    clearCapturedRequests(worker.id); // 對話已清空，舊位置的請求不再算數
     const summary = workerSummary(worker);
-    broadcast({ type: "worker_updated", worker: summary, reset: true });
     res.json({ ...summary, conversationReset });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
@@ -8159,6 +8254,7 @@ app.delete("/api/workers/:id", async (req, res) => {
   clearWorkerHookState(worker.id);
   if (workerAutopilotByWorker.delete(worker.id)) persistWorkerAutopilotStates(); // NPC 沒了，個人循環狀態一併回收
   if (workerAutopilotRetros[worker.id]) { delete workerAutopilotRetros[worker.id]; workerAutopilotRetroStore.save(workerAutopilotRetros); }
+  clearCapturedRequests(worker.id);
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
@@ -8846,8 +8942,15 @@ function drainWorkerQueue(worker: Worker): void {
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  // 排隊的 /clear、/clean、Claude /goal 跟直送一樣由 app 處理，不能原樣送進 CLI（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, next.message, images.length + documents.length > 0);
   try {
-    worker.runner.send(next.message, images, documents);
+    if (appCommand) {
+      const result = runAppCommand(worker, appCommand);
+      if (!result.ok) throw new Error(result.error);
+    } else {
+      worker.runner.send(next.message, images, documents);
+    }
   } catch (error) {
     const previous = queueSendAttempts.get(worker.id);
     const attempts = previous?.itemId === next.id ? previous.attempts + 1 : 1;
@@ -8864,6 +8967,7 @@ function drainWorkerQueue(worker: Worker): void {
   }
   queueSendAttempts.delete(worker.id);
   store.removeQueueItem(worker.id, next.id);
+  if (appCommand) { broadcastQueue(worker.id); return; }
   record(worker, { type: "user_message", text });
   captureOpenUserRequest(worker, text); // 真人佇列訊息（循環武裝時）落帳，防換腦／議程蒸發
   resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
@@ -8977,29 +9081,16 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(400).json({ error: "message or attachment required" });
     return;
   }
-  if (matchNativeCommand(message) === "clean" || (
-    images.length === 0
-    && documents.length === 0
-    && isClearCommand(message)
-  )) {
-    const result = cleanWorkerAndAnnounce(worker);
+  // `/clear`、`/clean` 由 app 重建工作階段；Codex 的 `/goal` 走 app-server，Claude 的 stream-json
+  // 沒有對應 RPC，由 app 模擬同樣的 get/set/clear 並帶著目標重生閒置的 transport（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, message, images.length + documents.length > 0);
+  if (appCommand) {
+    const result = runAppCommand(worker, appCommand);
     if (!result.ok) {
       res.status(409).json({ error: result.error });
       return;
     }
-    res.json({ ok: true, cleaned: true });
-    return;
-  }
-  // Codex dispatches `/goal` through its app-server. Claude's stream-json
-  // transport has no equivalent slash-command RPC, so mirror the same
-  // get/set/clear semantics here and re-spawn its idle transport with the
-  // persisted goal appended to its system prompt.
-  const claudeGoal = worker.runner.provider === "claude" && images.length === 0 && documents.length === 0
-    ? parseGoalCommand(message)
-    : null;
-  if (claudeGoal) {
-    announceClaudeGoal(worker, claudeGoal);
-    res.json({ ok: true, goal: getExtras(worker.id).goal });
+    res.json(result);
     return;
   }
   if (worker.resumeCandidate) {
@@ -9534,6 +9625,8 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
     if (worker.runner.busy) worker.runner.interrupt(); else worker.runner.stop();
     if (workerProviderReady(worker)) worker.runner.warmup();
   }
+  // 切成無限制模式：個人自動循環不能在無人看管下繼續驅動它。
+  if (mode === "invincible") disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote());
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, autoApproveMode: worker.autoApproveMode });
@@ -10254,6 +10347,9 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
     res.status(409).json({ error: missionInProgress(worker.id) ? t("Department Mission 請從 Mission 面板取消") : t("協作任務請從協作面板取消") });
     return;
   }
+  // 按停止＝連個人自動循環一起停：Claude 的中止只發 error、不經 turn_end，循環會被 15s 保底掃
+  // 當成停擺而補送下一步；Codex 的中止回合則會被當成「上一回合發生錯誤」。先撤再中止。
+  disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。"));
   worker.runner.interrupt();
   broadcast({ type: "worker_status", workerId: worker.id, busy: false });
   res.json({ ok: true });
@@ -10429,6 +10525,8 @@ if (config.production && existsSync(config.webDistPath)) {
 // crashing the process. Must be registered after every other app.use/route.
 app.use((err: unknown, _req: express.Request, res: Response, next: express.NextFunction) => {
   if (res.headersSent) { next(err); return; }
+  // 附件總量超過 HTTP 上限：回 413 與看得懂的說明，別落到下面的通用 500。
+  if (isRequestBodyTooLarge(err)) { res.status(413).json({ error: requestBodyTooLargeMessage() }); return; }
   console.error("[http] request handler error:", err);
   res.status(500).json({ error: t("伺服器發生未預期的錯誤") });
 });
