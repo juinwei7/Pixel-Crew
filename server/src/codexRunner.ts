@@ -593,9 +593,11 @@ export class CodexSession implements AgentSession {
       return;
     }
     const category = method.includes("commandExecution") ? "command" : method.includes("fileChange") ? "file_change" : "permissions";
+    // fullCommand 給所有檢查用，command（截斷）只給卡片顯示——先截再檢查，危險片段藏在截斷點後就漏看。
+    const fullCommand = category === "command" && params.command ? String(params.command) : undefined;
     if (isReadOnlyExecutionProfile(this.executionProfile)) {
       const id = randomUUID();
-      const command = category === "command" && params.command ? truncateCommand(params.command) : undefined;
+      const command = fullCommand === undefined ? undefined : truncateCommand(fullCommand);
       this.onEvent({ type: "approval_requested", request: {
         id,
         activityId: params.itemId ? String(params.itemId) : null,
@@ -608,21 +610,21 @@ export class CodexSession implements AgentSession {
           ? t("唯讀查詢不允許需要額外權限的操作")
           : t("唯讀 NPC 協作不允許需要額外權限的操作"),
         decisions: [],
-        riskReason: riskReasonFor(command),
+        riskReason: riskReasonFor(fullCommand),
       } });
       if (method === "item/permissions/requestApproval") this.sendRpcError(message.id, -32000, "Read-only mode declined permissions");
       else this.sendRpcResult(message.id, { decision: "decline" });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return;
     }
-    const command = category === "command" && params.command ? truncateCommand(params.command) : undefined;
+    const command = fullCommand === undefined ? undefined : truncateCommand(fullCommand);
     // Under "safe" mode, file changes and permission escalations are never in
     // autoApprovalPolicy's allowlist, so only commandExecution can auto
     // -approve. Under "full" mode, evaluateAutoApproval treats any non-Bash
     // action as blanket-safe (mirroring Claude), so these two categories can
     // auto-approve too — that's the whole point of the more permissive mode.
     const mode = this.getAutoApproveMode();
-    const autoApproval = evaluateAutoApproval(mode, category === "command" ? "Bash" : "Edit", command);
+    const autoApproval = evaluateAutoApproval(mode, category === "command" ? "Bash" : "Edit", fullCommand);
 
     if (autoApproval.allowed) {
       const id = randomUUID();
@@ -638,7 +640,7 @@ export class CodexSession implements AgentSession {
           cwd: params.cwd ? String(params.cwd).slice(0, 4_000) : undefined,
           reason: autoApproveEnabledReason(mode),
           decisions: [],
-          riskReason: riskReasonFor(command),
+          riskReason: riskReasonFor(fullCommand),
         },
       });
       this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
@@ -666,7 +668,7 @@ export class CodexSession implements AgentSession {
         ? autoApproveConfirmReason(mode, autoApproval.reason)
         : params.reason ? String(params.reason).slice(0, 4_000) : undefined,
       decisions: ["allow_once", "allow_session", "deny"],
-      riskReason: riskReasonFor(command),
+      riskReason: riskReasonFor(fullCommand),
     };
     this.approvals.set(id, { rpcId: message.id, method, params, request });
     this.onEvent({ type: "approval_requested", request });

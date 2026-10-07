@@ -261,11 +261,13 @@ export class ClaudeSession implements AgentSession {
     const originalInput = detail.input ?? detail.tool_input ?? {};
     const permissionUpdates = sessionPermissionUpdates(detail.permission_suggestions ?? detail.suggestions, toolName);
     const input = boundedValue(originalInput);
-    const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
-      ? truncateCommand((originalInput as Record<string, unknown>).command)
+    // fullCommand 給所有檢查用，command（截斷）只給卡片顯示——先截再檢查，危險片段藏在截斷點後就漏看。
+    const fullCommand = toolName === "Bash" && originalInput && typeof originalInput === "object"
+      ? String((originalInput as Record<string, unknown>).command ?? "")
       : undefined;
+    const command = fullCommand === undefined ? undefined : truncateCommand(fullCommand);
     if (this.executionProfile === "read_only_query") {
-      const policy = queryToolPolicy(toolName, this.queryAllowedTools, { allowSafeShell: this.queryAllowSafeShell, command });
+      const policy = queryToolPolicy(toolName, this.queryAllowedTools, { allowSafeShell: this.queryAllowSafeShell, command: fullCommand });
       const id = randomUUID();
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null,
@@ -294,7 +296,7 @@ export class ClaudeSession implements AgentSession {
         reason: t("唯讀 NPC 協作不允許需要額外權限的操作"),
         decisions: [],
         toolName,
-        riskReason: riskReasonFor(command),
+        riskReason: riskReasonFor(fullCommand),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("唯讀 NPC 協作不允許需要額外權限的操作") });
@@ -313,7 +315,7 @@ export class ClaudeSession implements AgentSession {
         title: t("已擋下寫入工作資料夾外的路徑"),
         input, command, cwd: this.workspacePath,
         reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
-        decisions: [], toolName, riskReason: riskReasonFor(command),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
@@ -321,14 +323,14 @@ export class ClaudeSession implements AgentSession {
     // 通道 E 的 Bash 對稱補強：Bash 沒有結構化路徑，退而擋「寫入型重導向」字面逃逸目標
     // （echo x > 外部路徑 / >> ../out）。刻意只認字面重導向、不做完整 shell 解析——變數、
     // 子殼、直譯器、cp/mv/tee 認不出即不擋，屬防禦縱深非圍牆（見外傳風險盤點 §九）。不論核准模式。
-    if (toolName === "Bash" && typeof command === "string" && bashRedirectsOutsideWorkspace(this.workspacePath, command)) {
+    if (toolName === "Bash" && typeof fullCommand === "string" && bashRedirectsOutsideWorkspace(this.workspacePath, fullCommand)) {
       const id = randomUUID();
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null, category: "command",
         title: t("已擋下寫入工作資料夾外的路徑"),
         input, command, cwd: this.workspacePath,
         reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
-        decisions: [], toolName, riskReason: riskReasonFor(command),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
@@ -343,12 +345,12 @@ export class ClaudeSession implements AgentSession {
         title: t("AskUserQuestion 已自動改為自主決定"),
         input, command, cwd: this.workspacePath,
         reason: t("完全自動核准模式：沒有人值守回答提問，已請 NPC 依任務目標自行做最合理的決定並繼續"),
-        decisions: [], toolName, riskReason: riskReasonFor(command),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("（自動核准）目前沒有人值守回答提問。請依任務目標與現有資訊，自行做出最合理的決定並直接繼續執行；把你的抉擇與理由寫進交付內容即可。") });
     }
-    const autoApproval = evaluateAutoApproval(mode, toolName, command);
+    const autoApproval = evaluateAutoApproval(mode, toolName, fullCommand);
 
     if (autoApproval.allowed) {
       // Still surface it in the task log as an already-resolved item, so the
@@ -367,7 +369,7 @@ export class ClaudeSession implements AgentSession {
           reason: autoApproveEnabledReason(mode),
           decisions: [],
           toolName,
-          riskReason: riskReasonFor(command),
+          riskReason: riskReasonFor(fullCommand),
         },
       });
       this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
@@ -390,7 +392,7 @@ export class ClaudeSession implements AgentSession {
           : t("Claude Code 需要額外權限才能繼續目前回合"),
       decisions: permissionUpdates.length ? ["allow_once", "allow_session", "deny"] : ["allow_once", "deny"],
       toolName,
-      riskReason: riskReasonFor(command),
+      riskReason: riskReasonFor(fullCommand),
     };
     const pending = new Promise((resolve) => this.pendingApprovals.set(id, { input: originalInput, permissionUpdates, resolve }));
     this.onEvent({ type: "approval_requested", request });

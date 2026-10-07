@@ -237,3 +237,13 @@ test("flags an agent reaching for the self-install switch or trigger", () => {
   assert.equal(isDangerousCommand("powershell -File scripts/windows/pc-selfrebuild.ps1 -Repo C:\\repo").dangerous, true);
   assert.equal(isDangerousCommand("curl http://127.0.0.1:8787/api/workers").dangerous, false);
 });
+
+test("padding a dangerous command past the display limit never gets it auto-approved", () => {
+  // 先截到 2 萬字再檢查的話，危險片段藏在截斷點後就只看得到無害的開頭。
+  const padded = `echo ${"a".repeat(20_100)} && rm -rf ~`;
+  assert.equal(evaluateAutoApproval("full", "Bash", padded).allowed, false);
+  assert.equal(evaluateAutoApproval("safe", "Bash", padded).allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", `ls ${"a".repeat(20_100)}`).allowed, false);
+  assert.match(evaluateAutoApproval("full", "Bash", padded).reason ?? "", /20000/);
+  assert.equal(evaluateAutoApproval("full", "Bash", `echo ${"a".repeat(100)}`).allowed, true);
+});

@@ -67,6 +67,17 @@ const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: /\/api\/self-install\b|self-install-(auto|pending|shipped|attempt)\.json|pc-self(rebuild|install)\.ps1/i, reason: "觸發或開關 app 自我安裝（只能由 owner 決定）" },
 ];
 
+// 跟核准卡片的顯示上限（runnerShared 的 MAX_APPROVAL_TEXT_LENGTH）一致。比這更長的指令卡片顯示
+// 不完整、也不值得對整段跑正規式，一律不自動放行、交給人看——否則在危險片段前塞 2 萬字填充，
+// 檢查就只看得到無害的開頭。
+export const MAX_CHECKED_COMMAND_LENGTH = 20_000;
+
+export function commandTooLongReason(command: string | undefined): string | undefined {
+  return command && command.length > MAX_CHECKED_COMMAND_LENGTH
+    ? t("指令超過 {n} 字元，無法完整顯示與檢查，需要你親自確認", { n: MAX_CHECKED_COMMAND_LENGTH })
+    : undefined;
+}
+
 export function isDangerousCommand(command: string): DangerousMatch {
   const normalized = command.trim();
   if (!normalized) return { dangerous: false };
@@ -148,6 +159,8 @@ export function autoApprovalPolicy(toolName: string, command?: string): AutoAppr
   }
   const normalized = command?.trim() ?? "";
   if (!normalized) return { allowed: false, reason: t("無法辨識指令內容") };
+  const tooLong = commandTooLongReason(normalized);
+  if (tooLong) return { allowed: false, reason: tooLong };
   const danger = isDangerousCommand(normalized);
   if (danger.dangerous) return { allowed: false, reason: danger.reason };
   const inner = unwrapShellCommand(normalized);
@@ -190,6 +203,8 @@ export function evaluateAutoApproval(mode: AutoApproveMode, toolName: string, co
   if (mode === "off") return { allowed: false };
   if (mode === "safe") return autoApprovalPolicy(toolName, command);
   if (toolName !== "Bash") return { allowed: true };
+  const tooLong = commandTooLongReason(command?.trim());
+  if (tooLong) return { allowed: false, reason: tooLong };
   const danger = isDangerousCommand(command?.trim() ?? "");
   return danger.dangerous ? { allowed: false, reason: danger.reason } : { allowed: true };
 }

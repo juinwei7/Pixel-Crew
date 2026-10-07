@@ -111,6 +111,8 @@ export const enServerC: Record<string, string> = {
   "遞迴刪除整個目錄（rd /s）": "Deletes an entire directory tree (rd /s)",
   "強制或批次刪除檔案（del /f /s /q）": "Forced or bulk file delete (del /f /s /q)",
   "格式化磁碟（format）": "Formats a disk (format)",
+  "觸發或開關 app 自我安裝（只能由 owner 決定）": "Triggers or toggles the app's self-install (only the owner may decide this)",
+  "指令超過 {n} 字元，無法完整顯示與檢查，需要你親自確認": "This command is longer than {n} characters, so it can't be shown or checked in full and needs your confirmation",
   "{tool} 可能修改本機或外部資料": "{tool} may modify local or external data",
   "無法辨識指令內容": "Could not recognize the command content",
   "串接中含寫入型重導向、替換語法或不在唯讀清單的片段": "The chained command contains a write-type redirect, substitution syntax, or a segment not on the read-only allowlist",

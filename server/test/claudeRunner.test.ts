@@ -488,3 +488,23 @@ test("normal turns leave Read/WebFetch to the approval bridge; only read-only qu
     harness.restore();
   }
 });
+
+test("the bridge checks the whole Bash command, not the truncated text shown on the card", async () => {
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), "/repo");
+  (session as unknown as { getAutoApproveMode: () => string }).getAutoApproveMode = () => "full";
+  session.busy = true;
+  const token = (session as unknown as { approvalToken: string }).approvalToken;
+  const padded = `echo ${"a".repeat(20_100)} && rm -rf ~`;
+  const pending = session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: padded } });
+  assert.ok(pending instanceof Promise);
+  // full 模式下會被自動放行的話，這裡就不會出現等人決定的卡片。
+  assert.equal(events.some((event) => event.type === "approval_resolved" && event.decision === "auto_allow"), false);
+  const request = events.find((event) => event.type === "approval_requested") as Extract<RunnerEvent, { type: "approval_requested" }>;
+  assert.ok(request);
+  assert.ok((request.request.command ?? "").length <= 20_000);
+  assert.match(request.request.riskReason ?? "", /20000/);
+  session.resolveApproval(request.request.id, "deny");
+  await pending;
+  session.stop();
+});

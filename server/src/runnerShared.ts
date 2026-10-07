@@ -6,7 +6,7 @@
 import { dirname, join } from "node:path";
 import { config } from "./config.js";
 import { documentPrompt } from "./messageDocuments.js";
-import { isDangerousCommand } from "./dangerousCommand.js";
+import { commandTooLongReason, isDangerousCommand } from "./dangerousCommand.js";
 import { t } from "./i18n.js";
 import type { AutoApproveMode } from "./protocol.js";
 import type { ExecutionProfile } from "./providers/session.js";
@@ -25,7 +25,7 @@ export function boundedValue(value: unknown, maxLength = MAX_APPROVAL_TEXT_LENGT
   }
 }
 
-/** 指令字串截到跟 boundedValue 一致的上限，核准卡片的 command 欄位顯示用。 */
+/** 指令字串截到跟 boundedValue 一致的上限，核准卡片的 command 欄位「顯示」用；檢查一律用完整指令。 */
 export function truncateCommand(value: unknown): string {
   return String(value ?? "").slice(0, MAX_APPROVAL_TEXT_LENGTH);
 }
@@ -49,8 +49,9 @@ export function autoApproveConfirmReason(mode: AutoApproveMode, detail: string |
 }
 
 /** 指令命中危險清單就回傳中文風險描述，否則 undefined；沒有指令一律 undefined。 */
+/** 傳完整指令（不是截斷後的顯示字串），否則截斷點之後的危險片段不會被標出來。 */
 export function riskReasonFor(command: string | undefined): string | undefined {
-  return command ? isDangerousCommand(command).reason : undefined;
+  return command ? commandTooLongReason(command) ?? isDangerousCommand(command).reason : undefined;
 }
 
 /** 使用者中止當前回合時的錯誤訊息，兩邊 runner 的 interrupt() 都顯示這句。
