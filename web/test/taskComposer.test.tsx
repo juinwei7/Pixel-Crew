@@ -4,7 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TaskComposer } from "../src/components/TaskComposer";
 import { dragContainsFiles } from "../src/composerDrag";
-import { mergeComposerItems, moveQueuedItem, reorderQueuedItem } from "../src/composerQueue";
+import { legacyQueueRestore, mergeComposerItems, moveQueuedItem, reorderQueuedItem, type QueuedCommand } from "../src/composerQueue";
 import { emptyWorker } from "../src/workerState";
 
 const capabilities = {
@@ -129,4 +129,23 @@ test("restored composer extras merge by id without duplicating current attachmen
     { id: "same", value: 2 },
     { id: "current", value: 3 },
   ]);
+});
+
+test("legacy browser-queued commands come back as one reviewable draft with every attachment", () => {
+  const image = (id: string) => ({ id, name: `${id}.png`, mimeType: "image/png", dataBase64: "AA==", previewUrl: "data:image/png;base64,AA==", size: 1 }) as QueuedCommand["images"][number];
+  const document = (id: string) => ({ id, name: `${id}.md`, mimeType: "text/markdown", dataBase64: "AA==", size: 1 }) as QueuedCommand["documents"][number];
+  const command = (id: string, text: string, images: string[] = [], documents: string[] = []): QueuedCommand => ({
+    id, text, images: images.map(image), documents: documents.map(document), clientMessageId: `c-${id}`, idempotencyKey: `k-${id}`,
+  });
+  // 6＋6 張圖超過單則上限也全數放回：寧可讓使用者自己刪，也不悄悄丟掉。
+  const many = Array.from({ length: 6 }, (_, index) => `i${index}`);
+  const restored = legacyQueueRestore([
+    command("a", "  先修登入頁  ", many, ["spec"]),
+    command("b", "", many.map((id) => `${id}b`)),
+    command("c", "再跑一次測試"),
+  ]);
+  assert.equal(restored.text, "先修登入頁\n\n再跑一次測試");
+  assert.equal(restored.images.length, 12);
+  assert.deepEqual(restored.documents.map((item) => item.id), ["spec"]);
+  assert.deepEqual(legacyQueueRestore([]), { text: "", images: [], documents: [] });
 });

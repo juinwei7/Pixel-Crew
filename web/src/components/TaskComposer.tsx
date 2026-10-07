@@ -20,7 +20,7 @@ import {
   type ComposerDocument,
   type ComposerImage,
 } from "../composerFiles";
-import { MAX_QUEUED_COMMANDS, moveQueuedItem, newQueueId, reorderQueuedItem, type QueuedCommand } from "../composerQueue";
+import { legacyQueueRestore, MAX_QUEUED_COMMANDS, mergeComposerItems, moveQueuedItem, newQueueId, reorderQueuedItem, type QueuedCommand } from "../composerQueue";
 import { useComposerDraft, writeComposerDraft } from "../hooks/useComposerDraft";
 import { useComposerHistory } from "../hooks/useComposerHistory";
 import { useComposerPalette, type PaletteItem } from "../hooks/useComposerPalette";
@@ -329,6 +329,21 @@ export function TaskComposer({
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueEnabled, busy, disabled, queued, draftKey, switchingSession, dispatchTick]);
+
+  // v2.5.0 以前排在瀏覽器本機（IndexedDB）的待送訊息：改走 server 佇列後畫面與 drain 都只看 server，
+  // 這批還原回來會永遠卡著——看不到、送不出也刪不掉。放回輸入框（原文＋附件）並提示，由使用者決定
+  // 送出或刪掉，本機那份隨即清掉。不直接搬進 server 佇列：升級後它們就一直看不到，使用者可能早已
+  // 重送過，而 server 佇列在 NPC 閒著時會立刻開跑。
+  useEffect(() => {
+    if (!useServerQueue || switchingSession || queued.length === 0) return;
+    const restored = legacyQueueRestore(queued);
+    setQueued([]);
+    setDraftValue((current) => restoreFailedDraft(current, restored.text));
+    setImages((current) => mergeComposerItems(restored.images, current));
+    setDocuments((current) => mergeComposerItems(restored.documents, current));
+    setError(t("舊版留在這台裝置、還沒送出的 {n} 則排隊訊息已放回輸入框，確認後再送出", { n: queued.length }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useServerQueue, switchingSession, queued]);
 
   // 影片解析結果（影格＋字幕）套進輸入框：影格當圖片、字幕當隱形隨附檔。上傳檔與貼連結共用。
   // label 是顯示用來源名（檔名或影片標題/連結），讓多張影格在輸入框收合成一個影片晶片。
