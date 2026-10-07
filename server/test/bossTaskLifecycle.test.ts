@@ -53,3 +53,26 @@ test("boss routing only offers the deciding task's own temporary crew", () => {
   // 為交辦剛開的隊要交回同一張的第二輪決策。
   assert.match(indexSource, /await decideBossTask\(task, false, \[department\.id\]\)/);
 });
+
+test("the decide create_department branch re-reads the task after building the crew", () => {
+  const decide = block("async function decideBossTaskInner(", "function missionReport(");
+  const create = decide.indexOf("await createDepartmentForObjective(");
+  const recheck = decide.indexOf("snapshotStillCurrent(task.status, store.getBossTask(task.id))", create);
+  assert.ok(create !== -1 && recheck !== -1, "建部門後要重讀交辦");
+  assert.ok(recheck < decide.indexOf("await decideBossTask(task, false"), "要在第二輪決策（派工）前重讀");
+  assert.match(decide, /newCrewOrphaned\(store\.getBossTask\(task\.id\), department\.id\)/);
+});
+
+test("autopilot stand-in answers and auto-resolve write to the re-read task, not the hook-time snapshot", () => {
+  const answer = block("async function autoAnswerBossTask(", "async function autoResolveBossTask(");
+  assert.match(answer, /pendingQuestionUnchanged\(task, live\)/);
+  assert.match(answer, /persistBossTask\(live\)/);
+  assert.doesNotMatch(answer, /persistBossTask\(task\)/);
+  const resolve = block("async function autoResolveBossTask(", "async function advanceAutopilot(");
+  assert.match(resolve, /snapshotStillCurrent\(task\.status, live\)/);
+  assert.match(resolve, /advanceBossTaskStages\(live\)/);
+  assert.doesNotMatch(resolve, /advanceBossTaskStages\(task\)/);
+  const disable = block("function disableAutopilotWithNote(", "async function spawnBossTask(");
+  assert.match(disable, /store\.getBossTask\(task\.id\)/);
+  assert.doesNotMatch(disable, /persistBossTask\(task\)/);
+});

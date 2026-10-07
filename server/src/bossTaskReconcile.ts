@@ -45,3 +45,35 @@ export class BossTaskWorkCounter {
     return this.depth.has(taskId);
   }
 }
+
+// ── 長流程 await 後的快照重讀（交互審查 #6）───────────────────────────────
+// 決策、建專屬部門、自動循環代答都要跑一兩分鐘的 LLM；store 每次讀取回新物件，手上那份是
+// await 前的快照。期間老闆可能取消、刪除、親自回覆，或另一條重試路徑已接手——照舊套用就會
+// 整列蓋回去（saveBossTask 是 upsert，連刪掉的列都會復活），已取消的交辦甚至會被真的派工。
+
+/** 重讀到的權威狀態是否仍與快照同一階段：交辦還在、沒被取消／判失敗、狀態沒被別條路徑推動。
+ *  回 true 才能把快照上的變更寫回；type guard 讓呼叫端直接拿 live 接著用。 */
+export function snapshotStillCurrent<T extends { status: string }>(snapshotStatus: string, live: T | null | undefined): live is T {
+  return !!live && live.status !== "cancelled" && live.status !== "failed" && live.status === snapshotStatus;
+}
+
+type QuestionView = { status: string; messages: Array<{ id: string; role: string }> };
+
+function latestQuestionId(task: QuestionView): string | null {
+  for (let index = task.messages.length - 1; index >= 0; index -= 1) {
+    if (task.messages[index].role === "decision_model") return task.messages[index].id;
+  }
+  return null;
+}
+
+/** 自動代答前確認當初那一題還懸著：仍是 needs_input，且最新一題就是拿去代答的那題。老闆期間親自
+ *  回覆、決策模型又問了新的一題時狀態一樣是 needs_input，但手上的答案已經答非所問。 */
+export function pendingQuestionUnchanged<T extends QuestionView>(snapshot: QuestionView, live: T | null | undefined): live is T {
+  return snapshotStillCurrent("needs_input", live) && latestQuestionId(live) === latestQuestionId(snapshot);
+}
+
+/** 為交辦剛開的臨時團隊在第二輪決策後是否該收掉：交辦已不在、被取消，或沒有任何 stage 指向它
+ *  （決策失敗、改問老闆問題）——取消／刪除／封存的清理都靠 stages 找隊，掃不到它就成了孤兒。 */
+export function newCrewOrphaned(live: { status: string; stages: Array<{ departmentId: string }> } | null | undefined, crewId: string): boolean {
+  return !live || live.status === "cancelled" || !live.stages.some((stage) => stage.departmentId === crewId);
+}

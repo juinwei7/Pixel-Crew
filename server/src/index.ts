@@ -240,7 +240,10 @@ import {
 } from "./missionStepRetry.js";
 import {
   BossTaskWorkCounter,
+  newCrewOrphaned,
+  pendingQuestionUnchanged,
   restartBlockedByActiveWork,
+  snapshotStillCurrent,
   synthesizingZombieAction,
 } from "./bossTaskReconcile.js";
 import {
@@ -5164,9 +5167,9 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
   });
   // 建部門要跑最長 90s 的規劃 LLM：期間老闆可能已取消／刪除這張交辦，手上是舊快照
   // （decide 路徑既有同款護欄；自動重試讓這條競態更容易踩到——交互自審補上）。
-  // 套用結果前重讀權威狀態，已終結就放手，剛建好的臨時部門一併解散不留孤兒。
-  const liveAfterCreate = store.getBossTask(task.id);
-  if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+  // 套用結果前重讀權威狀態，已終結（或已被重新交辦等別條路徑接手）就放手，剛建好的臨時部門
+  // 一併解散不留孤兒。
+  if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
     if (department) disbandEphemeralDepartment(department.id);
     return;
   }
@@ -5227,8 +5230,7 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
       count: task.executionBudget?.maxAgents ?? 3,
     });
     // 與 dedicated 路徑同款取消護欄：重建部門的長流程期間交辦被終結就放手（交互自審補上）。
-    const liveAfterCreate = store.getBossTask(task.id);
-    if (!liveAfterCreate || liveAfterCreate.status === "cancelled" || liveAfterCreate.status === "failed") {
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
       if (department) disbandEphemeralDepartment(department.id);
       return;
     }
@@ -5317,9 +5319,9 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
       throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
     }
     // 探索是背景長流程（LLM 最長 150s×2）：期間老闆可能已取消或刪除這張交辦，而手上是舊快照。
-    // 套用決策前重讀權威狀態，已終結就直接放手——否則已取消的交辦會被蓋回 ready 並真的派工復活。
-    const current = store.getBossTask(task.id);
-    if (!current || current.status === "cancelled" || current.status === "failed") return;
+    // 套用決策前重讀權威狀態，已終結（或已被別條路徑接手）就直接放手——否則已取消的交辦會被
+    // 蓋回 ready 並真的派工復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.error = null;
     if (decision.status === "clarification") {
       task.status = "needs_input";
@@ -5343,6 +5345,12 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
         provider: task.decisionProvider,
         count: decision.memberCount,
       });
+      // 建部門又跑了最長 90s 的規劃 LLM：與 dedicated 路徑同款護欄，套用前重讀，作廢就放手；
+      // 剛建好的隊一併解散——它還不在任何 stage 上，取消／刪除的清理掃不到它。
+      if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
+        if (department) disbandEphemeralDepartment(department.id);
+        return;
+      }
       if (!department) {
         const failure = deptCreateFailureError.decide();
         task.status = "needs_attention";
@@ -5357,6 +5365,9 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
       task.messages.push(bossTaskMessage("system", t("已建立「{name}」，交給它繼續規劃與執行。", { name: department.name })));
       persistBossTask(task);
       await decideBossTask(task, false, [department.id]);
+      // 第二輪決策期間交辦被取消／刪除，或決策最後沒把工作交給這支新隊（失敗、改問老闆）：
+      // 沒有 stage 指向它就沒人會解散它，在這裡收掉，不留佔位的孤兒臨時部門。
+      if (newCrewOrphaned(store.getBossTask(task.id), department.id)) disbandEphemeralDepartment(department.id);
       return;
     }
     const byDepartment = new Map(candidates.map((candidate) => [candidate.departmentId, candidate]));
@@ -5382,6 +5393,8 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
     persistBossTask(task);
     advanceBossTask(task);
   } catch (error) {
+    // LLM 逾時／出錯常發生在等了好一陣之後：期間被取消或刪除的交辦不能被這份舊快照改判失敗或復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.status = "failed";
     task.error = (error as Error).message || t("無法完成 Boss Task 判斷");
     task.messages.push(bossTaskMessage("system", task.error));
@@ -5880,8 +5893,15 @@ function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number
 function disableAutopilotWithNote(task: BossTask, note: string): void {
   const had = autopilotByWorkspace.delete(autopilotKey(task.workspacePath));
   if (!had) return;
-  task.messages.push(bossTaskMessage("system", note));
-  persistBossTask(task);
+  // 呼叫端多半剛等完一兩分鐘的 LLM，手上 task 可能是舊快照：說明掛到重讀的權威版本上，
+  // 已刪除就不寫（saveBossTask 是 upsert，寫回會讓刪掉的交辦復活、蓋掉期間的取消或回覆）。
+  const message = bossTaskMessage("system", note);
+  task.messages.push(message);
+  const live = store.getBossTask(task.id);
+  if (live) {
+    live.messages.push(message);
+    persistBossTask(live);
+  }
   broadcastAutopilot(task.workspacePath);
 }
 
@@ -6009,30 +6029,33 @@ async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<voi
       disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
-    // 開關可能在生成期間被關掉；老闆也可能已親自回覆——都不再動任何東西。
+    // 開關可能在生成期間被關掉；老闆也可能已親自回覆、取消或刪除——都不再動任何東西。
     if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
-    if (task.status !== "needs_input") return;
+    // 手上 task 是 hook 當下的快照（代答 LLM 可跑兩分鐘）：重讀權威狀態，那一題已不再懸著就放手，
+    // 後續變更全掛在重讀的版本上——舊快照整列寫回會蓋掉期間的回覆／取消，刪掉的交辦還會復活。
+    const live = store.getBossTask(task.id);
+    if (!pendingQuestionUnchanged(task, live)) return;
     if (!decision || decision.action === "wait") {
       const reason = decision?.action === "wait" ? decision.reason : "";
-      disableAutopilotWithNote(task, reason
+      disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
       return;
     }
     autopilotResolveAttempts.set(task.id, attempts + 1);
     autopilotFired.delete(task.id);
-    task.messages.push(bossTaskMessage("boss", t("🤝（自動接手代答，第 {n}/{max} 次，可隨時修正）{reply}", {
+    live.messages.push(bossTaskMessage("boss", t("🤝（自動接手代答，第 {n}/{max} 次，可隨時修正）{reply}", {
       n: attempts + 1,
       max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
       reply: decision.reply,
     })));
-    task.status = "discovering";
-    task.error = null;
-    persistBossTask(task);
+    live.status = "discovering";
+    live.error = null;
+    persistBossTask(live);
     // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答
     //（遞迴深度由 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。
     autopilotResolving = false;
-    await decideBossTask(task);
+    await decideBossTask(live);
   } finally {
     autopilotResolving = false;
   }
@@ -6089,18 +6112,24 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
     }
     // 使用者可能在生成期間關掉了開關——關了就不再動任何東西。
     if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
+    // 解卡 LLM 可跑兩分鐘：老闆可能已親自從 Mission 面板解卡、取消或刪除交辦。交辦與 Mission 都
+    // 重讀權威狀態，已不再卡著就放手；後續變更掛在重讀的版本上，不拿舊快照整列寫回。
+    const live = store.getBossTask(task.id);
+    if (!snapshotStillCurrent(task.status, live)) return;
+    const liveMission = activeMissions.get(mission.id) ?? store.getDepartmentMission(mission.id);
+    if (!liveMission || liveMission.status !== "needs_attention") return;
     if (!decision || decision.action === "wait") {
       const reason = decision?.action === "wait" ? decision.reason : "";
-      disableAutopilotWithNote(task, reason
+      disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : stopNote);
       return;
     }
     autopilotResolveAttempts.set(task.id, attempts + 1);
     const guidance = decision.action === "retry" ? "" : decision.guidance;
-    const outcome = applyMissionResolution(mission, decision.action, guidance);
+    const outcome = applyMissionResolution(liveMission, decision.action, guidance);
     if (outcome.error) {
-      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：自動接手失敗（{error}）。", { error: outcome.error }));
+      disableAutopilotWithNote(live, t("⛔ 自動循環已停止：自動接手失敗（{error}）。", { error: outcome.error }));
       return;
     }
     // 解卡已派工：把這張交辦移出「已觸發」集合，讓下一次終態（完成→續循環、
@@ -6111,13 +6140,13 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
       : decision.action === "retry_execute"
         ? t("帶指示重跑 Execute")
         : t("原步驟重試");
-    task.messages.push(bossTaskMessage("system", t("🤝 自動接手（第 {n}/{max} 次）：{action}{guidance}", {
+    live.messages.push(bossTaskMessage("system", t("🤝 自動接手（第 {n}/{max} 次）：{action}{guidance}", {
       n: attempts + 1,
       max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
       action: actionLabel,
       guidance: guidance ? t("——{guidance}", { guidance }) : "",
     })));
-    advanceBossTaskStages(task);
+    advanceBossTaskStages(live);
   } finally {
     autopilotResolving = false;
   }
