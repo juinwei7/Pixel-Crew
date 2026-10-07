@@ -401,7 +401,8 @@ else {
     restore() {
       config.claudeBin = saved.claudeBin;
       config.dbPath = saved.dbPath;
-      rmSync(root, { recursive: true, force: true });
+      // Windows 上剛結束的假 CLI 子程序要一下子才放開資料夾（EBUSY）；清暫存只是收尾，不是受測行為。
+      try { rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); } catch { /* 留給 OS 清 */ }
     },
   };
 }

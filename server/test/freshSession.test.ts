@@ -119,7 +119,7 @@ test("account switch with reset restores the previous account when the reset fai
 
 test("account route: a warm runner without history is respawned under the new account", () => {
   // 沒有對話紀錄時不清除，但暖機好的 CLI 是用舊帳號的 home 生的；不重生的話第一回合會跑在舊帳號上。
-  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8").replace(/\r\n/g, "\n"); // Windows checkout 是 CRLF
   const start = indexSource.indexOf('app.patch("/api/workers/:id/account"');
   assert.ok(start >= 0);
   const route = indexSource.slice(start, indexSource.indexOf("\n});", start));

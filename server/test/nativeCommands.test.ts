@@ -135,7 +135,7 @@ test("interceptedAppCommand: only Claude's /goal is emulated by the app", () => 
 });
 
 test("queued messages go through the same app-command interception as direct messages", () => {
-  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8").replace(/\r\n/g, "\n"); // Windows checkout 是 CRLF
   const body = (marker: string) => {
     const start = indexSource.indexOf(marker);
     assert.ok(start >= 0, `index.ts 找不到 ${marker}`);

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 /* 交辦生命週期的接線檢查：這些路由與編排都在 index.ts 裡，沒有不開整台伺服器就能跑的入口，
    所以比照 ephemeralWorkers.test.ts 直接讀原始碼，鎖住「收尾時一定要做的事」不被改掉。 */
 
-const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8").replace(/\r\n/g, "\n"); // Windows checkout 是 CRLF
 
 function block(startMarker: string, endMarker: string): string {
   const start = indexSource.indexOf(startMarker);
