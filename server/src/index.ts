@@ -63,7 +63,7 @@ import { registerBackupImportTransport } from "./backupImportTransport.js";
 import { commitBackupRestore } from "./backupRestoreCommit.js";
 import { registerOperationalSettingsRoutes } from "./operationalSettingsRoutes.js";
 import { registerReportingRoutes } from "./reportingRoutes.js";
-import { registerScheduleRoutes } from "./scheduleRoutes.js";
+import { registerScheduleRoutes, ScheduleBudgetNotices, scheduleOverDailyBudget } from "./scheduleRoutes.js";
 import { registerAccountRoutes } from "./accountRoutes.js";
 import { registerApprovalRoutes } from "./approvalRoutes.js";
 import { VoiceModelManager } from "./voice/voiceModel.js";
@@ -3496,6 +3496,7 @@ registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang }
 
 // 每 30 秒掃一次：到點、今天沒跑過、NPC 空檔 → 送出排程指示。
 // NPC 在忙就先不標記，30 秒後再試（同一天內補跑）。
+const scheduleBudgetNotices = new ScheduleBudgetNotices();
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -3525,6 +3526,20 @@ setInterval(() => {
       continue;
     }
     if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
+    // 每日預算用完：比照排隊 drain 留著不標記（當天調高上限就補跑、否則明天恢復），說明每個排程每天一則。
+    const budget = getExtras(worker.id).dailyBudgetUsd;
+    const spentUsd = todayCostUsd(worker.id);
+    if (scheduleOverDailyBudget(budget, spentUsd)) {
+      if (scheduleBudgetNotices.shouldNote(schedule.id, today)) {
+        record(worker, { type: "user_message", notice: true, text: t("⏰ 排程（{label}）未執行：{name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。", {
+          label: scheduleLabel,
+          name: worker.runner.name,
+          spent: spentUsd.toFixed(2),
+          cap: (budget ?? 0).toFixed(2),
+        }) });
+      }
+      continue;
+    }
     store.markScheduleRun(schedule.id, today, now.toISOString());
     record(worker, { type: "user_message", text: t("⏰ 排程任務（{label}）：{prompt}", { label: scheduleLabel, prompt: schedule.prompt }) });
     try {

@@ -305,6 +305,7 @@ export const enServerC: Record<string, string> = {
   "每 {minutes} 分鐘": "Every {minutes} minutes",
   "每日 {time}": "Daily at {time}",
   "⏰ 排程（{label}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後會自動恢復。": "⏰ Schedule ({label}) skipped: this NPC is in ⚡ unrestricted mode (all approvals bypassed), so it does not run unattended. It resumes automatically once approvals are set back to Full trust or Safe.",
+  "⏰ 排程（{label}）未執行：{name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。": "⏰ Schedule ({label}) skipped: {name} has spent ${spent} today, reaching the daily cap of ${cap}. It resumes automatically tomorrow, or raise the cap under 📊 Operations.",
   "⏰ 排程任務（{label}）：{prompt}": "⏰ Scheduled task ({label}): {prompt}",
   "【排程任務，{label} 自動觸發】{prompt}": "[Scheduled task, auto-triggered by {label}] {prompt}",
   "找不到指定的帳號": "The specified account was not found",
