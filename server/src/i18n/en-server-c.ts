@@ -368,6 +368,7 @@ export const enServerC: Record<string, string> = {
   "：{reason}": ": {reason}",
   "🔁 自動循環（自動決定的下一步）：{reason}": "🔁 Autopilot (self-chosen next step): {reason}",
   "⛔ 自動循環已停止：無法建立下一個交辦。": "⛔ Autopilot stopped: could not create the next assignment.",
+  "⛔ 自動循環已停止：無法建立下一個交辦（{error}）。": "⛔ Autopilot stopped: could not create the next assignment ({error}).",
   "進行中的 Boss Task 不能刪除；請等它完成或先取消": "A Boss Task in progress cannot be deleted; wait for it to finish or cancel it first",
   "遠端分享訪客不能為交辦開「專屬部門」：專屬部門的臨時成員會自動核准所有非毀滅性指令。請關掉「專屬部門」改用既有部門路由，或請主人在本機操作。": "Remote share guests cannot open a dedicated department for an assignment: its temporary members auto-approve every non-destructive command. Turn off \"dedicated department\" to route to an existing department, or ask the owner to do it locally.",
   "封存的 Boss Task 不能重新交辦": "An archived Boss Task cannot be reassigned",

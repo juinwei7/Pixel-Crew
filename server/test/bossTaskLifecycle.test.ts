@@ -88,3 +88,40 @@ test("a malformed next-step reply is retried once and never labelled a normal fi
     assert.match(body, /decideWithFormatRepair\(/, `${name} 要有格式修復重問`);
   }
 });
+
+test("a boss task that recovers re-arms the autopilot trigger at the central write point", () => {
+  const persist = block("function persistBossTask(", "// 為一個交辦目標即時建立一支專屬部門");
+  assert.match(persist, /if \(autopilotTriggerRearms\(task\.status\)\) autopilotFired\.delete\(task\.id\);/);
+});
+
+test("autopilot triggers yielded to the global lock are replayed when the lock is released", () => {
+  const hook = block("function autopilotHook(", "// 自動循環的決策呼叫");
+  // 三個讓出分支都要登記重播，不能只把觸發權還回去。
+  assert.equal(hook.match(/autopilotDeferred\.defer\(task\.id\)/g)?.length, 3);
+  // 背景推進一律接住意外丟錯（unhandledRejection 會讓整台伺服器退出）。
+  assert.doesNotMatch(hook, /void (advanceAutopilot|autoAnswerBossTask|autoResolveBossTask)\([^)]*\);/);
+  for (const [name, end] of [
+    ["async function autoAnswerBossTask(", "async function autoResolveBossTask("],
+    ["async function autoResolveBossTask(", "async function advanceAutopilot("],
+    ["async function advanceAutopilot(", "app.get(\"/api/autopilot\""],
+  ] as const) {
+    const body = block(name, end);
+    const finallyAt = body.lastIndexOf("} finally {");
+    assert.notEqual(finallyAt, -1, name);
+    assert.match(body.slice(finallyAt), /replayDeferredAutopilotTriggers\(\)/, `${name} 釋放鎖時要重播`);
+  }
+  // 代答後的重跑決策放在 finally 之外：不會在決策跑完後才清掉期間別人剛拿到的鎖。
+  const answer = block("async function autoAnswerBossTask(", "async function autoResolveBossTask(");
+  assert.ok(answer.indexOf("await decideBossTask(answered)") > answer.lastIndexOf("} finally {"));
+});
+
+test("a spawned task that fails is reported instead of leaving the loop silently on", () => {
+  const advance = block("async function advanceAutopilot(", "app.get(\"/api/autopilot\"");
+  const spawn = advance.indexOf("await spawnBossTask(");
+  assert.ok(advance.lastIndexOf("try {", spawn) > advance.indexOf("disbandTaskEphemeralDepartments(justFinished)"), "spawn 要包在自己的 try/catch 裡");
+  assert.match(advance, /無法建立下一個交辦（\{error\}）/);
+  // 探索就失敗的交辦不會再經過 advanceBossTask：決策的失敗收尾要自己通知自動循環。
+  const decide = block("async function decideBossTaskInner(", "function missionReport(");
+  const catchAt = decide.lastIndexOf("} catch (error) {");
+  assert.match(decide.slice(catchAt), /autopilotHook\(task\);/);
+});

@@ -7,9 +7,11 @@ import {
   AUTOPILOT_MIN_STEPS,
   autopilotNextPrompt,
   autopilotRepairPrompt,
+  autopilotTriggerRearms,
   clampAutopilotMinutes,
   clampAutopilotSteps,
   decideWithFormatRepair,
+  DeferredAutopilotTriggers,
   explainAutopilotFailure,
   parseAutopilotDecision,
 } from "../src/autopilot.js";
@@ -158,4 +160,26 @@ test("autopilotRepairPrompt keeps the base prompt and names the expected block",
   assert.ok(repair.startsWith("BASE"));
   assert.match(repair, /rejected: bad json/);
   assert.match(repair, /<autopilot_answer>/);
+});
+
+test("autopilotTriggerRearms: only a task back in progress clears the fired mark", () => {
+  // 回到進行中＝上一個終態已過去，下一次完成／卡住要能再進 hook。
+  for (const status of ["discovering", "ready", "running", "synthesizing"]) assert.equal(autopilotTriggerRearms(status), true, status);
+  // 終態與 needs_input 正是要防重複觸發的狀態，不能清。
+  for (const status of ["completed", "failed", "cancelled", "needs_attention", "needs_input"]) assert.equal(autopilotTriggerRearms(status), false, status);
+});
+
+test("DeferredAutopilotTriggers replays each yielded trigger once and keeps re-deferred ones for the next release", () => {
+  const deferred = new DeferredAutopilotTriggers();
+  deferred.defer("a");
+  deferred.defer("b");
+  deferred.defer("a");
+  assert.equal(deferred.size, 2);
+  const batch = deferred.drain();
+  assert.deepEqual(batch, ["a", "b"]);
+  assert.equal(deferred.size, 0);
+  // 重播途中又撞到鎖而讓出的，留給下一次鎖釋放，不在同一輪打轉。
+  for (const id of batch) if (id === "b") deferred.defer(id);
+  assert.deepEqual(deferred.drain(), ["b"]);
+  assert.deepEqual(deferred.drain(), []);
 });

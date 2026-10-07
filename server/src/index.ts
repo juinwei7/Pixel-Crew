@@ -198,9 +198,11 @@ import {
 } from "./expertAdvisor.js";
 import {
   autopilotNextPrompt,
+  autopilotTriggerRearms,
   clampAutopilotSteps,
   clampAutopilotMinutes,
   decideWithFormatRepair,
+  DeferredAutopilotTriggers,
   explainAutopilotFailure,
   parseAutopilotDecision,
   type AutopilotHistoryEntry,
@@ -5003,6 +5005,9 @@ function persistBossTask(task: BossTask, created = false): void {
   // 寫入點改寫時在這裡統一清掉結構化停滯標記——散落各處的 error 寫入點不必各自維護。
   task.stall = reconcileBossTaskStall(task);
   task.updatedAt = new Date().toISOString();
+  // 同一個中央寫入點順手重新武裝自動循環：交辦回到進行中（老闆回覆、解卡、重派…）就清掉上一個
+  // 終態的觸發標記，否則它下一次完成／卡住都會被 hook 當成重複而略過，開關亮著卻不再推進。
+  if (autopilotTriggerRearms(task.status)) autopilotFired.delete(task.id);
   store.saveBossTask(task);
   broadcastBossTask(task, created);
 }
@@ -5403,6 +5408,9 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
     task.error = (error as Error).message || t("無法完成 Boss Task 判斷");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
+    // 探索就失敗的交辦不會再經過 advanceBossTask：直接通知自動循環，否則自動開出的下一張在
+    // 這裡失敗時，開關會一直亮著、循環卻再也沒有下一步，也沒有任何說明。
+    autopilotHook(task);
   }
 }
 
@@ -5853,6 +5861,8 @@ function persistAutopilotStates(): void {
 const autopilotFired = new Set<string>();
 // 全域鎖：一次只推進一步，杜絕並發生出多張交辦。
 let autopilotAdvancing = false;
+// 撞到全域鎖而讓出的觸發（見 autopilotHook）：鎖釋放時由 replayDeferredAutopilotTriggers 重播。
+const autopilotDeferred = new DeferredAutopilotTriggers();
 // 自動接手：每張交辦已嘗試次數（護欄：超過 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 就停下等人）。
 const autopilotResolveAttempts = new Map<string, number>();
 // 全域鎖：一次只自動接手一個卡點，避免並發對同一 Mission 重複派工。
@@ -5892,6 +5902,30 @@ function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number
     autopilotByWorkspace.delete(key);
   }
   broadcastAutopilot(workspacePath);
+}
+
+// 鎖一釋放就重播先前讓出的觸發。重讀權威狀態再進 hook：期間被回覆、取消或刪除的交辦，
+// hook 依新狀態自己放行或略過；又撞到鎖的會再讓出，留給下一次釋放。
+function replayDeferredAutopilotTriggers(): void {
+  for (const taskId of autopilotDeferred.drain()) {
+    try {
+      const live = store.getBossTask(taskId);
+      if (live) autopilotHook(live);
+    } catch (error) {
+      console.error(`[autopilot] 重播讓出的觸發失敗 ${taskId}:`, error);
+    }
+  }
+}
+
+// 背景推進（下一步／代答／解卡）意外丟錯：記錄並誠實停下留言——不讓 unhandledRejection 拖垮
+// 整台伺服器，也不讓開關亮著、循環卻已無聲熄火。
+function autopilotCrashed(task: BossTask, error: unknown): void {
+  console.error(`[autopilot] 背景推進意外失敗 ${task.id}:`, error);
+  try {
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：{error}", { error: (error as Error)?.message || String(error) }));
+  } catch (noteError) {
+    console.error("[autopilot] 無法留下停止說明:", noteError);
+  }
 }
 
 function disableAutopilotWithNote(task: BossTask, note: string): void {
@@ -5943,7 +5977,19 @@ async function spawnBossTask(workspacePath: string, objective: string, note?: st
   };
   if (!store.saveBossTask(task)) return null;
   broadcastBossTask(task, true);
-  await decideBossTask(task);
+  try {
+    await decideBossTask(task);
+  } catch (error) {
+    // 比照 POST /api/boss-tasks 的兜底：探索意外丟錯不能讓新交辦永遠卡在 discovering；
+    // 錯誤照樣往外丟，讓自動循環把「開不出下一張」誠實回報出來。
+    if (task.status === "discovering") {
+      task.status = "needs_attention";
+      task.error = (error as Error).message || t("探索失敗");
+      task.messages.push(bossTaskMessage("system", t("⛔ 探索失敗：{error}", { error: task.error })));
+      persistBossTask(task);
+    }
+    throw error;
+  }
   return task;
 }
 
@@ -5961,12 +6007,14 @@ function autopilotHook(task: BossTask): void {
   if (answerable) {
     const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
     if (autopilotResolving) {
-      // 另一件自動接手正在進行：把觸發權還回去，之後的事件會再進來。
+      // 另一件自動接手正在進行：把觸發權還回去並登記重播——needs_input 之後不會再有事件
+      // 把這張送回 hook，只「還回去」等於永遠沒人代答。
       autopilotFired.delete(task.id);
+      autopilotDeferred.defer(task.id);
       return;
     }
     if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
-      void autoAnswerBossTask(task, attempts);
+      void autoAnswerBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
       return;
     }
     disableAutopilotWithNote(task, t("⛔ 自動循環已停止：代答次數已用完，這個問題需要你親自回答；回覆後可再打開開關。"));
@@ -5978,13 +6026,15 @@ function autopilotHook(task: BossTask): void {
     if (state.autoResolve && task.status === "needs_attention") {
       if (autopilotResolving) {
         // 另一件自動接手正在進行（可能是別的 workspace 的）：比照 needs_input 分支把觸發權
-        // 還回去等下一個事件，不能直接把這條循環關掉——它根本還沒嘗試過。
+        // 還回去並登記重播，不能直接把這條循環關掉——它根本還沒嘗試過；暫停中的 Mission
+        // 也不一定還會有事件把它送回來。
         autopilotFired.delete(task.id);
+        autopilotDeferred.defer(task.id);
         return;
       }
       const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
       if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
-        void autoResolveBossTask(task, attempts);
+        void autoResolveBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
         return;
       }
     }
@@ -5994,12 +6044,13 @@ function autopilotHook(task: BossTask): void {
   }
   autopilotResolveAttempts.delete(task.id);
   if (state.running || autopilotAdvancing) {
-    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去，讓之後的事件能重新進來，
-    // 否則這張 completed 永遠留在 autopilotFired、這條循環無聲熄火。
+    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去並登記重播。completed 之後
+    // 不會再有任何事件把這張送回 hook——只還回去不重播，這條循環就無聲熄火。
     autopilotFired.delete(task.id);
+    autopilotDeferred.defer(task.id);
     return;
   }
-  void advanceAutopilot(task, state);
+  void advanceAutopilot(task, state).catch((error) => autopilotCrashed(task, error));
 }
 
 // 自動循環的決策呼叫（不用工具、150s 上限）；格式修復重問也走同一條。
@@ -6017,6 +6068,7 @@ function autopilotFormatFailureNote(failure: string): string {
 // 真的需要老闆本人的資訊（實體資料、憑證、不可逆決定）就停下等人。
 async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<void> {
   autopilotResolving = true;
+  let answered: BossTask | null = null;
   try {
     const question = [...task.messages].reverse().find((message) => message.role === "decision_model")?.text ?? "";
     const runtime = resolveDecisionRuntime(undefined, undefined, task.workspacePath);
@@ -6076,13 +6128,14 @@ async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<voi
     live.status = "discovering";
     live.error = null;
     persistBossTask(live);
-    // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答
-    //（遞迴深度由 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。
-    autopilotResolving = false;
-    await decideBossTask(live);
+    answered = live;
   } finally {
     autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
   }
+  // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答（遞迴深度由
+  // AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。決策放在 finally 之外，跑完後也不會把期間別人剛拿到的鎖清掉。
+  if (answered) await decideBossTask(answered);
 }
 
 // 自動接手一張卡在 needs_attention 的交辦：找出中斷的部門 Mission，讓決策模型讀中斷
@@ -6183,6 +6236,7 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
     advanceBossTaskStages(live);
   } finally {
     autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
   }
 }
 
@@ -6242,7 +6296,14 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
     // 巡迴推進到下一步＝上一個交辦收工，先把它的臨時團隊解散（不會再手動追問）——要在開下一張
     // 之前：下一張的決策若把工作派進這支隊，接著一解散就會把它的 Mission 連同成員一起抽走。
     disbandTaskEphemeralDepartments(justFinished);
-    const spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+    let spawned: BossTask | null;
+    try {
+      spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+    } catch (error) {
+      // 以前這裡沒有 catch：探索意外丟錯會變成 unhandledRejection，循環既沒回報也沒停。
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦（{error}）。", { error: (error as Error).message || String(error) }));
+      return;
+    }
     if (!spawned) {
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
       return;
@@ -6251,6 +6312,7 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
   } finally {
     state.running = false;
     autopilotAdvancing = false;
+    replayDeferredAutopilotTriggers();
   }
 }
 
