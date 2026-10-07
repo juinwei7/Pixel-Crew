@@ -290,7 +290,7 @@ import { planPromoteOnSuccess } from "./selfInstallLifecycle.js";
 import { type PostInstallChecks } from "./selfEvolveInstall.js";
 import {
   lastAttemptedCommit, lastShippedCommit, readRepoHead, recordShippedCommit, selfInstallAutoEnabled, setSelfInstallAuto,
-  triggerSelfInstall as runSelfInstallTrigger, type SelfInstallTriggerResult,
+  shouldAutoGateSelfInstall, triggerSelfInstall as runSelfInstallTrigger, type AutoSelfInstallMemo, type SelfInstallTriggerResult,
 } from "./selfInstallTrigger.js";
 import {
   OpenUserRequestStore,
@@ -10445,12 +10445,17 @@ function triggerSelfInstall(reason: string): SelfInstallTriggerResult {
 }
 
 // 保守自動觸發：僅在開關開、HEAD 未出貨過、且沒有 NPC 正在忙（不打斷你）時才動。節奏閘防頻繁重裝。
+// 同一個 HEAD 沒裝成（被擋／髒目錄…）就記下來，隔一段時間才再跑一次同步 git 閘門，不每 15 秒卡一次。
+let autoSelfInstallMemo: AutoSelfInstallMemo | null = null;
 function maybeAutoSelfInstall(): void {
   if (!selfInstallAutoEnabled(config.dataDirectory) || !SELF_REPO) return;
   const head = readRepoHead(SELF_REPO);
   if (!head || head === lastShippedCommit(config.dataDirectory) || head === lastAttemptedCommit(config.dataDirectory)) return; // 失敗過的同一 HEAD 不自動重試，等新 commit
+  if (!shouldAutoGateSelfInstall(autoSelfInstallMemo, head, Date.now())) return;
   for (const w of workers.values()) { if (w.runner.busy) return; } // 有人在忙就不重啟
   const r = triggerSelfInstall("auto");
+  if (r.outcome === "in_flight") return; // 上一次還沒走完：不記也不寫 log，走完後下一輪照常檢查
+  autoSelfInstallMemo = { head, outcome: r.outcome, at: Date.now() };
   appendRuntimeLog(config.dataDirectory, "maybeAutoSelfInstall", { outcome: r.outcome, detail: r.detail });
 }
 

@@ -15,6 +15,7 @@ import {
   type SelfChangeCommit,
 } from "./selfEvolveInstall.js";
 import { checkRollbackReady } from "./selfInstallLifecycle.js";
+import { PendingSelfInstallStore, parseTimestampedLog } from "./selfEvolvePending.js";
 
 export type SelfInstallLog = (message: string, detail?: Record<string, unknown>) => void;
 export type SelfInstallTriggerResult = { outcome: string; detail?: string };
@@ -51,8 +52,70 @@ export function recordShippedCommit(dataDirectory: string, commit: string): void
 export function lastAttemptedCommit(dataDirectory: string): string {
   try { return String(JSON.parse(readFileSync(join(dataDirectory, "self-install-attempt.json"), "utf8"))?.commit || ""); } catch { return ""; }
 }
-function recordAttemptedCommit(dataDirectory: string, commit: string): void {
-  try { writeFileSync(join(dataDirectory, "self-install-attempt.json"), JSON.stringify({ commit, at: new Date().toISOString() })); } catch { /* best-effort */ }
+function lastAttemptedAt(dataDirectory: string): number {
+  try {
+    const at = Date.parse(String(JSON.parse(readFileSync(join(dataDirectory, "self-install-attempt.json"), "utf8"))?.at || ""));
+    return Number.isFinite(at) ? at : 0;
+  } catch { return 0; }
+}
+function recordAttemptedCommit(dataDirectory: string, commit: string, atMs: number): void {
+  try { writeFileSync(join(dataDirectory, "self-install-attempt.json"), JSON.stringify({ commit, at: new Date(atMs).toISOString() })); } catch { /* best-effort */ }
+}
+
+// ───── 進行中鎖 ─────
+// 一次自裝橫跨好幾個行程：pc-selfrebuild（build/test/打包，數分鐘）→ pc-selfinstall（換入＋健康輪詢）
+// → 新版開機驗收（晉升回滾點）。中途再觸發一次會讓兩個 pc-selfrebuild 在同一個 repo 同時 build、
+// 互蓋 staged exe／pending marker。狀態跨重啟，所以不放記憶體，從磁碟上的三個痕跡判斷：
+//  - pending marker 還在＝已交棒、還沒驗收完（開機解析器驗收完或逾時就會清掉）。
+//  - 觸發紀錄之後 self-rebuild.log 還沒有收尾行（出貨交棒／FAILED／FATAL／no-op）＝重建還在跑。
+// 兩者都有逾時上限：行程死掉沒留下收尾，也不會把之後的觸發永遠鎖住。
+export const SELF_INSTALL_INFLIGHT_TIMEOUT_MS = 60 * 60_000;
+// 觸發後這麼久 log 裡連「self-rebuild start」都沒有＝重建根本沒起來（wscript 啟動失敗），不算進行中。
+const SELF_REBUILD_START_GRACE_MS = 3 * 60_000;
+
+/** 回傳「正在進行中、不准再觸發」的理由；沒在進行回 null（純函式）。 */
+export function describeSelfInstallInFlight(input: {
+  now: number;
+  /** 上次觸發的時間（epoch ms；沒有＝0）。 */
+  attemptAt: number;
+  /** self-rebuild.log 的內容（尾段即可）。 */
+  rebuildLog: string;
+  /** pending marker 的 firedAt；沒有 marker＝null。 */
+  pendingFiredAt: number | null;
+}): string | null {
+  const { now, attemptAt, pendingFiredAt } = input;
+  if (pendingFiredAt !== null && now - pendingFiredAt < SELF_INSTALL_INFLIGHT_TIMEOUT_MS) {
+    return "上一次自裝還在等驗收（換入新版／健康檢查／晉升回滾點），完成前不重複觸發";
+  }
+  if (attemptAt > 0 && now - attemptAt < SELF_INSTALL_INFLIGHT_TIMEOUT_MS) {
+    const since = parseTimestampedLog(input.rebuildLog).filter((line) => line.at >= attemptAt);
+    const finished = since.some((line) => /^(?:FATAL|FAILED|no-op):|^=== self-rebuild done/.test(line.message));
+    const started = since.some((line) => line.message.startsWith("=== self-rebuild start"));
+    if (!finished && (started || now - attemptAt < SELF_REBUILD_START_GRACE_MS)) {
+      return "上一次觸發的重建還在跑（build／test／打包），完成前不重複觸發";
+    }
+  }
+  return null;
+}
+
+function readSelfInstallInFlight(dataDirectory: string, now: number): string | null {
+  let rebuildLog = "";
+  try { rebuildLog = readFileSync(join(dataDirectory, "logs", "self-rebuild.log"), "utf8").slice(-200_000); } catch { /* 沒 log */ }
+  const marker = new PendingSelfInstallStore(dataDirectory).read();
+  return describeSelfInstallInFlight({ now, attemptAt: lastAttemptedAt(dataDirectory), rebuildLog, pendingFiredAt: marker ? marker.firedAt : null });
+}
+
+// ───── 全自動觸發的節流 ─────
+// 閘門是同步 git（逐 commit diff，最多 200 個），一跑就卡住 event loop 好幾秒；全自動每 15 秒掃一次，
+// 同一個 HEAD 沒出貨（被擋回 owner、工作目錄髒、回滾點沒備好…）就會每 15 秒重跑一次。記住上次
+// 檢查過的 HEAD，同一個 HEAD 隔一段時間才再看一次（髒目錄、回滾點這類狀態可能自己變好）。
+export const AUTO_SELF_INSTALL_REGATE_MS = 10 * 60_000;
+export type AutoSelfInstallMemo = { head: string; outcome: string; at: number };
+
+/** 這一輪全自動掃描要不要對這個 HEAD 跑閘門（純函式）。 */
+export function shouldAutoGateSelfInstall(memo: AutoSelfInstallMemo | null, head: string, now: number): boolean {
+  if (!memo || memo.head !== head) return true;
+  return now - memo.at >= AUTO_SELF_INSTALL_REGATE_MS;
 }
 
 // 單一 commit 對其第一個 parent 的改動（root commit 對空樹）。--no-renames：改名拆成刪＋增，舊檔名
@@ -89,11 +152,16 @@ export type TriggerSelfInstallInput = {
   log: SelfInstallLog;
   /** 測試注入用；預設走 wscript+vbs detached 啟動。 */
   launch?: (psCmd: string, vbsPath: string) => void;
+  /** 測試注入用；預設 Date.now。 */
+  now?: () => number;
 };
 
 export function triggerSelfInstall(input: TriggerSelfInstallInput): SelfInstallTriggerResult {
   const { repo, dataDirectory, reason, log } = input;
   if (!repo || !existsSync(repo)) return { outcome: "repo_not_configured", detail: "PIXEL_CREW_SELF_REPO 未設定或不存在" };
+  // 手動與全自動共用這道鎖：上一次還沒走完就不再開一條重建。
+  const inFlight = readSelfInstallInFlight(dataDirectory, (input.now ?? Date.now)());
+  if (inFlight) return { outcome: "in_flight", detail: inFlight };
   const head = readRepoHead(repo);
   if (!head) return { outcome: "needs_owner", detail: "讀不到 HEAD，無法確認要裝的改動" };
   // pc-selfrebuild build 的是整個工作目錄，但下面的閘門只看得到已提交的 commit：未提交的改動
@@ -147,12 +215,14 @@ export function triggerSelfInstall(input: TriggerSelfInstallInput): SelfInstallT
   // 寫到無空格路徑（SELF_REPO 有連字號沒空格）：wscript 對含空格的腳本路徑會從空格截斷、
   // 跳出「…\Pixel 沒有副檔名」錯誤（dataDirectory 是 …\Pixel Crew\ 有空格，故不可用）。
   const vbsPath = join(repo, ".pc-selfrebuild-launch.vbs");
+  // 觸發時間取在啟動之前：進行中鎖只認這之後 self-rebuild.log 的行，重建一起來就寫的 start 行不能早於它。
+  const firedAt = (input.now ?? Date.now)();
   try {
     (input.launch ?? ((cmd, path) => launchDetachedRebuild(cmd, path, log)))(psCmd, vbsPath);
   } catch (error) {
     return { outcome: "launch_failed", detail: (error as Error).message };
   }
-  recordAttemptedCommit(dataDirectory, head);
+  recordAttemptedCommit(dataDirectory, head, firedAt);
   log("self-install triggered: detached self-rebuild launched", { reason, head, range: range.kind, checked: cls.checked, changed: changed.slice(0, 20), psExe });
   return rangeNote ? { outcome: "fired", detail: rangeNote } : { outcome: "fired" };
 }
