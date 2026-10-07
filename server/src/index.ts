@@ -6330,6 +6330,22 @@ function disableWorkerAutopilotWithNote(worker: Worker, note: string, ask?: { op
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
 }
 
+// 按停止＝連個人自動循環一起停。Claude 的中止只發 error、不經 turn_end，循環會被 15s 保底掃當成
+// 停擺而補送下一步；Codex 的中止回合則會被當成「上一回合發生錯誤」。所以停止端點先撤掉武裝（決策
+// 進行中的那步也會因狀態不在而作廢），註記則等被中止的回合真的收尾才貼——回合還開著時插 notice 卡，
+// 前端會把那張卡當成最後一個 turn，被中止的回合就永遠掛著「進行中」。
+const workerAutopilotStopNotes = new Map<string, string>();
+
+function stopWorkerAutopilotForInterrupt(worker: Worker): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  const note = t("⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。");
+  if (worker.runner.busy) workerAutopilotStopNotes.set(worker.id, note);
+  else record(worker, { type: "user_message", text: note, notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
 // 循環撞到步數／時間上限而停時用：除了貼停止註記，再補送一個「收尾交接」回合，讓 NPC 主動給擁有者
 // 一份看得懂的結案（做了什麼／結論／下一步／怎麼接續）。這條在拿掉「剩 N 步」倒數後尤其重要——否則
 // NPC 不知道是最後一步、不會自己總結，循環就這樣停在半空，擁有者回頭看不懂也不知怎麼接。
@@ -6417,6 +6433,11 @@ function workspaceChangedBetween(workspacePath: string, startAt: number | null, 
 }
 
 function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
+  const stopNote = event.type === "turn_end" || event.type === "error" ? workerAutopilotStopNotes.get(worker.id) : undefined;
+  if (stopNote) {
+    workerAutopilotStopNotes.delete(worker.id);
+    record(worker, { type: "user_message", text: stopNote, notice: true });
+  }
   if (event.type !== "turn_end") return;
   const state = workerAutopilotByWorker.get(worker.id);
   if (!state) return;
@@ -10084,6 +10105,7 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
     res.status(409).json({ error: missionInProgress(worker.id) ? t("Department Mission 請從 Mission 面板取消") : t("協作任務請從協作面板取消") });
     return;
   }
+  stopWorkerAutopilotForInterrupt(worker); // 先撤循環：否則中止後它會自己再送下一步
   worker.runner.interrupt();
   broadcast({ type: "worker_status", workerId: worker.id, busy: false });
   res.json({ ok: true });
