@@ -510,6 +510,14 @@ export class ClaudeSession implements AgentSession {
         }
       }
       if (parsed.type === "result") {
+        // 實測（CLI 2.1.285）：resume 不存在的對話時，CLI 先在 stdout 吐一行 is_error 的 result
+        //（errors 帶 "No conversation found"），約一秒後才非零退出。這行不是真的跑完一回合——若照常
+        // 累加回合數、清 busy，close 時 fail() 的自動重跑閘門永遠不成立，下次還會 resume 同一個死 id。
+        // 所以在同一個閘門內（這次 spawn 還沒跑完任何回合）直接略過，交給 close 的 fail() 改開新對話重跑。
+        if (this.resumedThisSpawn && this.completedTurns === turnsAtSpawn && isMissingConversationResult(parsed)) {
+          sawMissingConversation = true;
+          return;
+        }
         this.completedTurns++;
         this.busy = false;
         this.cleanupInputDocuments();
@@ -635,6 +643,12 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
     });
   }
   return content;
+}
+
+function isMissingConversationResult(parsed: any): boolean {
+  if (!parsed?.is_error) return false;
+  const errors: unknown[] = Array.isArray(parsed.errors) ? parsed.errors : [];
+  return [...errors, parsed.result].some((value) => typeof value === "string" && value.includes("No conversation found"));
 }
 
 function isSubagentMessage(parsed: any): boolean {
