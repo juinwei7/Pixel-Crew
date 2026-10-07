@@ -20,16 +20,33 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// secret 檔的存放位置：安裝版的更新流程會「整個換掉 app/ 資料夾」，secret 檔若放在
-// app/ 裡（舊行為），每次更新都會被洗掉——簽章密鑰重生、手機登入全失效、設定精靈歸零。
-// 安裝版（特徵：旁邊有 runtime/ 資料夾）改放上一層的資料根目錄（{LocalAppData}/Pixel Crew），
-// 更新只換 app/ 不動資料根目錄；並把舊位置的檔案一次性搬過去。源碼 checkout 維持舊位置。
+// secret 檔的存放位置：安裝版的更新流程會「整個換掉」程式所在的資料夾（Windows 的 app/、
+// macOS 的整個 .app），secret 檔若跟程式放一起（舊行為），每次更新都會被洗掉——簽章密鑰重生、
+// 手機登入全失效、設定精靈歸零。安裝版改放更新不會碰的資料目錄：
+//  - Windows 安裝版（旁邊有 runtime/）：上一層的資料根目錄（{LocalAppData}/Pixel Crew）。
+//  - macOS .app（本檔在 Contents/Resources/app，runtime 在 Resources/ 底下）：上一層仍在 .app 裡、
+//    會跟著被換掉，所以改放本體同一個資料目錄 ~/Library/Application Support/Pixel Crew
+//    （PIXEL_CREW_DATA_DIR 可覆寫，與本體一致）。
+// 真正的搬家發生在「換掉程式資料夾之前」（Windows 單檔安裝器、macOS 安裝腳本都會先把舊檔搬到
+// 資料目錄），這裡的複製只是保底：舊位置還有檔、新位置沒有時一次性搬過去。源碼 checkout 維持舊位置。
+function installedDataRoot() {
+  if (fs.existsSync(path.join(__dirname, 'runtime'))) return path.dirname(__dirname);
+  const resources = path.dirname(__dirname);
+  if (path.basename(__dirname) === 'app' && path.basename(resources) === 'Resources'
+      && fs.existsSync(path.join(resources, 'runtime'))) {
+    return (process.env.PIXEL_CREW_DATA_DIR || '').trim()
+      || path.join(os.homedir(), 'Library', 'Application Support', 'Pixel Crew');
+  }
+  return '';
+}
 function defaultConfigPath() {
   const legacy = path.join(__dirname, '_tsproxy.secret.json');
-  const installedBundle = fs.existsSync(path.join(__dirname, 'runtime'));
-  if (!installedBundle) return legacy;
-  const durable = path.join(path.dirname(__dirname), '_tsproxy.secret.json');
+  const dataRoot = installedDataRoot();
+  if (!dataRoot) return legacy;
+  const durable = path.join(dataRoot, '_tsproxy.secret.json');
   try {
+    // macOS 的資料目錄可能還沒建（本體從沒跑過就先開轉接站）；建好 saveConfig 才寫得進去。
+    fs.mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
     if (!fs.existsSync(durable) && fs.existsSync(legacy)) {
       fs.copyFileSync(legacy, durable);
       try { fs.chmodSync(durable, 0o600); } catch {}

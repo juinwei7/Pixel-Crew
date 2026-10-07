@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer as createSocketServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -271,9 +271,9 @@ test("登出會一併清掉監護解鎖 cookie", async (t) => {
   assert.ok(cookies.some((c) => /^pc_grd=;/.test(c)), "監護解鎖 cookie 也要一起清");
 });
 
-async function startRelay(env: Record<string, string>): Promise<{ child: ChildProcess; port: number; api: (path: string, init?: RequestInit) => Promise<Response> }> {
+async function startRelay(env: Record<string, string>, script = RELAY): Promise<{ child: ChildProcess; port: number; api: (path: string, init?: RequestInit) => Promise<Response> }> {
   const port = await freePort();
-  const child = spawn(process.execPath, [RELAY], {
+  const child = spawn(process.execPath, [script], {
     env: { ...process.env, PC_TSPROXY_PORT: String(port), ...env },
     stdio: "ignore",
   });
@@ -395,4 +395,55 @@ test("尚未安裝就切到 cloudflared 通道，回 409 而不是含糊的 502"
   });
   assert.equal(res.status, 409);
   assert.equal((await res.json()).needsInstall, true);
+});
+
+// ── 安裝版的 secret 位置（更新不能把手機登入全部洗掉）─────────────────────────
+
+/** 把轉接站複製進假的安裝版目錄結構，從那裡跑起來（不帶 PC_TSPROXY_CONFIG，走預設位置判斷）。 */
+function layoutRelay(appDir: string, runtimeDir: string, legacySecret: object | null): string {
+  mkdirSync(appDir, { recursive: true });
+  mkdirSync(runtimeDir, { recursive: true });
+  const script = join(appDir, "_tsproxy.mjs");
+  copyFileSync(RELAY, script);
+  if (legacySecret) writeFileSync(join(appDir, "_tsproxy.secret.json"), JSON.stringify(legacySecret), { mode: 0o600 });
+  return script;
+}
+
+test("Windows 安裝版：secret 放資料根目錄，app\\ 裡的舊檔會搬過去、通行碼照用", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pc-relay-win-"));
+  const app = join(root, "Pixel Crew", "app");
+  const script = layoutRelay(app, join(app, "runtime"), { passcode: "kept-passcode", signingSecret: "s".repeat(64), channel: "off" });
+  const relay = await startRelay({ PC_TSPROXY_CONFIG: "", PC_CLOUDFLARED_EXE: join(root, "cloudflared") }, script);
+  t.after(() => { relay.child.kill(); rmSync(root, { recursive: true, force: true }); });
+
+  const durable = join(root, "Pixel Crew", "_tsproxy.secret.json");
+  assert.equal(JSON.parse(readFileSync(durable, "utf8")).signingSecret, "s".repeat(64), "簽章密鑰要原封不動搬過去");
+  assert.ok(await login(relay.api, "kept-passcode"), "舊通行碼要能直接登入");
+});
+
+test("macOS .app：secret 放 ~/Library/Application Support/Pixel Crew，不留在會被整包換掉的 .app 裡", { skip: process.platform === "win32" }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pc-relay-mac-"));
+  const resources = join(root, "Pixel Crew.app", "Contents", "Resources");
+  const script = layoutRelay(join(resources, "app"), join(resources, "runtime", "bin"), { passcode: "kept-passcode", signingSecret: "m".repeat(64), channel: "off" });
+  const env: Record<string, string> = { PC_TSPROXY_CONFIG: "", PC_CLOUDFLARED_EXE: join(root, "cloudflared"), HOME: join(root, "home"), PIXEL_CREW_DATA_DIR: "" };
+  const relay = await startRelay(env, script);
+  t.after(() => { relay.child.kill(); rmSync(root, { recursive: true, force: true }); });
+
+  const durable = join(root, "home", "Library", "Application Support", "Pixel Crew", "_tsproxy.secret.json");
+  assert.equal(JSON.parse(readFileSync(durable, "utf8")).signingSecret, "m".repeat(64));
+  assert.equal(statSync(durable).mode & 0o777, 0o600);
+  assert.ok(await login(relay.api, "kept-passcode"));
+});
+
+test("源碼 checkout（旁邊沒有 runtime）維持舊位置", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pc-relay-src-"));
+  mkdirSync(root, { recursive: true });
+  const script = join(root, "_tsproxy.mjs");
+  copyFileSync(RELAY, script);
+  writeFileSync(join(root, "_tsproxy.secret.json"), JSON.stringify({ passcode: "src-passcode", channel: "off" }), { mode: 0o600 });
+  const relay = await startRelay({ PC_TSPROXY_CONFIG: "", PC_CLOUDFLARED_EXE: join(root, "cloudflared") }, script);
+  t.after(() => { relay.child.kill(); rmSync(root, { recursive: true, force: true }); });
+
+  assert.ok(await login(relay.api, "src-passcode"));
+  assert.equal(existsSync(join(tmpdir(), "_tsproxy.secret.json")), false, "不可往上一層亂寫");
 });

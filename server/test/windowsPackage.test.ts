@@ -116,6 +116,18 @@ test("Windows release ships a self-contained native Pixel Crew control center", 
   assert.match(packager, /winpty-agent\.exe/);
 });
 
+test("Windows installer carries the remote-access secret out of app\\ before swapping it away", () => {
+  const source = readFileSync(controllerSource, "utf8");
+  // 舊版轉接站把通行碼／簽章密鑰放在 app\_tsproxy.secret.json；安裝器換掉 app\ 之後新轉接站才啟動，
+  // 來不及自己搬，所以安裝器必須在把舊 app\ 移走「之前」先複製到資料根目錄。
+  const preserve = source.indexOf("PreserveRelaySecret(installRoot, dataRoot);");
+  const moveAway = source.indexOf("MoveWithRetry(installRoot, backup);");
+  assert.ok(preserve > 0, "installer must preserve the relay secret");
+  assert.ok(moveAway > 0 && preserve < moveAway, "the secret must be copied before app\\ is moved away");
+  assert.match(source, /Path\.Combine\(installRoot, "_tsproxy\.secret\.json"\)/);
+  assert.match(source, /Path\.Combine\(dataRoot, "_tsproxy\.secret\.json"\)/);
+});
+
 test("server restart uses graceful shutdown after the detached launcher starts", () => {
   const source = readFileSync(serverEntrypoint, "utf8");
 

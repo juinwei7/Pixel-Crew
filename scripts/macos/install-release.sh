@@ -61,6 +61,16 @@ source_app="$temporary/extracted/Pixel Crew.app"
 [[ -f "$source_app/Contents/Resources/app/server/dist/index.js" ]] || fail "release is missing its server"
 [[ -f "$source_app/Contents/Resources/app/web/dist/index.html" ]] || fail "release is missing its web app"
 
+# Older relays kept the remote-access passcode and signing secret inside the
+# bundle, so replacing the app below would sign every phone out. Current relays
+# read it from the data directory; carry an old one over before the swap.
+data_dir="${PIXEL_CREW_DATA_DIR:-$HOME/Library/Application Support/Pixel Crew}"
+legacy_secret="$APP_PATH/Contents/Resources/app/_tsproxy.secret.json"
+if [[ -f "$legacy_secret" && ! -e "$data_dir/_tsproxy.secret.json" ]]; then
+  (umask 077 && mkdir -p "$data_dir" && cp "$legacy_secret" "$data_dir/_tsproxy.secret.json") ||
+    say "Could not carry over the remote-access settings; phones will need to sign in again."
+fi
+
 mkdir -p "$INSTALL_ROOT"
 stage="$INSTALL_ROOT/.Pixel Crew.app.install.$$"
 backup="$INSTALL_ROOT/.Pixel Crew.app.previous.$$"

@@ -113,6 +113,7 @@ internal static class SingleFileInstaller
             // Release any handle on the old install tree before the atomic swap so a
             // surviving server/worker can't lock us out (previously required a reboot).
             TerminateInstallBlockers(installRoot, dataRoot);
+            PreserveRelaySecret(installRoot, dataRoot);
             if (Directory.Exists(installRoot))
             {
                 backup = Path.Combine(dataRoot, $"app.previous-{Guid.NewGuid():N}");
@@ -216,6 +217,22 @@ internal static class SingleFileInstaller
             catch { }
             finally { proc.Dispose(); }
         }
+    }
+
+    // Older relays kept the remote-access passcode and signing secret in app\_tsproxy.secret.json,
+    // and the swap below throws app\ away. Current relays read it from the data root instead, but
+    // they only start after the swap, so carry the old file over first; otherwise every update
+    // regenerates the secret and signs every phone out. Runs after TerminateInstallBlockers so a
+    // still-running relay can't be writing it mid-copy.
+    private static void PreserveRelaySecret(string installRoot, string dataRoot)
+    {
+        try
+        {
+            var legacy = Path.Combine(installRoot, "_tsproxy.secret.json");
+            var durable = Path.Combine(dataRoot, "_tsproxy.secret.json");
+            if (File.Exists(legacy) && !File.Exists(durable)) File.Copy(legacy, durable);
+        }
+        catch { }
     }
 
     // Directory.Move can transiently fail while the OS finishes releasing handles the
