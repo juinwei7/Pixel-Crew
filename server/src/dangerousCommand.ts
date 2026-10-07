@@ -121,9 +121,16 @@ const SAFE_COMMAND_WRITE_OR_EXEC_FLAGS = [
 // `--out{put,}` 還能拼出上面擋掉的旗標。引號外出現 ( ) { } 就不算白名單安全指令。
 const UNQUOTED_EXPANSION = /[(){}]/;
 
+// 引號外的萬用字元會被 shell 展開成檔名，而檔名可以就叫 `--pre=x.ts`——上面逐旗標的比對看不到展開
+// 後才出現的選項。只對有危險旗標的工具收緊；ls/cat 這類沒有能寫檔或執行的旗標，照舊可用萬用字元。
+const FLAG_SENSITIVE_COMMAND = /^(?:git|rg|eslint|tsc|npm|pnpm|yarn)(?:\s|$)/;
+const UNQUOTED_GLOB = /[*?[]/;
+
 function isAllowlistedCommand(part: string): boolean {
   if (!SAFE_BASH_COMMANDS.some((pattern) => pattern.test(part))) return false;
-  if (UNQUOTED_EXPANSION.test(part.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ""))) return false;
+  const outsideQuotes = part.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "");
+  if (UNQUOTED_EXPANSION.test(outsideQuotes)) return false;
+  if (FLAG_SENSITIVE_COMMAND.test(part) && UNQUOTED_GLOB.test(outsideQuotes)) return false;
   const unquoted = part.replace(/["'\\]/g, "");
   return !SAFE_COMMAND_WRITE_OR_EXEC_FLAGS.some((pattern) => pattern.test(unquoted));
 }

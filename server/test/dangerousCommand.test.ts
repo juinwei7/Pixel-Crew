@@ -247,3 +247,14 @@ test("padding a dangerous command past the display limit never gets it auto-appr
   assert.match(evaluateAutoApproval("full", "Bash", padded).reason ?? "", /20000/);
   assert.equal(evaluateAutoApproval("full", "Bash", `echo ${"a".repeat(100)}`).allowed, true);
 });
+
+test("an unquoted glob on a tool with write/exec flags isn't auto-approved — a file named --pre=x would become a flag", () => {
+  assert.equal(autoApprovalPolicy("Bash", "rg TODO *.ts").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "git diff -- src/*.ts").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "eslint src/[a-z]*.ts").allowed, false);
+  // 引號內的萬用字元不會被 shell 展開，照舊放行；沒有危險旗標的工具也照舊。
+  assert.equal(autoApprovalPolicy("Bash", "rg 'TODO.*' src").allowed, true);
+  assert.equal(autoApprovalPolicy("Bash", "git diff -- '*.ts'").allowed, true);
+  assert.equal(autoApprovalPolicy("Bash", "ls *.ts").allowed, true);
+  assert.equal(autoApprovalPolicy("Bash", "rg TODO src").allowed, true);
+});
