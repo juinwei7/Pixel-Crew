@@ -109,7 +109,7 @@ import {
 } from "./globalMemory.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
-import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
+import { isRequestBodyTooLarge, MESSAGE_JSON_BODY_LIMIT_BYTES, MessageDocumentValidationError, parseMessageDocuments, requestBodyTooLargeMessage } from "./messageDocuments.js";
 import {
   bootstrapPrompt,
   buildLocalHandoff,
@@ -343,10 +343,10 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self' http://localhost:8790 http://127.0.0.1:8790");
   next();
 });
-// Four documents (20 MiB total) plus images (10 MiB total) expand by roughly
-// one third when transported as base64. Keep the HTTP ceiling just above the
-// validated attachment budget; individual parsers still enforce tighter caps.
-app.use(express.json({ limit: "44mb" }));
+// The HTTP ceiling is derived from the validated image + document budgets
+// (base64 expands them by a third); individual parsers still enforce tighter
+// caps. An oversized body gets a 413 from the terminal error handler below.
+app.use(express.json({ limit: MESSAGE_JSON_BODY_LIMIT_BYTES }));
 // A backup restore in progress means the DB is being swapped out from under
 // this process — every write API except the backup routes themselves must
 // be rejected until the process exits and relaunches against the new data.
@@ -10261,6 +10261,8 @@ if (config.production && existsSync(config.webDistPath)) {
 // crashing the process. Must be registered after every other app.use/route.
 app.use((err: unknown, _req: express.Request, res: Response, next: express.NextFunction) => {
   if (res.headersSent) { next(err); return; }
+  // 附件總量超過 HTTP 上限：回 413 與看得懂的說明，別落到下面的通用 500。
+  if (isRequestBodyTooLarge(err)) { res.status(413).json({ error: requestBodyTooLargeMessage() }); return; }
   console.error("[http] request handler error:", err);
   res.status(500).json({ error: t("伺服器發生未預期的錯誤") });
 });

@@ -131,6 +131,7 @@ export const enServerC: Record<string, string> = {
   "每份文件不可超過 {mib} MiB": "Each document cannot exceed {mib} MiB",
   "第 {n} 份文件內容與格式不符": "Document #{n} content does not match its format",
   "文件總大小不可超過 {mib} MiB": "Total document size cannot exceed {mib} MiB",
+  "送出的內容太大：圖片合計最多 {images} MiB、文件合計最多 {documents} MiB，請減少附件後再試。": "The request is too large: images can total at most {images} MiB and documents at most {documents} MiB. Remove some attachments and try again.",
   "Pixel Crew 已將使用者附加的文件暫存為以下唯讀檔案。請把它們視為本次訊息的附件，依使用者要求用讀檔工具檢視；不要修改或刪除附件：\n{list}": "Pixel Crew has staged the user's attached documents as the following read-only files. Treat them as attachments to this message and use a file-reading tool to view them as the user requests; do not modify or delete the attachments:\n{list}",
 
   // mcpLogin.ts

@@ -4,10 +4,32 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
 import { t } from "./i18n.js";
+import { MAX_MESSAGE_IMAGES_TOTAL_BYTES } from "./messageImages.js";
 
 export const MAX_MESSAGE_DOCUMENTS = 4;
 export const MAX_MESSAGE_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES = 20 * 1024 * 1024;
+
+// HTTP JSON 上限直接從附件預算推出來（base64 每 3 bytes 變 4 字元），再留 2 MiB 給訊息文字、
+// 檔名與 JSON 外殼。以前是手寫的固定值，圖片預算調大後沒跟上：滿額圖片＋幾 MiB 文件在
+// body-parser 就被擋，連驗證訊息都看不到。個別附件的上限仍由 parseMessage* 把關。
+const base64Length = (bytes: number) => Math.ceil(bytes / 3) * 4;
+export const MESSAGE_JSON_BODY_LIMIT_BYTES =
+  base64Length(MAX_MESSAGE_IMAGES_TOTAL_BYTES) + base64Length(MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES) + 2 * 1024 * 1024;
+
+/** body-parser 超過上限時丟的錯誤（type: entity.too.large、status 413）。 */
+export function isRequestBodyTooLarge(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { type?: unknown; status?: unknown };
+  return value.type === "entity.too.large" || value.status === 413;
+}
+
+export function requestBodyTooLargeMessage(): string {
+  return t("送出的內容太大：圖片合計最多 {images} MiB、文件合計最多 {documents} MiB，請減少附件後再試。", {
+    images: MAX_MESSAGE_IMAGES_TOTAL_BYTES / 1024 / 1024,
+    documents: MAX_MESSAGE_DOCUMENTS_TOTAL_BYTES / 1024 / 1024,
+  });
+}
 
 const DOCUMENT_TYPES: Record<string, { mimeType: string; kind: "text" | "pdf" | "zip" }> = {
   txt: { mimeType: "text/plain", kind: "text" },
