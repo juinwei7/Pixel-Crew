@@ -1,8 +1,10 @@
 // 接線整合測試：驗證未結案使用者請求帳本真的接進教練 prompt、決策解析、換腦交接三處。
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { workerAutopilotNextPrompt, parseWorkerAutopilotDecision } from "../src/workerAutopilot.js";
-import { buildLocalHandoff, parseHandoffSummary, bootstrapPrompt, summaryMarkdown } from "../src/handoff.js";
+import { buildLocalHandoff, parseHandoffSummary, bootstrapPrompt, summaryMarkdown, withOpenUserRequests } from "../src/handoff.js";
 import type { OpenUserRequest } from "../src/openRequests.js";
 
 const openReq = (id: string, text: string): OpenUserRequest => ({ id, text, at: 1, status: "open" });
@@ -80,4 +82,31 @@ test("換腦交接：parseHandoffSummary 能解析 openUserRequests 欄位（往
   });
   const parsed = parseHandoffSummary(raw);
   assert.deepEqual(parsed?.openUserRequests, ["未結案A", "未結案B"]);
+});
+
+test("換腦交接：帳本原文權威覆寫時仍遮蔽憑證、並受交接大綱尺寸上限約束", () => {
+  const base = buildLocalHandoff([], "", []);
+  const secret = "請用 api_key=sk-live-abcdefghijklmnopqrstuvwxyz 打這支 API";
+  const huge = Array.from({ length: 12 }, (_, index) => `${index} ${"很長的請求".repeat(400)}`);
+  const summary = withOpenUserRequests(base, [secret, ...huge]);
+  assert.doesNotMatch(JSON.stringify(summary), /sk-live-abcdefghijklmnopqrstuvwxyz/);
+  assert.match(summary.openUserRequests[0], /\[REDACTED\]/);
+  assert.ok(JSON.stringify(summary).length <= 24_000, "交接大綱不能被原文撐破上限");
+  assert.ok(summary.openUserRequests.every((item) => item.length <= 500));
+});
+
+test("帳本跟著對話走：/clear、換工作位置、刪除 NPC 都會清掉；交接只帶還算數的請求", () => {
+  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  const block = (marker: string) => {
+    const start = indexSource.indexOf(marker);
+    assert.ok(start >= 0, `index.ts 找不到 ${marker}`);
+    return indexSource.slice(start, indexSource.indexOf("\n}", start));
+  };
+  assert.match(block("function cleanWorkerAndAnnounce("), /clearCapturedRequests\(worker\.id\)/);
+  assert.match(block('app.delete("/api/workers/:id"'), /clearCapturedRequests\(worker\.id\)/);
+  assert.match(block('app.patch("/api/workers/:id/workspace"'), /clearCapturedRequests\(worker\.id\)/);
+  const handoff = block("async function performProviderHandoff(");
+  assert.match(handoff, /openRequestsForHandoff\(/);
+  assert.match(handoff, /withOpenUserRequests\(summary, openRequestTexts\)/);
+  assert.doesNotMatch(handoff, /summary\.openUserRequests = /, "直接塞原文會繞過遮蔽與尺寸上限");
 });

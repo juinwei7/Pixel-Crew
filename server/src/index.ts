@@ -118,6 +118,7 @@ import {
   summaryMarkdown,
   summaryPrompt,
   usageBlockReason,
+  withOpenUserRequests,
   type HandoffProgress,
   type HandoffSummary,
 } from "./handoff.js";
@@ -295,7 +296,10 @@ import {
 import {
   OpenUserRequestStore,
   appendOpenRequest,
+  clearOpenRequests,
+  lastSuccessfulTurnAt,
   listOpenRequests,
+  openRequestsForHandoff,
   pruneResolved,
   resolveOpenRequests,
   type OpenUserRequest,
@@ -2156,6 +2160,7 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
   // Goals belong to a conversation, unlike long-term memory notes and daily
   // budgets. A fresh `/clear` session must not inherit its old objective.
   setWorkerGoal(worker.id, null);
+  clearCapturedRequests(worker.id); // 對話重來：舊請求不能再被當成未結案帶進教練 prompt 或交接
   clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
   workerActivities.delete(worker.id); // 舊 session 的背景代理隨行程結束；歷史已清空，不必補記 subagent_done
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
@@ -2738,7 +2743,11 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
 
     const gitState = await workspaceGitState(workspacePath);
     // 未結案使用者請求：從帳本取原文，餵進本機備援＋摘要後權威覆寫，確保逐字跨換腦、不被 LLM 壓縮掉。
-    const openRequestTexts = listOpenRequests(openUserRequests, worker.id).map((entry) => entry.text);
+    // 只帶還算數的（見 openRequestsForHandoff：沒開循環時帳本不會結案）。
+    const openRequestTexts = openRequestsForHandoff(listOpenRequests(openUserRequests, worker.id), {
+      autopilotArmed: workerAutopilotByWorker.has(worker.id),
+      lastCompletedAt: lastSuccessfulTurnAt(worker.history),
+    }).map((entry) => entry.text);
     const localSummary = buildLocalHandoff(worker.history, gitState, openRequestTexts);
     source = "agent";
     setHandoff(worker, { ...progress, stage: "summarizing", message: t("請 {provider} 整理工作大綱", { provider: providerLabel(sourceProvider) }), source: null });
@@ -2757,8 +2766,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       sourceState = result.state;
       summary = parseHandoffSummary(result.text);
       if (!summary) throw new Error(t("來源 LLM 沒有回傳有效的交接格式"));
-      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）。
-      summary.openUserRequests = openRequestTexts;
+      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）；
+      // 仍走遮蔽與尺寸上限。
+      summary = withOpenUserRequests(summary, openRequestTexts);
     } catch (error) {
       source = "local_fallback";
       summary = localSummary;
@@ -6260,6 +6270,10 @@ function captureOpenUserRequest(worker: Worker, text: string): void {
   }
 }
 
+function clearCapturedRequests(workerId: string): void {
+  if (clearOpenRequests(openUserRequests, workerId)) openUserRequestStore.save(openUserRequests);
+}
+
 function resolveCapturedRequests(workerId: string, ids: string[] | undefined): void {
   if (!ids?.length) return;
   if (resolveOpenRequests(openUserRequests, workerId, ids, Date.now()) > 0) {
@@ -8018,6 +8032,7 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     // 位置變了而作廢，見 advanceWorkerAutopilot）。過往教訓（retros）是通用心法，留著。
     disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。", { path: workspacePath }));
     if (workerAutopilotPlans[worker.id]) { delete workerAutopilotPlans[worker.id]; workerAutopilotPlanStore.save(workerAutopilotPlans); }
+    clearCapturedRequests(worker.id); // 對話已清空，舊位置的請求不再算數
     const summary = workerSummary(worker);
     res.json({ ...summary, conversationReset });
   } catch (error) {
@@ -8053,6 +8068,7 @@ app.delete("/api/workers/:id", async (req, res) => {
   clearWorkerHookState(worker.id);
   if (workerAutopilotByWorker.delete(worker.id)) persistWorkerAutopilotStates(); // NPC 沒了，個人循環狀態一併回收
   if (workerAutopilotRetros[worker.id]) { delete workerAutopilotRetros[worker.id]; workerAutopilotRetroStore.save(workerAutopilotRetros); }
+  clearCapturedRequests(worker.id);
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
