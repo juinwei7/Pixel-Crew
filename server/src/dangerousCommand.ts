@@ -91,6 +91,28 @@ const SAFE_BASH_COMMANDS = [
   /^yarn\s+(test|build|check|lint|typecheck)(?:\s|$)/,
   /^(tsc|eslint)(?:\s|$)/,
 ];
+// 白名單只認前綴，但同一個「唯讀」指令配上某些旗標就能寫任意路徑或執行任意程式（實測：
+// `git diff --output=<外部路徑>` 會截斷外部檔、`rg --pre <程式>` 會逐檔執行該程式）。
+// 比對前先剝掉引號與反斜線——shell 裡 "--output=x"、--out""put=x、\--output 都等同 --output=x。
+const SAFE_COMMAND_WRITE_OR_EXEC_FLAGS = [
+  /^git\s(?:.*\s)?--output(?:=|\s|$)/,
+  /^rg\s(?:.*\s)?--(?:pre|hostname-bin)(?:=|\s|$)/,
+  /^eslint\s(?:.*\s)?(?:--fix|--output-file|-o|--cache(?:-location|-file)?|-c|--config|--rulesdir|--plugin|--resolve-plugins-relative-to|--init|--inspect-config|--mcp)(?:=|\s|$)/,
+  // tsc 的選項名稱不分大小寫（--OUTDIR 一樣有效）。
+  /^tsc\s(?:.*\s)?(?:--outDir|--outFile|--out|--declarationDir|--tsBuildInfoFile|--generateTrace|--generateCpuProfile|-b|--build|--init|-w|--watch)(?:=|\s|$)/i,
+  /^(?:npm|pnpm|yarn)\s(?:.*\s)?(?:--script-shell|--node-options|--prefix|-C|--dir|--cwd|--userconfig|--globalconfig)(?:=|\s|$)/,
+];
+// zsh（macOS 預設 shell，Claude 的 Bash 工具也跑在它上面）不需任何 SHELL_META 就能執行指令：
+// glob qualifier `ls *(e:'cmd':)`、process substitution `cat =(cmd)`；brace expansion
+// `--out{put,}` 還能拼出上面擋掉的旗標。引號外出現 ( ) { } 就不算白名單安全指令。
+const UNQUOTED_EXPANSION = /[(){}]/;
+
+function isAllowlistedCommand(part: string): boolean {
+  if (!SAFE_BASH_COMMANDS.some((pattern) => pattern.test(part))) return false;
+  if (UNQUOTED_EXPANSION.test(part.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ""))) return false;
+  const unquoted = part.replace(/["'\\]/g, "");
+  return !SAFE_COMMAND_WRITE_OR_EXEC_FLAGS.some((pattern) => pattern.test(unquoted));
+}
 
 // 串接指令逐段放行：每一段都在唯讀白名單內才整條自動核准。
 // 只容忍「丟棄輸出」類重導向（2>&1、2>/dev/null）；任何寫檔重導向、指令替換
@@ -103,7 +125,7 @@ function isSafeCompoundCommand(normalized: string): boolean {
   const segments = stripped.split(/\r?\n|&&|\|\||;|\|/);
   if (segments.some((segment) => segment.includes("&"))) return false;
   const parts = segments.map((segment) => segment.trim()).filter(Boolean);
-  return parts.length > 0 && parts.every((part) => SAFE_BASH_COMMANDS.some((pattern) => pattern.test(part)));
+  return parts.length > 0 && parts.every(isAllowlistedCommand);
 }
 
 export function autoApprovalPolicy(toolName: string, command?: string): AutoApprovalMatch {
@@ -119,7 +141,7 @@ export function autoApprovalPolicy(toolName: string, command?: string): AutoAppr
     if (isSafeCompoundCommand(normalized)) return { allowed: true };
     return { allowed: false, reason: t("串接中含寫入型重導向、替換語法或不在唯讀清單的片段") };
   }
-  if (SAFE_BASH_COMMANDS.some((pattern) => pattern.test(normalized))) return { allowed: true };
+  if (isAllowlistedCommand(normalized)) return { allowed: true };
   return { allowed: false, reason: t("指令不在唯讀／驗證安全清單") };
 }
 

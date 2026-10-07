@@ -219,6 +219,17 @@ test("safe: compound commands with write redirects, substitution, or non-read-on
   assert.equal(autoApprovalPolicy("Bash", "cat a.txt < b.txt").allowed, false);
 });
 
+test("safe: allowlisted commands still prompt when a flag makes them write or execute", () => {
+  assert.equal(autoApprovalPolicy("Bash", "git diff --output=/tmp/outside.txt").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "rg --pre ./evil.sh TODO").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "eslint --fix src").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "tsc --outDir /tmp/out").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "ls *(e:'touch pwned':)").allowed, false);
+  assert.equal(autoApprovalPolicy("Bash", "git status && rg --pre=sh x").allowed, false);
+  // full 模式不看白名單，這些不是毀滅性指令，維持原本的放行行為。
+  assert.equal(evaluateAutoApproval("full", "Bash", "eslint --fix src").allowed, true);
+});
+
 test("flags an agent reaching for the self-install switch or trigger", () => {
   assert.equal(isDangerousCommand(`curl -X POST http://127.0.0.1:8787/api/self-install/auto -d '{"enabled":true}'`).dangerous, true);
   assert.equal(isDangerousCommand("Invoke-WebRequest -Method Post http://localhost:8787/api/self-install/trigger").dangerous, true);
