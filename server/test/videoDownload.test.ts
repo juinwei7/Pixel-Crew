@@ -25,3 +25,21 @@ test("downloadVideoFromUrl 對非法連結立即丟 VideoDownloadError", async (
   await assert.rejects(() => downloadVideoFromUrl("file:///etc/passwd"), VideoDownloadError);
   await assert.rejects(() => downloadVideoFromUrl("   "), VideoDownloadError);
 });
+
+// SSRF：yt-dlp 的 generic extractor 會抓任何網址，指向本機／內網的連結必須在啟動 yt-dlp 前擋下。
+test("downloadVideoFromUrl 擋下指向本機與內網的連結", async () => {
+  for (const url of [
+    "http://127.0.0.1:8787/api/backup/export",
+    "http://localhost:8787/",
+    "http://[::1]/",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://192.168.1.1/video.mp4",
+    "http://10.0.0.5/a.mp4",
+  ]) {
+    await assert.rejects(
+      () => downloadVideoFromUrl(url, { ytDlpBin: "/nonexistent/yt-dlp" }),
+      (error) => error instanceof VideoDownloadError && /內部位址/.test(error.message),
+      url,
+    );
+  }
+});

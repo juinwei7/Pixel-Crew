@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertPublicUrl } from "./webShot.js";
 
 // 貼連結看影片：用 yt-dlp 把公開影片（YouTube／抖音/TikTok 等 yt-dlp 支援的站）下載成單一
 // 檔案，交回 Buffer，再走既有的 extractVideoFramesAndAudio 抽影格＋whisper 管線——等同讓
@@ -31,6 +32,10 @@ export async function downloadVideoFromUrl(url: string, opts: {
 } = {}): Promise<DownloadedVideo> {
   const target = url.trim();
   if (!isProbableVideoUrl(target)) throw new VideoDownloadError("請提供有效的 http(s) 影片連結");
+  // yt-dlp 的 generic extractor 什麼網址都抓，等於讓伺服器替呼叫端打本機／內網（跟 webshot
+  // 同一類 SSRF），所以沿用 webshot 的同一道檢查：解析出的位址落在內網就擋。
+  try { await assertPublicUrl(target); }
+  catch (error) { throw new VideoDownloadError(error instanceof Error ? error.message : String(error)); }
   const bin = opts.ytDlpBin?.trim() || "yt-dlp";
   const maxBytes = Math.max(1, Math.floor(opts.maxBytes ?? 200 * 1024 * 1024));
   const timeoutMs = Math.max(10_000, Math.floor(opts.timeoutMs ?? 240_000));

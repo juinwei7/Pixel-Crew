@@ -320,7 +320,7 @@ export function isInternalIp(ip: string): boolean {
   }
   return false;
 }
-async function assertPublicUrl(raw: string): Promise<void> {
+export async function assertPublicUrl(raw: string): Promise<void> {
   let u: URL;
   try { u = new URL(raw); } catch { throw new Error("不支援的網址"); }
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("只允許 http/https 網址");
