@@ -22,6 +22,16 @@ const SAFETY_CRITICAL_PATHS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /(^|[\\/])coldinstall([\\/]|$)/i, reason: "冷安裝／回滾產物" },
   { pattern: /pc-coldinstall/i, reason: "冷安裝腳本" },
   { pattern: /package-app\.mjs$/i, reason: "打包／冷安裝流程" },
+  // 閘門的「呼叫端」跟閘門本身一樣是剎車：改掉範圍判斷、開機晉升或重建腳本裡的 build/test
+  // 步驟，等於繞過上面所有規則，而這些改動的增刪行未必剛好含剎車關鍵字，所以整檔封鎖。
+  { pattern: /(^|[\\/])selfEvolveInstall\.ts$/i, reason: "自裝閘門與比對範圍判斷" },
+  { pattern: /(^|[\\/])selfEvolvePending\.ts$/i, reason: "開機晉升／回滾判斷" },
+  { pattern: /(^|[\\/])selfInstallLifecycle\.ts$/i, reason: "回滾點生命週期" },
+  { pattern: /(^|[\\/])selfInstallTrigger\.ts$/i, reason: "自裝觸發器（閘門接線）" },
+  { pattern: /pc-selfrebuild/i, reason: "自我重建腳本（build/test 全綠才出貨）" },
+  { pattern: /pc-selfinstall/i, reason: "自我安裝腳本（健康檢查＋自動回滾）" },
+  { pattern: /(^|[\\/])localAccess\.ts$/i, reason: "本機存取白名單（loopback 安全邊界）" },
+  { pattern: /(^|[\\/])_tsproxy\.mjs$/i, reason: "遠端存取轉接站（登入與分享權限）" },
 ];
 
 // 這些檔是進化引擎會合法演進的（例如循環邏輯、主程式），不整檔封鎖；但若 diff 觸及其中的
@@ -36,6 +46,7 @@ const SAFETY_RULE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\brollback\b|回滾/i, reason: "改動冷安裝回滾機制" },
   { pattern: /STOP only for what you genuinely cannot settle|money.{0,4}irreversible|不可逆/i, reason: "改動循環 STOP／花錢不可逆守則" },
   { pattern: /four[\s-]?件套|四件套|SWAPPED OK/i, reason: "改動冷安裝自驗四件套" },
+  { pattern: /SelfInstall|self-install|SELF_REPO/, reason: "改動自裝觸發器／開機晉升接線" },
 ];
 
 function norm(file: string): string {

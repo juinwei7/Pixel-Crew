@@ -58,6 +58,8 @@ const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: STOP_PROCESS_FORCE, reason: "強制終止行程（Stop-Process -Force）可能誤殺其他行程" },
   { test: TASKKILL_FORCE, reason: "強制終止行程（taskkill /F）可能誤殺其他行程" },
   { test: ENUMERATE_THEN_KILL, reason: "先列舉再批次終止行程，篩選條件不夠精確時可能誤殺其他行程（包含自己所依賴的行程）" },
+  // 本機 API 不驗身分（loopback 就放行），NPC 的 Bash 打得到；自裝的開關與觸發必須是 owner 親手做。
+  { test: /\/api\/self-install\b|self-install-(auto|pending|shipped|attempt)\.json|pc-self(rebuild|install)\.ps1/i, reason: "觸發或開關 app 自我安裝（只能由 owner 決定）" },
 ];
 
 export function isDangerousCommand(command: string): DangerousMatch {

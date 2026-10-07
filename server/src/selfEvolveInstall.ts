@@ -96,6 +96,18 @@ export function describeSelfChangeRangeBlock(result: SelfChangeRangeClassificati
   return `此自改動到保護機制，需 owner 拍板（不自動冷安裝）：${reasons}（commit：${commits}）`;
 }
 
+/**
+ * `git status --porcelain=v1` 的輸出不是空的＝工作目錄有未提交（含未追蹤）的改動，回給 owner 的
+ * 理由；乾淨回 null。重建腳本 build 的是整個工作目錄，閘門卻只看得到 commit，所以有髒檔就不能自裝。
+ */
+export function describeDirtyWorktree(porcelain: string): string | null {
+  // 每行是「XY 路徑」；只切行不整段 trim，否則第一行開頭的狀態空白會被吃掉、路徑切歪。
+  const paths = porcelain.split(/\r?\n/).filter((line) => line.length > 3).map((line) => line.slice(3).trim());
+  if (!paths.length) return null;
+  const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? "…" : "");
+  return `工作目錄有 ${paths.length} 個未提交的改動（${shown}）：重建會把它們一起裝上去，但閘門只檢查已提交的 commit。請先 commit 或還原再觸發`;
+}
+
 /** 上線前閘門：critical(動到剎車) → 回 owner；非 critical 但驗證沒全綠 → 擋下；全綠才放行自裝。 */
 export function evaluateSelfInstallGate(input: SelfInstallGateInput): SelfInstallGateResult {
   const classification = classifySelfChange(input.changedFiles, input.diffText);

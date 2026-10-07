@@ -594,6 +594,7 @@ const SHARE_FORBIDDEN = [
   ['POST',   /^\/api\/providers\/[^/]+\/install$/],           // 安裝 provider CLI
   ['POST',   /^\/api\/mcp\/import-from-claude-desktop$/],     // 拉 host 上的 MCP 設定
   ['GET',    /^\/api\/webshot$/],                             // 伺服器抓任意 URL（SSRF）→ 訪客一律不可直接觸發
+  ['POST',   /^\/api\/self-install(\/|$)/],                   // 自我重建＋安裝／開關全自動自裝＝改寫 host 上的 app
   // 轉接站自身管理：本體 /api/remote-access/* 會以 8787→8790 的 127.0.0.1 直連（isLocalDirect＝owner）
   // 呼叫 /__gate/api/*，等於讓分享訪客越權改主通行碼／開關 tunnel。整個子樹一律 owner 專屬。
   ['GET',    /^\/api\/remote-access(\/|$)/],

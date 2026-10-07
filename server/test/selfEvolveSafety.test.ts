@@ -13,6 +13,14 @@ test("動到保護機制檔案 → critical（不看內容）", () => {
     "coldinstall/pixel-crew/app.exe",
     "scripts/windows/pc-coldinstall.ps1",
     "scripts/windows/package-app.mjs",
+    "server/src/selfEvolveInstall.ts",
+    "server/src/selfEvolvePending.ts",
+    "server/src/selfInstallLifecycle.ts",
+    "server/src/selfInstallTrigger.ts",
+    "scripts/windows/pc-selfrebuild.ps1",
+    "scripts/windows/pc-selfinstall.ps1",
+    "server/src/localAccess.ts",
+    "_tsproxy.mjs",
   ]) {
     const r = classifySelfChange([f]);
     assert.equal(r.critical, true, `應 critical：${f}`);
@@ -55,6 +63,12 @@ test("unified diff 只看改動行：上下文行剛好含剎車字眼不誤判�
   // 檔名標頭含關鍵字（例如 rollback.ts）不算內容改動，但改到真的程式行照攔
   const fileHeader = "diff --git a/x/rollback.ts b/x/rollback.ts\n--- a/x/rollback.ts\n+++ b/x/rollback.ts\n@@ -1 +1 @@\n-const n = 1;\n+const n = 2;\n";
   assert.equal(classifySelfChange(["x/rollback.ts"], fileHeader).critical, false);
+});
+
+test("index.ts 裡改到自裝觸發／開機晉升的接線 → critical", () => {
+  assert.equal(classifySelfChange(["server/src/index.ts"], "-  void resolvePendingSelfInstallOnBoot();").critical, true);
+  assert.equal(classifySelfChange(["server/src/index.ts"], '+app.post("/api/self-install/auto", () => {})').critical, true);
+  assert.equal(classifySelfChange(["server/src/index.ts"], "+  const head = readRepoHead(SELF_REPO);").critical, true);
 });
 
 test("偷放寬唯讀查詢邊界／核准分類 → critical", () => {

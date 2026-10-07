@@ -6,7 +6,9 @@
 # ASCII-only comments on purpose: Windows PowerShell 5.1 misparses UTF-8-no-BOM scripts with CJK text.
 param(
   [Parameter(Mandatory = $true)][string]$Repo,
-  [string]$Reason = "self-evolve"
+  [string]$Reason = "self-evolve",
+  # HEAD the server-side gate reviewed. Empty only when launched by an older server.
+  [string]$ExpectedHead = ""
 )
 $ErrorActionPreference = 'Continue'
 $root         = Join-Path $env:LOCALAPPDATA 'Pixel Crew'
@@ -23,6 +25,19 @@ function Log($m){ Add-Content -LiteralPath $log -Value ("{0} {1}" -f (Get-Date -
 Log "=== self-rebuild start (repo=$Repo reason=$Reason) ==="
 if (-not (Test-Path -LiteralPath $Repo)) { Log "FATAL: repo not found"; return }
 if (-not (Test-Path -LiteralPath $rollbackExe)) { Log "FATAL: no rollback point; refuse to rebuild"; return }
+
+# The gate only reviewed committed changes up to ExpectedHead, but the build below compiles the whole
+# working tree. A newer HEAD, or uncommitted/untracked files (e.g. another agent's half-done edit),
+# would ship code nobody checked -- so refuse unless the tree is exactly what the gate saw.
+function Test-HeadUnchanged {
+  if (-not $ExpectedHead) { return $true }
+  $head = ((& git -C $Repo rev-parse HEAD 2>$null) | Out-String).Trim()
+  if ($head -ne $ExpectedHead) { Log "FATAL: HEAD is '$head', gate reviewed '$ExpectedHead' -- abort, nothing installed"; return $false }
+  return $true
+}
+if (-not (Test-HeadUnchanged)) { return }
+$dirty = ((& git -C $Repo status --porcelain 2>$null) | Out-String).Trim()
+if ($dirty) { Log "FATAL: working tree has uncommitted changes -- abort, nothing installed"; return }
 
 # Ship nothing unless every step exits 0.
 function Run($label, $exe, $argList) {
@@ -41,6 +56,9 @@ try {
 } finally {
   Pop-Location
 }
+
+# A commit landing mid-build means the exe may mix reviewed and unreviewed code.
+if (-not (Test-HeadUnchanged)) { return }
 
 $newExe = Join-Path $Repo 'release\windows\x64\Pixel Crew.exe'
 if (-not (Test-Path -LiteralPath $newExe)) { Log "FATAL: built exe missing: $newExe"; return }
