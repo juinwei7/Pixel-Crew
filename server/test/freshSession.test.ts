@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import type { ApprovalDecision } from "../src/claudeRunner.js";
 import { replaceWithFreshSession, switchAccountWithReset } from "../src/freshSession.js";
 import type { AgentSession } from "../src/providers/session.js";
@@ -113,4 +115,15 @@ test("account switch with reset restores the previous account when the reset fai
   const result = switchAccountWithReset(worker, null, () => ({ ok: false, error: "busy" }));
   assert.deepEqual(result, { ok: false, error: "busy" });
   assert.equal(worker.accountId, "old");
+});
+
+test("account route: a warm runner without history is respawned under the new account", () => {
+  // 沒有對話紀錄時不清除，但暖機好的 CLI 是用舊帳號的 home 生的；不重生的話第一回合會跑在舊帳號上。
+  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  const start = indexSource.indexOf('app.patch("/api/workers/:id/account"');
+  assert.ok(start >= 0);
+  const route = indexSource.slice(start, indexSource.indexOf("\n});", start));
+  assert.match(route, /switchAccountWithReset\(worker, accountId, \(\) => cleanWorkerAndAnnounce\(worker\)\)/);
+  assert.match(route, /if \(!respawned && previousAccountId !== accountId\) \{\n\s+worker\.runner\.stop\(\);\n\s+if \(workerProviderReady\(worker\)\) worker\.runner\.warmup\(\);/);
+  assert.ok(route.indexOf("worker.accountId = accountId;") < route.indexOf("worker.runner.stop();"), "先換帳號再重生");
 });

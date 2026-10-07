@@ -3754,6 +3754,8 @@ app.patch("/api/workers/:id/account", (req, res) => {
   // that silently — but when the owner passes force:true they've already
   // confirmed the reset in the UI, so we fold the clear INTO the switch (one
   // click) instead of making them clear the session as a separate step first.
+  const previousAccountId = worker.accountId;
+  let respawned = false;
   if (worker.runner.getPersistenceState().completedTurns > 0) {
     if (req.body?.force !== true) {
       res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
@@ -3762,8 +3764,14 @@ app.patch("/api/workers/:id/account", (req, res) => {
     // 先換帳號再清：清除會當場暖機新 runner，得讓它生在新帳號的 home（見 switchAccountWithReset）。
     const cleared = switchAccountWithReset(worker, accountId, () => cleanWorkerAndAnnounce(worker));
     if (!cleared.ok) { persistWorker(worker); res.status(409).json({ error: cleared.error }); return; }
+    respawned = true;
   }
   worker.accountId = accountId;
+  // 沒有對話紀錄就不必清除，但已暖機的 CLI 仍是用舊帳號的 home 生出來的：重生一次，第一回合才會跑在新帳號上。
+  if (!respawned && previousAccountId !== accountId) {
+    worker.runner.stop();
+    if (workerProviderReady(worker)) worker.runner.warmup();
+  }
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
