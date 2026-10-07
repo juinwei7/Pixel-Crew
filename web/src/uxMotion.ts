@@ -51,3 +51,9 @@ export const HOLD_CONFIRM_MS = 650;
 export function holdOutcome(heldMs: number, holdMs = HOLD_CONFIRM_MS): "confirm" | "too-short" {
   return heldMs >= holdMs ? "confirm" : "too-short";
 }
+/** 按住確認的鍵盤手勢：Enter／空白鍵第一次按下才開始計時；按住不放時的自動重複 keydown 一律吞掉
+ *  （不擋預設動作的話，瀏覽器每次重複都會對按鈕觸發 click，過了 onClick 的門檻就提早確認）。 */
+export function holdKeyAction(key: string, repeat: boolean): "start" | "swallow" | "ignore" {
+  if (key !== "Enter" && key !== " ") return "ignore";
+  return repeat ? "swallow" : "start";
+}
