@@ -170,7 +170,7 @@ import {
   parseAssignmentDecision,
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
-import { replaceWithFreshSession } from "./freshSession.js";
+import { replaceWithFreshSession, switchAccountWithReset } from "./freshSession.js";
 import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
@@ -3725,8 +3725,9 @@ app.patch("/api/workers/:id/account", (req, res) => {
       res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
       return;
     }
-    const cleared = cleanWorkerAndAnnounce(worker);
-    if (!cleared.ok) { res.status(409).json({ error: cleared.error }); return; }
+    // 先換帳號再清：清除會當場暖機新 runner，得讓它生在新帳號的 home（見 switchAccountWithReset）。
+    const cleared = switchAccountWithReset(worker, accountId, () => cleanWorkerAndAnnounce(worker));
+    if (!cleared.ok) { persistWorker(worker); res.status(409).json({ error: cleared.error }); return; }
   }
   worker.accountId = accountId;
   persistWorker(worker);

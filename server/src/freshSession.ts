@@ -30,3 +30,21 @@ export function replaceWithFreshSession(
   persistCheckpoint(previous);
   return null;
 }
+
+/**
+ * 換帳號同時重置對話（帳號切換的 force 路徑）。順序是重點：先把 accountId 換成新帳號再重置——
+ * 重置會當場暖機新的 runner，若還掛著舊帳號，新 CLI 就生在舊帳號的 CLAUDE_CONFIG_DIR／CODEX_HOME
+ * 裡（用量卻記到新帳號頭上，下次重生時 --resume 在新帳號 home 找不到對話、整段上下文消失）。
+ * 重置失敗就把帳號還原，比照 /provider/fresh 的先換後回滾。
+ */
+export function switchAccountWithReset<T extends { accountId: string | null }>(
+  worker: T,
+  accountId: string | null,
+  reset: () => { ok: true } | { ok: false; error: string },
+): { ok: true } | { ok: false; error: string } {
+  const previous = worker.accountId;
+  worker.accountId = accountId;
+  const result = reset();
+  if (!result.ok) worker.accountId = previous;
+  return result;
+}

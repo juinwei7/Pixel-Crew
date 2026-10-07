@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ApprovalDecision } from "../src/claudeRunner.js";
-import { replaceWithFreshSession } from "../src/freshSession.js";
+import { replaceWithFreshSession, switchAccountWithReset } from "../src/freshSession.js";
 import type { AgentSession } from "../src/providers/session.js";
 
 class FakeSession implements AgentSession {
@@ -93,4 +93,24 @@ test("fresh model switch restores the previous runner when persistence fails", (
   assert.equal(previous.getModel(), "sonnet");
   assert.equal(fresh.stopped, true);
   assert.equal(persistCalls, 2);
+});
+
+test("account switch with reset applies the new account before the fresh runner warms up", () => {
+  const worker = { accountId: "old" as string | null };
+  let accountAtReset: string | null = null;
+  const result = switchAccountWithReset(worker, "new", () => {
+    // 重置當場會暖機新 runner，它讀到的帳號決定 CLI 生在哪個 home。
+    accountAtReset = worker.accountId;
+    return { ok: true };
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(accountAtReset, "new");
+  assert.equal(worker.accountId, "new");
+});
+
+test("account switch with reset restores the previous account when the reset fails", () => {
+  const worker = { accountId: "old" as string | null };
+  const result = switchAccountWithReset(worker, null, () => ({ ok: false, error: "busy" }));
+  assert.deepEqual(result, { ok: false, error: "busy" });
+  assert.equal(worker.accountId, "old");
 });
