@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import test from "node:test";
 import { assertSafeLocalPath, pathEscapesWorkspace } from "../src/safeLocalPath.js";
 
@@ -69,4 +69,27 @@ test("pathEscapesWorkspace allows targets inside the workspace, including outbox
   assert.equal(pathEscapesWorkspace(ws, "outbox/final.pdf"), false); // workspace 相對路徑
   assert.equal(pathEscapesWorkspace(ws, "nested/deep/file.txt"), false);
   assert.equal(pathEscapesWorkspace(ws, ws), false); // workspace 根本身
+});
+
+// Windows 上跨磁碟／UNC／\\?\ 目標跟 workspace 沒有共同根：relative() 回傳的是絕對路徑而不是 ..\ 開頭，
+// 舊判定會把它們當成「在 workspace 內」放行。用 path.win32 在任何平台上鎖住這個語意。
+test("pathEscapesWorkspace flags Windows other-drive, UNC and \\\\?\\ targets", () => {
+  const ws = "C:\\work\\ws";
+  for (const target of ["D:\\secret.txt", "\\\\server\\share\\secret.txt", "\\\\?\\C:\\work\\secret.txt", "\\\\.\\C:\\work\\secret.txt", "..\\secret.txt"]) {
+    assert.equal(pathEscapesWorkspace(ws, target, win32), true, target);
+  }
+  for (const target of ["C:\\work\\ws\\outbox\\report.md", "outbox\\report.md", "c:\\WORK\\ws\\a.txt"]) {
+    assert.equal(pathEscapesWorkspace(ws, target, win32), false, target);
+  }
+});
+
+test("assertSafeLocalPath rejects other-drive and UNC targets on Windows", { skip: process.platform !== "win32" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixel-crew-safepath-"));
+  try {
+    const otherDrive = dir.toUpperCase().startsWith("Z:") ? "Y:\\secret.txt" : "Z:\\secret.txt";
+    await assert.rejects(assertSafeLocalPath(dir, otherDrive), /超出工作資料夾/);
+    await assert.rejects(assertSafeLocalPath(dir, "\\\\server\\share\\secret.txt"), /超出工作資料夾/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

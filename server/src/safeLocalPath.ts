@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import path, { isAbsolute, relative, resolve, sep } from "node:path";
 import { t } from "./i18n.js";
 
 /**
@@ -11,7 +11,9 @@ export async function assertSafeLocalPath(workspacePath: string, targetPath: str
   const workspace = resolve(workspacePath);
   const target = resolve(targetPath);
   const relativeTarget = relative(workspace, target);
-  if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`)) {
+  // Windows 上跨磁碟（D:\）、UNC（\\server\share）與 \\?\ 路徑跟 workspace 沒有共同根，
+  // relative() 直接回傳目標的絕對路徑、不是 ..\ 開頭——那同樣是逃逸。
+  if (relativeTarget === ".." || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) {
     throw new Error(t("目標路徑超出工作資料夾"));
   }
 
@@ -37,9 +39,10 @@ export async function assertSafeLocalPath(workspacePath: string, targetPath: str
  * its `null` dispatch). Path-normalization only — pairs with channel F's
  * symlink read-fence rather than replacing the full lstat walk.
  */
-export function pathEscapesWorkspace(workspacePath: string, targetPath: string): boolean {
-  const workspace = resolve(workspacePath);
-  const target = resolve(workspace, targetPath);
-  const rel = relative(workspace, target);
-  return rel === ".." || rel.startsWith(`..${sep}`);
+export function pathEscapesWorkspace(workspacePath: string, targetPath: string, pathApi: path.PlatformPath = path): boolean {
+  const workspace = pathApi.resolve(workspacePath);
+  const target = pathApi.resolve(workspace, targetPath);
+  const rel = pathApi.relative(workspace, target);
+  // 同 assertSafeLocalPath：Windows 跨磁碟／UNC／\\?\ 目標的 relative() 是絕對路徑。
+  return rel === ".." || rel.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(rel);
 }

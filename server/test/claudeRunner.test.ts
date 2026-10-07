@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, handleLine, type RunnerEvent } from "../src/claudeRunner.js";
+import { config } from "../src/config.js";
 
 test("approval MCP bridge starts outside the Pixel Crew working directory", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pixel-crew-approval-cwd-"));
@@ -352,4 +353,138 @@ test("subagent-internal messages (parent_tool_use_id) are not surfaced as the pa
   assert.deepEqual(events.map((event) => event.type), ["tool_call_start"]);
   handleLine({ type: "system", subtype: "task_notification", tool_use_id: "toolu_parent" }, (event) => events.push(event));
   assert.deepEqual(events.at(-1), { type: "subagent_done", id: "toolu_parent" });
+});
+
+// 假的 claude CLI：照實錄（CLI 2.1.285）重現 resume 遺失對話的輸出順序——stderr 一行文字、
+// stdout 一行 is_error 的 result、稍後才非零退出。resume dead-id 一啟動就吐這個；resume alive-id
+// 第一則成功、第二則才吐（模擬 resume 成功後晚一點的無關失敗）；其餘每收到一則訊息回一個成功 result。
+function fakeClaudeHarness() {
+  const root = mkdtempSync(join(tmpdir(), "pixel-crew-fake-claude-"));
+  const script = join(root, "fake-claude.mjs");
+  const argvLog = join(root, "argv.log");
+  writeFileSync(script, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
+const resumeAt = args.indexOf("--resume");
+const missing = (id) => {
+  process.stderr.write("No conversation found with session ID: " + id + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: id, errors: ["No conversation found with session ID: " + id] }) + "\\n");
+  setTimeout(() => process.exit(1), 50);
+};
+const ok = () => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "fresh ok" }) + "\\n");
+const resumed = resumeAt >= 0 ? args[resumeAt + 1] : null;
+if (resumed === "dead-id") missing(resumed);
+else {
+  let lines = 0;
+  createInterface({ input: process.stdin }).on("line", () => {
+    lines++;
+    if (resumed === "alive-id" && lines > 1) missing(resumed); else ok();
+  });
+}
+`);
+  let bin: string;
+  if (process.platform === "win32") {
+    bin = join(root, "fake-claude.cmd");
+    writeFileSync(bin, `@"${process.execPath}" "${script}" %*\r\n`);
+  } else {
+    bin = join(root, "fake-claude");
+    writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  const saved = { claudeBin: config.claudeBin, dbPath: config.dbPath };
+  config.claudeBin = bin;
+  config.dbPath = join(root, "cockpit.sqlite"); // 核准橋設定檔與附件暫存都落在這個暫存資料夾
+  return {
+    root,
+    invocations: (): string[][] => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)),
+    restore() {
+      config.claudeBin = saved.claudeBin;
+      config.dbPath = saved.dbPath;
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function nextTurnEnd(events: RunnerEvent[], count: number, timeoutMs = 10_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = setInterval(() => {
+      if (events.filter((event) => event.type === "turn_end" || event.type === "error").length >= count) {
+        clearInterval(poll);
+        resolve();
+      } else if (Date.now() - started > timeoutMs) {
+        clearInterval(poll);
+        reject(new Error(`timed out waiting for turn ${count}: ${JSON.stringify(events)}`));
+      }
+    }, 20);
+  });
+}
+
+test("a resume whose conversation is gone silently restarts as a fresh session and re-sends the message", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => [], () => "", () => "off", { sessionId: "dead-id", completedTurns: 3 });
+  try {
+    session.send("繼續剛才的工作");
+    await nextTurnEnd(events, 1);
+    const ends = events.filter((event) => event.type === "turn_end" || event.type === "error");
+    assert.deepEqual(ends.map((event) => event.type === "turn_end" && !event.isError && event.resultText), ["fresh ok"]);
+    const [first, second] = harness.invocations();
+    assert.equal(first[first.indexOf("--resume") + 1], "dead-id");
+    assert.equal(second.includes("--resume"), false);
+    const state = session.getPersistenceState();
+    assert.notEqual(state.sessionId, "dead-id");
+    assert.equal(second[second.indexOf("--session-id") + 1], state.sessionId);
+    assert.equal(state.completedTurns, 1);
+    assert.equal(session.busy, false);
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+test("a later failure after a successful resume is reported, not turned into a fresh session that drops the conversation", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => [], () => "", () => "off", { sessionId: "alive-id", completedTurns: 3 });
+  try {
+    session.send("第一則");
+    await nextTurnEnd(events, 1);
+    session.send("第二則");
+    await nextTurnEnd(events, 2);
+    const ends = events.filter((event) => event.type === "turn_end" || event.type === "error");
+    assert.equal(ends.length, 2);
+    assert.equal(ends[1].type === "turn_end" && ends[1].isError, true);
+    assert.equal(harness.invocations().length, 1); // 沒有偷偷開新對話重跑
+    assert.equal(session.getPersistenceState().sessionId, "alive-id");
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+// 列進 --allowedTools 的工具 CLI 直接執行、不問核准橋（實測 CLI 2.1.285：workspace 外的 Read 與
+// WebFetch 平常會問，列進去就不問）。一般檔位只能預先放行 MCP 規則，唯讀內建工具要留給核准橋。
+test("normal turns leave Read/WebFetch to the approval bridge; only read-only query turns pre-approve them", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => ["mcp__github__*"]);
+  const allowedTools = (args: string[]) => args[args.indexOf("--allowedTools") + 1].split(",");
+  try {
+    session.send("一般回合");
+    await nextTurnEnd(events, 1);
+    session.send("唯讀查詢", [], [], { executionProfile: "read_only_query" });
+    await nextTurnEnd(events, 2);
+    const [normal, query, ...rest] = harness.invocations();
+    assert.equal(rest.length, 0);
+    assert.deepEqual(allowedTools(normal), ["mcp__github__*", "mcp__pixel_crew_approval__approval_prompt"]);
+    for (const tool of ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]) {
+      assert.equal(allowedTools(query).includes(tool), true, tool);
+    }
+    assert.equal(query[query.indexOf("--permission-mode") + 1], "plan");
+  } finally {
+    session.stop();
+    harness.restore();
+  }
 });

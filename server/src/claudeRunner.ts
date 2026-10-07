@@ -450,12 +450,12 @@ export class ClaudeSession implements AgentSession {
       const allowed = [
         ...(this.executionProfile === "read_only_query"
           ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
-          // 一般檔位也把唯讀內建工具（Read/Glob/Grep/WebSearch/WebFetch）放進 --allowedTools：
-          // 在 allowedTools 內的工具，CLI 會直接執行、完全不呼叫核准橋，省掉每個唯讀工具呼叫的
-          // MCP stdio + localhost HTTP 往返與兩個 approval 事件（就是任務日誌一直冒「等待核准→
-          // 核准已允許」的來源）。這些工具本就是唯讀（toolPolicy），放行無副作用；寫檔／Bash
-          // 等仍走核准橋，照舊受 autoApproveMode 管控。
-          : [...readOnlyBuiltinToolNames(), ...this.getAllowedTools()]),
+          // 一般檔位刻意不把唯讀內建工具（Read/Glob/Grep/WebSearch/WebFetch）放進 --allowedTools：
+          // 列在這裡的工具 CLI 直接執行、完全不呼叫核准橋。實測（CLI 2.1.285）workspace 內的讀取
+          // 本來就不會問核准；會問的只有讀 workspace 外（~/.ssh…）與 WebFetch/WebSearch——預先放行
+          // 等於讓被 prompt injection 的回合不經任何卡片就讀機密再送出去。交給核准橋才會照
+          // autoApproveMode 即時判定（off 跳卡；safe/full 自動放行並留紀錄）。
+          : this.getAllowedTools()),
         "mcp__pixel_crew_approval__approval_prompt",
       ];
       if (allowed.length > 0) args.push("--allowedTools", allowed.join(","));
@@ -510,6 +510,14 @@ export class ClaudeSession implements AgentSession {
         }
       }
       if (parsed.type === "result") {
+        // 實測（CLI 2.1.285）：resume 不存在的對話時，CLI 先在 stdout 吐一行 is_error 的 result
+        //（errors 帶 "No conversation found"），約一秒後才非零退出。這行不是真的跑完一回合——若照常
+        // 累加回合數、清 busy，close 時 fail() 的自動重跑閘門永遠不成立，下次還會 resume 同一個死 id。
+        // 所以在同一個閘門內（這次 spawn 還沒跑完任何回合）直接略過，交給 close 的 fail() 改開新對話重跑。
+        if (this.resumedThisSpawn && this.completedTurns === turnsAtSpawn && isMissingConversationResult(parsed)) {
+          sawMissingConversation = true;
+          return;
+        }
         this.completedTurns++;
         this.busy = false;
         this.cleanupInputDocuments();
@@ -635,6 +643,12 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
     });
   }
   return content;
+}
+
+function isMissingConversationResult(parsed: any): boolean {
+  if (!parsed?.is_error) return false;
+  const errors: unknown[] = Array.isArray(parsed.errors) ? parsed.errors : [];
+  return [...errors, parsed.result].some((value) => typeof value === "string" && value.includes("No conversation found"));
 }
 
 function isSubagentMessage(parsed: any): boolean {

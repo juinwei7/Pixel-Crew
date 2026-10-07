@@ -225,3 +225,12 @@ test("composeMemorySection omits the Playbook section when there are no lessons"
   const section = composeMemorySection("w-no-lessons");
   assert.doesNotMatch(section, /【做事心法/);
 });
+
+test("the silent memory curl instruction auto-approves in full mode (cleanup must not trip the rm -f rule)", async () => {
+  const { evaluateAutoApproval } = await import("../src/dangerousCommand.js");
+  const step = composeMemorySection("w-full-mode").split("\n").find((line) => line.startsWith("② "));
+  assert.ok(step);
+  const command = step.slice(2);
+  assert.match(command, /pc-memory-w-full-mode\.json$/);
+  assert.equal(evaluateAutoApproval("full", "Bash", command).allowed, true);
+});

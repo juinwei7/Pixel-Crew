@@ -36,7 +36,8 @@ const TASKKILL_FORCE = /\btaskkill\b[^|&;\n]*\/F\b/i;
 const ENUMERATE_THEN_KILL = /\b(Get-CimInstance|Get-WmiObject|Get-Process)\b[\s\S]*?\bStop-Process\b/i;
 // Windows 的 rm -rf 對等指令：清單有 Unix 的 rm/mkfs 卻漏了這些，等於主平台（Windows）防線失效。
 // format 要求後面直接接磁碟代號，避免誤中常見的 --format 旗標（lookbehind 擋掉 `-format`）。
-const REMOVE_ITEM_DESTRUCTIVE = /\bRemove-Item\b[^|&;\n]*(-Recurse\b|-Force\b)/i;
+// PowerShell 參數可縮寫（-r、-fo 就是 -Recurse、-Force），del/rd/ri 等也是 Remove-Item 的別名。
+const REMOVE_ITEM_DESTRUCTIVE = /\b(Remove-Item|ri|del|erase|rd|rmdir)\b[^|&;\n]*\s-(r\w*|fo\w*)\b/i;
 const RD_RECURSIVE = /\b(rd|rmdir)\b[^|&;\n]*\/s\b/i;
 const DEL_FORCED = /\b(del|erase)\b[^|&;\n]*\/(f|s|q)\b/i;
 const FORMAT_DRIVE = /(?<!-)\bformat(\.com)?\s+[a-z]:(\s|$)/i;
@@ -58,6 +59,10 @@ const PATTERNS: Array<{ test: RegExp; reason: string }> = [
   { test: STOP_PROCESS_FORCE, reason: "強制終止行程（Stop-Process -Force）可能誤殺其他行程" },
   { test: TASKKILL_FORCE, reason: "強制終止行程（taskkill /F）可能誤殺其他行程" },
   { test: ENUMERATE_THEN_KILL, reason: "先列舉再批次終止行程，篩選條件不夠精確時可能誤殺其他行程（包含自己所依賴的行程）" },
+  { test: REMOVE_ITEM_DESTRUCTIVE, reason: "遞迴或強制刪除（Remove-Item -Recurse / -Force）" },
+  { test: RD_RECURSIVE, reason: "遞迴刪除整個目錄（rd /s）" },
+  { test: DEL_FORCED, reason: "強制或批次刪除檔案（del /f /s /q）" },
+  { test: FORMAT_DRIVE, reason: "格式化磁碟（format）" },
   // 本機 API 不驗身分（loopback 就放行），NPC 的 Bash 打得到；自裝的開關與觸發必須是 owner 親手做。
   { test: /\/api\/self-install\b|self-install-(auto|pending|shipped|attempt)\.json|pc-self(rebuild|install)\.ps1/i, reason: "觸發或開關 app 自我安裝（只能由 owner 決定）" },
 ];
@@ -78,14 +83,49 @@ const SHELL_META = /[\r\n;&|<>`]|\$[({]/;
 const SAFE_BASH_COMMANDS = [
   /^(pwd|ls|cat|head|tail|wc|echo|printf)(?:\s|$)/,
   /^(rg|grep)(?:\s|$)/,
-  // 刻意不放行 sed：即使 `sed -n` 也能透過 w/W 指令與 s///w 旗標寫檔、用 e 指令執行外部命令
-  // （例：`echo x | sed -n "w /path"`），無法用前綴白名單安全判定，改回退到手動核准。
+  // 刻意不用前綴放行 sed：即使 `sed -n` 也能透過 w/W 指令與 s///w 旗標寫檔、用 e 指令執行外部命令
+  // （例：`echo x | sed -n "w /path"`）。只收 Codex 讀檔慣用的「純印行號範圍」整句形式
+  // `sed -n '1,200p' <檔案…>`：腳本只能是行號範圍＋p，檔案參數不可是選項（擋 -i 就地改寫）也不可含萬用字元
+  //（`*` 可能展開成名為 -i 的檔案）。
+  /^sed\s+-n\s+(?:'(?:\d+(?:,(?:\d+|\$))?|\$)p'|"\d+(?:,\d+)?p"|\d+(?:,\d+)?p)(?:\s+(?:'(?!-)[^'*?[]*'|"(?!-)[^"\\$`*?[]*"|(?!-)[^\s'"\\$`*?[]+))*$/,
   /^git\s+(status|diff|log|show)(?:\s|$)/,
   /^(npm|pnpm)\s+test(?:\s|$)/,
   /^(npm|pnpm)\s+run\s+(test|build|check|lint|typecheck)(?:\s|$)/,
   /^yarn\s+(test|build|check|lint|typecheck)(?:\s|$)/,
   /^(tsc|eslint)(?:\s|$)/,
 ];
+// 白名單只認前綴，但同一個「唯讀」指令配上某些旗標就能寫任意路徑或執行任意程式（實測：
+// `git diff --output=<外部路徑>` 會截斷外部檔、`rg --pre <程式>` 會逐檔執行該程式）。
+// 比對前先剝掉引號與反斜線——shell 裡 "--output=x"、--out""put=x、\--output 都等同 --output=x。
+const SAFE_COMMAND_WRITE_OR_EXEC_FLAGS = [
+  /^git\s(?:.*\s)?--output(?:=|\s|$)/,
+  /^rg\s(?:.*\s)?--(?:pre|hostname-bin)(?:=|\s|$)/,
+  /^eslint\s(?:.*\s)?(?:--fix|--output-file|-o|--cache(?:-location|-file)?|-c|--config|--rulesdir|--plugin|--resolve-plugins-relative-to|--init|--inspect-config|--mcp)(?:=|\s|$)/,
+  // tsc 的選項名稱不分大小寫（--OUTDIR 一樣有效）。
+  /^tsc\s(?:.*\s)?(?:--outDir|--outFile|--out|--declarationDir|--tsBuildInfoFile|--generateTrace|--generateCpuProfile|-b|--build|--init|-w|--watch)(?:=|\s|$)/i,
+  /^(?:npm|pnpm|yarn)\s(?:.*\s)?(?:--script-shell|--node-options|--prefix|-C|--dir|--cwd|--userconfig|--globalconfig)(?:=|\s|$)/,
+];
+// zsh（macOS 預設 shell，Claude 的 Bash 工具也跑在它上面）不需任何 SHELL_META 就能執行指令：
+// glob qualifier `ls *(e:'cmd':)`、process substitution `cat =(cmd)`；brace expansion
+// `--out{put,}` 還能拼出上面擋掉的旗標。引號外出現 ( ) { } 就不算白名單安全指令。
+const UNQUOTED_EXPANSION = /[(){}]/;
+
+function isAllowlistedCommand(part: string): boolean {
+  if (!SAFE_BASH_COMMANDS.some((pattern) => pattern.test(part))) return false;
+  if (UNQUOTED_EXPANSION.test(part.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, ""))) return false;
+  const unquoted = part.replace(/["'\\]/g, "");
+  return !SAFE_COMMAND_WRITE_OR_EXEC_FLAGS.some((pattern) => pattern.test(unquoted));
+}
+
+// Codex 回報的指令一律包成一層 `/bin/zsh -lc <cmd>`（實測 codex-cli 0.160：內層含單引號時改用
+// 雙引號、單字時不加引號），前綴白名單永遠對不上。只拆「一層」且引號內不可能有跳脫或展開的形式；
+// 拆不乾淨就回 null、照舊走一般判定（不會因此放行）。
+const SHELL_WRAPPER = /^(?:\/usr\/local\/bin\/|\/opt\/homebrew\/bin\/|\/usr\/bin\/|\/bin\/)?(?:ba|z)?sh\s+-l?c\s+(?:'([^']*)'|"([^"\\$`]*)"|([^\s'"\\$`;&|<>(){}*?[\]~]+))$/;
+
+function unwrapShellCommand(command: string): string | null {
+  const match = SHELL_WRAPPER.exec(command);
+  return match ? (match[1] ?? match[2] ?? match[3]).trim() : null;
+}
 
 // 串接指令逐段放行：每一段都在唯讀白名單內才整條自動核准。
 // 只容忍「丟棄輸出」類重導向（2>&1、2>/dev/null）；任何寫檔重導向、指令替換
@@ -98,7 +138,7 @@ function isSafeCompoundCommand(normalized: string): boolean {
   const segments = stripped.split(/\r?\n|&&|\|\||;|\|/);
   if (segments.some((segment) => segment.includes("&"))) return false;
   const parts = segments.map((segment) => segment.trim()).filter(Boolean);
-  return parts.length > 0 && parts.every((part) => SAFE_BASH_COMMANDS.some((pattern) => pattern.test(part)));
+  return parts.length > 0 && parts.every(isAllowlistedCommand);
 }
 
 export function autoApprovalPolicy(toolName: string, command?: string): AutoApprovalMatch {
@@ -110,11 +150,17 @@ export function autoApprovalPolicy(toolName: string, command?: string): AutoAppr
   if (!normalized) return { allowed: false, reason: t("無法辨識指令內容") };
   const danger = isDangerousCommand(normalized);
   if (danger.dangerous) return { allowed: false, reason: danger.reason };
+  const inner = unwrapShellCommand(normalized);
+  if (inner !== null) {
+    // 外殼裡只收單一簡單指令：內層的串接／重導向一律不放行，不套用逐段放寬。
+    if (!SHELL_META.test(inner) && isAllowlistedCommand(inner)) return { allowed: true };
+    return { allowed: false, reason: t("指令不在唯讀／驗證安全清單") };
+  }
   if (SHELL_META.test(normalized)) {
     if (isSafeCompoundCommand(normalized)) return { allowed: true };
     return { allowed: false, reason: t("串接中含寫入型重導向、替換語法或不在唯讀清單的片段") };
   }
-  if (SAFE_BASH_COMMANDS.some((pattern) => pattern.test(normalized))) return { allowed: true };
+  if (isAllowlistedCommand(normalized)) return { allowed: true };
   return { allowed: false, reason: t("指令不在唯讀／驗證安全清單") };
 }
 

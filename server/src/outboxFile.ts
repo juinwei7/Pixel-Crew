@@ -1,5 +1,6 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { pathEscapesWorkspace } from "./safeLocalPath.js";
 
 const MAX_OUTBOX_FILE_BYTES = 100 * 1024 * 1024;
 
@@ -9,6 +10,8 @@ const MAX_OUTBOX_FILE_BYTES = 100 * 1024 * 1024;
  *  - 檔名只允許純檔名（擋路徑穿越 `/` `\` `..`）→ 400
  *  - lstat（不跟隨連結）+ 顯式擋符號連結：NPC 能在 outbox/ 內建立指向 workspace 外機密檔的
  *    symlink，statSync 會跟隨並把外部檔案送出。擋在讀取前，回 404 不洩漏連結是否存在 → 404
+ *  - lstat 只看最後一段：outbox/ 目錄本身是指向外部的 symlink 時照樣會跟過去。所以再用 realpath
+ *    確認實際位置仍在 workspace 內（outbox 連到 workspace 內別處仍可）→ 否則 404
  *  - 非一般檔（目錄等）→ 404；過大 → 413
  * 呼叫端（index.ts 路由）負責把狀態碼對應成訊息與內容型別、附件處置。
  */
@@ -22,6 +25,9 @@ export function resolveOutboxFile(workspacePath: string, name: string): OutboxFi
   let st: ReturnType<typeof lstatSync>;
   try { st = lstatSync(full); } catch { return { ok: false, status: 404 }; }
   if (st.isSymbolicLink() || !st.isFile()) return { ok: false, status: 404 };
+  try {
+    if (pathEscapesWorkspace(realpathSync(workspacePath), realpathSync(full))) return { ok: false, status: 404 };
+  } catch { return { ok: false, status: 404 }; }
   if (st.size > MAX_OUTBOX_FILE_BYTES) return { ok: false, status: 413 };
   return { ok: true, fullPath: full, size: st.size };
 }

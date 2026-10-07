@@ -76,3 +76,31 @@ test("returns 404 for a symlink in outbox/ pointing at a secret outside the work
     rmSync(outside, { recursive: true, force: true });
   }
 });
+
+// lstat 只看最後一段：outbox/ 目錄本身換成指向 workspace 外的 symlink（Windows 用 junction）時，
+// 裡面的「一般檔」其實是外部檔案，必須用 realpath 確認實際位置。
+test("returns 404 when outbox/ itself is a symlink to a directory outside the workspace", () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-outbox-"));
+  const outside = mkdtempSync(join(tmpdir(), "pixel-crew-outbox-outside-"));
+  try {
+    writeFileSync(join(outside, "secret.txt"), "TOP SECRET");
+    symlinkSync(outside, join(ws, "outbox"), process.platform === "win32" ? "junction" : "dir");
+    assert.deepEqual(resolveOutboxFile(ws, "secret.txt"), { ok: false, status: 404 });
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("still serves files when outbox/ links to another directory inside the workspace", () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-outbox-"));
+  try {
+    mkdirSync(join(ws, "dist"));
+    writeFileSync(join(ws, "dist", "report.md"), "hello");
+    symlinkSync(join(ws, "dist"), join(ws, "outbox"), process.platform === "win32" ? "junction" : "dir");
+    const res = resolveOutboxFile(ws, "report.md");
+    assert.equal(res.ok, true);
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
