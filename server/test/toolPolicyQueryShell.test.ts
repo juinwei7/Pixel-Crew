@@ -128,6 +128,52 @@ test("同樣的指令不帶寫檔旗標照常放行（不誤殺）", () => {
   }
 });
 
+// Codex app-server 的 commandExecution.command 實際長相（codex-cli 0.160 實錄）：
+// 一律包一層 `/bin/zsh -lc`，內層含單引號改用雙引號、單字不加引號。
+test("Codex 探索：拆掉單層 shell 外殼後套用同一份唯讀判定", () => {
+  for (const cmd of [
+    "/bin/zsh -lc 'git status --short'",
+    "/bin/zsh -lc \"sed -n '1,3p' README.md\"",
+    "/bin/zsh -lc ls",
+    "/bin/bash -lc 'rg -n TODO src'",
+    "/bin/zsh -lc \"sed -n '1,200p' 'src/my file.ts'\"",
+  ]) {
+    assert.equal(shell(cmd).allowed, true, `應放行：${cmd}`);
+  }
+  for (const cmd of [
+    "/bin/zsh -lc 'git status && rm -rf x'", // 外殼內的串接一律不放行
+    "/bin/zsh -lc 'ls | head'",
+    "/bin/zsh -lc 'npm install evil'",
+    "/bin/zsh -lc 'git diff --output=/tmp/outside.txt'",
+    "/bin/zsh -lc \"rg --pre ./evil.sh TODO\"",
+    "/bin/zsh -lc \"cat $(whoami)\"", // 雙引號內可展開：不拆
+    "/bin/zsh -lc 'ls' && touch x", // 外殼外面還接東西：不拆
+    "/bin/zsh -lc 'ls' extra",
+    "/tmp/evil/zsh -lc 'ls'", // 非系統路徑的 shell
+    "/bin/zsh -lc '/bin/zsh -lc ls'", // 只拆一層
+  ]) {
+    assert.equal(shell(cmd).allowed, false, `應拒絕：${cmd}`);
+  }
+});
+
+test("sed 只放行純印行號範圍的嚴格形式", () => {
+  assert.equal(shell("sed -n '1,200p' src/index.ts").allowed, true);
+  assert.equal(shell("sed -n 10p a.txt b.txt").allowed, true);
+  assert.equal(shell("sed -n '$p' notes.md").allowed, true);
+  for (const cmd of [
+    "sed -n 'w /tmp/out' a.txt",
+    "sed -n '1,3p;w /tmp/out' a.txt",
+    "sed -n '1e touch pwned' a.txt",
+    "sed -n '1,3p' -i a.txt", // GNU sed 會把後面的 -i 當選項：就地改寫
+    "sed -n '1,3p' --in-place a.txt",
+    "sed -n '1,3p' *.ts", // 萬用字元可能展開成名為 -i 的檔案
+    "sed -i 's/a/b/' a.txt",
+    "sed 's/a/b/w /tmp/out' a.txt",
+  ]) {
+    assert.equal(shell(cmd).allowed, false, `應拒絕：${cmd}`);
+  }
+});
+
 test("allowSafeShell 只對 Bash 生效：其他寫入型工具仍拒絕", () => {
   assert.equal(queryToolPolicy("Write", NONE, { allowSafeShell: true }).allowed, false);
   assert.equal(queryToolPolicy("Edit", NONE, { allowSafeShell: true }).allowed, false);

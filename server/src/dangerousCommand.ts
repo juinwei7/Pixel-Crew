@@ -83,8 +83,11 @@ const SHELL_META = /[\r\n;&|<>`]|\$[({]/;
 const SAFE_BASH_COMMANDS = [
   /^(pwd|ls|cat|head|tail|wc|echo|printf)(?:\s|$)/,
   /^(rg|grep)(?:\s|$)/,
-  // 刻意不放行 sed：即使 `sed -n` 也能透過 w/W 指令與 s///w 旗標寫檔、用 e 指令執行外部命令
-  // （例：`echo x | sed -n "w /path"`），無法用前綴白名單安全判定，改回退到手動核准。
+  // 刻意不用前綴放行 sed：即使 `sed -n` 也能透過 w/W 指令與 s///w 旗標寫檔、用 e 指令執行外部命令
+  // （例：`echo x | sed -n "w /path"`）。只收 Codex 讀檔慣用的「純印行號範圍」整句形式
+  // `sed -n '1,200p' <檔案…>`：腳本只能是行號範圍＋p，檔案參數不可是選項（擋 -i 就地改寫）也不可含萬用字元
+  //（`*` 可能展開成名為 -i 的檔案）。
+  /^sed\s+-n\s+(?:'(?:\d+(?:,(?:\d+|\$))?|\$)p'|"\d+(?:,\d+)?p"|\d+(?:,\d+)?p)(?:\s+(?:'(?!-)[^'*?[]*'|"(?!-)[^"\\$`*?[]*"|(?!-)[^\s'"\\$`*?[]+))*$/,
   /^git\s+(status|diff|log|show)(?:\s|$)/,
   /^(npm|pnpm)\s+test(?:\s|$)/,
   /^(npm|pnpm)\s+run\s+(test|build|check|lint|typecheck)(?:\s|$)/,
@@ -114,6 +117,16 @@ function isAllowlistedCommand(part: string): boolean {
   return !SAFE_COMMAND_WRITE_OR_EXEC_FLAGS.some((pattern) => pattern.test(unquoted));
 }
 
+// Codex 回報的指令一律包成一層 `/bin/zsh -lc <cmd>`（實測 codex-cli 0.160：內層含單引號時改用
+// 雙引號、單字時不加引號），前綴白名單永遠對不上。只拆「一層」且引號內不可能有跳脫或展開的形式；
+// 拆不乾淨就回 null、照舊走一般判定（不會因此放行）。
+const SHELL_WRAPPER = /^(?:\/usr\/local\/bin\/|\/opt\/homebrew\/bin\/|\/usr\/bin\/|\/bin\/)?(?:ba|z)?sh\s+-l?c\s+(?:'([^']*)'|"([^"\\$`]*)"|([^\s'"\\$`;&|<>(){}*?[\]~]+))$/;
+
+function unwrapShellCommand(command: string): string | null {
+  const match = SHELL_WRAPPER.exec(command);
+  return match ? (match[1] ?? match[2] ?? match[3]).trim() : null;
+}
+
 // 串接指令逐段放行：每一段都在唯讀白名單內才整條自動核准。
 // 只容忍「丟棄輸出」類重導向（2>&1、2>/dev/null）；任何寫檔重導向、指令替換
 // （$()、反引號）、背景執行（&）一律不放行，維持「嚴格放寬」——放過的仍然全是唯讀。
@@ -137,6 +150,12 @@ export function autoApprovalPolicy(toolName: string, command?: string): AutoAppr
   if (!normalized) return { allowed: false, reason: t("無法辨識指令內容") };
   const danger = isDangerousCommand(normalized);
   if (danger.dangerous) return { allowed: false, reason: danger.reason };
+  const inner = unwrapShellCommand(normalized);
+  if (inner !== null) {
+    // 外殼裡只收單一簡單指令：內層的串接／重導向一律不放行，不套用逐段放寬。
+    if (!SHELL_META.test(inner) && isAllowlistedCommand(inner)) return { allowed: true };
+    return { allowed: false, reason: t("指令不在唯讀／驗證安全清單") };
+  }
   if (SHELL_META.test(normalized)) {
     if (isSafeCompoundCommand(normalized)) return { allowed: true };
     return { allowed: false, reason: t("串接中含寫入型重導向、替換語法或不在唯讀清單的片段") };
