@@ -285,12 +285,12 @@ import {
   type WorkerAutopilotDecision,
   type WorkerAutopilotFinding,
 } from "./workerAutopilot.js";
-import { PendingSelfInstallStore, evaluateBootResolution } from "./selfEvolvePending.js";
+import { PendingSelfInstallStore, evaluateBootResolution, readSelfInstallVerdict, type SelfInstallVerdict } from "./selfEvolvePending.js";
 import { planPromoteOnSuccess } from "./selfInstallLifecycle.js";
 import { type PostInstallChecks } from "./selfEvolveInstall.js";
 import {
   lastAttemptedCommit, lastShippedCommit, readRepoHead, recordShippedCommit, selfInstallAutoEnabled, setSelfInstallAuto,
-  triggerSelfInstall as runSelfInstallTrigger, type SelfInstallTriggerResult,
+  shouldAutoGateSelfInstall, triggerSelfInstall as runSelfInstallTrigger, type AutoSelfInstallMemo, type SelfInstallTriggerResult,
 } from "./selfInstallTrigger.js";
 import {
   OpenUserRequestStore,
@@ -8733,10 +8733,12 @@ app.post("/api/workers/:id/queue", (req, res) => {
     return;
   }
   // 存原始 images/documents（drain 時再用 parseMessage* 驗一次，與 /message 一致）。
-  store.enqueueCommand(randomUUID(), worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
+  const queueId = randomUUID();
+  store.enqueueCommand(queueId, worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
   broadcastQueue(worker.id);
   scheduleQueueDrain(worker); // 若其實現在就空閒，立刻開跑
-  res.json({ ok: true, queue: store.listQueue(worker.id) });
+  // 回傳新項目 id：遠端轉接站靠它記「這是這位分享訪客排的」，讓訪客能免監護密碼撤回自己的。
+  res.json({ ok: true, id: queueId, queue: store.listQueue(worker.id) });
 });
 
 app.patch("/api/workers/:id/queue", (req, res) => {
@@ -10350,17 +10352,32 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // 自我進化 · 開機解析自裝結果（Stage 3 跨重啟狀態機的收尾）：上一輪若剛自裝完會留一張 pending
-// marker，重啟後在這裡驗收——我們能跑進 listen callback＝新版起得來＝健康，於是晉升回滾點
-// （rollback := 這次成功的好版，供下次回滾）並清 marker；少見的「起得來但檢查不過」只記錄給 owner
-// （真正「爛到起不來」的回滾由 detached 的 pc-selfinstall 健康輪詢負責，app 自己沒機會跑這段）。
+// marker，重啟後在這裡驗收——等 detached 的 pc-selfinstall 對「這次安裝」下結論（換入＋打 8787
+// 健康輪詢），健康才晉升回滾點（rollback := 這次成功的好版，供下次回滾）並清 marker。
+// 不能一進 listen 就晉升：pc-selfinstall 的健康輪詢那時還沒跑完，晉升後它若判失敗，回滾會回到
+// 這個剛被晉升的壞版本。真正「爛到起不來」的回滾由 pc-selfinstall 負責，app 自己沒機會跑這段。
+const SELF_INSTALL_VERDICT_TIMEOUT_MS = 5 * 60_000; // pc-selfinstall 的健康輪詢最多 60 秒，留足餘裕
+const SELF_INSTALL_VERDICT_POLL_MS = 3_000;
 async function resolvePendingSelfInstallOnBoot(): Promise<void> {
   try {
     const dir = config.dataDirectory;
     const store = new PendingSelfInstallStore(dir);
-    const marker = store.read();
+    let marker = store.read();
     if (!marker) return;
+    let verdict: SelfInstallVerdict = { state: "pending", swapped: false };
+    const deadline = Date.now() + SELF_INSTALL_VERDICT_TIMEOUT_MS;
+    for (;;) {
+      let logTail = "";
+      try { logTail = readFileSync(join(dir, "logs", "self-install.log"), "utf8").slice(-200_000); } catch { /* 沒 log */ }
+      verdict = readSelfInstallVerdict(logTail, marker);
+      if (verdict.state !== "pending" || Date.now() >= deadline) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, SELF_INSTALL_VERDICT_POLL_MS).unref());
+      if (shuttingDown) return; // 等到一半被關掉：marker 留著，下次開機再驗
+      marker = store.read();
+      if (!marker) return; // pc-selfinstall 判失敗會先刪 marker 再回滾——回滾歸它管，這裡不晉升
+    }
     // 降落傘2.0事故的根修：不能把「進得了 listen callback」當健康——壞版(聽錯port)也進得來，
-    // 還會把自己晉升成回滾點(污染)。必須真的打 canonical port 拿到 200 才算健康、才准晉升。
+    // 還會把自己晉升成回滾點(污染)。健康以 pc-selfinstall 打 canonical 8787 的結論為準，自打一次只是附帶。
     let selfHealthOk = false;
     try {
       const resp = await fetch(`http://127.0.0.1:${config.port}/`, { signal: AbortSignal.timeout(5000) });
@@ -10371,14 +10388,12 @@ async function resolvePendingSelfInstallOnBoot(): Promise<void> {
     const rollbackExe = join(dir, "coldinstall", "Pixel Crew.rollback.exe");
     let installedMtime = 0;
     try { installedMtime = statSync(installedExe).mtimeMs; } catch { /* 取不到＝當沒換到 */ }
-    let logTail = "";
-    try { logTail = readFileSync(join(dir, "logs", "self-install.log"), "utf8").slice(-4000); } catch { /* 沒 log */ }
     const checks: PostInstallChecks = {
       exeFresh: installedMtime > marker.prevExeMtimeMs,
-      swappedOk: /SWAPPED OK|HEALTHY OK/.test(logTail),
-      distHasNewCode: true,        // 正在執行的就是新碼
-      apiOk: selfHealthOk,         // 真的打 canonical port 的結果，不再寫死（根修）
-      healthOk: selfHealthOk,
+      swappedOk: verdict.swapped,                // 只認這次安裝段落裡的 SWAPPED OK，不認舊安裝留下的
+      distHasNewCode: true,                      // 正在執行的就是新碼
+      apiOk: selfHealthOk,
+      healthOk: verdict.state === "healthy",     // pc-selfinstall 對這次安裝的最終結論
     };
     const res = evaluateBootResolution(marker, checks);
     if (res.action === "confirm_ok") {
@@ -10410,7 +10425,7 @@ async function resolvePendingSelfInstallOnBoot(): Promise<void> {
       }
       store.clear();
     } else if (res.action === "rollback") {
-      appendRuntimeLog(dir, "self-install boot checks failed; detached installer owns won't-boot rollback", { failed: res.result.failed });
+      appendRuntimeLog(dir, "self-install boot checks failed; detached installer owns won't-boot rollback", { failed: res.result.failed, verdict: verdict.state });
       store.clear();
     }
   } catch (error) {
@@ -10430,12 +10445,17 @@ function triggerSelfInstall(reason: string): SelfInstallTriggerResult {
 }
 
 // 保守自動觸發：僅在開關開、HEAD 未出貨過、且沒有 NPC 正在忙（不打斷你）時才動。節奏閘防頻繁重裝。
+// 同一個 HEAD 沒裝成（被擋／髒目錄…）就記下來，隔一段時間才再跑一次同步 git 閘門，不每 15 秒卡一次。
+let autoSelfInstallMemo: AutoSelfInstallMemo | null = null;
 function maybeAutoSelfInstall(): void {
   if (!selfInstallAutoEnabled(config.dataDirectory) || !SELF_REPO) return;
   const head = readRepoHead(SELF_REPO);
   if (!head || head === lastShippedCommit(config.dataDirectory) || head === lastAttemptedCommit(config.dataDirectory)) return; // 失敗過的同一 HEAD 不自動重試，等新 commit
+  if (!shouldAutoGateSelfInstall(autoSelfInstallMemo, head, Date.now())) return;
   for (const w of workers.values()) { if (w.runner.busy) return; } // 有人在忙就不重啟
   const r = triggerSelfInstall("auto");
+  if (r.outcome === "in_flight") return; // 上一次還沒走完：不記也不寫 log，走完後下一輪照常檢查
+  autoSelfInstallMemo = { head, outcome: r.outcome, at: Date.now() };
   appendRuntimeLog(config.dataDirectory, "maybeAutoSelfInstall", { outcome: r.outcome, detail: r.detail });
 }
 

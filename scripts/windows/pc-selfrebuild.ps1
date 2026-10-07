@@ -70,12 +70,16 @@ $rbHash  = (Get-FileHash -LiteralPath $rollbackExe -Algorithm SHA256).Hash
 if ($newHash -eq $rbHash) { Log "no-op: new build identical to rollback point; nothing to ship"; return }
 
 # Ship: stage the new exe, write the marker, chain to pc-selfinstall.
+# Epoch ms via DateTimeOffset: subtracting (Get-Date '1970-01-01Z') is wrong because that value is
+# local-kind, so the result was off by the UTC offset (8h in UTC+8) and exeFresh was always true.
 $prevMtime = 0
-try { $prevMtime = [int64]((Get-Item -LiteralPath $installedExe).LastWriteTimeUtc - (Get-Date '1970-01-01Z')).TotalMilliseconds } catch {}
+try { $prevMtime = ([DateTimeOffset]((Get-Item -LiteralPath $installedExe).LastWriteTimeUtc)).ToUnixTimeMilliseconds() } catch {}
 Copy-Item -LiteralPath $newExe -Destination $stagedExe -Force
 Log "staged new exe"
 
-$marker = @{ firedAt = $prevMtime; reason = $Reason; changedFiles = @(); stagedExe = $stagedExe; rollbackExe = $rollbackExe; prevExeMtimeMs = $prevMtime; stagedSha256 = $newHash }
+# firedAt = hand-off time: the app's boot resolver only trusts self-install.log lines written after it.
+$firedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$marker = @{ firedAt = $firedAt; reason = $Reason; changedFiles = @(); stagedExe = $stagedExe; rollbackExe = $rollbackExe; prevExeMtimeMs = $prevMtime; stagedSha256 = $newHash }
 # Write UTF-8 WITHOUT BOM: Set-Content -Encoding UTF8 on PS 5.1 prepends a BOM that breaks node's JSON.parse.
 [System.IO.File]::WriteAllText($pendingJson, ($marker | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
 Log "wrote pending marker"

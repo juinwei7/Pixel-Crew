@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -74,6 +74,37 @@ test("certificate-free macOS installer installs, upgrades, and uninstalls withou
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(join(root, "install", "Pixel Crew.app")), false);
     assert.equal(readFileSync(userData, "utf8"), "keep");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("macOS upgrade carries the remote-access secret out of the bundle it replaces", {
+  skip: !supportedPlatform,
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), "pixel-crew-macos-installer-secret-"));
+  try {
+    const releaseDirectory = join(root, "release");
+    writeFixture(releaseDirectory, "arm64", "first");
+    assert.equal(runInstaller(root).status, 0);
+    // 舊版轉接站把 secret 寫在 .app 裡；整包換掉之前要先搬到資料目錄，否則手機全被登出。
+    const legacy = join(root, "install", "Pixel Crew.app", "Contents", "Resources", "app", "_tsproxy.secret.json");
+    writeFileSync(legacy, '{"signingSecret":"old"}');
+
+    writeFixture(releaseDirectory, "arm64", "second");
+    const result = runInstaller(root);
+    assert.equal(result.status, 0, result.stderr);
+    const durable = join(root, "home", "Library", "Application Support", "Pixel Crew", "_tsproxy.secret.json");
+    assert.equal(readFileSync(durable, "utf8"), '{"signingSecret":"old"}');
+    assert.equal(statSync(durable).mode & 0o777, 0o600);
+    assert.equal(existsSync(legacy), false, "the replaced bundle no longer has it");
+
+    // 資料目錄已經有（新版轉接站寫的）就不能被舊檔蓋掉。
+    writeFileSync(durable, '{"signingSecret":"current"}');
+    writeFileSync(legacy, '{"signingSecret":"stale"}');
+    writeFixture(releaseDirectory, "arm64", "third");
+    assert.equal(runInstaller(root).status, 0);
+    assert.equal(readFileSync(durable, "utf8"), '{"signingSecret":"current"}');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

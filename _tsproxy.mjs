@@ -20,16 +20,33 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// secret 檔的存放位置：安裝版的更新流程會「整個換掉 app/ 資料夾」，secret 檔若放在
-// app/ 裡（舊行為），每次更新都會被洗掉——簽章密鑰重生、手機登入全失效、設定精靈歸零。
-// 安裝版（特徵：旁邊有 runtime/ 資料夾）改放上一層的資料根目錄（{LocalAppData}/Pixel Crew），
-// 更新只換 app/ 不動資料根目錄；並把舊位置的檔案一次性搬過去。源碼 checkout 維持舊位置。
+// secret 檔的存放位置：安裝版的更新流程會「整個換掉」程式所在的資料夾（Windows 的 app/、
+// macOS 的整個 .app），secret 檔若跟程式放一起（舊行為），每次更新都會被洗掉——簽章密鑰重生、
+// 手機登入全失效、設定精靈歸零。安裝版改放更新不會碰的資料目錄：
+//  - Windows 安裝版（旁邊有 runtime/）：上一層的資料根目錄（{LocalAppData}/Pixel Crew）。
+//  - macOS .app（本檔在 Contents/Resources/app，runtime 在 Resources/ 底下）：上一層仍在 .app 裡、
+//    會跟著被換掉，所以改放本體同一個資料目錄 ~/Library/Application Support/Pixel Crew
+//    （PIXEL_CREW_DATA_DIR 可覆寫，與本體一致）。
+// 真正的搬家發生在「換掉程式資料夾之前」（Windows 單檔安裝器、macOS 安裝腳本都會先把舊檔搬到
+// 資料目錄），這裡的複製只是保底：舊位置還有檔、新位置沒有時一次性搬過去。源碼 checkout 維持舊位置。
+function installedDataRoot() {
+  if (fs.existsSync(path.join(__dirname, 'runtime'))) return path.dirname(__dirname);
+  const resources = path.dirname(__dirname);
+  if (path.basename(__dirname) === 'app' && path.basename(resources) === 'Resources'
+      && fs.existsSync(path.join(resources, 'runtime'))) {
+    return (process.env.PIXEL_CREW_DATA_DIR || '').trim()
+      || path.join(os.homedir(), 'Library', 'Application Support', 'Pixel Crew');
+  }
+  return '';
+}
 function defaultConfigPath() {
   const legacy = path.join(__dirname, '_tsproxy.secret.json');
-  const installedBundle = fs.existsSync(path.join(__dirname, 'runtime'));
-  if (!installedBundle) return legacy;
-  const durable = path.join(path.dirname(__dirname), '_tsproxy.secret.json');
+  const dataRoot = installedDataRoot();
+  if (!dataRoot) return legacy;
+  const durable = path.join(dataRoot, '_tsproxy.secret.json');
   try {
+    // macOS 的資料目錄可能還沒建（本體從沒跑過就先開轉接站）；建好 saveConfig 才寫得進去。
+    fs.mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
     if (!fs.existsSync(durable) && fs.existsSync(legacy)) {
       fs.copyFileSync(legacy, durable);
       try { fs.chmodSync(durable, 0o600); } catch {}
@@ -577,6 +594,7 @@ const SHARE_SAFE_WRITES = [
   ['POST', /^\/api\/assignments$/],                         // 建立指派
   ['POST', /^\/api\/schedules$/],                           // 建立排程
   ['POST', /^\/api\/workers\/[^/]+\/(consult|message|interrupt)$/], // 找隊員商量／傳訊／暫停
+  ['POST', /^\/api\/workers\/[^/]+\/queue$/],              // NPC 忙碌時排隊（等同傳訊；撤回自己排的見 itemKey）
   // 純狀態重整（不動任何資料，前端每 3 秒自動輪詢）：不放行會讓訪客一直被監護密碼框轟炸。
   ['POST', /^\/api\/auth\/refresh$/],                       // 重新檢查各 provider 登入狀態
   ['POST', /^\/api\/usage\/refresh$/],                      // 重新抓用量數字
@@ -642,9 +660,22 @@ function sessionSet(sid) {
   return e;
 }
 const pathSegs = (p) => p.split('/').filter(Boolean);
+// 壞掉的 %-編碼（例如 %E0%A4%A）會讓 decodeURIComponent 丟錯；在 request handler 裡沒接住＝
+// 整個轉接站行程掛掉，等於任何訪客一個請求就能把手機連線打斷。解不開＝不認得＝不算自己的。
+function safeDecode(seg) {
+  try { return decodeURIComponent(seg); } catch { return null; }
+}
+// 個別 NPC 的排隊訊息比一般 /api/<collection>/<id> 深一層：POST /api/workers/<wid>/queue 建立、
+// DELETE /api/workers/<wid>/queue/<qid> 撤回。key 用 'queue:<wid>/<qid>'（raw 路徑段，不會跟
+// 一般 '<段>/<id>' 撞名），訪客只能免密碼撤回自己排的；重新排序（PATCH 整條 order）會動到
+// 別人的項目，不走這條、維持監護密碼。
+const QUEUE_CREATE = /^\/api\/workers\/([^/]+)\/queue$/;
+const QUEUE_ITEM = /^\/api\/workers\/([^/]+)\/queue\/([^/]+)$/;
 // 建立類：POST /api/<collection>（剛好兩段）→ 回傳成功且含 id 就記下 'collection/id'。
 function createCollection(method, p) {
   if (String(method).toUpperCase() !== 'POST') return null;
+  const queue = QUEUE_CREATE.exec(p);
+  if (queue) return `queue:${queue[1]}`;
   const s = pathSegs(p);
   return (s.length === 2 && s[0] === 'api') ? s[1] : null;
 }
@@ -652,8 +683,12 @@ function createCollection(method, p) {
 function itemKey(method, p) {
   const m = String(method).toUpperCase();
   if (m !== 'DELETE' && m !== 'PATCH' && m !== 'PUT') return null;
+  const queue = m === 'DELETE' && QUEUE_ITEM.exec(p);
+  if (queue) return `queue:${queue[1]}/${queue[2]}`;
   const s = pathSegs(p);
-  return (s.length === 3 && s[0] === 'api') ? `${s[1]}/${decodeURIComponent(s[2])}` : null;
+  if (s.length !== 3 || s[0] !== 'api') return null;
+  const id = safeDecode(s[2]);
+  return id === null ? null : `${s[1]}/${id}`;
 }
 function ownsItem(sid, method, p) {
   const key = sid && itemKey(method, p);
