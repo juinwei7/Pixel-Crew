@@ -120,7 +120,7 @@ export function App() {
     workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, brainSwapEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
-    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission, loadMissionActivity,
     send, enqueueCommand, removeQueued, reorderQueued, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
@@ -1862,6 +1862,7 @@ export function App() {
           workspacePath={activeWorkspace}
           tasks={Object.values(bossTasks)}
           missions={missionList}
+          onLoadActivity={loadMissionActivity}
           workers={workerList}
           decisionModels={decisionModelOptions}
           onCreate={createBossTask}
@@ -1931,6 +1932,7 @@ export function App() {
           boss={selectedDepartmentLead}
           workers={workerList}
           missions={missionList}
+          onLoadActivity={loadMissionActivity}
           legacyTasks={collaborationList}
           departmentRecord={selectedDepartment}
           onPrepare={prepareMission}
