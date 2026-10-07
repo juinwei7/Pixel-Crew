@@ -18,6 +18,15 @@ export function readOnlyBuiltinToolNames(): string[] {
 }
 
 /**
+ * 只更新工作階段內待辦清單的工具：Claude 的 TodoWrite，以及 codexRunner 把 Codex
+ * turn/plan/updated 轉成的合成 TodoWrite。不碰檔案、不對外，所以 no_tools／唯讀查詢回合
+ * 「一用工具就中止」的守門不該算它——否則模型列個計畫就讓整個回合失敗。
+ */
+export function isSessionPlanTool(toolName: string): boolean {
+  return toolName === "TodoWrite";
+}
+
+/**
  * options.allowSafeShell（支柱 B · 探索唯讀 Bash）：開啟後，Bash 不再一律拒絕，改用
  * autoApprovalPolicy 的 "safe" 分類——唯讀安全指令（npm test/tsc/ls/cat/git status…）放行、
  * 危險指令（rm -rf/sudo/下載即執行…）與寫檔重導向一律拒絕。重用既有已驗分類器，不另寫判斷。

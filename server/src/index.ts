@@ -310,7 +310,7 @@ import {
   type DepartmentThread,
   type IntentClassification,
 } from "./departmentThread.js";
-import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
+import { isSessionPlanTool, queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
 import { localDay } from "./dayReport.js";
 import { decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
@@ -2655,6 +2655,7 @@ function runDetachedTurn(
       }
       if (event.type === "text_delta") streamedText += event.text;
       else if (event.type === "tool_call_start") {
+        if (isSessionPlanTool(event.name)) return;
         if (policy.kind === "no_tools") {
           finish(new Error(t("這個模型回合不得使用工具")));
           return;
