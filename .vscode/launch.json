@@ -1,0 +1,46 @@
+{
+  // Pixel Crew 除錯設定。三種模式：
+  // 1) Server 除錯：在「獨立沙盒」跑一份完整 app（port 8788、資料放 .debug-data/），
+  //    不會碰你正在使用的 Pixel Crew（8787）與它的正式資料庫。瀏覽器開 http://127.0.0.1:8788
+  //    就能邊操作邊在 server/src/*.ts 下斷點（需先跑過一次 web build 讓 web/dist 存在）。
+  // 2) Web 除錯：起 vite dev（5173，proxy 連到你正在跑的 8787 app），在 Chrome 裡對
+  //    web/src/*.tsx 下斷點，看的是「真的正在跑的資料」。
+  // 3) 測試除錯：對目前開啟的 *.test.ts 檔下斷點單獨跑。
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Server 除錯（沙盒 8788，不動正式資料）",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/server",
+      "program": "${workspaceFolder}/server/src/index.ts",
+      "runtimeArgs": ["--import", "tsx"],
+      "args": ["--serve-web"],
+      "env": {
+        "PORT": "8788",
+        "PIXEL_CREW_DATA_DIR": "${workspaceFolder}/.debug-data"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": []
+    },
+    {
+      "name": "Web 除錯（Chrome，連正在跑的 app）",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/web",
+      "preLaunchTask": "web: vite dev"
+    },
+    {
+      "name": "除錯目前開啟的測試檔",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${fileDirname}/..",
+      "program": "${file}",
+      "runtimeArgs": ["--import", "tsx", "--test"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}

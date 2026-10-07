@@ -9,17 +9,10 @@ import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
 import { Modal } from "./Modal";
 import { type ConfirmTone } from "./ConfirmDialog";
 import { t } from "../i18n";
+import { Skeleton } from "./Skeleton";
+import { indicatorStyle, useFreshKeys, useTabIndicator } from "../flip";
 
-const NEW_COMMAND = `---
-description: 說明這個指令適合在什麼情況使用
----
-
-請依照以下步驟完成任務：
-
-1. 先理解目前狀況。
-2. 說明執行計畫。
-3. 完成後驗證結果。
-`;
+const NEW_COMMAND = t("---\ndescription: 說明這個指令適合在什麼情況使用\n---\n\n請依照以下步驟完成任務：\n\n1. 先理解目前狀況。\n2. 說明執行計畫。\n3. 完成後驗證結果。\n");
 
 type CommandDocument = {
   name: string;
@@ -79,6 +72,14 @@ export function CommandCenter({
       `${command.name} ${command.description}`.toLowerCase().includes(needle),
     );
   }, [commands, query]);
+
+  // 新指令（剛儲存的、外部新增後重讀進來的）「落入」清單；首次載入、換房間時讀到的不算新。
+  const freshCommands = useFreshKeys(
+    `${providerView}\0${workspacePath}\0${loading && commands.length === 0 ? "pending" : "ready"}`,
+    commands.map((command) => command.name),
+  );
+  const providersRef = useRef<HTMLDivElement>(null);
+  const providerInk = useTabIndicator(providersRef, providerView, '[aria-pressed="true"]');
 
   useEffect(() => {
     if (providerView !== "claude") {
@@ -236,9 +237,11 @@ export function CommandCenter({
             <h2>{providerView === "claude" ? t("Claude 指令中心") : "Codex Skills"}</h2>
             <p>{providerView === "claude" ? t("管理這個房間的 Claude Code 專屬指令。") : t("管理這個房間的 repo-scoped Codex Skills。")}</p>
           </div>
-          <div className="command-center__providers" aria-label="Provider">
+          <div className={`command-center__providers${providerInk ? " r2-tabs--ink" : ""}`} aria-label="Provider" ref={providersRef}>
+            {providerInk && <span className="r2-tab-ink" aria-hidden="true" style={indicatorStyle(providerInk)} />}
             <button
               type="button"
+              aria-pressed={providerView === "claude"}
               className={providerView === "claude" ? "command-center__provider--active" : ""}
               onClick={() => void switchProviderView("claude")}
             >
@@ -246,6 +249,7 @@ export function CommandCenter({
             </button>
             <button
               type="button"
+              aria-pressed={providerView === "codex"}
               className={providerView === "codex" ? "command-center__provider--active" : ""}
               onClick={() => void switchProviderView("codex")}
             >
@@ -275,7 +279,7 @@ export function CommandCenter({
               <code>.claude/commands</code>
             </div>
             <div className="command-library__list">
-              {loading && <div className="command-library__empty">{t("正在讀取本機指令…")}</div>}
+              {loading && commands.length === 0 && <Skeleton variant="list" rows={4} label={t("正在讀取本機指令…")} className="command-library__skeleton" />}
               {!loading && filtered.length === 0 && (
                 <div className="command-library__empty">{t("這個房間還沒有符合的指令。")}</div>
               )}
@@ -283,7 +287,7 @@ export function CommandCenter({
                 <button
                   type="button"
                   key={command.name}
-                  className={`command-library__item ${selectedName === command.name ? "command-library__item--active" : ""}`}
+                  className={`command-library__item ${selectedName === command.name ? "command-library__item--active" : ""}${freshCommands.has(command.name) ? " r2-drop-in" : ""}`}
                   onClick={() => void select(command)}
                 >
                   <code>/{command.name}</code>

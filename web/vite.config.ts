@@ -6,6 +6,23 @@ import react from "@vitejs/plugin-react";
 // version; it is baked into the bundle at build time.
 const rootManifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
 
+function vendorChunk(id: string): string | null {
+  if (!id.includes("node_modules")) return null;
+  if (id.includes("pixi.js") || id.includes("pixi-filters")) return "pixi";
+  if (id.includes("react-markdown") || id.includes("remark-") || id.includes("rehype-") || id.includes("hast-") || id.includes("mdast-") || id.includes("micromark")) return "rich-text";
+  if (id.includes("react-dom") || id.includes("/react/")) return "react";
+  if (id.includes("/yaml/")) return "yaml";
+  // Only QrTree (the remote-access QR "night city" animation) pulls in
+  // three.js. Isolate it into its own vendor chunk so that lazy chunk stays
+  // feature-code-sized instead of ~95% vendor library.
+  if (id.includes("node_modules/three/")) return "three-vendor";
+  // Black Window is lazy, and xterm is almost all of that route's weight.
+  // Keep it in an audited vendor chunk so feature code remains within the
+  // generic lazy-chunk budget.
+  if (id.includes("node_modules/@xterm/")) return "xterm-vendor";
+  return null;
+}
+
 export default defineConfig({
   plugins: [react()],
   define: {
@@ -17,21 +34,20 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) return undefined;
-          if (id.includes("pixi.js") || id.includes("pixi-filters")) return "pixi";
-          if (id.includes("react-markdown") || id.includes("remark-") || id.includes("rehype-") || id.includes("hast-") || id.includes("mdast-") || id.includes("micromark")) return "rich-text";
-          if (id.includes("react-dom") || id.includes("/react/")) return "react";
-          if (id.includes("/yaml/")) return "yaml";
-          // Only QrTree (the remote-access QR "night city" animation) pulls
-          // in three.js. Isolate it into its own vendor chunk so that lazy
-          // chunk stays feature-code-sized instead of ~95% vendor library.
-          if (id.includes("node_modules/three/")) return "three-vendor";
-          // Black Window is lazy, and xterm is almost all of that route's
-          // weight. Keep it in an audited vendor chunk so feature code remains
-          // within the generic lazy-chunk budget.
-          if (id.includes("node_modules/@xterm/")) return "xterm-vendor";
-          return undefined;
+        // Rolldown code-splitting groups (manualChunks is its deprecated
+        // compat shim). Groups capture their dependencies recursively, so
+        // priority matters: Pixi lazily imports its own sub-modules, which
+        // made the pixi group swallow Vite's shared dynamic-import preload
+        // helper — and the entry then statically imported all of Pixi
+        // (~165 kB gzip) just for that 1 kB helper. Higher priority wins.
+        codeSplitting: {
+          groups: [
+            { name: "preload-helper", test: /vite[\\/](preload-helper|modulepreload-polyfill)/, priority: 30 },
+            // English UI strings load on demand (i18n.ensureLanguage); keep
+            // the dictionary files in one request instead of fifteen.
+            { name: "i18n-en", test: /[\\/]src[\\/]i18n[\\/]en-[^\\/]+\.ts$/, priority: 20 },
+            { name: vendorChunk, priority: 10 },
+          ],
         },
       },
     },

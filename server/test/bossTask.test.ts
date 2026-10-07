@@ -5,8 +5,13 @@ import {
   bossTaskClarificationBudget,
   bossTaskDecisionPrompt,
   bossTaskFinalReport,
+  bossTaskAcceptancePrompt,
+  parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
+  shareGuestBossTaskError,
+  dedicatedCrewApproveMode,
+  isShareGuestAccess,
   type BossTask,
 } from "../src/bossTask.js";
 import type { AssignmentDecisionCandidate } from "../src/assignmentDecision.js";
@@ -96,6 +101,23 @@ test("clarification budget is semantic-flow guardrail and reaches zero after thr
   assert.match(prompt, /Do not return clarification/i);
 });
 
+test("required-input preflight: prompt surfaces attachment count and demands asking for missing inputs up front", () => {
+  const base = {
+    objective: "對主資料表做實體解析清理並驗證準確率",
+    acceptanceCriteria: [],
+    workspacePath: "/repo",
+    messages: [{ id: "m1", role: "boss" as const, text: "清理主資料", createdAt: "2026-01-01" }],
+  };
+  // 沒附件：模型必須知道「0 file(s)」，缺輸入要當下就問，別跑到一半才發現。
+  const bare = bossTaskDecisionPrompt({ task: base, candidates });
+  assert.match(bare, /Required-input preflight/);
+  assert.match(bare, /Attachments provided by the Boss: 0 file\(s\)/);
+  assert.match(bare, /missing input discovered mid-execution wastes the whole run/i);
+  // 有附件：數量如實呈現，讓模型把附件當成已到位的輸入。
+  const attached = bossTaskDecisionPrompt({ task: { ...base, attachmentIds: ["a1", "a2"] }, candidates });
+  assert.match(attached, /Attachments provided by the Boss: 2 file\(s\)/);
+});
+
 test("parses clarification without creating stages", () => {
   const decision = parseBossTaskDecision(
     `<boss_task_decision>{"status":"clarification","question":"Which ERP modules belong in the first release?","rationale":["The requested product boundary is unknown"]}</boss_task_decision>`,
@@ -106,6 +128,33 @@ test("parses clarification without creating stages", () => {
     question: "Which ERP modules belong in the first release?",
     rationale: ["The requested product boundary is unknown"],
   });
+});
+
+test("parses create_department and clamps memberCount to 2-4", () => {
+  const decision = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","departmentPurpose":"本地優先個人 AI 助理研發","memberCount":9,"rationale":["No existing department covers local RAG + Ollama work"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(decision?.status, "create_department");
+  if (decision?.status === "create_department") {
+    assert.equal(decision.departmentPurpose, "本地優先個人 AI 助理研發");
+    assert.equal(decision.memberCount, 4); // clamped down from 9
+    assert.ok(decision.rationale.length >= 1);
+  }
+});
+
+test("create_department defaults memberCount to 3 and requires a purpose", () => {
+  const defaulted = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","departmentPurpose":"資安稽核","rationale":["fresh domain"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(defaulted?.status === "create_department" && defaulted.memberCount, 3);
+  // Missing purpose is invalid (would create a nameless team).
+  const noPurpose = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"create_department","memberCount":3,"rationale":["x"]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(noPurpose, null);
 });
 
 test("validates a multi-department acyclic graph and rejects a cycle", () => {
@@ -124,6 +173,53 @@ test("validates a multi-department acyclic graph and rejects a cycle", () => {
     candidates,
   );
   assert.equal(cycle, null);
+});
+
+test("directExecute flag is parsed per stage and defaults off", () => {
+  const withFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"trivial write","rationale":["single action"],"stages":[{"id":"write","departmentId":"eng","title":"Write file","objective":"Create one small file","acceptanceCriteria":["file exists"],"dependsOn":[],"directExecute":true}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withFlag?.status, "ready");
+  if (withFlag?.status === "ready") assert.equal(withFlag.stages[0].directExecute, true);
+
+  const withoutFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"normal","rationale":["multi step"],"stages":[{"id":"build","departmentId":"eng","title":"Build","objective":"Implement the feature","acceptanceCriteria":["works"],"dependsOn":[]}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withoutFlag?.status, "ready");
+  // 未給旗標時 directExecute 必須是 undefined（falsy）——不能誤啟快速道
+  if (withoutFlag?.status === "ready") assert.notEqual(withoutFlag.stages[0].directExecute, true);
+
+  // 非布林垃圾值不得被當真
+  const garbage = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"garbage flag","rationale":["x"],"stages":[{"id":"s","departmentId":"eng","title":"S","objective":"do","acceptanceCriteria":["ok"],"dependsOn":[],"directExecute":"yes"}]}</boss_task_decision>`,
+    candidates,
+  );
+  if (garbage?.status === "ready") assert.notEqual(garbage.stages[0].directExecute, true);
+});
+
+test("noReview flag is parsed per stage and defaults off", () => {
+  const withFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"simple multi-doc","rationale":["low risk authoring"],"stages":[{"id":"docs","departmentId":"eng","title":"Write docs","objective":"Author a set of related documents","acceptanceCriteria":["files exist"],"dependsOn":[],"noReview":true}]}</boss_task_decision>`,
+    candidates,
+  );
+  assert.equal(withFlag?.status, "ready");
+  if (withFlag?.status === "ready") assert.equal(withFlag.stages[0].noReview, true);
+
+  const withoutFlag = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"risky logic","rationale":["needs QA"],"stages":[{"id":"impl","departmentId":"eng","title":"Implement","objective":"Write the calculation engine","acceptanceCriteria":["passes"],"dependsOn":[]}]}</boss_task_decision>`,
+    candidates,
+  );
+  // 未給旗標時 noReview 必須是 undefined（falsy）——不能誤啟剝 review
+  if (withoutFlag?.status === "ready") assert.notEqual(withoutFlag.stages[0].noReview, true);
+
+  // 非布林垃圾值不得被當真
+  const garbage = parseBossTaskDecision(
+    `<boss_task_decision>{"status":"ready","executionMode":"project","summary":"garbage","rationale":["x"],"stages":[{"id":"s","departmentId":"eng","title":"S","objective":"do","acceptanceCriteria":["ok"],"dependsOn":[],"noReview":"yes"}]}</boss_task_decision>`,
+    candidates,
+  );
+  if (garbage?.status === "ready") assert.notEqual(garbage.stages[0].noReview, true);
 });
 
 test("selected execution boundary rejects a graph beyond its stage ceiling", () => {
@@ -224,6 +320,100 @@ test("consolidates department reports into one Boss report", () => {
   assert.match(report, /QA passes/);
 });
 
+function completedTask(criteria: string[], reports: string[]): BossTask {
+  return {
+    id: "task",
+    title: "Build ERP",
+    archivedAt: null,
+    workspacePath: "/repo",
+    decisionProvider: "codex",
+    decisionModel: "gpt",
+    objective: "Build ERP",
+    acceptanceCriteria: criteria,
+    status: "completed",
+    messages: [],
+    stages: reports.map((report, index) => ({
+      id: `s${index}`,
+      departmentId: `d${index}`,
+      departmentName: `Dept ${index}`,
+      title: `Stage ${index}`,
+      objective: "do",
+      acceptanceCriteria: [],
+      dependsOn: [],
+      status: "completed" as const,
+      missionId: `m${index}`,
+      report,
+    })),
+    finalReport: null,
+    error: null,
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+    completedAt: "2026-01-01",
+  } satisfies BossTask;
+}
+
+test("acceptance prompt carries every criterion and each stage report for judging", () => {
+  const task = completedTask(["Login works", "Data persists"], ["Auth shipped", "DB wired"]);
+  const prompt = bossTaskAcceptancePrompt(task);
+  assert.match(prompt, /Acceptance Verification/);
+  assert.match(prompt, /Login works/);
+  assert.match(prompt, /Data persists/);
+  assert.match(prompt, /Auth shipped/);
+  assert.match(prompt, /DB wired/);
+  assert.match(prompt, /<boss_task_acceptance>/);
+});
+
+test("verdict parser aligns to criteria order and fills gaps with unverifiable", () => {
+  const criteria = ["A", "B", "C"];
+  const text = `noise <boss_task_acceptance>{"verdicts":[{"index":1,"status":"met","evidence":"done"},{"index":2,"status":"unmet","evidence":"missing"}]}</boss_task_acceptance>`;
+  const verdicts = parseBossTaskAcceptanceVerdicts(text, criteria);
+  assert.equal(verdicts.length, 3);
+  assert.deepEqual(verdicts.map((v) => v.status), ["met", "unmet", "unverifiable"]);
+  assert.equal(verdicts[0].criterion, "A");
+  assert.equal(verdicts[0].evidence, "done");
+  assert.equal(verdicts[2].evidence, "");
+});
+
+test("verdict parser degrades to all-unverifiable when the block is missing or invalid", () => {
+  const criteria = ["A", "B"];
+  for (const text of ["", "no block here", "<boss_task_acceptance>not json</boss_task_acceptance>"]) {
+    const verdicts = parseBossTaskAcceptanceVerdicts(text, criteria);
+    assert.equal(verdicts.length, 2);
+    assert.ok(verdicts.every((v) => v.status === "unverifiable"));
+  }
+  // Out-of-range or bad status values are ignored, not trusted.
+  const bad = parseBossTaskAcceptanceVerdicts(
+    `<boss_task_acceptance>{"verdicts":[{"index":9,"status":"met"},{"index":1,"status":"perfect"}]}</boss_task_acceptance>`,
+    criteria,
+  );
+  assert.deepEqual(bad.map((v) => v.status), ["unverifiable", "unverifiable"]);
+});
+
+test("final report renders a per-criterion verdict table with a met/unmet tally", () => {
+  const task = completedTask(["Login works", "Data persists"], ["report"]);
+  const report = bossTaskFinalReport(task, [
+    { criterion: "Login works", status: "met", evidence: "auth tested" },
+    { criterion: "Data persists", status: "unmet", evidence: "no db" },
+  ]);
+  assert.match(report, /1 項達成/);
+  assert.match(report, /\| --- \| --- \| --- \|/);
+  assert.match(report, /達成.*Login works.*auth tested/);
+  assert.match(report, /未達成.*Data persists.*no db/);
+});
+
+test("final report escapes pipes so criterion text cannot break the table", () => {
+  const task = completedTask(["a | b"], ["report"]);
+  const report = bossTaskFinalReport(task, [{ criterion: "a | b", status: "met", evidence: "" }]);
+  assert.match(report, /a \\\| b/);
+});
+
+test("final report without verdicts stays honest that criteria were not auto-checked", () => {
+  const task = completedTask(["Login works"], ["report"]);
+  const report = bossTaskFinalReport(task);
+  assert.match(report, /未能自動逐條核對/);
+  assert.match(report, /- Login works/);
+});
+
 test("record metadata can be renamed, while only terminal Boss tasks can be archived", () => {
   const running = {
     id: "task",
@@ -253,4 +443,24 @@ test("record metadata can be renamed, while only terminal Boss tasks can be arch
   assert.equal(running.archivedAt, "2026-01-02");
   assert.equal(applyBossTaskRecordPatch(running, { archived: false }), null);
   assert.equal(running.archivedAt, null);
+});
+
+test("share guests cannot ask for a dedicated (full auto-approve) crew", () => {
+  // 轉接站對分享訪客蓋 x-pc-access: shr；owner 是 own，本機直連沒有這個 header。
+  assert.match(shareGuestBossTaskError("shr", { dedicatedDepartment: true }) ?? "", /專屬部門/);
+  assert.equal(shareGuestBossTaskError("shr", { dedicatedDepartment: false }), null);
+  assert.equal(shareGuestBossTaskError("shr", {}), null);
+  assert.equal(shareGuestBossTaskError("shr", null), null);
+  assert.equal(shareGuestBossTaskError("own", { dedicatedDepartment: true }), null);
+  assert.equal(shareGuestBossTaskError(undefined, { dedicatedDepartment: true }), null);
+});
+
+test("a crew built for a task a share guest touched never gets full auto-approve", () => {
+  // 訪客擋得了「直接要求專屬部門」，擋不了決策模型自己建隊或追問時重建隊——所以看的是交辦本身。
+  assert.equal(dedicatedCrewApproveMode({}), "full");
+  assert.equal(dedicatedCrewApproveMode({ requestedByShareGuest: false }), "full");
+  assert.equal(dedicatedCrewApproveMode({ requestedByShareGuest: true }), "safe");
+  assert.equal(isShareGuestAccess("shr"), true);
+  assert.equal(isShareGuestAccess("own"), false);
+  assert.equal(isShareGuestAccess(undefined), false);
 });

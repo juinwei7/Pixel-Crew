@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { t } from "../i18n";
-import type { BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
+import { t, tc } from "../i18n";
+import type { AdvisorProposal, BossTask, BossTaskStage, CommandSubmission, DepartmentMission, ExecutionProfile, ProviderId, WorkerState } from "../types";
+import { apiRequest } from "../api";
+import { clearAdvisorErrors, getActiveAdvisorWorkspace, getAdvisorEntry, releaseAdvisorPin, runAdvisor as runAdvisorStore, setAdvisorIdea as setAdvisorIdeaStore, subscribeAdvisor } from "../advisorStore";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
+import { writeComposerDraft } from "../hooks/useComposerDraft";
+import { useIsPhone } from "../hooks/useIsPhone";
+import { MissionActivityFeed } from "./MissionActivityFeed";
 import { type ConfirmTone } from "./ConfirmDialog";
+import { useFreshKeys } from "../flip";
 
 type DecisionModelOption = { provider: ProviderId; model: string; label: string };
 
@@ -27,12 +33,20 @@ type Props = {
     documents?: CommandSubmission["documents"];
     clientMessageId?: string;
     idempotencyKey?: string;
+    dedicatedDepartment?: boolean;
   }): Promise<{ data?: BossTask; error?: string }>;
   onMessage(id: string, submission: CommandSubmission): Promise<{ data?: BossTask; error?: string }>;
   onUpdate(id: string, patch: { title?: string; archived?: boolean }): Promise<{ data?: BossTask; error?: string }>;
   onDelete(id: string): Promise<{ error?: string }>;
   onRestart?(id: string, confirm: boolean): Promise<{ data?: { members?: Array<{ name: string }>; missions?: Array<{ objective: string }>; bossTask?: BossTask }; error?: string }>;
+  /** 一鍵中止整張交辦（取消進行中 Mission＋解散臨時團隊）。 */
+  onCancelTask?(id: string): Promise<string | null>;
   onOpenMission?(missionId: string): void;
+  /** 補抓已結束 Mission 的活動流（初始 snapshot 不帶）。 */
+  onLoadActivity?(missionId: string): Promise<void>;
+  onCreateDepartment?(): void;
+  /** 把一個顧問方向送去圓桌智囊團辯論（3 方兩輪→裁決→host NPC 接手）。 */
+  onDebateDirection?(topic: string): void;
   onClose(): void;
   composerHost?: Element | null;
   focusMode?: boolean;
@@ -51,14 +65,23 @@ const statusLabel: Record<BossTask["status"], string> = {
   cancelled: t("已取消"),
 };
 
-const starterTasks = [
-  "規劃並開發一套簡易 ERP",
-  "整理上週營運數據並提出建議",
-  "檢查目前產品並安排改善計畫",
-];
-
 const LAST_BOSS_TASK_KEY = "pixel-crew:boss-last-task";
 const terminalStatuses: BossTask["status"][] = ["completed", "failed", "cancelled"];
+// 可刪除的狀態比可封存的多兩個「等你處理」的卡住狀態——那些沒有背景在跑，卡著刪不掉很煩。
+const deletableStatuses: BossTask["status"][] = [...terminalStatuses, "needs_attention", "needs_input"];
+
+// 把一張顧問方向卡組成圓桌辯論的主題：帶上方向、洞見與目標，讓 3 方辯得有料。
+function advisorDebateTopic(proposal: AdvisorProposal, domain: string | null): string {
+  const parts = [
+    t("請評估專家顧問提出的這個方向是否值得投入、怎麼做最專業、有哪些風險與取捨，最後給出建議與可執行的下一步。"),
+    t("方向：{title}", { title: proposal.title }),
+  ];
+  if (domain) parts.push(t("領域：{domain}", { domain }));
+  if (proposal.summary) parts.push(t("說明：{summary}", { summary: proposal.summary }));
+  if (proposal.insight) parts.push(t("關鍵洞見：{insight}", { insight: proposal.insight }));
+  if (proposal.objective) parts.push(t("目標：{objective}", { objective: proposal.objective }));
+  return parts.join("\n");
+}
 
 function workspaceLabel(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
@@ -89,7 +112,7 @@ export function bossStageProgress(stage: BossTaskStage, mission: DepartmentMissi
   });
 }
 
-export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onOpenMission, onClose, composerHost, focusMode = false, confirm }: Props) {
+export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = [], decisionModels, onCreate, onMessage, onUpdate, onDelete, onRestart, onCancelTask, onOpenMission, onLoadActivity, onDebateDirection, onClose, composerHost, focusMode = false, confirm }: Props) {
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || b.updatedAt.localeCompare(a.updatedAt)),
     [tasks],
@@ -106,7 +129,86 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const [maxMissionSteps, setMaxMissionSteps] = useState(3);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 專家顧問（沒方向時的前段）：一個粗略念頭 → 幾個「你可能沒想到」的方向 → 挑一個
+  // 就把它的 objective 預填進下面的交辦草稿（沿用 starterTasks 同款「填草稿＋重開」）。
+  // 狀態放在模組級 advisorStore（依 workspace 分鍵），讓生成中／已生成的結果在切到別的
+  // NPC 再回來時不會消失——BossTaskDesk 一離開 Boss Desk 就卸載，本地 state 會被清掉。
+  // 顧問狀態依 workspace 分鍵，但 Boss Desk 是對「目前作用中工作區」開的。若在 A 工作區發起
+  // 生成後切到 B 工作區的 NPC，activeWorkspace 變 B、讀到 B 的空狀態→生成看似消失，非得切回 A 才
+  // 看得到。這裡改讀「釘選工作區」（正在生成／剛生成好的那個）；沒有釘選時才退回目前工作區。顧問
+  // 的念頭／生成，以及「用此方向交辦」的草稿與建立任務都跟著它走，方向才不會落到別的工作區。
+  const pinnedAdvisorWorkspace = useSyncExternalStore(subscribeAdvisor, getActiveAdvisorWorkspace, getActiveAdvisorWorkspace);
+  const advisorWorkspace = pinnedAdvisorWorkspace ?? workspacePath;
+  const advisorPinnedElsewhere = advisorWorkspace !== workspacePath;
+  const advisor = useSyncExternalStore(subscribeAdvisor, () => getAdvisorEntry(advisorWorkspace), () => getAdvisorEntry(advisorWorkspace));
+  const { idea: advisorIdea, loading: advisorLoading, error: advisorError, domain: advisorDomain, question: advisorQuestion, proposals: advisorProposals } = advisor;
+  const setAdvisorIdea = (value: string) => setAdvisorIdeaStore(advisorWorkspace, value);
+  // 顧問生成一次要 ~100–115 秒（冷啟＋思考＋4 段內容）：期間跑一個計時＋輪播訊息的動畫，
+  // 讓使用者知道還活著、大概還要多久，而不是對著一個不動的按鈕乾等。elapsed 由 store 的
+  // startedAt 推導，遠端換頁重掛後仍能接續正確秒數。
+  const [advisorElapsed, setAdvisorElapsed] = useState(0);
+  // 交辦顧問方向時，用這個 seed 強制 TaskComposer 重掛，讓它重新從 localStorage 讀進 objective
+  // ——因為沒有既有任務時 draftKey 前後相同、composer 不會自己重讀（就是「點了沒反應／再點消失」的根因）。
+  const [composerSeed, setComposerSeed] = useState(0);
+  // 「為此交辦開專屬部門」：預設開＝按交辦直接為目標建一支專屬部門並開跑（省 token、不卡既有部門）；
+  // 關掉＝走原本的決策模型路由，交給既有部門。
+  const [dedicatedDepartment, setDedicatedDepartment] = useState(true);
+  // 手機上把「執行邊界／進階設定／驗收條件」三顆進階設定收進一顆「更多設定」，讓交辦第一眼
+  // 只剩專屬部門開關＋輸入框，不被三排設定推到畫面最底；桌機維持三顆攤開。
+  const isPhone = useIsPhone();
   const restoredSelection = useRef(false);
+
+  // Returning to the Boss Desk (this component remounts on entry) is a natural
+  // "am I still offline?" moment — clear any stale advisor connection error so a
+  // blip from a previous visit doesn't keep flashing "無法連線" while the server
+  // is actually reachable. In-app navigation keeps the WS open, so the reconnect
+  // handler wouldn't fire; this covers that path.
+  useEffect(() => { clearAdvisorErrors(); }, []);
+
+  useEffect(() => {
+    if (!advisorLoading || advisor.startedAt == null) { setAdvisorElapsed(0); return; }
+    const startedAt = advisor.startedAt;
+    const tick = () => setAdvisorElapsed(Math.max(0, Math.floor((performance.now() - startedAt) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [advisorLoading, advisor.startedAt]);
+
+  // 依已過秒數輪播「顧問正在做什麼」的擬真階段訊息（純視覺，不代表真實後端步驟）。
+  const advisorPhases = [
+    t("正在讀你的工作區脈絡…"),
+    t("在推敲這屬於哪個領域…"),
+    t("搜尋你可能沒想到的專業方向…"),
+    t("為每個方向補內行洞見與實作路數…"),
+    t("整理成可直接交辦的方向…"),
+  ];
+  const advisorPhase = advisorPhases[Math.min(advisorPhases.length - 1, Math.floor(advisorElapsed / 24))];
+  const advisorProgress = Math.min(96, Math.round((advisorElapsed / 110) * 100));
+
+  const runAdvisor = (proactive = false) => {
+    // 交易在 store 內執行，即使離開 Boss Desk 卸載了本元件也會跑完並保存結果。
+    const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
+    // 對目前檢視的工作區生成（advisorWorkspace）：沒有釘選時就是目前工作區；正看著別區釘選結果時
+    // 則是續跑那個工作區（念頭欄也綁在它上面，兩者一致）。要為目前工作區另起爐灶，先按「改用目前
+    // 工作區」清掉釘選再生成。
+    void runAdvisorStore(advisorWorkspace, { proactive, provider: decision?.provider, model: decision?.model });
+  };
+
+  // 「改用目前工作區」：清掉別區釘選的顧問結果，讓 Boss Desk 退回目前工作區開全新交辦。
+  const dismissPinnedAdvisor = () => releaseAdvisorPin(advisorWorkspace, true);
+
+  // 把選中的方向 objective 預填進「新任務」草稿並重開 composer（與 starterTasks 一致）。
+  const useProposalObjective = (objective: string) => {
+    // 目標一律進「新任務」草稿：切到新任務、清掉選取，再把 objective 寫進該 draftKey，
+    // 然後 bump seed 逼 composer 重掛重讀（換 key 前寫入，避免舊實例的 200ms 自動存檔把它蓋回空）。
+    setShowArchived(false);
+    setSelectedId(null);
+    setNewTask(true);
+    // 用 advisorWorkspace（生成該方向的工作區）作草稿鍵：與下方 composer 的 :new draftKey 一致，且
+    // 交辦會建立在生成方向的工作區，方向不會落到別的工作區。
+    writeComposerDraft(`boss:${advisorWorkspace}:new`, objective);
+    setComposerSeed((seed) => seed + 1);
+  };
   // Mirrors the `tasks` prop for the re-check in deleteRecord — confirm() is
   // non-blocking, so a WS-driven status change can land while its dialog is
   // still open; re-read through this ref instead of a stale closure.
@@ -116,6 +218,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   const archivedTasks = ordered.filter((task) => task.archivedAt);
   const visibleTasks = showArchived ? archivedTasks : activeTasks;
   const selected = visibleTasks.find((task) => task.id === selectedId) ?? (!newTask ? visibleTasks[0] : undefined);
+
+  // 「落入」進場：剛交辦出去的任務、同一張任務裡後來才出現的訊息與部門階段。
+  // 打開 Boss Desk 時已存在的、切換到另一張任務時看到的都不算新，不播。
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
+  const freshTaskIds = useFreshKeys(tasks.length === 0 ? "tasks:empty" : "tasks", tasks.map((task) => task.id));
+  const freshTask = Boolean(selected && !newTask && (selected.id === justCreatedId || freshTaskIds.has(selected.id)));
+  const freshMessages = useFreshKeys(`messages:${selected?.id ?? ""}`, selected?.messages.map((entry) => entry.id) ?? []);
+  const freshStages = useFreshKeys(`stages:${selected?.id ?? ""}`, selected?.stages.map((stage) => stage.id) ?? []);
 
   useEffect(() => {
     if (!restoredSelection.current && ordered.length > 0) {
@@ -144,14 +254,14 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   }, [selected?.id, selected?.title]);
 
   useEffect(() => {
-    const modelKey = `pixel-crew:boss-decision-model:${workspacePath}`;
+    const modelKey = `pixel-crew:boss-decision-model:${advisorWorkspace}`;
     try {
       const savedModel = localStorage.getItem(modelKey) ?? "";
       setDecisionKey(decisionModels.some((option) => `${option.provider}:${option.model}` === savedModel) ? savedModel : "");
     } catch {
       setDecisionKey("");
     }
-  }, [decisionModels, selected?.id, workspacePath]);
+  }, [decisionModels, selected?.id, advisorWorkspace]);
 
   async function submit(submission: CommandSubmission): Promise<string | null> {
     const text = submission.text.trim();
@@ -159,14 +269,15 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     setWorking(true);
     setError(null);
     let result: { data?: BossTask; error?: string };
+    const isCreate = !(selected && !newTask);
     if (selected && !newTask) {
       result = await onMessage(selected.id, submission);
     } else {
       const decision = decisionModels.find((option) => `${option.provider}:${option.model}` === decisionKey);
       result = await onCreate({
-        message: text || "請依附加檔案規劃並完成任務",
+        message: text || t("請依附加檔案規劃並完成任務"),
         acceptanceCriteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 8),
-        workspacePath,
+        workspacePath: advisorWorkspace,
         decisionProvider: decision?.provider,
         decisionModel: decision?.model,
         executionProfile,
@@ -176,6 +287,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         documents: submission.documents,
         clientMessageId: submission.clientMessageId,
         idempotencyKey: submission.idempotencyKey,
+        dedicatedDepartment,
       });
     }
     setWorking(false);
@@ -185,6 +297,10 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
       return message;
     }
     setCriteria("");
+    // 任務已建立，這筆顧問結果算「消化完」→ 解除釘選，之後開新交辦回到目前工作區；但若還在生成
+    // 中（例如另跑的主動建議）就別打斷，讓它繼續浮在原工作區。
+    if (isCreate && !getAdvisorEntry(advisorWorkspace).loading) releaseAdvisorPin(advisorWorkspace);
+    if (isCreate) setJustCreatedId(result.data.id);
     setSelectedId(result.data.id);
     setNewTask(false);
     setShowArchived(false);
@@ -212,13 +328,13 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
   }
 
   async function deleteRecord() {
-    if (!selected || working || !terminalStatuses.includes(selected.status)) return;
+    if (!selected || working || !deletableStatuses.includes(selected.status)) return;
     if (!(await confirm(t("確定永久刪除 Boss 任務「{title}」？此動作無法復原。", { title: selected.title }), "danger"))) return;
     // Re-check against the latest tasks — confirm() doesn't block the page,
     // so a WS push could have moved this task out of a terminal status while
     // the dialog was open.
     const current = tasksRef.current.find((task) => task.id === selected.id);
-    if (!current || !terminalStatuses.includes(current.status)) {
+    if (!current || !deletableStatuses.includes(current.status)) {
       setError(t("這筆任務狀態已變更，無法刪除。"));
       return;
     }
@@ -242,12 +358,21 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
     setWorking(false);
     if (preview.error) { setError(preview.error); return; }
     const missionCount = preview.data?.missions?.length ?? 0;
-    const memberNames = preview.data?.members?.map((member) => member.name).join("、") || t("相關 NPC");
+    const memberNames = preview.data?.members?.map((member) => member.name).join(tc("punct", "、")) || t("相關 NPC");
     if (!(await confirm(t("清空這個 Boss 交辦並重新規劃？將取消 {count} 個進行中的 Mission，並重開：{members}。附件與稽核紀錄會保留。", { count: missionCount, members: memberNames }), "danger"))) return;
     setWorking(true); setError(null);
     const committed = await onRestart(selected.id, true);
     setWorking(false);
     if (committed.error) setError(committed.error);
+  }
+
+  async function cancelTask() {
+    if (!selected || !onCancelTask || working) return;
+    if (!(await confirm(t("中止這個交辦？進行中的部門工作會立刻停止，臨時團隊會解散；對話紀錄與附件保留，之後仍可清空重新交辦。"), "danger"))) return;
+    setWorking(true); setError(null);
+    const failure = await onCancelTask(selected.id);
+    setWorking(false);
+    if (failure) setError(failure);
   }
 
   const canReply = selected && ["needs_input", "needs_attention", "completed", "failed"].includes(selected.status);
@@ -261,17 +386,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         ? t("追問結果、要求修改，或追加後續工作")
         : t("目前正在跨部門執行；進度會自動回報");
 
-  const composer = <TaskComposer
-    draftKey={`boss:${selected && !newTask ? selected.id : `${workspacePath}:new`}`}
-    placeholder={placeholder}
-    submitLabel={selected && !newTask ? t("送出") : t("交辦")}
-    busyLabel={t("處理中…")}
-    disabled={Boolean(selected && !newTask && !canReply)}
-    working={working}
-    layout={composerHost ? "dock" : "inline"}
-    focusMode={focusMode}
-    leading={composerHost ? <span className="command-composer__target">BOSS</span> : undefined}
-    toolbar={(!selected || newTask) && <div className="boss-task-composer__setup">
+  const settingSections = <>
       <details><summary>{t("執行邊界與估算")} <span>{t("開始前設定")}</span></summary><div><label><span>{t("執行級別")}</span><select value={executionProfile} onChange={(event) => {
         const profile = event.target.value as ExecutionProfile;
         setExecutionProfile(profile);
@@ -289,12 +404,40 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           : t("上限：4 位 NPC、3 個部門階段、每 Mission 3 步；約 10–35 分鐘。")}</small><small>{t("預估：Claude 約 US$ 0.02–2.00；Codex 約影響 5 小時 quota 1–30%。實際依工作內容與模型而變，非保證值；超過上限會停止派工，不會靜默擴張。")}</small></div></details>
       <details><summary>{t("進階設定")} <span>{t("選填")}</span></summary><div><label><span>{t("決策模型")}</span><select value={decisionKey} onChange={(event) => {
         setDecisionKey(event.target.value);
-        try { localStorage.setItem(`pixel-crew:boss-decision-model:${workspacePath}`, event.target.value); } catch { /* unavailable */ }
+        try { localStorage.setItem(`pixel-crew:boss-decision-model:${advisorWorkspace}`, event.target.value); } catch { /* unavailable */ }
       }}>
         <option value="">{t("自動選擇 Claude / Codex")}</option>
         {decisionModels.map((option) => <option key={`${option.provider}:${option.model}`} value={`${option.provider}:${option.model}`}>{option.label}</option>)}
       </select></label></div></details>
-      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成的標準")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
+      <details><summary>{t("驗收條件")} <span>{t("選填")}</span></summary><div><strong>{t("完成後會逐條核對這些條件")}</strong><small>{t("每行一項，最多 8 項")}</small><textarea value={criteria} rows={4} onChange={(event) => setCriteria(event.target.value)} placeholder={t("例如：\n可建立客戶與訂單\n具備權限控管\n測試全部通過")} /></div></details>
+  </>;
+
+  const composer = <TaskComposer
+    key={`boss-composer-${composerSeed}`}
+    draftKey={`boss:${selected && !newTask ? selected.id : `${advisorWorkspace}:new`}`}
+    placeholder={placeholder}
+    submitLabel={selected && !newTask ? t("送出") : t("交辦")}
+    busyLabel={t("處理中…")}
+    disabled={Boolean(selected && !newTask && !canReply)}
+    working={working}
+    layout={composerHost ? "dock" : "inline"}
+    focusMode={focusMode}
+    leading={composerHost ? <span className="command-composer__target">BOSS</span> : undefined}
+    toolbar={(!selected || newTask) && <div className="boss-task-composer__setup">
+      <button
+        type="button"
+        className={`boss-task-composer__dedicated${dedicatedDepartment ? " is-on" : ""}`}
+        role="switch"
+        aria-checked={dedicatedDepartment}
+        onClick={() => setDedicatedDepartment((value) => !value)}
+        title={t("開：按交辦直接為這個目標建一支專屬部門並開跑（省 token、不占用既有部門）。關：交給決策模型路由到既有部門。")}
+      >
+        <span className="boss-task-composer__dedicated-track"><span className="boss-task-composer__dedicated-thumb" /></span>
+        <span>{dedicatedDepartment ? t("為此交辦開專屬部門") : t("交給既有部門（路由）")}</span>
+      </button>
+      {isPhone
+        ? <details className="boss-task-composer__advanced"><summary>{t("更多設定")} <span>{t("選填")}</span></summary><div className="boss-task-composer__advanced-inner">{settingSections}</div></details>
+        : settingSections}
     </div>}
     onSubmit={submit}
   />;
@@ -332,7 +475,7 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         {selected.archivedAt
           ? <button type="button" disabled={working} onClick={() => void updateRecord({ archived: false })}>{t("移回目前任務")}</button>
           : <button type="button" disabled={working || !terminalStatuses.includes(selected.status)} title={terminalStatuses.includes(selected.status) ? t("保留完整歷史並從目前清單移除") : t("進行中或等待處理的任務不能封存")} onClick={() => void updateRecord({ archived: true })}>{t("封存記錄")}</button>}
-        <button type="button" className="boss-task-record-editor__delete" disabled={working || !terminalStatuses.includes(selected.status)} title={terminalStatuses.includes(selected.status) ? t("永久刪除這筆 Boss 任務記錄") : t("進行中或等待處理的任務不能刪除")} onClick={() => void deleteRecord()}>{t("刪除紀錄")}</button>
+        <button type="button" className="boss-task-record-editor__delete" disabled={working || !deletableStatuses.includes(selected.status)} title={deletableStatuses.includes(selected.status) ? t("永久刪除這筆 Boss 任務記錄") : t("執行中的任務不能刪除；請等它完成或先取消")} onClick={() => void deleteRecord()}>{t("刪除紀錄")}</button>
       </div>
       <small>{selected.archivedAt ? t("封存於 {time}", { time: new Date(selected.archivedAt).toLocaleString() }) : terminalStatuses.includes(selected.status) ? t("封存會保留全部對話、部門階段與報告。") : t("這筆任務仍在進行或等待處理，完成／取消後才能封存。")}</small>
     </section>}
@@ -342,16 +485,74 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         <div className="boss-task-desk__empty-mark" aria-hidden="true">B</div>
         <span>BOSS DESK</span>
         <strong>{t("今天想完成什麼？")}</strong>
-        <p>{t("將以目前工作區「{workspace}」開始；需求太概略時會先詢問，明確後才安排部門。", { workspace: workspaceLabel(workspacePath) })}</p>
-        <div className="boss-task-desk__starters" aria-label={t("任務範例")}>
-          {starterTasks.map((starter) => <button key={starter} type="button" onClick={() => {
-            try { localStorage.setItem(`pixel-crew:task-composer:boss:${workspacePath}:new`, starter); } catch { /* unavailable */ }
-            setNewTask(false);
-            requestAnimationFrame(() => setNewTask(true));
-          }}>{t(starter)}</button>)}
+        <p>{t("任務會在工作區「{workspace}」執行；需求太概略時會先問清楚再安排部門。", { workspace: workspaceLabel(advisorWorkspace) })}</p>
+        <div className="boss-task-desk__advisor" aria-label={t("專家顧問")}>
+          <div className="boss-task-desk__advisor-head">
+            <strong>{t("沒方向？讓顧問幫你想")}</strong>
+            <small>{t("給一個粗略念頭或主題，顧問會用專業列出你可能沒想到的方向，挑一個就能交辦。")}</small>
+          </div>
+          {advisorPinnedElsewhere && <div className="boss-task-desk__advisor-pinned" role="status">
+            <span>{advisorLoading
+              ? t("正在生成工作區「{workspace}」的顧問方向，切到哪都看得到。", { workspace: workspaceLabel(advisorWorkspace) })
+              : t("目前顯示的是工作區「{workspace}」的顧問方向。", { workspace: workspaceLabel(advisorWorkspace) })}</span>
+            <button type="button" onClick={dismissPinnedAdvisor}>{t("改用目前工作區「{workspace}」", { workspace: workspaceLabel(workspacePath) })}</button>
+          </div>}
+          <div className="boss-task-desk__advisor-input">
+            <input
+              value={advisorIdea}
+              onChange={(event) => setAdvisorIdea(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void runAdvisor(); } }}
+              placeholder={t("例如：我想用 AI 做量化交易，但不知道從何下手")}
+              maxLength={4000}
+              aria-label={t("你的粗略念頭或主題")}
+            />
+            <button type="button" onClick={() => void runAdvisor()} disabled={advisorLoading || !advisorIdea.trim()}>
+              {advisorLoading ? t("顧問思考中…") : t("幫我想方向")}
+            </button>
+          </div>
+          {/* 主動建議：完全沒想法時，讓顧問從你的工作區脈絡主動端幾個方向給你挑（只建議、不自動執行）。 */}
+          <button
+            type="button"
+            className="boss-task-desk__advisor-proactive"
+            onClick={() => void runAdvisor(true)}
+            disabled={advisorLoading}
+          >
+            {advisorLoading ? t("顧問思考中…") : t("完全沒想法？讓顧問主動給我建議")}
+          </button>
+          {advisorLoading && <div className="boss-task-desk__advisor-loading" role="status" aria-live="polite">
+            <div className="boss-task-desk__advisor-orb"><span></span><span></span><span></span></div>
+            <div className="boss-task-desk__advisor-loading-body">
+              <strong>{t("顧問思考中…")}</strong>
+              <span key={advisorPhase} className="boss-task-desk__advisor-phase">{advisorPhase}</span>
+              <div className="boss-task-desk__advisor-bar"><i style={{ width: `${advisorProgress}%` }}></i></div>
+              <small>{t("已思考 {sec} 秒 · 通常約 100–115 秒，請稍候", { sec: advisorElapsed })}</small>
+            </div>
+          </div>}
+          {advisorError && <p className="boss-task-desk__advisor-error" role="alert">{advisorError}</p>}
+          {advisorQuestion && <div className="boss-task-desk__advisor-question">
+            <strong>{t("顧問想先確認一件事：")}</strong>
+            <p>{advisorQuestion}</p>
+            <small>{t("把答案補進上面的念頭，再按一次「幫我想方向」。")}</small>
+          </div>}
+          {advisorProposals.length > 0 && <div className="boss-task-desk__advisor-proposals">
+            {advisorDomain && <small className="boss-task-desk__advisor-domain">{t("領域：{domain}", { domain: advisorDomain })}</small>}
+            {advisorProposals.map((proposal) => (
+              <div key={proposal.id} className="boss-task-desk__advisor-card">
+                <strong>{proposal.title}</strong>
+                {proposal.summary && <p>{proposal.summary}</p>}
+                {proposal.insight && <p className="boss-task-desk__advisor-insight">{proposal.insight}</p>}
+                {proposal.approach && <p className="boss-task-desk__advisor-approach">{proposal.approach}</p>}
+                {proposal.considerations.length > 0 && <ul>{proposal.considerations.map((item, index) => <li key={index}>{item}</li>)}</ul>}
+                <div className="boss-task-desk__advisor-actions">
+                  <button type="button" onClick={() => useProposalObjective(proposal.objective)}>{t("用這個方向交辦 →")}</button>
+                  {onDebateDirection && <button type="button" className="boss-task-desk__advisor-debate" onClick={() => onDebateDirection(advisorDebateTopic(proposal, advisorDomain))}>{t("送圓桌智囊團討論 →")}</button>}
+                </div>
+              </div>
+            ))}
+          </div>}
         </div>
       </div> : <>
-        <div className={`boss-task-desk__status boss-task-desk__status--${selected.status}`}>
+        <div key={`status-${selected.id}`} className={`boss-task-desk__status boss-task-desk__status--${selected.status}${freshTask ? " r2-drop-in" : ""}`}>
           <span>{selected.executionMode === "research" && selected.status === "running" ? t("快速研究中") : statusLabel[selected.status]}</span>
           <small>{selected.decisionProvider} · {selected.decisionModel}</small>
         </div>
@@ -363,8 +564,8 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
           completed: selected.stages.filter((stage) => (stage.missionId ? missions.find((mission) => mission.id === stage.missionId)?.status : stage.status) === "completed").length,
           total: selected.stages.length,
         })}</p>}
-        <div className="boss-task-desk__messages">
-          {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}`}>
+        <div key={`messages-${selected.id}`} className={`boss-task-desk__messages${freshTask ? " r2-drop-in r2-drop-in--after" : ""}`}>
+          {selected.messages.map((entry) => <article key={entry.id} className={`boss-task-message boss-task-message--${entry.role}${freshMessages.has(entry.id) ? " r2-drop-in" : ""}`}>
             <span>{entry.role === "boss" ? t("老闆") : entry.role === "decision_model" ? t("決策模型") : entry.role === "report" ? t("最終報告") : "Pixel Crew"}</span>
             <div className="boss-task-message__content">
               <RichText text={entry.text} compact={entry.role !== "report"} />
@@ -374,10 +575,30 @@ export function BossTaskDesk({ workspacePath, tasks, missions = [], workers = []
         </div>
         {selected.stages.length > 0 && <div className="boss-task-stages">
           <h3>{selected.executionMode === "research" ? t("部門快速研究") : t("跨部門執行")}</h3>
-          {selected.stages.map((stage, index) => <button key={stage.id} type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
-            <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined, workers)}</small></span>
-          </button>)}
+          {selected.stages.map((stage, index) => {
+            const stageMission = stage.missionId ? missions.find((mission) => mission.id === stage.missionId) : undefined;
+            const stageActive = stageMission?.status === "planning" || stageMission?.status === "executing" || stageMission?.status === "reviewing";
+            const hasStageActivity = (stageMission?.executionEvents?.length ?? 0) > 0;
+            // 同 DepartmentMissionDialog：已結束的 Mission 在初始 snapshot 裡沒有活動流，
+            // 入口還是要留著，展開時再單筆補抓，否則重整後「看部門討論」就消失了。
+            const canLoadStageActivity = !hasStageActivity && Boolean(stageMission) && Boolean(onLoadActivity)
+              && (stageMission!.status === "completed" || stageMission!.status === "failed" || stageMission!.status === "cancelled");
+            return <div key={stage.id} className={`boss-task-stage${freshStages.has(stage.id) ? " r2-drop-in" : ""}`} style={freshStages.has(stage.id) ? { animationDelay: `${Math.min(index, 5) * 60}ms` } : undefined}>
+              <button type="button" disabled={!stage.missionId || !onOpenMission} onClick={() => stage.missionId && onOpenMission?.(stage.missionId)}>
+                <i>{index + 1}</i><span><strong>{stage.departmentName} · {stage.title}</strong><small>{bossStageProgress(stage, stageMission, workers)}</small></span>
+              </button>
+              {(hasStageActivity || canLoadStageActivity) && <details
+                className="boss-task-stage__peek"
+                open={stageActive}
+                onToggle={(event) => { if (event.currentTarget.open && canLoadStageActivity) void onLoadActivity!(stageMission!.id); }}
+              >
+                <summary>{t("看部門討論")}</summary>
+                <MissionActivityFeed events={stageMission!.executionEvents} workers={workers} limit={40} />
+              </details>}
+            </div>;
+          })}
         </div>}
+        {onCancelTask && !selected.archivedAt && !terminalStatuses.includes(selected.status) && <button type="button" className="boss-task-desk__cancel" disabled={working} onClick={() => void cancelTask()}>{t("中止交辦")}</button>}
         {onRestart && !selected.archivedAt && <button type="button" className="boss-task-desk__restart" disabled={working || selected.status === "discovering" || selected.status === "synthesizing"} onClick={() => void restartTask()}>{t("清空並重新交辦")}</button>}
       </>}
     </div>

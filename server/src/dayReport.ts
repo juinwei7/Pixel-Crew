@@ -80,7 +80,9 @@ export function buildDayReport(input: DayReportInput): DayReport {
     if (!entry) {
       entry = {
         workerId,
-        name: workerName(workerId) ?? fallbackName ?? workerId,
+        // 用 || 而非 ??：fallbackName 預設是空字串（cost_log 的 worker_name DB 預設也是 ''），
+        // 空字串不是 nullish，?? 會讓 workerId 退路永遠不可達，已刪 NPC 會顯示成空白名。
+        name: workerName(workerId) || fallbackName || workerId,
         costUsd: 0, turns: 0, userMessages: 0, errors: 0,
         dailyBudgetUsd: dailyBudget(workerId) ?? null,
       };

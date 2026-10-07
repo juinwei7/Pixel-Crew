@@ -7,6 +7,27 @@ import type { LocalStore } from "./store.js";
 
 const diagnosticKinds = new Set<DiagnosticEventKind>(["websocket_reconnect", "ui_long_task", "fps_sample", "approval_wait"]);
 
+/**
+ * 把 POST /api/app-settings 的 body 轉成設定 patch。「開機自動啟動遠端存取轉接站」雖然存在一般
+ * 功能設定裡，本質是遠端存取設定——轉接站把 /api/remote-access/* 整個子樹對分享訪客鎖成 owner
+ * 專屬，這裡也一樣，不能讓拿到監護解鎖的訪客從這條路繞過去改。shareGuest 來自轉接站驗證後蓋上
+ * 的 x-pc-access: shr（用戶端偽造不了；主機上本機直連沒有這個 header＝owner）。
+ */
+export function appSettingsPatchFromBody(
+  body: unknown,
+  options: { shareGuest: boolean },
+): { patch: Record<string, boolean | string> } | { error: "owner_only" } {
+  const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (options.shareGuest && source.remoteAccessAutoStart !== undefined) return { error: "owner_only" };
+  const patch: Record<string, boolean | string> = {};
+  if (typeof source.brainSwapEnabled === "boolean") patch.brainSwapEnabled = source.brainSwapEnabled;
+  if (typeof source.limitResumeEnabled === "boolean") patch.limitResumeEnabled = source.limitResumeEnabled;
+  if (typeof source.diagnosticsEnabled === "boolean") patch.diagnosticsEnabled = source.diagnosticsEnabled;
+  if (typeof source.remoteAccessAutoStart === "boolean") patch.remoteAccessAutoStart = source.remoteAccessAutoStart;
+  if (source.lang === "zh" || source.lang === "en") patch.lang = source.lang;
+  return { patch };
+}
+
 export function registerOperationalSettingsRoutes(input: {
   app: Express;
   appSettings: AppSettingsStore;
@@ -21,12 +42,9 @@ export function registerOperationalSettingsRoutes(input: {
   });
 
   app.post("/api/app-settings", (req, res) => {
-    const patch: Record<string, boolean | string> = {};
-    if (typeof req.body?.brainSwapEnabled === "boolean") patch.brainSwapEnabled = req.body.brainSwapEnabled;
-    if (typeof req.body?.limitResumeEnabled === "boolean") patch.limitResumeEnabled = req.body.limitResumeEnabled;
-    if (typeof req.body?.diagnosticsEnabled === "boolean") patch.diagnosticsEnabled = req.body.diagnosticsEnabled;
-    if (req.body?.lang === "zh" || req.body?.lang === "en") patch.lang = req.body.lang;
-    const settings = appSettings.update(patch);
+    const parsed = appSettingsPatchFromBody(req.body, { shareGuest: String(req.headers["x-pc-access"] ?? "") === "shr" });
+    if ("error" in parsed) { res.status(403).json({ error: parsed.error }); return; }
+    const settings = appSettings.update(parsed.patch);
     input.setLang(settings.lang);
     res.json({ settings });
   });

@@ -1,0 +1,817 @@
+/* ────────────────────────────────────────────────────────────────────────
+   介面瞬間（第二輪）：建立 NPC、手機遠端、桌面通知、重啟／重新連線、設定
+   已儲存、複製、載入骨架、空狀態、新成品、批准卡、隊員列。
+
+   規則跟 motion.css 一樣：
+   - 只動 transform / opacity，而且用獨立的 translate / scale / rotate 屬性
+     （元件自己可能拿 transform 定位）。
+   - 時長、曲線、位移全部取 motion.css 的 token。
+   - 像素感：方角（2–3px 圓角）、硬邊色塊、等寬字標籤，不用漸層彩虹、不用
+     毛玻璃。顏色只用既有色板（cyan / ok 綠 / warn 琥珀 / err 洋紅）。
+   - 最下面 prefers-reduced-motion：循環的一律停掉，位移改成純淡入。
+   載入順序在 motion.css 之後、responsive.css 之前。
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* 共用：勾勾用 stroke 畫出來（跟送出鈕同一個語彙）。 */
+.pc-conn__check path,
+.pc-build-done__monitor path,
+.remote-steps__check path,
+.pc-copy__done path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-dasharray: 24;
+}
+
+/* 錯誤抖動：左右晃三下收住。key 換掉就重播。 */
+.pc-shake { animation: pc-shake 380ms var(--ease-out) both; }
+@keyframes pc-shake {
+  0% { translate: 0 0; }
+  18% { translate: -6px 0; }
+  36% { translate: 5px 0; }
+  54% { translate: -3px 0; }
+  72% { translate: 2px 0; }
+  100% { translate: 0 0; }
+}
+@keyframes pc-shake-b {
+  0% { translate: 0 0; }
+  18% { translate: -6px 0; }
+  36% { translate: 5px 0; }
+  54% { translate: -3px 0; }
+  72% { translate: 2px 0; }
+  100% { translate: 0 0; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   重啟／重新連線
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-conn {
+  position: fixed;
+  z-index: 27500;
+  pointer-events: none;
+}
+/* 一般斷線：頂欄下方一張小卡。 */
+.pc-conn--blip {
+  top: calc(var(--safe-t, 0px) + 58px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+/* 重啟／安裝新版：預期中的斷線，畫面整個暗一階，卡片置中偏上。 */
+.pc-conn--reboot {
+  inset: 0;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: calc(var(--safe-t, 0px) + 18vh);
+}
+.pc-conn--reboot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 6, 14, 0.42);
+  animation: pc-fade-in var(--dur-4) ease both;
+}
+.pc-conn--reboot[data-phase="back"]::before {
+  animation: pc-fade-out var(--dur-3) var(--ease-in) 1300ms both;
+}
+
+.pc-conn__card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 300px;
+  max-width: min(440px, calc(100vw - 24px));
+  padding: 10px 14px 10px 12px;
+  border: 1px solid rgba(255, 176, 0, 0.36);
+  border-radius: 6px;
+  background: #0a1120;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  color: #f0d38c;
+  transform-origin: top center;
+  --m-from-y: -8px;
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+}
+.pc-conn--reboot .pc-conn__card {
+  min-width: min(380px, calc(100vw - 24px));
+  padding: 16px 18px 16px 16px;
+  gap: 16px;
+  --m-from-y: 12px;
+}
+.pc-conn[data-phase="back"] .pc-conn__card {
+  border-color: rgba(0, 255, 163, 0.5);
+  color: #9af5d0;
+  animation: pc-conn-out var(--dur-3) var(--ease-in) 1350ms both;
+}
+@keyframes pc-conn-out {
+  to { opacity: 0; translate: 0 -6px; scale: 0.98; }
+}
+.pc-conn__copy { display: grid; gap: 3px; min-width: 0; }
+.pc-conn__eyebrow { color: #8a7650; font: 700 8.5px var(--mono); letter-spacing: 0.18em; }
+.pc-conn[data-phase="back"] .pc-conn__eyebrow { color: #4fae86; }
+.pc-conn__title { color: #ffe1a3; font-size: 13px; animation: pc-item-in var(--dur-3) var(--ease-out) both; }
+.pc-conn--reboot .pc-conn__title { font-size: 15px; }
+.pc-conn[data-phase="back"] .pc-conn__title { color: #c9ffe8; }
+.pc-conn__copy small { color: #8d97ad; font: 10.5px var(--mono); }
+.pc-conn__elapsed { margin-left: 4px; color: #b9a172; }
+.pc-conn__note { color: #5f6f8c !important; }
+
+/* 像素機櫃：三格插槽，燈號由上而下輪流亮；回來時三燈一起亮綠。 */
+.pc-conn__rack {
+  display: grid;
+  gap: 3px;
+  width: 22px;
+  padding: 3px;
+  border: 1px solid rgba(255, 176, 0, 0.3);
+  border-radius: 2px;
+  background: #070c17;
+}
+.pc-conn--reboot .pc-conn__rack { width: 30px; gap: 4px; padding: 4px; }
+.pc-conn__rack i {
+  position: relative;
+  height: 4px;
+  background: #18233a;
+}
+.pc-conn--reboot .pc-conn__rack i { height: 6px; }
+.pc-conn__rack i::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 2px;
+  height: 2px;
+  background: var(--warn);
+  opacity: 0.15;
+  animation: pc-led 1.2s steps(1, end) infinite;
+}
+.pc-conn--reboot .pc-conn__rack i::after { top: 2px; right: 2px; }
+.pc-conn__rack i:nth-child(2)::after { animation-delay: 0.4s; }
+.pc-conn__rack i:nth-child(3)::after { animation-delay: 0.8s; }
+@keyframes pc-led {
+  0% { opacity: 1; }
+  33% { opacity: 0.15; }
+}
+.pc-conn[data-phase="back"] .pc-conn__rack { border-color: rgba(0, 255, 163, 0.4); }
+.pc-conn[data-phase="back"] .pc-conn__rack i::after {
+  background: var(--ok);
+  opacity: 1;
+  animation: pc-check-pop var(--dur-spring) var(--ease-spring) both;
+}
+
+/* 像素進度：12 格，等待中一道亮波來回跑；回來時由左到右點滿綠。 */
+.pc-conn__bar { display: flex; gap: 2px; margin-top: 4px; }
+.pc-conn__bar i {
+  flex: 1 1 0;
+  max-width: 14px;
+  height: 5px;
+  background: var(--warn);
+  opacity: 0.14;
+  animation: pc-seg-chase 1.5s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--seg, 0) * 75ms);
+}
+.pc-conn--reboot .pc-conn__bar i { height: 6px; max-width: 18px; }
+@keyframes pc-seg-chase {
+  0%, 100% { opacity: 0.14; }
+  30% { opacity: 1; }
+  60% { opacity: 0.14; }
+}
+.pc-conn[data-phase="back"] .pc-conn__bar i {
+  background: var(--ok);
+  animation: pc-seg-fill 260ms var(--ease-out) both;
+  animation-delay: calc(var(--seg, 0) * 28ms);
+}
+@keyframes pc-seg-fill {
+  from { opacity: 0.14; scale: 1 0.4; }
+  to { opacity: 1; scale: 1 1; }
+}
+
+.pc-conn__check {
+  width: 22px;
+  height: 22px;
+  color: var(--ok);
+  stroke-width: 3;
+  animation: pc-check-pop var(--dur-spring) var(--ease-spring) 200ms both;
+}
+.pc-conn__check path { animation: pc-check-draw 320ms var(--ease-out) 260ms both; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   建立 NPC／部門：建造中的像素磚、建好的工位
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-build { display: inline-flex; align-items: center; gap: 8px; }
+.pc-build__bricks {
+  display: grid;
+  grid-template-columns: repeat(2, 5px);
+  grid-template-rows: repeat(2, 5px);
+  gap: 1px;
+}
+.pc-build__bricks i {
+  background: currentColor;
+  opacity: 0;
+  animation: pc-brick 1.4s var(--ease-out) infinite;
+}
+/* 疊磚順序：左下 → 右下 → 左上 → 右上。 */
+.pc-build__bricks i:nth-child(1) { grid-area: 2 / 1; animation-delay: 0ms; }
+.pc-build__bricks i:nth-child(2) { grid-area: 2 / 2; animation-delay: 140ms; }
+.pc-build__bricks i:nth-child(3) { grid-area: 1 / 1; animation-delay: 280ms; }
+.pc-build__bricks i:nth-child(4) { grid-area: 1 / 2; animation-delay: 420ms; }
+@keyframes pc-brick {
+  0% { opacity: 0; translate: 0 -7px; }
+  16% { opacity: 1; translate: 0 0; }
+  78% { opacity: 1; translate: 0 0; }
+  100% { opacity: 0; translate: 0 0; }
+}
+
+.workspace-picker__card,
+.department-creator__card { position: relative; }
+.pc-build-done {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  border-radius: inherit;
+  background: rgba(7, 11, 22, 0.94);
+  text-align: center;
+  animation: pc-fade-in var(--dur-2) ease both;
+}
+.pc-build-done strong {
+  color: #e8fbff;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+  animation: pc-item-in var(--dur-4) var(--ease-out) 320ms both;
+}
+.pc-build-done small {
+  color: #7d90aa;
+  font: 11px var(--mono);
+  animation: pc-item-in var(--dur-4) var(--ease-out) 400ms both;
+}
+/* 工位：桌板先橫向鋪開 → 支架長出來 → 螢幕彈上去亮起打勾 → 三顆像素火花彈開。 */
+.pc-build-done__station {
+  position: relative;
+  width: 72px;
+  height: 58px;
+  margin-bottom: 6px;
+}
+.pc-build-done__station i { position: absolute; display: block; }
+.pc-build-done__station .pc-build-done__monitor { display: grid; }
+.pc-build-done__desk {
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 6px;
+  background: #3b4a6b;
+  box-shadow: inset 0 2px 0 #56698f;
+  animation: pc-desk-in 260ms var(--ease-out) both;
+}
+@keyframes pc-desk-in { from { scale: 0 1; } }
+.pc-build-done__stand {
+  left: 32px;
+  bottom: 6px;
+  width: 8px;
+  height: 10px;
+  background: #2b3754;
+  transform-origin: bottom center;
+  animation: pc-stand-in 200ms var(--ease-out) 140ms both;
+}
+@keyframes pc-stand-in { from { scale: 1 0; } }
+.pc-build-done__monitor {
+  left: 12px;
+  bottom: 16px;
+  width: 48px;
+  height: 34px;
+  place-items: center;
+  border: 2px solid #56698f;
+  background: #08111f;
+  color: var(--ok);
+  transform-origin: bottom center;
+  animation: pc-monitor-in var(--dur-spring) var(--ease-spring) 240ms both;
+}
+@keyframes pc-monitor-in { from { opacity: 0; scale: 0.4; translate: 0 6px; } }
+/* 螢幕亮起：一層綠光由透明亮到微亮。 */
+.pc-build-done__monitor::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 255, 163, 0.12);
+  opacity: 0;
+  animation: pc-fade-in 240ms ease 460ms forwards;
+}
+.pc-build-done__monitor svg { position: relative; width: 22px; height: 22px; stroke-width: 3; }
+.pc-build-done__monitor path { stroke-dashoffset: 24; animation: pc-check-draw 300ms var(--ease-out) 520ms forwards; }
+.pc-build-done__spark {
+  top: 10px;
+  left: 34px;
+  width: 4px;
+  height: 4px;
+  background: var(--cyan);
+  opacity: 0;
+  animation: pc-spark 560ms var(--ease-out) 600ms both;
+}
+.pc-build-done__spark--a { --sx: -30px; --sy: -14px; }
+.pc-build-done__spark--b { --sx: 30px; --sy: -16px; background: var(--ok); }
+.pc-build-done__spark--c { --sx: 2px; --sy: -26px; background: #ffcb5b; }
+@keyframes pc-spark {
+  0% { opacity: 0; translate: 0 0; scale: 0.5; }
+  20% { opacity: 1; }
+  100% { opacity: 0; translate: var(--sx) var(--sy); scale: 1; }
+}
+
+/* 建好之後表單淡出，交給上面的「工位已就緒」。 */
+.workspace-picker__form,
+.department-creator__review { transition: opacity var(--dur-2) ease; }
+.workspace-picker__form--built,
+.department-creator__review--built { opacity: 0; }
+
+/* 表單分段入場：卡片先到，欄位一段一段往上浮進來。 */
+.workspace-picker__form > *,
+.department-creator__card > form > * {
+  animation: pc-item-in var(--dur-4) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 34ms + 70ms);
+  --m-item-y: 8px;
+}
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(2) { --i: 1; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(3) { --i: 2; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(4) { --i: 3; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(5) { --i: 4; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(6) { --i: 5; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(7) { --i: 6; }
+:is(.workspace-picker__form, .department-creator__card > form) > :nth-child(n + 8) { --i: 7; }
+/* 錯誤訊息：自己有抖動，不吃分段入場。 */
+.workspace-picker__form > .pc-shake,
+.department-creator__card > form > .pc-shake { animation: pc-shake 380ms var(--ease-out) both; }
+/* 新 NPC 的工位圖示：等待確認時，小螢幕的游標輕輕閃。 */
+.workspace-picker__card--create .workspace-picker__glyph::after { animation: pc-glyph-blink 1.6s steps(1, end) infinite; }
+@keyframes pc-glyph-blink { 50% { opacity: 0.25; } }
+
+/* AI 排好的部門成員：一張一張發下來。 */
+.department-creator__members > article {
+  animation: pc-item-in var(--dur-4) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 70ms + 60ms);
+  --m-item-y: 12px;
+}
+.department-creator__members > article > b { animation: pc-check-stamp var(--dur-spring) var(--ease-spring) backwards; animation-delay: calc(var(--i, 0) * 70ms + 180ms); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   角色工坊：選中的角色跳一下、勾勾蓋章；來源分頁的亮塊從另一邊滑過來
+   ════════════════════════════════════════════════════════════════════════ */
+.avatar-workshop__preset.is-active .avatar-workshop__preset-art {
+  animation: pc-avatar-hop 560ms var(--ease-out);
+}
+.avatar-workshop__preset.is-active .avatar-workshop__preset-check {
+  animation: pc-check-stamp var(--dur-spring) var(--ease-spring) both;
+}
+@keyframes pc-avatar-hop {
+  0% { translate: 0 0; scale: 1 1; }
+  18% { translate: 0 1px; scale: 1.06 0.92; }
+  45% { translate: 0 -7px; scale: 0.97 1.04; }
+  72% { translate: 0 0; scale: 1.04 0.96; }
+  100% { translate: 0 0; scale: 1 1; }
+}
+.avatar-workshop__existing { animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both; }
+.avatar-workshop__source-tabs button::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  border-radius: inherit;
+  background: rgba(0, 229, 255, 0.08);
+  opacity: 0;
+  pointer-events: none;
+}
+.avatar-workshop__source-tabs button.is-active:first-child::before { animation: pc-tab-ghost-r 340ms var(--ease-out); }
+.avatar-workshop__source-tabs button.is-active:last-child::before { animation: pc-tab-ghost-l 340ms var(--ease-out); }
+@keyframes pc-tab-ghost-r {
+  0% { opacity: 1; translate: calc(100% + 7px) 0; }
+  80% { opacity: 0.9; translate: 0 0; }
+  100% { opacity: 0; translate: 0 0; }
+}
+@keyframes pc-tab-ghost-l {
+  0% { opacity: 1; translate: calc(-100% - 7px) 0; }
+  80% { opacity: 0.9; translate: 0 0; }
+  100% { opacity: 0; translate: 0 0; }
+}
+
+/* 頂欄模式切換（像素／專業／黑窗）同一招：亮塊從鄰格滑進來。中間那格不知道
+   從哪邊來，改成由中心往兩側展開。 */
+.top-bar .ui-mode-switch button { position: relative; }
+.top-bar .ui-mode-switch button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 229, 255, 0.16);
+  opacity: 0;
+  pointer-events: none;
+}
+.top-bar .ui-mode-switch button.active:first-child::before { animation: pc-mode-ghost-r 300ms var(--ease-out); }
+.top-bar .ui-mode-switch button.active:last-child::before { animation: pc-mode-ghost-l 300ms var(--ease-out); }
+.top-bar .ui-mode-switch button.active:not(:first-child):not(:last-child)::before { animation: pc-mode-ghost-c 300ms var(--ease-out); }
+@keyframes pc-mode-ghost-r { 0% { opacity: 1; translate: 100% 0; } 85% { opacity: 1; translate: 0 0; } 100% { opacity: 0; } }
+@keyframes pc-mode-ghost-l { 0% { opacity: 1; translate: -100% 0; } 85% { opacity: 1; translate: 0 0; } 100% { opacity: 0; } }
+@keyframes pc-mode-ghost-c { 0% { opacity: 1; scale: 0.2 1; } 85% { opacity: 1; scale: 1 1; } 100% { opacity: 0; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   手機遠端控制
+   ════════════════════════════════════════════════════════════════════════ */
+.remote-steps__bar { position: relative; overflow: hidden; }
+.remote-steps__bar > i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #5b8cff;
+  transform-origin: left center;
+  scale: 0 1;
+  transition: scale 560ms var(--ease-out);
+}
+.remote-steps__step[data-done] .remote-steps__bar > i { scale: 1 1; }
+/* 目前這一步：軌道裡有一小段光來回走，告訴你「下一步在這」。 */
+.remote-steps__step[data-current] .remote-steps__bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  background: rgba(159, 192, 255, 0.45);
+  animation: pc-track-sweep 1.8s var(--ease-in-out) infinite;
+}
+@keyframes pc-track-sweep {
+  0% { translate: -100% 0; opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { translate: 300% 0; opacity: 0; }
+}
+.remote-steps__label { display: flex; align-items: center; gap: 3px; transition: color var(--dur-3) ease; }
+.remote-steps__check {
+  width: 11px;
+  height: 11px;
+  color: #9fc0ff;
+  stroke-width: 3.2;
+  animation: pc-check-pop var(--dur-spring) var(--ease-spring) 280ms both;
+}
+.remote-steps__check path { stroke-dashoffset: 24; animation: pc-check-draw 300ms var(--ease-out) 320ms forwards; }
+
+/* 已上線卡：彈進來，外框亮一圈綠再退。 */
+.remote-live-card {
+  position: relative;
+  animation: pc-pop-in var(--dur-spring-soft) var(--ease-spring-soft) both;
+  --m-from-y: 8px;
+}
+.remote-live-card::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid #7ee0a2;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-ring-flash 1.6s var(--ease-out) 260ms both;
+}
+@keyframes pc-ring-flash {
+  0% { opacity: 0; }
+  14% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.remote-live-card .remote-access-modal__qr { animation: pc-pop-in var(--dur-spring) var(--ease-spring) 120ms both; }
+/* 「已上線」燈：持續發出慢慢擴散的聲納波——這條線是活的。 */
+.remote-live { display: flex; align-items: center; }
+.remote-live__dot {
+  position: relative;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 1px;
+  background: #7ee0a2;
+}
+.remote-live__dot::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid #7ee0a2;
+  border-radius: 1px;
+  animation: pc-sonar 2.4s var(--ease-out) infinite;
+}
+@keyframes pc-sonar {
+  0% { opacity: 0.9; scale: 1; }
+  70%, 100% { opacity: 0; scale: 3.2; }
+}
+/* cloudflared 下載不知道總大小時：淡色滿版條裡一段光在跑。 */
+.remote-dl__fill--unknown { position: relative; overflow: hidden; }
+.remote-dl__fill--unknown::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  background: rgba(255, 255, 255, 0.85);
+  animation: pc-track-sweep 1.4s var(--ease-in-out) infinite;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   複製鈕：字往上收、勾勾畫出來、再把字放回來
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-copy { position: relative; display: inline-grid; overflow: hidden; white-space: nowrap; }
+.pc-copy > span {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: opacity var(--dur-2) ease, translate var(--dur-3) var(--ease-out);
+}
+.pc-copy__done { opacity: 0; translate: 0 8px; color: #7ee0a2; }
+.pc-copy__done svg { width: 13px; height: 13px; stroke-width: 3; }
+.pc-copy[data-copied] .pc-copy__label { opacity: 0; translate: 0 -8px; }
+.pc-copy[data-copied] .pc-copy__done { opacity: 1; translate: 0 0; }
+.pc-copy[data-copied] .pc-copy__done path { animation: pc-check-draw 300ms var(--ease-out) 60ms both; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   桌面通知：鈴鐺搖一下、ON 標籤蓋章
+   ════════════════════════════════════════════════════════════════════════ */
+.top-bar__notify .ui-icon { transform-origin: 50% 12%; }
+.top-bar__notify[data-ring="a"] .ui-icon { animation: pc-bell-a 900ms var(--ease-out); }
+.top-bar__notify[data-ring="b"] .ui-icon { animation: pc-bell-b 900ms var(--ease-out); }
+@keyframes pc-bell-a {
+  0% { rotate: 0deg; }
+  12% { rotate: 20deg; }
+  26% { rotate: -16deg; }
+  40% { rotate: 11deg; }
+  54% { rotate: -7deg; }
+  68% { rotate: 3deg; }
+  100% { rotate: 0deg; }
+}
+@keyframes pc-bell-b {
+  0% { rotate: 0deg; }
+  12% { rotate: 20deg; }
+  26% { rotate: -16deg; }
+  40% { rotate: 11deg; }
+  54% { rotate: -7deg; }
+  68% { rotate: 3deg; }
+  100% { rotate: 0deg; }
+}
+.top-bar__notify[data-on] .ui-icon { color: var(--ok); }
+.top-bar__notify-on {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(0, 255, 163, 0.42);
+  border-radius: 2px;
+  color: var(--ok);
+  font: 700 8.5px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  animation: pc-check-stamp var(--dur-spring) var(--ease-spring) 160ms both;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   開關：像素方塊滑軌，拇指彈簧滑過去；伺服器確認後列尾蓋一個勾
+   ════════════════════════════════════════════════════════════════════════ */
+.top-bar__menu-toggle { position: relative; }
+.top-bar__menu-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid rgba(143, 184, 232, 0.3);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: background-color var(--dur-2) ease, border-color var(--dur-2) ease;
+}
+.top-bar__menu-toggle input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: #6f839f;
+  transition: translate var(--dur-spring) var(--ease-spring), background-color var(--dur-2) ease, scale var(--dur-2) var(--ease-out);
+}
+.top-bar__menu-toggle input[type="checkbox"]:checked {
+  border-color: rgba(0, 229, 255, 0.6);
+  background: rgba(0, 229, 255, 0.14);
+}
+.top-bar__menu-toggle input[type="checkbox"]:checked::before {
+  translate: 12px 0;
+  background: var(--cyan);
+}
+/* 按住：拇指被壓扁一點，放開跟著彈簧彈回。 */
+.top-bar__menu-toggle input[type="checkbox"]:active:not(:disabled)::before { scale: 1.3 0.75; }
+.top-bar__menu-toggle input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
+.top-bar__menu-toggle[data-saved]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 8px;
+  height: 4px;
+  margin-top: -4px;
+  border-left: 2px solid var(--ok);
+  border-bottom: 2px solid var(--ok);
+  rotate: -45deg;
+  opacity: 0;
+}
+.top-bar__menu-toggle[data-saved="a"]::after { animation: pc-saved-a 1400ms var(--ease-out) both; }
+.top-bar__menu-toggle[data-saved="b"]::after { animation: pc-saved-b 1400ms var(--ease-out) both; }
+@keyframes pc-saved-a {
+  0% { opacity: 0; scale: 0.3; }
+  14% { opacity: 1; scale: 1.25; }
+  26% { scale: 1; }
+  78% { opacity: 1; }
+  100% { opacity: 0; scale: 1; }
+}
+@keyframes pc-saved-b {
+  0% { opacity: 0; scale: 0.3; }
+  14% { opacity: 1; scale: 1.25; }
+  26% { scale: 1; }
+  78% { opacity: 1; }
+  100% { opacity: 0; scale: 1; }
+}
+.top-bar__menu-toggle[data-failed="a"] { animation: pc-shake 380ms var(--ease-out); }
+.top-bar__menu-toggle[data-failed="b"] { animation: pc-shake-b 380ms var(--ease-out); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   載入骨架／空狀態
+   ════════════════════════════════════════════════════════════════════════ */
+.pc-skel { display: grid; gap: 6px; }
+.pc-skel__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid #1c2440;
+  border-radius: 10px;
+  background: #0e1424;
+  animation: pc-fade-in var(--dur-3) ease backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+.pc-skel__row i { display: block; border-radius: 2px; background: rgba(143, 184, 232, 0.09); }
+.pc-skel__icon { width: 18px; height: 18px; }
+.pc-skel__line { flex: 1 1 auto; max-width: 52%; height: 9px; }
+.pc-skel__meta { width: 34px; height: 8px; margin-left: auto; }
+/* 一道很淡的光從左掃到右，每列錯開一點，像一排正在讀取的格子。 */
+.pc-skel__row::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.06), transparent);
+  animation: pc-skel-sweep 1.5s var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i, 0) * 110ms);
+}
+@keyframes pc-skel-sweep {
+  from { translate: -100% 0; }
+  to { translate: 260% 0; }
+}
+
+.pc-empty { display: grid; justify-items: center; gap: 10px; text-align: center; }
+.pc-empty__art { position: relative; display: grid; justify-items: center; color: #4f6280; }
+.pc-empty__art .ui-icon { animation: pc-idle-bob 3.2s var(--ease-in-out) infinite; }
+/* 影子：東西浮起來時縮小變淡。 */
+.pc-empty__art i {
+  width: 18px;
+  height: 2px;
+  margin-top: 4px;
+  background: rgba(79, 98, 128, 0.5);
+  animation: pc-idle-shadow 3.2s var(--ease-in-out) infinite;
+}
+@keyframes pc-idle-bob { 50% { translate: 0 -4px; } }
+@keyframes pc-idle-shadow { 50% { scale: 0.65 1; opacity: 0.5; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   成品匣：列錯開入場、新成品左緣亮條＋掃過一道光＋NEW
+   ════════════════════════════════════════════════════════════════════════ */
+.outbox-modal__item {
+  position: relative;
+  overflow: hidden;
+  animation: pc-item-in var(--dur-3) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 32ms + 40ms);
+}
+.outbox-modal__item[data-fresh]::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  background: var(--cyan);
+  transform-origin: center;
+  animation: pc-stand-in 320ms var(--ease-out) 260ms backwards;
+}
+.outbox-modal__item[data-fresh]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.12), transparent);
+  pointer-events: none;
+  animation: pc-skel-sweep 900ms var(--ease-in-out) 360ms both;
+}
+.outbox-modal__new {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: 2px;
+  color: var(--cyan);
+  font: 700 8.5px/1.3 var(--mono);
+  letter-spacing: 0.1em;
+  animation: pc-check-stamp var(--dur-spring) var(--ease-spring) 300ms both;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   批准卡：落下來、外框琥珀亮兩下、驚嘆號晃一下
+   ════════════════════════════════════════════════════════════════════════ */
+.approval-card--pending {
+  position: relative;
+  transform-origin: top center;
+  --m-from-y: -8px;
+  /* backwards：結束後不鎖住 translate，hover 浮起（motion-fx.css）才拿得到。 */
+  animation: pc-pop-in var(--dur-spring) var(--ease-spring) backwards;
+}
+.approval-card--pending::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(255, 176, 0, 0.9);
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  animation: pc-attn-twice 1.5s ease-out 240ms both;
+}
+@keyframes pc-attn-twice {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  34% { opacity: 0.1; }
+  48% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+.approval-card--pending .approval-card__icon { animation: pc-bell-a 900ms var(--ease-out) 260ms; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   隊員列／手機 chip：新加入的滑進來；被選中的頭像跳一下
+   ════════════════════════════════════════════════════════════════════════ */
+.crew-row { animation: pc-row-in var(--dur-3) var(--ease-out) backwards; }
+@keyframes pc-row-in { from { opacity: 0; translate: -10px 0; } }
+.crew-strip__chip { animation: pc-chip-in var(--dur-spring-soft) var(--ease-spring-soft) backwards; }
+@keyframes pc-chip-in { from { opacity: 0; scale: 0.86; } }
+.crew-row--active .crew-row__avatar,
+.crew-strip__chip--active .crew-row__avatar { animation: pc-avatar-hop 520ms var(--ease-out); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   prefers-reduced-motion：循環的停掉，位移／彈跳拿掉，只留淡入淡出
+   ════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes pc-shake { from { opacity: 0.6; } }
+  @keyframes pc-shake-b { from { opacity: 0.6; } }
+  @keyframes pc-conn-out { to { opacity: 0; } }
+  @keyframes pc-seg-fill { from { opacity: 0.14; } to { opacity: 1; } }
+  @keyframes pc-desk-in { from { opacity: 0; } }
+  @keyframes pc-stand-in { from { opacity: 0; } }
+  @keyframes pc-monitor-in { from { opacity: 0; } }
+  @keyframes pc-avatar-hop { from { opacity: 0.7; } }
+  @keyframes pc-tab-ghost-r { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes pc-tab-ghost-l { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes pc-mode-ghost-r { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes pc-mode-ghost-l { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes pc-mode-ghost-c { from { opacity: 0; } to { opacity: 0; } }
+  @keyframes pc-bell-a { from { opacity: 0.5; } }
+  @keyframes pc-bell-b { from { opacity: 0.5; } }
+  @keyframes pc-saved-a { 0% { opacity: 0; } 15% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes pc-saved-b { 0% { opacity: 0; } 15% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes pc-row-in { from { opacity: 0; } }
+  @keyframes pc-chip-in { from { opacity: 0; } }
+  @keyframes pc-attn-twice { 0% { opacity: 0; } 20% { opacity: 1; } 100% { opacity: 0; } }
+
+  /* 循環動畫：停掉，留一個靜態但看得懂的狀態。 */
+  .pc-conn__rack i::after { animation: none; opacity: 1; }
+  .pc-conn__bar i { animation: none; opacity: 0.45; }
+  .pc-conn[data-phase="back"] .pc-conn__bar i { animation: pc-fade-in var(--dur-2) ease both; opacity: 1; }
+  .pc-build__bricks i { animation: none; opacity: 0.8; }
+  .pc-build-done__spark { display: none; }
+  .remote-steps__step[data-current] .remote-steps__bar::after,
+  .remote-dl__fill--unknown::after,
+  .pc-skel__row::after,
+  .outbox-modal__item[data-fresh]::after { animation: none; display: none; }
+  .remote-live__dot::after { animation: none; display: none; }
+  .pc-empty__art .ui-icon,
+  .pc-empty__art i,
+  .workspace-picker__card--create .workspace-picker__glyph::after { animation: none; }
+  .remote-steps__bar > i,
+  .pc-copy > span,
+  .top-bar__menu-toggle input[type="checkbox"]::before { transition-duration: var(--dur-1); }
+  .pc-copy__done,
+  .pc-copy[data-copied] .pc-copy__label { translate: 0 0; }
+  .top-bar__menu-toggle input[type="checkbox"]:active:not(:disabled)::before { scale: 1; }
+}

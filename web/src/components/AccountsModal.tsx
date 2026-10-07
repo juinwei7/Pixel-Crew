@@ -25,8 +25,8 @@ const TABS: Array<{ provider: ProviderId; label: string; eyebrow: string }> = [
 ];
 
 const HINT_BY_PROVIDER: Record<ProviderId, string> = {
-  codex: t("提醒：NPC 一旦開始對話就無法直接換帳號（避免默默重置 Codex 端的對話記憶）——要換的話請先清除該 NPC 的工作階段。"),
-  claude: t("提醒：NPC 一旦開始對話就無法直接換帳號（避免默默重置 Claude 端的對話記憶）——要換的話請先清除該 NPC 的工作階段。"),
+  codex: t("提醒：每個帳號各自獨立登入。已開始對話的 NPC 換帳號會清空它的對話記憶（Codex 端無法沿用原本對話）——切換時會先詢問你確認。"),
+  claude: t("提醒：每個帳號各自獨立登入。已開始對話的 NPC 換帳號會清空它的對話記憶（Claude 端無法沿用原本對話）——切換時會先詢問你確認。"),
 };
 
 type Props = {
@@ -311,7 +311,7 @@ export function AccountsModal({
                   <>
                     <button type="button" className="mcp-modal__login" onClick={() => void loginOauth(account.id)}>{t("瀏覽器登入")}</button>
                     {account.provider === "codex" && (
-                      <button type="button" className="mcp-modal__login" onClick={() => setApiKeyOpenFor(apiKeyOpenFor === account.id ? null : account.id)}>{t("API Key 登入")}</button>
+                      <button type="button" className="mcp-modal__login" onClick={() => { setApiKeyDraft(""); setApiKeyOpenFor(apiKeyOpenFor === account.id ? null : account.id); }}>{t("API Key 登入")}</button>
                     )}
                   </>
                 )}

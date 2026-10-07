@@ -1,0 +1,327 @@
+/* 第二輪（R2）composer 專屬樣式：輸入框、對話記錄、核准卡。
+   美感原則：單一青色強調、克制的動態、不用圓形光暈；所有動畫在
+   prefers-reduced-motion 下關閉或改成純淡入（最下面統一處理）。 */
+
+/* ════════════════════════════════════════════════════════════════════════
+   送出失敗：紙飛機折返
+   起飛（motion.css 的 pc-plane-takeoff）飛向右上；失敗時同一架飛機從右上
+   掉頭飛回按鈕中央、機頭朝回程方向，落定後淡掉，按鈕字再浮回來。
+   ════════════════════════════════════════════════════════════════════════ */
+.command-composer__submit[data-launch="return"] {
+  border-color: rgba(143, 171, 195, 0.32);
+  background: rgba(143, 171, 195, 0.08);
+  color: #9fb3c8;
+}
+.command-composer__submit[data-launch="return"] .command-composer__submit-label { opacity: 0; }
+.command-composer__submit[data-launch="return"] .command-composer__submit-fx {
+  animation: pc-plane-return 520ms var(--ease-out) forwards;
+}
+@keyframes pc-plane-return {
+  0% { opacity: 0; translate: 40px -26px; scale: -0.8 0.8; rotate: 0deg; }
+  30% { opacity: 1; }
+  78% { opacity: 1; translate: 0 0; scale: -1 1; rotate: -6deg; }
+  100% { opacity: 0; translate: 0 2px; scale: -1 1; rotate: 0deg; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   狀態列：輸入框旁一枚小方塊＋字（需要你／工作中／待命）
+   ════════════════════════════════════════════════════════════════════════ */
+.composer-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px;
+  color: #6f8aa6;
+  font: 600 9px/1 var(--mono);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  user-select: none;
+}
+.composer-status__mark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.5;
+}
+.composer-status[data-state="working"] { color: #8fcfdb; }
+.composer-status[data-state="working"] .composer-status__mark {
+  background: var(--cyan);
+  opacity: 1;
+  animation: pc-status-work 1.8s ease-in-out infinite;
+}
+@keyframes pc-status-work {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.composer-status[data-state="attention"] { color: var(--cyan); font-weight: 800; }
+.composer-status[data-state="attention"] .composer-status__mark {
+  background: var(--cyan);
+  opacity: 1;
+  outline: 1px solid rgba(0, 229, 255, 0.45);
+  outline-offset: 2px;
+}
+.composer-status__label { text-transform: uppercase; }
+.composer-status[data-state] .composer-status__label { animation: pc-status-swap var(--dur-2) var(--ease-out); }
+@keyframes pc-status-swap { from { opacity: 0; translate: 0 3px; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   排隊：晶片上的堆疊條（最多 3 條＝排了幾則），忙碌中最前面那條慢慢往前推；
+   新排進一則時晶片輕輕落定。
+   ════════════════════════════════════════════════════════════════════════ */
+.command-composer__queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.command-composer__queue-stack {
+  display: inline-grid;
+  gap: 2px;
+  align-content: center;
+}
+.command-composer__queue-stack i {
+  display: block;
+  width: 9px;
+  height: 1.5px;
+  background: currentColor;
+  opacity: 0.4;
+}
+.command-composer__queue-stack i:first-child { opacity: 1; background: var(--cyan); }
+.command-composer__queue[data-waiting="true"] .command-composer__queue-stack i:first-child {
+  animation: pc-queue-wait 2.4s var(--ease-in-out) infinite;
+}
+@keyframes pc-queue-wait {
+  0%, 100% { opacity: 1; translate: 0 0; }
+  50% { opacity: 0.45; translate: 2px 0; }
+}
+.command-composer__queue[data-arrive="a"] { animation: pc-queue-arrive-a 420ms var(--ease-out); }
+.command-composer__queue[data-arrive="b"] { animation: pc-queue-arrive-b 420ms var(--ease-out); }
+@keyframes pc-queue-arrive-a { from { translate: 0 -4px; border-color: rgba(0, 229, 255, 0.7); } }
+@keyframes pc-queue-arrive-b { from { translate: 0 -4px; border-color: rgba(0, 229, 255, 0.7); } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   核准卡蓋章：按下的瞬間蓋上（重壓後回彈到位），已處理的卡留靜態章
+   ════════════════════════════════════════════════════════════════════════ */
+.approval-card { position: relative; }
+.approval-card[data-stamped="true"] .approval-card__head { padding-right: 76px; }
+.approval-card__stamp {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  right: 12px;
+  padding: 4px 8px 3px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  font: 800 10px/1 var(--mono);
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  rotate: -7deg;
+  opacity: 0.78;
+  pointer-events: none;
+}
+.approval-card__stamp--allow { color: var(--cyan); }
+.approval-card__stamp--deny { color: #9aa8bb; }
+.approval-card__stamp[data-live="true"] {
+  opacity: 0.92;
+  animation: pc-stamp-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+}
+@keyframes pc-stamp-in {
+  0% { opacity: 0; scale: 1.7; }
+  55% { opacity: 1; scale: 0.94; }
+  100% { opacity: 0.92; scale: 1; }
+}
+/* 章落下的那一下，卡片本身被輕壓一點點。 */
+.approval-card:has(.approval-card__stamp[data-live="true"]) { animation: pc-stamp-press 320ms var(--ease-out); }
+@keyframes pc-stamp-press { 55% { translate: 0 1px; } }
+
+/* ════════════════════════════════════════════════════════════════════════
+   對話記錄：下一件需要你／本回合成品／markdown 載入前的純文字
+   ════════════════════════════════════════════════════════════════════════ */
+.quest-log__next-attention {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  border-left: 2px solid var(--cyan);
+  border-radius: 8px;
+  background: rgba(7, 13, 26, 0.95);
+  color: #cfe3ea;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+.quest-log__next-attention:hover { border-color: rgba(0, 229, 255, 0.5); background: rgba(9, 20, 34, 0.98); }
+.quest-log__next-attention:focus-visible { outline: 2px solid var(--focus-ring-color, rgba(0, 229, 255, 0.72)); outline-offset: 2px; }
+.quest-log__next-attention-kicker {
+  flex: none;
+  color: var(--cyan);
+  font: 700 8.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+}
+.quest-log__next-attention strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quest-log__next-attention small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #7489a5;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quest-log__next-attention-go {
+  flex: none;
+  margin-left: auto;
+  color: var(--cyan);
+  transition: translate var(--dur-1) var(--ease-out);
+}
+.quest-log__next-attention:hover .quest-log__next-attention-go { translate: 3px 0; }
+
+.turn-deliverables {
+  margin: 8px 12px 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(143, 171, 195, 0.12);
+}
+.turn-deliverables__label {
+  color: #637b8e;
+  font: 700 8.5px/1 var(--mono);
+  letter-spacing: 0.14em;
+}
+.turn-deliverables__label small { margin-left: 3px; color: var(--cyan); font: inherit; }
+.turn-deliverables ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.turn-deliverables li { min-width: 0; max-width: 100%; }
+.turn-deliverables__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(0, 229, 255, 0.04);
+  color: #bfe0e8;
+  cursor: pointer;
+  font: 11px/1.2 inherit;
+  text-decoration: none;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+.turn-deliverables__item:hover:not(:disabled) { border-color: rgba(0, 229, 255, 0.42); background: rgba(0, 229, 255, 0.08); }
+.turn-deliverables__item:disabled { cursor: default; opacity: 0.75; }
+.turn-deliverables__item .ui-icon { flex: none; color: var(--cyan); }
+.turn-deliverables__item strong { min-width: 0; max-width: 240px; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.turn-deliverables__item small { color: #6f8aa6; font: 9.5px var(--mono); white-space: nowrap; }
+
+.rich-text__plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .composer-status { min-height: var(--tap, 44px); }
+  .approval-card[data-stamped="true"] .approval-card__head { padding-right: 68px; }
+  .turn-deliverables__item strong { max-width: 60vw; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   prefers-reduced-motion：一致關閉／降級
+   1. 本檔新增的動態：循環停掉，位移／縮放拿掉，只留淡入。
+   2. 全站安全網：這裡最晚載入（在所有 motion*.css 之後），同名 @keyframes
+      以最後一份為準。把各動態檔裡還沒在 reduced-motion 下改寫過的 keyframes
+      統一改寫——進場只淡入、出場只淡出、裝飾性的一次性特效與所有無限循環
+      改成空 keyframes（動畫仍會結束、animationend 照常觸發，但畫面不動）。
+      test/motionReducedAudit.test.ts 會檢查新加的 keyframes 有沒有被漏掉。
+   ════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  /* 1. 本檔 */
+  @keyframes pc-plane-return { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes pc-status-work { }
+  @keyframes pc-status-swap { from { opacity: 0; } }
+  @keyframes pc-queue-wait { }
+  @keyframes pc-queue-arrive-a { from { border-color: rgba(0, 229, 255, 0.7); } }
+  @keyframes pc-queue-arrive-b { from { border-color: rgba(0, 229, 255, 0.7); } }
+  @keyframes pc-stamp-in { from { opacity: 0; } }
+  @keyframes pc-stamp-press { }
+  .quest-log__next-attention-go,
+  .quest-log__next-attention:hover .quest-log__next-attention-go { transition: none; translate: none; }
+
+  /* 2a. 進場：只淡入 */
+  @keyframes pc-origin-in-a { from { opacity: 0; } }
+  @keyframes pc-origin-in-b { from { opacity: 0; } }
+  @keyframes pc-polish-check { from { opacity: 0; } }
+  @keyframes warroom-card-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes metric-pop { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes toast-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes shortcuts-rise { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes advisor-loading-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes advisor-phase-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes boss-setup-reveal { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ww-flip { from { opacity: 0; } to { opacity: 1; } }
+
+  /* 2b. 出場：只淡出 */
+  @keyframes pc-origin-out { to { opacity: 0; } }
+
+  /* 2c. 打勾的筆畫：直接畫好（基底 stroke-dashoffset 是 24，空 keyframes 會讓勾消失）。 */
+  @keyframes pc-check-draw { from, to { stroke-dashoffset: 0; } }
+
+  /* 2d. 裝飾性一次性特效：粒子類整段隱藏（不留靜止的殘點），其餘不動 */
+  @keyframes pc-plane-trail { from, to { opacity: 0; } }
+  @keyframes pc-hub-ping { from, to { opacity: 0; } }
+  @keyframes pc-spark-fly { from, to { opacity: 0; } }
+  @keyframes pc-ripple-box { from, to { opacity: 0; } }
+  @keyframes pc-confetti { from, to { opacity: 0; } }
+  @keyframes pc-twinkle { from, to { opacity: 0; } }
+  @keyframes pc-spark { from, to { opacity: 0; } }
+  @keyframes card-shine { from, to { opacity: 0; } }
+  @keyframes pc-egg-hop { }
+  @keyframes pc-egg-dot { }
+  @keyframes ww-sheen { }
+  @keyframes ww-type { }
+
+  /* 2e. 無限循環（掃光、呼吸、閃爍、彈跳、骨架掃過）：全部靜止 */
+  @keyframes pc-scan { }
+  @keyframes pc-busy-sweep { }
+  @keyframes pc-polish-breathe { }
+  @keyframes pc-led { }
+  @keyframes pc-seg-chase { }
+  @keyframes pc-brick { }
+  @keyframes pc-glyph-blink { }
+  @keyframes pc-track-sweep { }
+  @keyframes pc-sonar { }
+  @keyframes pc-skel-sweep { }
+  @keyframes pc-idle-bob { }
+  @keyframes pc-idle-shadow { }
+  @keyframes pc-calm { }
+  @keyframes roundtable-breathe { }
+  @keyframes research-breathe { }
+  @keyframes running-dot { }
+  @keyframes voice-input-pulse { }
+  @keyframes video-proc-pulse { }
+  @keyframes skeletonSlide { }
+  @keyframes missionDot { }
+  @keyframes missionShimmer { }
+  @keyframes missionPulse { }
+  @keyframes advisor-orb { }
+  @keyframes advisor-bar-shine { }
+  @keyframes ww-live { }
+  @keyframes ww-breathe { }
+  @keyframes ww-caret { }
+}

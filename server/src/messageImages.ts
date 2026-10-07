@@ -1,9 +1,9 @@
 import type { MessageImage } from "./providers/session.js";
 import { t } from "./i18n.js";
 
-export const MAX_MESSAGE_IMAGES = 4;
+export const MAX_MESSAGE_IMAGES = 10;
 export const MAX_MESSAGE_IMAGE_BYTES = 5 * 1024 * 1024;
-export const MAX_MESSAGE_IMAGES_TOTAL_BYTES = 10 * 1024 * 1024;
+export const MAX_MESSAGE_IMAGES_TOTAL_BYTES = 30 * 1024 * 1024;
 
 const MIME_TYPES = new Set<MessageImage["mimeType"]>(["image/png", "image/jpeg", "image/webp"]);
 

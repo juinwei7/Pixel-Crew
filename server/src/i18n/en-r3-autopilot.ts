@@ -1,0 +1,28 @@
+/** 第三輪（R3）autopilot 新增字串的英文翻譯。 */
+export const enR3Autopilot: Record<string, string> = {
+  "✅ 自動循環已達步數上限，自動停止；收尾報告在上一則回覆。要繼續就再打開開關。":
+    "✅ Autopilot reached its step limit and stopped; the wrap-up report is in the previous reply. Turn the switch back on to continue.",
+  "完成標準：{doneWhen}": "Done when: {doneWhen}",
+  "（回覆結尾請用一句話對照這條完成標準，說明達成與否）": "(End your reply with one sentence stating whether this criterion was met.)",
+  "上一步達標": "Previous step met its criterion",
+  "上一步部分達標": "Previous step partly met its criterion",
+  "上一步未達標": "Previous step missed its criterion",
+  "這步：{reason}": "This step: {reason}",
+  "自動循環已完成目標：{reason}。": "Autopilot reached the goal: {reason}.",
+  "可選的下一步：{next}（要做就直接下指示或重開開關）": "Optional next step: {next} (give an instruction or switch autopilot back on to pursue it)",
+  "🅿️ 自動循環卡住而停：{reason}。給個方向或選一個選項，就能換路接著做。": "🅿️ Autopilot stopped because it is stuck: {reason}. Give a direction or pick an option and it can take another route.",
+  "卡點：{blocker}": "Blocker: {blocker}",
+  "🅿️ 自動循環停下來等你拍板：{reason}。回覆選項或直接下指示即可接續。": "🅿️ Autopilot paused for your decision: {reason}. Reply with an option or give an instruction to continue.",
+  "（問題：{question}）": " (question: {question})",
+  "——{why}": " — {why}",
+  "🤖 循環自選：{picked}{why}{question}。想改直接回我一句，循環會照你的改。": "🤖 Autopilot picked: {picked}{why}{question}. Reply with one line to change it and the loop will follow you.",
+  "需要只有你有的資料": "needs data only you have",
+  "這步會花錢／不可逆／對外送出，需要你本人點頭": "this step spends money / is irreversible / sends something out, so it needs your own OK",
+  "⏸ 自動循環暫停等你（{why}）：{reason}。回覆後循環會自動接著跑，不用重開開關。": "⏸ Autopilot paused for you ({why}): {reason}. Reply and the loop continues by itself, no need to switch it back on.",
+  "🎯 自動循環目標已改為：{goal}": "🎯 Autopilot goal changed to: {goal}",
+  "目標不能是空的": "The goal cannot be empty",
+  "自動循環沒有開著": "Autopilot is not on",
+  "\n\n（你正在自動循環中）摘要裡務必保留一段「自動循環」：目標＝「{goal}」、這輪已完成哪些步驟與結論、正在做的那一步做到哪、下一步打算{next}{blocker}。新腦會依這段無縫接續循環。": "\n\n(You are in an autopilot loop.) The summary MUST keep an \"Autopilot\" section: goal = \"{goal}\", which steps this loop has completed and their conclusions, how far the current step got, and the planned next step{next}{blocker}. The fresh session will continue the loop from this section.",
+  "（目前計畫的下一個候選：{next}）": " (current plan next candidate: {next})",
+  "，以及卡點（{blocker}）": ", plus the blocker ({blocker})",
+};

@@ -57,6 +57,11 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN ?? "claude",
   codexBin: process.env.CODEX_BIN ?? "codex",
   codexSandbox: process.env.CODEX_SANDBOX ?? "workspace-write",
+  // 影片理解用：ffmpeg 抽影格＋音訊，ffprobe 探測時長。預設走 PATH。
+  ffmpegBin: process.env.FFMPEG_BIN?.trim() || "ffmpeg",
+  ffprobeBin: process.env.FFPROBE_BIN?.trim() || "ffprobe",
+  // 貼連結看影片：yt-dlp 下載公開影片。預設走 PATH，YTDLP_BIN 可覆寫。
+  ytDlpBin: process.env.YTDLP_BIN?.trim() || "yt-dlp",
   port: Number(process.env.PORT ?? 8787),
   host: configuredHost,
   dbPath,

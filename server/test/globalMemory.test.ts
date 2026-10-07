@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { evaluateAutoApproval } from "../src/dangerousCommand.js";
 import { LocalStore } from "../src/store.js";
 import {
   MAX_GLOBAL_MEMORY_NOTES,
@@ -173,5 +174,13 @@ test("addGlobalMemoryNote rejects notes that look like credentials", () => {
       });
     }
     assert.deepEqual(listGlobalMemory(store), []);
+  });
+});
+
+test("the silent global-memory curl instruction auto-approves in full mode (cleanup must not trip the rm -f rule)", () => {
+  withStore((store) => {
+    const step = composeGlobalMemorySection(store, "w-full-mode").split("\n").find((line) => line.startsWith("② "));
+    assert.ok(step);
+    assert.equal(evaluateAutoApproval("full", "Bash", step.slice(2)).allowed, true);
   });
 });

@@ -99,6 +99,21 @@ export type Turn = {
   costUsd?: number;
   durationMs?: number;
   contextTokens?: number;
+  // 自動循環停下來要 owner 拍板的「循環問你」通知回合：autopilotAsk 讓日誌渲染醒目問題卡，
+  // askOptions 是從停止理由抽出的 A/B/C／甲乙丙丁 一鍵回答選項（可能為空＝只有敘述沒有選項）。
+  autopilotAsk?: boolean;
+  askOptions?: string[];
+  // notice:true＝純系統通知回合（循環進度、循環停止、撞到用量上限…）：只顯示，不是任務——
+  // 判斷「最近一件任務完成／失敗了沒」要跳過它（見 workerState.latestTaskTurn）。
+  notice?: boolean;
+  // 跨 NPC 檢視（全部搜尋）才會帶：這筆回合屬於哪位 NPC。一鍵回答要發回「發問的那位」而不是
+  // 當前選取的 NPC，否則在全部搜尋裡回答會誤送到別人。單一 NPC 日誌裡不帶＝沿用當前 NPC。
+  workerId?: string;
+  // system:true＝系統自動產生的訊息（換腦冷卻／蒸餾心法／換腦完成等），不是真工作活動。
+  // 注意：日誌 feed 「不」據此隱藏回合——換腦接手回合雖標 system，卻承載接手後的真實工作，藏掉會讓
+  // 換腦後主窗空白。防止換腦卡把真實結果擠出「保留最近」視窗的工作在 server 端（snapshotHistory 的
+  // real-turn floor：裁切初始 snapshot 時換腦系統卡不佔真實結果名額）。此旗標前端僅供標示/排序之用。
+  system?: boolean;
 };
 
 export type UpdateInfo = {
@@ -121,6 +136,8 @@ export type CharacterState = {
   speechAt?: number; // speech 對應事件的 server 時間戳（epoch ms）；重整重播也保留真實時間
   webQuery?: string; // 上網查時的查詢字/網址＝工作小窗抓真實瀏覽器截圖用
   bump: number;
+  /** 這次 bump 是哪一層的結束：tool＝單一工具呼叫回來；turn＝整個回合結束（含 error）。場景據此分層慶祝。 */
+  outcome?: "tool" | "turn";
 };
 
 export type WorkerMeta = {
@@ -136,6 +153,8 @@ export type SubagentState = {
   name: string;
   task: string;
   background: boolean;
+  /** 開出來的時間（事件 at）；背景子代理跨回合留座，靠它設上限防殘影。 */
+  startedAt?: number;
 };
 
 export type { CapabilityState } from "../../server/src/protocol";
@@ -416,6 +435,21 @@ export type ExecutionBudget = {
   codexQuota5hPercent: { min: number; max: number };
 };
 
+// 專家顧問：把一個粗略念頭展開成「你可能沒想到」的專業方向；挑一個直接接 Boss Task。
+export type AdvisorProposal = {
+  id: string;
+  title: string;
+  summary: string;
+  insight: string;
+  approach: string;
+  considerations: string[];
+  objective: string;
+};
+
+export type AdvisorResult =
+  | { status: "proposals"; domain: string; proposals: AdvisorProposal[] }
+  | { status: "need_focus"; question: string };
+
 export type BossTask = {
   id: string;
   title: string;
@@ -508,11 +542,25 @@ export type PersonaTemplate = Persona & {
   name: string;
 };
 
+// 跨裝置排隊佇列的一筆（server 為單一真相；手機/電腦共用、背景也會被 server drain）。
+export type QueuedCommandDto = {
+  id: string;
+  workerId: string;
+  message: string;
+  images: unknown[];
+  documents: unknown[];
+  createdAt: string;
+};
+
 export type WorkerState = {
   id: string;
   name: string;
   model: string | null;
   busy: boolean;
+  /** busy 只因背景子代理還在跑、本人沒在跑回合（server workerSummary）：輸入框不顯「中止」、訊息直接送。 */
+  backgroundOnly?: boolean;
+  /** server 端排隊佇列（不再存瀏覽器；由 snapshot 與 queue_updated 廣播帶入）。 */
+  queue: QueuedCommandDto[];
   colorIndex: number;
   avatarId: string | null;
   avatarKind: "preset" | "custom";
@@ -526,9 +574,20 @@ export type WorkerState = {
   autoApproveMode: AutoApproveMode;
   handoff: HandoffProgress | null;
   resumeCandidate?: { workerId: string; taskText: string; sessionId: string; interruptedAt: string; resetAt: string | null } | null;
-  /** 編排器建立、跑完就消失的短命 NPC（作戰室成員、研究員）。場景據此把
-      他們拉到會議桌圍坐。以前是比對名字的 emoji 字首，現在由 server 明講。 */
-  ephemeralKind?: "warroom" | "research" | null;
+  /** 編排器建立、跑完就消失的短命 NPC（作戰室成員、研究員、老闆交辦專屬部門）。
+      場景據此把作戰室成員拉到會議桌圍坐、把 "dedicated"（老闆交辦臨時部門）圈進
+      自己的獨立房間。以前是比對名字的 emoji 字首，現在由 server 明講。 */
+  ephemeralKind?: "warroom" | "research" | "dedicated" | null;
+  /** 個人自動循環：有值＝開著（server 端 workerAutopilot），null/undefined＝關。 */
+  autopilot?: {
+    stepsRemaining: number;
+    deadlineAt: number | null;
+    proactive?: boolean;
+    /** 循環鎖定的目標（老闆原話）；null/空＝server 自動取最近一則指示。 */
+    goal?: string | null;
+    /** 遇到花錢/不可逆/對外送出的問題時暫停等老闆回覆；老闆對這位 NPC 發任何訊息就自動接續。 */
+    paused?: { question: string; options: string[]; at: number } | null;
+  } | null;
   turns: Turn[];
   character: CharacterState;
   subagents: SubagentState[];

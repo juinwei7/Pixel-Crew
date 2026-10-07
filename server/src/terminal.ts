@@ -70,7 +70,16 @@ function muxSend(socket: Socket, message: MuxInput): void {
 }
 
 /** Browser bridge to Pixel Crew's independent PTY/mux owner. */
-export function attachTerminalSocket(socket: WebSocket, normalizeWorkspacePath: (value: unknown, terminalTabId: string) => string | Promise<string>): () => void {
+export function attachTerminalSocket(
+  socket: WebSocket,
+  normalizeWorkspacePath: (value: unknown, terminalTabId: string) => string | Promise<string>,
+  options: { shareGuest?: boolean } = {},
+): () => void {
+  // 安全邊界：終端機（黑窗）＝主機上的 raw shell，是 owner 專屬的高危工具。分享訪客
+  // 的 WebSocket 一律不掛終端機控制，否則等於把 shell 開放給只該「看」的訪客，繞過
+  // HTTP 層的監護／禁止清單。訪客仍照常收即時畫面事件（那條由 index.ts 的 broadcast
+  // 負責，與這裡無關）。層級由轉接站注入的 x-pc-access header 決定，不可由用戶端偽造。
+  if (options.shareGuest) return () => {};
   let mux: Socket | null = null;
   let muxBuffer = "";
   let opening = false;

@@ -56,7 +56,7 @@ test("renders same-department Mission progress, assignees, review result, and re
   assert.match(html, /Old review/);
   assert.match(html, /這項工作需要你的核准/);
   assert.match(html, /本次任務都允許/);
-  assert.match(html, /任務執行紀錄 · 2/);
+  assert.match(html, /部門討論與執行 · 2/);
   assert.match(html, /tool-row__name">list</);
   assert.match(html, /MCP·issues/);
   assert.match(html, /等待核准：更新 issue/);
@@ -85,7 +85,8 @@ test("collapses consecutive tool calls from the same NPC into one grouped activi
     onPrepare={async () => ({ error: "unused" })} onStart={noopAction}
     onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction} onResolveApproval={noopAction} onClose={() => undefined}
   />);
-  assert.match(html, /任務執行紀錄 · 4/);
+  // 標題的數字是「整理後的活動列數」，不是原始事件數：4 筆連續工具事件收成 1 列。
+  assert.match(html, /部門討論與執行 · 1/);
   assert.match(html, /tool-group__summary/);
   assert.match(html, />2 項</);
   const builderNameCount = (html.match(/mission-activity-row__who">Builder</g) ?? []).length;
@@ -252,7 +253,7 @@ test("shows the actual generated plan for explicit owner approval before executi
   assert.doesNotMatch(html, /重新 Review/);
 });
 
-test("shows only the current Mission prominently and tucks other department Missions into a collapsed history", () => {
+test("renders department missions and messages in one chronological timeline (oldest first)", () => {
   const boss = emptyWorker("boss", "主管", null, false, 0, "claude", "/repo");
   const analyst = emptyWorker("analyst", "分析師", null, false, 1, "claude", "/repo");
   const oldMission: DepartmentMission = {
@@ -276,14 +277,36 @@ test("shows only the current Mission prominently and tucks other department Miss
     onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction} onClose={() => undefined}
   />);
   assert.match(html, /需要你決定/);
-  assert.match(html, /此部門過往 Mission · 1/);
-  const historyIndex = html.indexOf('class="mission-dialog__history"');
-  const pastMissionsIndex = html.indexOf('class="mission-dialog__past-missions"');
-  assert.ok(historyIndex > -1 && pastMissionsIndex > historyIndex);
-  const prominentSection = html.slice(historyIndex, pastMissionsIndex);
-  const collapsedSection = html.slice(pastMissionsIndex);
-  assert.match(prominentSection, /TSLA 投資研究與財報分析/);
-  assert.match(prominentSection, /風險與假設獨立審視/);
-  assert.doesNotMatch(prominentSection, /評估是否該排除槓桿方案/);
-  assert.match(collapsedSection, /評估是否該排除槓桿方案/);
+  // 新設計：訊息與 Mission 合成一條依時間排序的時間軸（舊在上、新在下），不再把舊 Mission 收合。
+  const olderIndex = html.indexOf("評估是否該排除槓桿方案");   // 2026-07-20
+  const newerIndex = html.indexOf("整理 TSLA 投資報告");        // 2026-07-25
+  assert.ok(olderIndex > -1 && newerIndex > -1, "both missions render inline");
+  assert.ok(olderIndex < newerIndex, "older mission renders above the newer one (chronological, oldest first)");
+  assert.match(html, /TSLA 投資研究與財報分析/);
+  assert.match(html, /風險與假設獨立審視/);
+});
+
+// 回歸守衛：已結束的 Mission 在初始 snapshot 裡不帶 executionEvents（server 為了體積拿掉），
+// 所以活動流的入口不能用「目前有沒有事件」當條件——不然重新整理後「部門討論與執行」就永遠
+// 不見了。有 onLoadActivity 時要留著可展開的入口，展開才去補抓。
+test("a finished mission with no loaded activity still renders the expandable activity entry", () => {
+  const boss = emptyWorker("boss", "BOSS", null, false, 0, "claude", "/repo");
+  const builder = emptyWorker("builder", "Builder", null, false, 1, "claude", "/repo");
+  const finished: DepartmentMission = {
+    id: "done", workspacePath: "/repo", bossWorkerId: boss.id, objective: "Ship it",
+    acceptanceCriteria: [], status: "completed", planSummary: null,
+    currentStepIndex: null, correctionCount: 0, maxCorrections: 2, error: null,
+    createdAt: "2026-07-22T00:00:00Z", startedAt: "2026-07-22T00:00:00Z", completedAt: "2026-07-22T01:00:00Z",
+    steps: [], delegatedSessions: [], executionEvents: [],
+  };
+  const render = (onLoadActivity?: (id: string) => Promise<void>) => renderToStaticMarkup(<DepartmentMissionDialog
+    boss={boss} workers={[boss, builder]} missions={[finished]}
+    onPrepare={async () => ({ error: "unused" })} onStart={noopAction}
+    onCancel={noopAction} onRetryReview={noopAction} onApprovePlan={noopAction} onResolve={noopAction}
+    onLoadActivity={onLoadActivity} onClose={() => undefined}
+  />);
+
+  assert.match(render(async () => undefined), /部門討論與執行/);
+  // 沒有補抓能力時就不要給空入口。
+  assert.doesNotMatch(render(undefined), /部門討論與執行/);
 });

@@ -4,7 +4,14 @@ import { join } from "node:path";
 const MAX_DETAIL_LENGTH = 2_000;
 
 function cleanDetail(value: unknown): string {
-  return String(value ?? "")
+  // 物件要 JSON 序列化，否則 String(obj) 會變成無資訊的 "[object Object]"。
+  let s: string;
+  if (value != null && typeof value === "object") {
+    try { s = JSON.stringify(value); } catch { s = String(value); }
+  } else {
+    s = String(value ?? "");
+  }
+  return s
     .replace(/[\r\n]+/g, " ")
     .replace(/(bearer\s+)[^\s]+/gi, "$1[redacted]")
     .slice(0, MAX_DETAIL_LENGTH);

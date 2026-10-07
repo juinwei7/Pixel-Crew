@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode, type Ref } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode, type Ref } from "react";
+import type { NeedsYouKind } from "../needsYou";
 import type { AccountWithAuth, AutoApproveMode, CapabilityState, ProviderAuthState, ProviderId, UpdateInfo, WorkerState } from "../types";
 import { APP_VERSION } from "../appVersion";
 import { lang, setLang, t, tc } from "../i18n";
@@ -10,6 +11,8 @@ import { roomName } from "../workspace";
 const TOP_BAR_COMPACT_LEVELS = ["top-bar--compact", "top-bar--compact-2"] as const;
 import { Icon } from "./Icon";
 import { ModeSwitch, modeIndex } from "./ModeSwitch";
+import { RollingNumber } from "./RollingNumber";
+import { emitFx } from "../fxBus";
 
 type AppToggles = { brainSwapEnabled: boolean; limitResumeEnabled: boolean; diagnosticsEnabled: boolean };
 
@@ -31,6 +34,20 @@ type Props = {
   wsReady: boolean;
   modelOptions: ModelOption[];
   workerCount: number;
+  /** 全域「執行中」NPC 數（不分工作區）；頂欄燈號用。 */
+  runningCount: number;
+  /** 目前正在背景執行、還沒回報的 NPC（點「在跑」燈號展開清單、可跳過去看）；subAgents 是該
+      NPC 內部再拆出去、還在跑的子代理。 */
+  runningWorkers?: Array<{ id: string; name: string; room: string; subAgents?: Array<{ id: string; label: string }> }>;
+  onSelectRunning?(id: string): void;
+  /** 有事需要你（needsYou.ts：待核准／等你拍板／在問你／失敗未看）：頂欄多一顆「需要你」，
+      點一下＝接下一件（App 負責切人＋捲到那張卡）。kinds 只有核准時文案維持「等你核准」。 */
+  needsYou?: { count: number; name: string; kinds?: NeedsYouKind[] } | null;
+  onNeedsYou?(): void;
+  /** 成品匣未讀數：有新成品時頂欄出現成品匣按鈕；開啟成品匣後 App 歸零。 */
+  outboxUnread?: number;
+  /** 每次有新成品落袋 +1，用來重播「落袋」動畫。 */
+  outboxDropSeq?: number;
   providerChanging?: boolean;
   accounts?: AccountWithAuth[];
   onSetWorkerAccount?(workerId: string, accountId: string | null): void;
@@ -66,11 +83,15 @@ type Props = {
   topBarRef?: Ref<HTMLElement>;
   professionalModeButtonRef?: Ref<HTMLButtonElement>;
   onOpenCodexCommands?(): void;
+  /** 從外面（Ctrl+K 指令面板）打開「NPC 設定」或「平台設定」選單；seq 每次遞增。 */
+  menuRequest?: { menu: "npc" | "platform"; seq: number } | null;
   /** 置中插槽（能量條）：排進 flex 流裡跟其他控件互相讓位，不再蓋住任何按鈕。 */
   children?: ReactNode;
 };
 
-export function TopBar({
+export const TopBar = memo(TopBarImpl);
+
+function TopBarImpl({
   active,
   activeWorkspace,
   platform,
@@ -79,6 +100,11 @@ export function TopBar({
   wsReady,
   modelOptions,
   workerCount,
+  runningCount,
+  runningWorkers = [],
+  onSelectRunning,
+  needsYou = null,
+  onNeedsYou,
   providerChanging = false,
   accounts,
   onSetWorkerAccount,
@@ -114,12 +140,18 @@ export function TopBar({
   topBarRef,
   professionalModeButtonRef,
   onOpenCodexCommands,
+  menuRequest = null,
+  outboxUnread = 0,
+  outboxDropSeq = 0,
   children,
 }: Props) {
   const [healthOpen, setHealthOpen] = useState(false);
+  const [runningOpen, setRunningOpen] = useState(false);
+  const runningRef = useRef<HTMLDivElement>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   // 全域功能開關：平台選單打開時才抓，改動走樂觀更新、失敗回滾。
   const [moreOpen, setMoreOpen] = useState(false);
+  const [modelListOpen, setModelListOpen] = useState(false);
   const [appToggles, setAppToggles] = useState<AppToggles | null>(null);
   const updateRef = useRef<HTMLDivElement>(null);
   const healthRef = useRef<HTMLDivElement>(null);
@@ -151,18 +183,53 @@ export function TopBar({
     </select>
   );
 
-  const modelSelect = (className = "top-bar__model-select") => (
-    <select
-      className={className}
-      value={active?.model ?? ""}
-      disabled={!active || active.busy || !authReady || modelOptions.length === 0}
-      onChange={(event) => onModel(event.target.value)}
-      aria-label={t("選擇模型")}
-    >
-      {modelOptions.map((option) => (
-        <option key={option.id} value={option.id}>{option.label}</option>
-      ))}
-    </select>
+  // 模型選單用自己的清單而不是原生 <select>：原生選項只能一行字，備註擠進去
+  // 收起時會被折成好幾行。收起只顯示名稱；展開時在選單內原地攤開（選單本身
+  // overflow-y:auto，浮出去的下拉會被裁掉），每項名稱一行、用途備註一行。
+  const modelDisabled = !active || active.busy || !authReady || modelOptions.length === 0;
+  const selectedModel = modelOptions.find((option) => option.id === (active?.model ?? ""));
+  const modelPicker = () => (
+    <>
+      <div className="top-bar__menu-row">
+        <span>
+          {t("模型")}
+          {capabilities.loading && <i className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></i>}
+        </span>
+        <button
+          type="button"
+          className="top-bar__model-trigger"
+          disabled={modelDisabled}
+          aria-haspopup="listbox"
+          aria-expanded={modelListOpen}
+          aria-label={t("選擇模型")}
+          title={selectedModel?.description}
+          onClick={() => setModelListOpen((open) => !open)}
+        >
+          <span>{selectedModel?.label ?? active?.model ?? t("預設模型")}</span>
+          <svg viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z" /></svg>
+        </button>
+      </div>
+      {modelListOpen && !modelDisabled && (
+        <div className="top-bar__model-list" role="listbox" aria-label={t("選擇模型")}>
+          {modelOptions.map((option) => {
+            const selected = option.id === (active?.model ?? "");
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={`top-bar__model-option${selected ? " top-bar__model-option--selected" : ""}`}
+                onClick={() => { setModelListOpen(false); if (!selected) onModel(option.id); }}
+              >
+                <strong>{option.label}</strong>
+                {option.description && <small>{option.description}</small>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 
   const accountSelect = (className = "top-bar__provider-select") => {
@@ -170,12 +237,12 @@ export function TopBar({
     return <select
       className={className}
       value={active.accountId ?? ""}
-      disabled={active.busy || hasHistory}
+      disabled={active.busy}
       onChange={(event) => onSetWorkerAccount?.(active.id, event.target.value || null)}
       aria-label={t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })}
       title={
         hasHistory
-          ? t("這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶", { provider: providerLabel })
+          ? t("切換帳號會清空這位 NPC 的對話記憶（換帳號無法沿用原本的 {provider} 對話）；切換時會先詢問你確認。", { provider: providerLabel })
           : t("這位 NPC 使用的 {provider} 帳號", { provider: providerLabel })
       }
     >
@@ -197,21 +264,48 @@ export function TopBar({
     return () => { cancelled = true; };
   }, [moreOpen]);
 
+  // 開關存檔回饋：伺服器確認後那一列尾端蓋一個勾（data-saved），失敗就彈回並
+  // 抖一下（data-failed）。seq 讓連按同一列也會重播。
+  const [toggleFeedback, setToggleFeedback] = useState<{ key: keyof AppToggles; result: "saved" | "failed"; seq: number } | null>(null);
+  useEffect(() => {
+    if (!toggleFeedback) return;
+    const timer = window.setTimeout(() => setToggleFeedback(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [toggleFeedback]);
   const toggleAppSetting = (key: keyof AppToggles) => {
     if (!appToggles) return;
     const previous = appToggles;
     const next = { ...appToggles, [key]: !appToggles[key] };
     setAppToggles(next);
     void apiRequest<{ settings: AppToggles }>("/api/app-settings", { method: "POST", body: { [key]: next[key] } })
-      .then((data) => setAppToggles(data.settings))
-      .catch(() => setAppToggles(previous));
+      .then((data) => {
+        setAppToggles(data.settings);
+        setToggleFeedback((current) => ({ key, result: "saved", seq: (current?.seq ?? 0) + 1 }));
+        emitFx({ type: "system", kind: "settings-saved" });
+      })
+      .catch(() => {
+        setAppToggles(previous);
+        setToggleFeedback((current) => ({ key, result: "failed", seq: (current?.seq ?? 0) + 1 }));
+      });
   };
+  const toggleState = (key: keyof AppToggles) => toggleFeedback?.key === key
+    ? { "data-saved": toggleFeedback.result === "saved" ? (toggleFeedback.seq % 2 ? "a" : "b") : undefined, "data-failed": toggleFeedback.result === "failed" ? (toggleFeedback.seq % 2 ? "a" : "b") : undefined }
+    : {};
+
+  // 桌面通知剛開啟（權限也拿到了）：鈴鐺搖一下。關掉不搖。
+  const [bellRing, setBellRing] = useState(0);
+  const notifyWasOn = useRef(notificationsEnabled);
+  useEffect(() => {
+    if (notificationsEnabled && !notifyWasOn.current) setBellRing((count) => count + 1);
+    notifyWasOn.current = notificationsEnabled;
+  }, [notificationsEnabled]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setHealthOpen(false);
         setUpdateOpen(false);
+        setRunningOpen(false);
         for (const menu of menuRefs) if (menu.current) menu.current.open = false; // 原生 <details>：手動收合
       }
     };
@@ -219,6 +313,7 @@ export function TopBar({
       const target = event.target as Node;
       if (!healthRef.current?.contains(target)) setHealthOpen(false);
       if (!updateRef.current?.contains(target)) setUpdateOpen(false);
+      if (!runningRef.current?.contains(target)) setRunningOpen(false);
       // 原生 <details> 點外面不會自動關；開著且點到外面才手動收合。
       for (const menu of menuRefs) {
         if (menu.current?.open && !menu.current.contains(target)) menu.current.open = false;
@@ -234,8 +329,23 @@ export function TopBar({
     };
   }, []);
 
+  // 指令面板要求打開某個選單：等面板自己的退場跑完、焦點交還之後才開，
+  // 否則它關掉時的 pointerdown/焦點變化會把剛開的 <details> 又收起來。
+  useEffect(() => {
+    if (!menuRequest) return;
+    const timer = window.setTimeout(() => {
+      const target = menuRequest.menu === "npc" ? npcRef.current : moreRef.current;
+      if (!target) return;
+      for (const menu of menuRefs) if (menu.current && menu.current !== target) menu.current.open = false;
+      target.open = true;
+      target.querySelector<HTMLElement>("summary")?.focus();
+    }, 160);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuRequest?.seq]);
+
   const accountMenuSelect = accountSelect("top-bar__provider-select");
-  const closeMenus = () => { for (const menu of menuRefs) if (menu.current) menu.current.open = false; };
+  const closeMenus = () => { setModelListOpen(false); for (const menu of menuRefs) if (menu.current) menu.current.open = false; };
 
   /* 這條 bar 要多寬取決於「文字有多長」——中英文標籤長度差一截，房間名、
      模型名也都是變數。用固定的 media query 門檻去猜，永遠會在某個組合下
@@ -291,7 +401,8 @@ export function TopBar({
 
   return (
     <header ref={attachBar} className="top-bar">
-      <div className="top-bar__brand"><i />PIXEL CREW</div>
+      {/* 每個字母一個 span：彩蛋（連點 5 下，見 interactionFx.ts）時字母依序跳起來。 */}
+      <div className="top-bar__brand"><i /><span className="top-bar__brand-text">{"PIXEL CREW".split("").map((letter, index) => <span key={index} style={{ "--ci": index } as React.CSSProperties}>{letter}</span>)}</span></div>
       <ModeSwitch
         current={modeIndex(professionalMode, blackWindowMode)}
         onSelect={(index) => {
@@ -303,6 +414,88 @@ export function TopBar({
         professionalModeButtonRef={professionalModeButtonRef}
       />
       {onBossAssignment && <button type="button" className="top-bar__boss" onClick={onBossAssignment}><span>BOSS</span><strong>{t("交辦工作")}</strong></button>}
+      {/* 全域「在跑」燈號：不分工作區顯示目前有幾個 NPC 正在執行，讓你在聊天／別的
+          工作區時也能一眼看到背景是否還有 NPC 在跑；0 時暗掉並顯示「待命」。 */}
+      <div className="top-bar__running-wrap" ref={runningRef}>
+        <button
+          type="button"
+          className={`top-bar__running ${runningCount > 0 ? "top-bar__running--on" : ""}`}
+          disabled={runningCount === 0}
+          aria-expanded={runningOpen}
+          onClick={() => setRunningOpen((open) => !open)}
+          title={runningCount > 0
+            ? t("目前有 {count} 位 NPC 正在背景執行——點開看是誰", { count: runningCount })
+            : t("目前沒有 NPC 在執行，全部待命中")}
+          aria-label={runningCount > 0
+            ? t("目前有 {count} 位 NPC 正在執行", { count: runningCount })
+            : t("目前沒有 NPC 在執行，全部待命中")}
+        >
+          <i className="top-bar__running-dot" aria-hidden="true" />
+          {runningCount > 0
+            ? <><strong><RollingNumber value={runningCount} /></strong><span>{t("執行中")}</span></>
+            : <span>{t("待命")}</span>}
+        </button>
+        {runningOpen && runningWorkers.length > 0 && (
+          <div className="top-bar__running-menu" role="menu">
+            <div className="top-bar__running-menu-title">{t("背景執行中（點一位跳過去看）")}</div>
+            {runningWorkers.map((worker) => (
+              <div key={worker.id} className="top-bar__running-group">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="top-bar__running-item"
+                  onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
+                >
+                  <span className="top-bar__running-item-dot" aria-hidden="true" />
+                  <span className="top-bar__running-item-name">{worker.name}</span>
+                  <span className="top-bar__running-item-room">{worker.room}</span>
+                </button>
+                {(worker.subAgents ?? []).map((sub) => (
+                  <button
+                    key={sub.id}
+                    type="button"
+                    role="menuitem"
+                    className="top-bar__running-subitem"
+                    title={sub.label}
+                    onClick={() => { onSelectRunning?.(worker.id); setRunningOpen(false); }}
+                  >
+                    <span className="top-bar__running-subdot" aria-hidden="true" />
+                    <span className="top-bar__running-subtag">{t("子代理")}</span>
+                    <span className="top-bar__running-item-name">{sub.label}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {needsYou && needsYou.count > 0 && onNeedsYou && (() => {
+        const approvalsOnly = !needsYou.kinds || needsYou.kinds.every((kind) => kind === "approval");
+        return <button
+          type="button"
+          className={`top-bar__needs-you${approvalsOnly ? "" : " top-bar__needs-you--mixed"}`}
+          data-shortcut-hint="next_attention"
+          aria-keyshortcuts="N"
+          onClick={onNeedsYou}
+          title={approvalsOnly
+            ? needsYou.count === 1 ? t("{name} 在等你核准——點一下跳過去", { name: needsYou.name }) : t("{count} 位 NPC 在等你核准——點一下跳到下一位（N）", { count: needsYou.count })
+            : needsYou.count === 1 ? t("{name} 需要你——點一下跳過去", { name: needsYou.name }) : t("{count} 件事需要你——點一下接下一件（N）", { count: needsYou.count })}
+        >
+          <i className="top-bar__needs-you-dot" aria-hidden="true" />
+          <strong><RollingNumber value={needsYou.count} /></strong><span>{approvalsOnly ? t("等你核准") : tc("頂欄", "需要你")}</span>
+        </button>;
+      })()}
+      {outboxUnread > 0 && <button
+        type="button"
+        className="top-bar__outbox"
+        onClick={onOpenOutbox}
+        aria-label={t("成品匣：{count} 份新成品", { count: outboxUnread })}
+        title={t("成品匣有 {count} 份新成品——點一下查看", { count: outboxUnread })}
+      >
+        <span key={outboxDropSeq} className="top-bar__outbox-drop" aria-hidden="true" />
+        <Icon name="box" />
+        <strong className="top-bar__outbox-count"><RollingNumber value={outboxUnread} /></strong>
+      </button>}
       <div className="top-bar__spacer" />
       {children}
       <div className="top-bar__spacer" />
@@ -325,15 +518,9 @@ export function TopBar({
               <Icon name="building" />{t("工作位置")}<strong>{roomName(activeWorkspace)}</strong>
             </button>
             <label><span>{t("供應商")}</span>{providerSelect()}</label>
-            <label>
-              {/* 轉圈跟在「模型」兩個字旁邊，不要當成第三個 grid 項目——那會自己
-                  佔掉一整列，看起來像沒對齊的孤兒。 */}
-              <span>
-                {t("模型")}
-                {capabilities.loading && <i className="top-bar__agent-loading" role="status" aria-label={t("正在背景更新模型")} title={t("正在背景更新模型")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 7.4 5" /></svg></i>}
-              </span>
-              {modelSelect("top-bar__model-select top-bar__menu-model-select")}
-            </label>
+            {/* 轉圈跟在「模型」兩個字旁邊，不要當成第三個 grid 項目——那會自己
+                佔掉一整列，看起來像沒對齊的孤兒。 */}
+            {modelPicker()}
             {accountMenuSelect && <label><span>{t("帳號")}</span>{accountMenuSelect}</label>}
             <label>
               <span>{t("自動核准")}</span>
@@ -376,8 +563,9 @@ export function TopBar({
               const next = lang === "zh" ? "en" : "zh";
               void apiRequest("/api/app-settings", { method: "POST", body: { lang: next } }).catch(() => {}).finally(() => setLang(next));
             }}><Icon name="globe" />{lang === "zh" ? t("切換英文 EN") : t("切換中文 中")}</button>
-            <button type="button" onClick={onNotificationsToggle}>
+            <button type="button" className="top-bar__notify" data-on={notificationsEnabled || undefined} data-ring={bellRing ? (bellRing % 2 ? "a" : "b") : undefined} onClick={onNotificationsToggle}>
               <Icon name="bell" />{notificationsEnabled ? t("關閉桌面通知") : t("開啟桌面通知")}
+              {notificationsEnabled && <span className="top-bar__notify-on" aria-hidden="true">ON</span>}
             </button>
           </div>
           <div className="top-bar__menu-group top-bar__more-compact-features">
@@ -397,7 +585,7 @@ export function TopBar({
               <Icon name="moon" />{t("下班報告")}
             </button>
             <button type="button" onClick={() => { closeMenus(); onOpenOutbox(); }} title={t("成品匣：隊員完成的交付物（工作區 outbox 資料夾）集中一覽、一鍵開啟")}>
-              <Icon name="box" />{t("成品匣")}
+              <Icon name="box" />{t("成品匣")}{outboxUnread > 0 && <strong className="top-bar__menu-count">{outboxUnread}</strong>}
             </button>
             <button type="button" onClick={() => { closeMenus(); onOpenBackup(); }} title={t("備份與還原：把整個辦公室打包帶走，或從備份還原")}>
               <Icon name="archive" />{t("備份與還原")}
@@ -426,7 +614,7 @@ export function TopBar({
             </button>}
           </div>
           <div className="top-bar__menu-group">
-            <label className="top-bar__menu-toggle" title={t("CTX 快滿時自動把工作交接給全新工作階段（170k 門檻）；關閉後交給 CLI 自行壓縮")}>
+            <label className="top-bar__menu-toggle" {...toggleState("brainSwapEnabled")} title={t("CTX 快滿時自動把工作交接給全新工作階段（170k 門檻）；關閉後交給 CLI 自行壓縮")}>
               <input
                 type="checkbox"
                 checked={appToggles?.brainSwapEnabled ?? true}
@@ -435,7 +623,7 @@ export function TopBar({
               />
               <span><Icon name="brain" />{t("自動換腦")}</span>
             </label>
-            <label className="top-bar__menu-toggle" title={t("回合撞到訂閱用量上限時，重置時間一到自動叫 NPC 繼續被中斷的工作")}>
+            <label className="top-bar__menu-toggle" {...toggleState("limitResumeEnabled")} title={t("回合撞到訂閱用量上限時，重置時間一到自動叫 NPC 繼續被中斷的工作")}>
               <input
                 type="checkbox"
                 checked={appToggles?.limitResumeEnabled ?? true}
@@ -444,7 +632,7 @@ export function TopBar({
               />
               <span><Icon name="clock" />{t("撞限自動續跑")}</span>
             </label>
-            <label className="top-bar__menu-toggle" title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
+            <label className="top-bar__menu-toggle" {...toggleState("diagnosticsEnabled")} title={t("僅在這台電腦記錄任務成功率、效能與連線統計；不含 prompt 或路徑，且不會上傳")}>
               <input type="checkbox" checked={appToggles?.diagnosticsEnabled ?? true} disabled={!appToggles} onChange={() => toggleAppSetting("diagnosticsEnabled")} />
               <span><Icon name="chart" />{t("本機診斷")}</span>
             </label>

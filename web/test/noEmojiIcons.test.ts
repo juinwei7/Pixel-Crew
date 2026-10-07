@@ -24,8 +24,10 @@ function walk(dir: string, out: string[] = []): string[] {
 const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{23E9}-\u{23FA}\u{FE0F}]/u;
 const TEXT_GLYPHS = new Set([..."✓✔✕✖✗✎✏✦✧★☆⌕⌄⌃⌘⇧⧉→←↑↓↔·•≡⟳↻⌫⏎"]);
 
-/* 只有 icon 定義檔本身可以在註解裡舉 emoji 當對照。 */
-const ALLOWED = new Set(["src/components/Icon.tsx"]);
+/* icon 定義檔本身可以在註解裡舉 emoji 當對照；QuestLog 要用 regex／字串常數比對
+   server 訊息內文已帶的功能性前綴（🅿️/✅/⛔ 循環問你卡、🔁 教練下一步），那些是
+   內容比對不是介面圖示——index.ts 的 committed 碼本來就大量發這些 emoji 當訊息前綴。 */
+const ALLOWED = new Set(["src/components/Icon.tsx", "src/components/QuestLog.tsx"]);
 
 test("no emoji is used as a UI icon", () => {
   const offenders: string[] = [];

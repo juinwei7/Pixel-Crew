@@ -6,17 +6,7 @@ import { parseWorkflowDocument, updateWorkflowDocument, workflowText } from "../
 import { WorkflowDocumentEditor } from "./WorkflowDocumentEditor";
 import { type ConfirmTone } from "./ConfirmDialog";
 
-const NEW_SKILL = `---
-name: new-skill
-description: 說明 Codex 應該在什麼情況使用這個 Skill
----
-
-請依照以下流程完成任務：
-
-1. 理解需求與目前狀況。
-2. 執行必要的修改。
-3. 驗證結果並清楚回報。
-`;
+const NEW_SKILL = t("---\nname: new-skill\ndescription: 說明 Codex 應該在什麼情況使用這個 Skill\n---\n\n請依照以下流程完成任務：\n\n1. 理解需求與目前狀況。\n2. 執行必要的修改。\n3. 驗證結果並清楚回報。\n");
 
 type SkillDocument = {
   name: string;

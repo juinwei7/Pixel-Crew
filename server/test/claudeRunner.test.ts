@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, type RunnerEvent } from "../src/claudeRunner.js";
+import { approvalBridgeLaunch, claudeMessageContent, ClaudeSession, handleLine, type RunnerEvent } from "../src/claudeRunner.js";
+import { config } from "../src/config.js";
 
 test("approval MCP bridge starts outside the Pixel Crew working directory", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pixel-crew-approval-cwd-"));
@@ -258,9 +259,252 @@ test("Claude defers a global-memory prompt refresh until the next send(), never 
   assert.match(writes[0], /繼續工作/);
 });
 
+test("channel E fence: full auto-approve still denies structured writes that escape the workspace, but allows writes inside it", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-fence-ws-"));
+  try {
+    const events: RunnerEvent[] = [];
+    const session = new ClaudeSession(
+      (event) => events.push(event),
+      ws,
+      () => [],
+      () => "",
+      () => "full", // 完全自動核准：若沒有圍欄，寫到 workspace 外也會被放行
+    );
+    session.busy = true;
+    const token = (session as unknown as { approvalToken: string }).approvalToken;
+
+    // 逃逸的結構化寫入：即使 full 模式，也被圍欄擋下（deny + 外洩理由）。
+    const outsidePath = join(ws, "..", "escape-secret.txt");
+    for (const [tool, key] of [["Write", "file_path"], ["Edit", "file_path"], ["NotebookEdit", "notebook_path"]] as const) {
+      const denied = await session.handleApprovalBridge(token, { tool_name: tool, input: { [key]: outsidePath } });
+      assert.equal(denied.behavior, "deny", `${tool} should be denied`);
+      assert.match((denied as { message: string }).message, /超出工作資料夾/);
+    }
+
+    // 相對 ../ 逃逸同樣擋下。
+    const relDenied = await session.handleApprovalBridge(token, { tool_name: "Write", input: { file_path: "../outside.txt" } });
+    assert.equal(relDenied.behavior, "deny");
+
+    // workspace 內（含 outbox/）的寫入照常放行。
+    const insideOk = await session.handleApprovalBridge(token, { tool_name: "Write", input: { file_path: join(ws, "outbox", "report.md") } });
+    assert.deepEqual(insideOk, { behavior: "allow", updatedInput: { file_path: join(ws, "outbox", "report.md") } });
+
+    session.stop();
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("channel E Bash symmetry: full auto-approve denies a redirection that writes outside the workspace, but allows writes inside it", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "pixel-crew-bashfence-ws-"));
+  try {
+    const events: RunnerEvent[] = [];
+    const session = new ClaudeSession(
+      (event) => events.push(event),
+      ws,
+      () => [],
+      () => "",
+      () => "full", // 完全自動核准：若沒有 Bash 圍欄，echo > 外部路徑 會被放行
+    );
+    session.busy = true;
+    const token = (session as unknown as { approvalToken: string }).approvalToken;
+
+    // 逃逸的寫入型重導向：即使 full 模式也被擋下。
+    const outside = join(ws, "..", "leak.txt");
+    const denied = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: `echo secret > ${outside}` } });
+    assert.equal(denied.behavior, "deny", "redirect writing outside the workspace should be denied");
+    assert.match((denied as { message: string }).message, /超出工作資料夾/);
+
+    const relDenied = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "echo x >> ../escape.txt" } });
+    assert.equal(relDenied.behavior, "deny");
+
+    // workspace 內（含 outbox/）的重導向寫入照常放行；純讀取（無寫入重導向）也放行。
+    const insideOk = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "echo done > outbox/report.md" } });
+    assert.equal(insideOk.behavior, "allow", "writing inside outbox/ should still be allowed");
+    const readOk = await session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: "cat notes.md" } });
+    assert.equal(readOk.behavior, "allow");
+
+    session.stop();
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test("builds Claude stream-json image content blocks", () => {
   assert.deepEqual(claudeMessageContent("這是什麼？", [{ name: "shot.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=" }]), [
     { type: "text", text: "這是什麼？" },
     { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
   ]);
+});
+
+test("maps a background task_notification to subagent_done keyed by the Agent tool_use id", () => {
+  const events: RunnerEvent[] = [];
+  handleLine({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "toolu_1", status: "completed" }, (e) => events.push(e));
+  handleLine({ type: "system", subtype: "task_notification", task_id: "a2", status: "completed" }, (e) => events.push(e));
+  assert.deepEqual(events, [{ type: "subagent_done", id: "toolu_1" }]);
+});
+
+test("subagent-internal messages (parent_tool_use_id) are not surfaced as the parent's tool calls", () => {
+  const events: RunnerEvent[] = [];
+  handleLine({ type: "assistant", parent_tool_use_id: "toolu_parent", message: { content: [{ type: "tool_use", id: "toolu_child", name: "Bash", input: { command: "echo hi" } }] } }, (event) => events.push(event));
+  handleLine({ type: "user", parent_tool_use_id: "toolu_parent", message: { content: [{ type: "tool_result", tool_use_id: "toolu_child", content: "hi" }] } }, (event) => events.push(event));
+  assert.deepEqual(events, []);
+  handleLine({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "toolu_parent", name: "Agent", input: {} }] } }, (event) => events.push(event));
+  assert.deepEqual(events.map((event) => event.type), ["tool_call_start"]);
+  handleLine({ type: "system", subtype: "task_notification", tool_use_id: "toolu_parent" }, (event) => events.push(event));
+  assert.deepEqual(events.at(-1), { type: "subagent_done", id: "toolu_parent" });
+});
+
+// 假的 claude CLI：照實錄（CLI 2.1.285）重現 resume 遺失對話的輸出順序——stderr 一行文字、
+// stdout 一行 is_error 的 result、稍後才非零退出。resume dead-id 一啟動就吐這個；resume alive-id
+// 第一則成功、第二則才吐（模擬 resume 成功後晚一點的無關失敗）；其餘每收到一則訊息回一個成功 result。
+function fakeClaudeHarness() {
+  const root = mkdtempSync(join(tmpdir(), "pixel-crew-fake-claude-"));
+  const script = join(root, "fake-claude.mjs");
+  const argvLog = join(root, "argv.log");
+  writeFileSync(script, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
+const resumeAt = args.indexOf("--resume");
+const missing = (id) => {
+  process.stderr.write("No conversation found with session ID: " + id + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: id, errors: ["No conversation found with session ID: " + id] }) + "\\n");
+  setTimeout(() => process.exit(1), 50);
+};
+const ok = () => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "fresh ok" }) + "\\n");
+const resumed = resumeAt >= 0 ? args[resumeAt + 1] : null;
+if (resumed === "dead-id") missing(resumed);
+else {
+  let lines = 0;
+  createInterface({ input: process.stdin }).on("line", () => {
+    lines++;
+    if (resumed === "alive-id" && lines > 1) missing(resumed); else ok();
+  });
+}
+`);
+  let bin: string;
+  if (process.platform === "win32") {
+    bin = join(root, "fake-claude.cmd");
+    writeFileSync(bin, `@"${process.execPath}" "${script}" %*\r\n`);
+  } else {
+    bin = join(root, "fake-claude");
+    writeFileSync(bin, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  const saved = { claudeBin: config.claudeBin, dbPath: config.dbPath };
+  config.claudeBin = bin;
+  config.dbPath = join(root, "cockpit.sqlite"); // 核准橋設定檔與附件暫存都落在這個暫存資料夾
+  return {
+    root,
+    invocations: (): string[][] => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)),
+    restore() {
+      config.claudeBin = saved.claudeBin;
+      config.dbPath = saved.dbPath;
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function nextTurnEnd(events: RunnerEvent[], count: number, timeoutMs = 10_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = setInterval(() => {
+      if (events.filter((event) => event.type === "turn_end" || event.type === "error").length >= count) {
+        clearInterval(poll);
+        resolve();
+      } else if (Date.now() - started > timeoutMs) {
+        clearInterval(poll);
+        reject(new Error(`timed out waiting for turn ${count}: ${JSON.stringify(events)}`));
+      }
+    }, 20);
+  });
+}
+
+test("a resume whose conversation is gone silently restarts as a fresh session and re-sends the message", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => [], () => "", () => "off", { sessionId: "dead-id", completedTurns: 3 });
+  try {
+    session.send("繼續剛才的工作");
+    await nextTurnEnd(events, 1);
+    const ends = events.filter((event) => event.type === "turn_end" || event.type === "error");
+    assert.deepEqual(ends.map((event) => event.type === "turn_end" && !event.isError && event.resultText), ["fresh ok"]);
+    const [first, second] = harness.invocations();
+    assert.equal(first[first.indexOf("--resume") + 1], "dead-id");
+    assert.equal(second.includes("--resume"), false);
+    const state = session.getPersistenceState();
+    assert.notEqual(state.sessionId, "dead-id");
+    assert.equal(second[second.indexOf("--session-id") + 1], state.sessionId);
+    assert.equal(state.completedTurns, 1);
+    assert.equal(session.busy, false);
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+test("a later failure after a successful resume is reported, not turned into a fresh session that drops the conversation", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => [], () => "", () => "off", { sessionId: "alive-id", completedTurns: 3 });
+  try {
+    session.send("第一則");
+    await nextTurnEnd(events, 1);
+    session.send("第二則");
+    await nextTurnEnd(events, 2);
+    const ends = events.filter((event) => event.type === "turn_end" || event.type === "error");
+    assert.equal(ends.length, 2);
+    assert.equal(ends[1].type === "turn_end" && ends[1].isError, true);
+    assert.equal(harness.invocations().length, 1); // 沒有偷偷開新對話重跑
+    assert.equal(session.getPersistenceState().sessionId, "alive-id");
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+// 列進 --allowedTools 的工具 CLI 直接執行、不問核准橋（實測 CLI 2.1.285：workspace 外的 Read 與
+// WebFetch 平常會問，列進去就不問）。一般檔位只能預先放行 MCP 規則，唯讀內建工具要留給核准橋。
+test("normal turns leave Read/WebFetch to the approval bridge; only read-only query turns pre-approve them", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => ["mcp__github__*"]);
+  const allowedTools = (args: string[]) => args[args.indexOf("--allowedTools") + 1].split(",");
+  try {
+    session.send("一般回合");
+    await nextTurnEnd(events, 1);
+    session.send("唯讀查詢", [], [], { executionProfile: "read_only_query" });
+    await nextTurnEnd(events, 2);
+    const [normal, query, ...rest] = harness.invocations();
+    assert.equal(rest.length, 0);
+    assert.deepEqual(allowedTools(normal), ["mcp__github__*", "mcp__pixel_crew_approval__approval_prompt"]);
+    for (const tool of ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]) {
+      assert.equal(allowedTools(query).includes(tool), true, tool);
+    }
+    assert.equal(query[query.indexOf("--permission-mode") + 1], "plan");
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+test("the bridge checks the whole Bash command, not the truncated text shown on the card", async () => {
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), "/repo");
+  (session as unknown as { getAutoApproveMode: () => string }).getAutoApproveMode = () => "full";
+  session.busy = true;
+  const token = (session as unknown as { approvalToken: string }).approvalToken;
+  const padded = `echo ${"a".repeat(20_100)} && rm -rf ~`;
+  const pending = session.handleApprovalBridge(token, { tool_name: "Bash", input: { command: padded } });
+  assert.ok(pending instanceof Promise);
+  // full 模式下會被自動放行的話，這裡就不會出現等人決定的卡片。
+  assert.equal(events.some((event) => event.type === "approval_resolved" && event.decision === "auto_allow"), false);
+  const request = events.find((event) => event.type === "approval_requested") as Extract<RunnerEvent, { type: "approval_requested" }>;
+  assert.ok(request);
+  assert.ok((request.request.command ?? "").length <= 20_000);
+  assert.match(request.request.riskReason ?? "", /20000/);
+  session.resolveApproval(request.request.id, "deny");
+  await pending;
+  session.stop();
 });

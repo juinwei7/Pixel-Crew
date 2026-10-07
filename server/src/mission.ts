@@ -1,6 +1,7 @@
 import type { CollaborationResult } from "./collaboration.js";
 import type { RunnerEvent } from "./claudeRunner.js";
 import type { ProviderId } from "./providers/types.js";
+import type { AutoApproveMode } from "./protocol.js";
 import { t } from "./i18n.js";
 
 export type DepartmentMissionStatus =
@@ -24,6 +25,11 @@ export const MISSION_ACTIVE_STATUSES: DepartmentMissionStatus[] = [
 ];
 export type MissionExecutionMode = "research" | "project";
 export type MissionOrigin = "department" | "boss";
+// Review 要求修改時自動退回重做的輪數。依老闆指示不做查證回合（execute→review→correct 的來回
+// 是慢的另一主因）：設 0＝不自動重做，第一次 changes_requested 就停下（needs_attention／
+// correction_limit）由老闆決定重試、帶指示重跑或接受風險。要恢復自動修正就調回 2——
+// launchDepartmentMission、prepare API 的 maxCorrections 與警語都讀這裡，README 也要一起改。
+export const MISSION_MAX_CORRECTIONS = 0;
 
 export type DepartmentMissionStep = {
   id: string;
@@ -41,6 +47,23 @@ export type DepartmentMissionStep = {
   completedAt: string | null;
   formatRepairCount?: number;
 };
+
+// 已結束 mission 的「中間步驟」(execute/review/consult) 原始輸出會隨 mission 數量無上限
+// 累積，撐爆初始 snapshot（每個完成的 mission 光 steps 就 20~40KB，幾百個就破手機收得下的
+// 上限）。最終報告（synthesize 步驟的 result，正是卡片上要看的重點）保留完整；其餘中間步驟的
+// result 只送預覽（截斷），完整內容仍保存在本機 SQLite。reviewResult 是結構化物件（卡片會逐
+// 欄渲染），量小且截斷會破壞結構，所以不動。
+export const SNAPSHOT_STEP_RESULT_MAX_CHARS = 2000;
+export function previewTerminalMissionSteps(steps: DepartmentMissionStep[]): DepartmentMissionStep[] {
+  return steps.map((step) => {
+    if (step.kind === "synthesize") return step;
+    if (typeof step.result !== "string" || step.result.length <= SNAPSHOT_STEP_RESULT_MAX_CHARS) return step;
+    return {
+      ...step,
+      result: step.result.slice(0, SNAPSHOT_STEP_RESULT_MAX_CHARS) + `…（省略 ${step.result.length - SNAPSHOT_STEP_RESULT_MAX_CHARS} 字；完整內容保存於本機）`,
+    };
+  });
+}
 
 export type MissionDelegatedSession = {
   workerId: string;
@@ -145,6 +168,7 @@ type MissionActivityEvent =
   | { type: "tool_call_result"; id: string; output: unknown; isError: boolean }
   | { type: "turn_end" }
   | { type: "error" }
+  | { type: "subagent_done"; id: string }
   | { type: string };
 
 export function createMissionActivity(): MissionActivity {
@@ -169,6 +193,9 @@ export function applyMissionActivityEvent(
     open.add(event.id);
   } else if (event.type === "tool_call_result" && "output" in event && open.has(event.id)) {
     if (event.isError || !isAsyncAgentLaunch(event.output)) open.delete(event.id);
+  } else if (event.type === "subagent_done" && "id" in event) {
+    // 背景代理真的跑完（CLI task_notification）：銷號，不必等 15 分鐘逾時。
+    open.delete(event.id);
   } else if (event.type === "error") {
     return { activity: createMissionActivity(), shouldFinish: true };
   } else if (event.type === "turn_end") {
@@ -240,11 +267,17 @@ export function parseMissionPlan(
     });
   }
   if (!steps.some((step) => step.kind === "execute")) return { error: t("Mission 至少需要一個 Execute 步驟") };
+  // 指派錯人是「形式錯誤」不是「內容錯誤」——主管常把 Consult/Review 排給自己、或忘了把
+  // Execute 收回自己。這類錯誤有唯一合法修法時就地導正（跟 UI 的「重新指派」同效果），
+  // 別為此把整個 Mission 打停等老闆；只有真的無人可派才回報錯誤。
+  const alternativeTo = (excluded: string): string | null =>
+    [...allowedWorkerIds].find((id) => id !== excluded) ?? null;
   if (executionMode === "research") {
     const finalStep = steps[steps.length - 1];
-    if (finalStep.kind !== "execute" || (bossWorkerId && finalStep.assigneeWorkerId !== bossWorkerId)) {
+    if (finalStep.kind !== "execute") {
       return { error: t("研究模式最後一步必須是由部門主管完成的 Execute 回答") };
     }
+    if (bossWorkerId && finalStep.assigneeWorkerId !== bossWorkerId) finalStep.assigneeWorkerId = bossWorkerId;
     if (steps.length === 2 && steps[0].kind !== "consult") {
       return { error: t("研究模式的雙步驟流程只能是專家 Consult 後接主管 Execute") };
     }
@@ -252,15 +285,21 @@ export function parseMissionPlan(
       return { error: t("研究模式不建立 Review 修正迴圈；需要時以一次 Consult 提供反證與風險") };
     }
     if (steps.length === 2 && bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) {
-      return { error: t("研究模式的 Consult 必須指派給主管以外的專家") };
+      const specialist = alternativeTo(bossWorkerId);
+      if (!specialist) return { error: t("研究模式的 Consult 必須指派給主管以外的專家") };
+      steps[0].assigneeWorkerId = specialist;
     }
     return { plan: { summary: text(value.summary, 2_000), steps } };
   }
   const quick = steps[0].kind === "consult" || steps[0].kind === "review";
   if (quick) {
     if (steps.length !== 2 || steps[1].kind !== "execute") return { error: t("快速協作必須是 Consult／Review 後接一個主管 Execute") };
-    if (bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) return { error: t("快速協作的 Consult／Review 必須指派給另一位部門 NPC") };
-    if (bossWorkerId && steps[1].assigneeWorkerId !== bossWorkerId) return { error: t("快速協作的最後 Execute 必須交回部門主管") };
+    if (bossWorkerId && steps[0].assigneeWorkerId === bossWorkerId) {
+      const specialist = alternativeTo(bossWorkerId);
+      if (!specialist) return { error: t("快速協作的 Consult／Review 必須指派給另一位部門 NPC") };
+      steps[0].assigneeWorkerId = specialist;
+    }
+    if (bossWorkerId && steps[1].assigneeWorkerId !== bossWorkerId) steps[1].assigneeWorkerId = bossWorkerId;
   } else {
     if (steps.some((step) => step.kind === "consult")) return { error: t("Consult 只能作為快速協作的第一步") };
     for (let index = 0; index < steps.length; index++) {
@@ -268,7 +307,9 @@ export function parseMissionPlan(
         return { error: t("Mission Review 步驟 {n} 必須緊接在 Execute 之後", { n: index + 1 }) };
       }
       if (steps[index].kind === "review" && steps[index - 1]?.assigneeWorkerId === steps[index].assigneeWorkerId) {
-        return { error: t("Mission Review 步驟 {n} 必須由與 Execute 不同 NPC 負責", { n: index + 1 }) };
+        const reviewer = alternativeTo(steps[index].assigneeWorkerId);
+        if (!reviewer) return { error: t("Mission Review 步驟 {n} 必須由與 Execute 不同 NPC 負責", { n: index + 1 }) };
+        steps[index].assigneeWorkerId = reviewer;
       }
     }
   }
@@ -284,6 +325,16 @@ export function missionActiveWorkerId(mission: DepartmentMission): string | null
 
 export function missionLocksWorkspace(mission: DepartmentMission): boolean {
   return MISSION_ACTIVE_STATUSES.includes(mission.status);
+}
+
+/**
+ * Mission runner 實際採用的自動核准模式。老闆交辦派到既有部門時，成員是 "off" 就在這支
+ * Mission 的 runner 上升成 "safe"（唯讀工具免逐一點核准，寫檔／危險 Bash 照擋），其餘照成員
+ * 原設定。只作用在 Mission runner、不寫回 worker——以前直接改 worker.autoApproveMode，
+ * turn_end 就持久化，交辦結束後成員的直接對話也一路 safe 下去、沒人改回來。
+ */
+export function missionRunnerApproveMode(memberMode: AutoApproveMode, origin: MissionOrigin | undefined): AutoApproveMode {
+  return origin === "boss" && memberMode === "off" ? "safe" : memberMode;
 }
 
 // --- Pre-planning roundtable ------------------------------------------------
@@ -471,7 +522,7 @@ export function missionPlanningPrompt(input: {
       maxPlanSteps,
       policy: policyText(),
     },
-  );
+  ) + t("\n\n【驗證步驟的取捨（預設不加 review）】Review 是例外，不是預設，不要為了看起來嚴謹而加。撰寫文件／內容／說明、或建立檔案與資料這類產出，即使跨多個檔案、需依序完成、或要彼此一致，預設都不加獨立 review——由執行者在自己的步驟裡自我檢查即可，一致性也由後續 execute 步驟自己顧。只有「程式邏輯、設定、計算，或其正確性一旦錯了會造成實際故障」的產出，才值得在其 execute 後緊接一個 review（且由不同 NPC 負責）。低風險、機械式、或執行者當場就能自我驗證的步驟一律不加 review：execute 步驟本身已要求自我驗證，多排一個 review 只會拖慢。永遠優先用最少步驟達成目標。");
 }
 
 export function missionStepPrompt(input: {
@@ -528,12 +579,14 @@ export function missionStepPrompt(input: {
 export function missionFormatRepairPrompt(
   kind: "plan" | "review" | "consult",
   priorOutput: string,
+  problem?: string,
 ): string {
   const contract = kind === "plan"
     ? '<department_mission_plan>{"summary":"","steps":[]}</department_mission_plan>'
     : `<collaboration_result>{"verdict":"${kind === "consult" ? "advice|inconclusive" : "pass|changes_requested|inconclusive"}","summary":"","findings":[],"risks":[],"openQuestions":[],"recommendedNextAction":""}</collaboration_result>`;
+  const problemLine = problem ? t("\n上次輸出被拒絕的原因：{problem}\n請針對這個原因修正。", { problem: text(problem, 500) }) : "";
   return t(
-    "你已完成工作，但輸出缺少必要的結構化格式。這是唯一一次格式修復。\n不要使用工具、不要啟動 Agent、不要重做分析，也不要修改檔案。只把下方既有結論整理成合法 JSON 並包在指定標記內。\n指定格式：{contract}\n\n既有輸出：\n{priorOutput}",
-    { contract, priorOutput: text(priorOutput, 30_000) },
+    "你已完成工作，但輸出缺少必要的結構化格式。這是唯一一次格式修復。\n不要使用工具、不要啟動 Agent、不要重做分析，也不要修改檔案。只把下方既有結論整理成合法 JSON 並包在指定標記內。\n指定格式：{contract}{problemLine}\n\n既有輸出：\n{priorOutput}",
+    { contract, priorOutput: text(priorOutput, 30_000), problemLine },
   );
 }

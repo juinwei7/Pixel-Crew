@@ -57,6 +57,10 @@ export const enCore: Record<string, string> = {
   "這位 NPC 使用的 {provider} 帳號": "The {provider} account this NPC signs in with",
   "這位 NPC 已有對話紀錄，無法切換帳號——請先清除工作階段再切換，避免默默重置 {provider} 對話記憶":
     "This NPC already has a conversation, so its account can't be swapped — clear the session first, otherwise the {provider} conversation memory is silently reset",
+  "切換帳號會清空這位 NPC 的對話記憶（換帳號後無法沿用原本的對話）。確定要切換嗎？":
+    "Switching accounts clears this NPC's conversation memory (the original conversation can't be carried over to the new account). Switch anyway?",
+  "切換帳號會清空這位 NPC 的對話記憶（換帳號無法沿用原本的 {provider} 對話）；切換時會先詢問你確認。":
+    "Switching accounts clears this NPC's conversation memory (the original {provider} conversation can't be carried over); you'll be asked to confirm before it switches.",
   "（尚未登入）": "(not signed in)",
   "停止 Windows 背景服務並關閉 Pixel Crew；進行中的 NPC 工作會中斷":
     "Stop the Windows background service and quit Pixel Crew; any NPC work in progress is interrupted",
@@ -71,6 +75,10 @@ export const enCore: Record<string, string> = {
     "Note: once an NPC has started a conversation its account can't be swapped directly (that would silently reset the conversation memory on Codex's side) — clear that NPC's session first.",
   "提醒：NPC 一旦開始對話就無法直接換帳號（避免默默重置 Claude 端的對話記憶）——要換的話請先清除該 NPC 的工作階段。":
     "Note: once an NPC has started a conversation its account can't be swapped directly (that would silently reset the conversation memory on Claude's side) — clear that NPC's session first.",
+  "提醒：每個帳號各自獨立登入。已開始對話的 NPC 換帳號會清空它的對話記憶（Codex 端無法沿用原本對話）——切換時會先詢問你確認。":
+    "Note: each account signs in separately. Switching an NPC that has already started a conversation clears its conversation memory (the original conversation can't be carried over on Codex's side) — you'll be asked to confirm before it switches.",
+  "提醒：每個帳號各自獨立登入。已開始對話的 NPC 換帳號會清空它的對話記憶（Claude 端無法沿用原本對話）——切換時會先詢問你確認。":
+    "Note: each account signs in separately. Switching an NPC that has already started a conversation clears its conversation memory (the original conversation can't be carried over on Claude's side) — you'll be asked to confirm before it switches.",
   "已刪除「{label}」；{count} 個 NPC 已改回共用登入":
     "Deleted \u300c{label}\u300d; {count} NPCs moved back to the shared login",
   "已刪除「{label}」": "Deleted \u300c{label}\u300d",
@@ -196,7 +204,6 @@ export const enCore: Record<string, string> = {
   "下班報告與一日回放：今天花了多少、完成了什麼、事件時間軸": "Day report and replay: today's spend, what got done, event timeline",
   "重啟伺服器": "Restart server",
   "優雅重啟伺服器：等所有 NPC 空檔後自動重啟，不會打斷任何回合": "Graceful restart: waits until all NPCs are idle, never interrupts a turn",
-  "新手導覽": "Tour",
   "新手導覽：讓導覽貓帶你重新認識辦公室": "Tour: let the guide cat walk you through the office again",
   "Pixel Crew v{version} 已發布": "Pixel Crew v{version} is out",
   "目前版本 v{version}": "Current version v{version}",
@@ -292,4 +299,7 @@ export const enCore: Record<string, string> = {
   "無法貼上圖片": "Could not paste the image",
   "無法讀取貼上的圖片": "Could not read the pasted image",
   "放大終端字體": "Increase terminal font size",
+  "畫面載入時發生問題": "Something went wrong while loading",
+  "這通常是更新後舊分頁的快取沒對上新版造成的。重新整理頁面就會恢復正常。": "This usually happens when an open tab's cache doesn't match a new update. Refreshing the page fixes it.",
+  "重新整理頁面": "Reload the page",
 };

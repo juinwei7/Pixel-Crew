@@ -1,0 +1,67 @@
+/* ────────────────────────────────────────────────────────────────────────
+   第五輪手感補洞：盤點時還「瞬間跳出來／按了沒反應」的幾個地方。
+   規則同前：只動 transform(scale/translate) 與 opacity、120–240ms ease-out、
+   閒置時什麼都不動；最下面 reduced-motion 全部收掉。
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* 按下回饋：任務卡標題、畫面縮放鈕、任務日誌的複製鈕，原本按了完全沒感覺。 */
+.turn-card__toggle,
+.canvas-zoom > button,
+.copy-button {
+  transition-property: background, background-color, border-color, color, opacity, scale;
+  transition-duration: var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), var(--dur-1), 180ms;
+  transition-timing-function: ease-out;
+}
+.turn-card__toggle:active { scale: 0.99; transition-duration: var(--dur-press); }
+:is(.canvas-zoom > button, .copy-button):not(:disabled):active { scale: 0.9; transition-duration: var(--dur-press); }
+
+/* 複製成功：⧉ 換成 ✓ 時不再硬切，勾勾小小彈一下、染成成功色。 */
+.copy-button__glyph { display: inline-block; }
+.copy-button--done { color: var(--green, #37d6a3); }
+.copy-button--done .copy-button__glyph { animation: pc-polish-check 200ms var(--ease-out) both; }
+@keyframes pc-polish-check {
+  from { opacity: 0; scale: 0.6; }
+}
+
+/* 工具列展開：INPUT / OUTPUT 從標題下方拉開，不再一口氣蹦出來。 */
+.tool-row__detail {
+  animation: pc-item-in 180ms var(--ease-out) both;
+  --m-item-y: -4px;
+}
+
+/* 切到部門作戰任務：工作區淡入上浮，跟任務日誌的進場一致。 */
+.mission-workspace {
+  animation: pc-item-in 220ms var(--ease-out) both;
+  --m-item-y: 6px;
+}
+
+/* 進行中：原本整顆膠囊一明一暗＋卡片上緣掃描光，owner 嫌怪。改成膠囊靜止，
+   只有字前一顆小圓點慢慢呼吸（2.4s，只動 opacity）。 */
+.turn-chip--running {
+  animation: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.turn-chip--running::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pc-polish-breathe 2.4s ease-in-out infinite;
+}
+@keyframes pc-polish-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.turn-card--running::before { content: none; animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-chip--running::before { animation: none; }
+  .turn-card__toggle:active,
+  :is(.canvas-zoom > button, .copy-button):not(:disabled):active { scale: 1; }
+  .copy-button--done .copy-button__glyph,
+  .tool-row__detail,
+  .mission-workspace { animation: none; }
+}

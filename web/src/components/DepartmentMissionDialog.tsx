@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ApprovalDecision, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, MissionExecutionEvent, PreparedMission, ProviderId, RunnerEvent, ToolCallItem, WorkerState } from "../types";
 import { roomName } from "../workspace";
 import { RichText } from "./RichText";
 import { TaskComposer } from "./TaskComposer";
-import { ToolGroup, ToolRow } from "./QuestLog";
+import { MissionActivityFeed, missionActivityGroups } from "./MissionActivityFeed";
 import { Modal } from "./Modal";
 import { t } from "../i18n";
 
@@ -26,6 +26,8 @@ type Props = {
   onResolve(id: string, action: "retry" | "retry_execute" | "reassign" | "accept_risk" | "guide", guidance?: string, workerId?: string): Promise<string | null>;
   onResolveApproval?(missionId: string, approvalId: string, decision: ApprovalDecision): Promise<string | null>;
   onAsk?(missionId: string, question: string): Promise<string | null>;
+  /** 補抓已結束 Mission 的活動流（初始 snapshot 不帶，見下面的展開入口）。 */
+  onLoadActivity?(missionId: string): Promise<void>;
   onClose(): void;
   embedded?: boolean;
   focusMode?: boolean;
@@ -55,81 +57,21 @@ export async function prepareAndStartDepartmentMission(
   return onStart(input.bossWorkerId, prepared.data.missionToken);
 }
 
-function missionActivityLabel({ event }: MissionExecutionEvent): string {
-  if (event.type === "user_message") return event.text;
-  if (event.type === "tool_call_start") return t("開始使用工具：{name}", { name: event.name });
-  if (event.type === "tool_call_result") return event.isError ? t("工具執行失敗") : t("工具執行完成");
-  if (event.type === "approval_requested") return t("等待核准：{title}", { title: event.request.title });
-  if (event.type === "approval_resolved") return event.decision === "deny" ? t("核准已拒絕") : t("核准已允許");
-  if (event.type === "turn_end") return event.isError ? t("本輪工作失敗") : t("本輪工作完成");
-  if (event.type === "error") return t("錯誤：{message}", { message: event.message });
-  return t("任務狀態已更新");
-}
-
-type MissionActivityTone = "ok" | "error" | "pending" | "neutral";
-
-function missionActivityTone(event: RunnerEvent): MissionActivityTone {
-  if (event.type === "error") return "error";
-  if (event.type === "turn_end") return event.isError ? "error" : "ok";
-  if (event.type === "approval_requested") return "pending";
-  if (event.type === "approval_resolved") return event.decision === "deny" ? "error" : "ok";
-  return "neutral";
-}
-
-const MISSION_ACTIVITY_TONE_ICON: Record<MissionActivityTone, string> = { ok: "✓", error: "✕", pending: "…", neutral: "•" };
-
-type MissionActivityGroup =
-  | { kind: "tools"; key: string; workerId: string; items: ToolCallItem[] }
-  | { kind: "event"; key: string; workerId: string; label: string; tone: MissionActivityTone };
-
-// Consecutive tool_call_start/tool_call_result pairs from the same worker collapse
-// into one ToolGroup instead of two flat rows per call — the raw event stream
-// otherwise renders dozens of near-duplicate "開始使用工具" / "工具執行完成" rows.
-function groupMissionActivity(events: MissionExecutionEvent[]): MissionActivityGroup[] {
-  const groups: MissionActivityGroup[] = [];
-  const pending = new Map<string, ToolCallItem>();
-  events.forEach(({ workerId, event }, index) => {
-    if (event.type === "tool_call_start") {
-      const pendingKey = `${workerId}\0${event.id}`;
-      const item: ToolCallItem = { kind: "tool_call", key: pendingKey, id: event.id, name: event.name, input: event.input, isError: false, status: "running" };
-      pending.set(pendingKey, item);
-      const last = groups[groups.length - 1];
-      if (last?.kind === "tools" && last.workerId === workerId) last.items.push(item);
-      else groups.push({ kind: "tools", key: `tools-${index}`, workerId, items: [item] });
-      return;
-    }
-    if (event.type === "tool_call_result") {
-      const item = pending.get(`${workerId}\0${event.id}`);
-      if (item) {
-        item.output = event.output;
-        item.isError = event.isError;
-        item.status = "done";
-        return;
-      }
-    }
-    groups.push({
-      kind: "event",
-      key: `event-${index}`,
-      workerId,
-      label: missionActivityLabel({ workerId, stepId: null, event }),
-      tone: missionActivityTone(event),
-    });
-  });
-  return groups;
-}
-
-export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks = [], departmentRecord, onPrepare, onStart, onLoadThread, onMessageDepartment, onResetSessions, resetRequestKey = 0, onCancel, onRetryReview, onApprovePlan, onResolve, onResolveApproval, onAsk, onClose, embedded = false, focusMode = false, missionDetailId = null, focusSection = null, onSelectWorker, composerHost }: Props) {
+export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks = [], departmentRecord, onPrepare, onStart, onLoadThread, onMessageDepartment, onResetSessions, resetRequestKey = 0, onCancel, onRetryReview, onApprovePlan, onResolve, onResolveApproval, onAsk, onLoadActivity, onClose, embedded = false, focusMode = false, missionDetailId = null, focusSection = null, onSelectWorker, composerHost }: Props) {
   const [criteria, setCriteria] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [guidance, setGuidance] = useState("");
-  const [reassignWorkerId, setReassignWorkerId] = useState("");
+  // 以 mission.id 為 key：時間軸上可能同時渲染多張 failed/needs_attention 卡片，
+  // 共用單一 state 會讓 A 卡打的補充指示（或選好的 NPC）被送到 B 卡的 mission。
+  const [guidanceByMission, setGuidanceByMission] = useState<Record<string, string>>({});
+  const [reassignByMission, setReassignByMission] = useState<Record<string, string>>({});
   const [threadPayload, setThreadPayload] = useState<DepartmentThreadPayload | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [resetPreview, setResetPreview] = useState<Array<{ workerId: string; name: string; provider: ProviderId; model: string | null }> | null>(null);
   const [resetResults, setResetResults] = useState<Array<{ workerId: string; name: string; ok: boolean; error: string | null }> | null>(null);
   const [restartingActiveMission, setRestartingActiveMission] = useState(false);
   const handledResetRequest = useRef(resetRequestKey);
+  const threadBottomRef = useRef<HTMLDivElement>(null);
   const department = workers.filter((worker) => boss.departmentId
     ? worker.departmentId === boss.departmentId
     : worker.workspacePath === boss.workspacePath);
@@ -161,6 +103,12 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
     setCriteria("");
     setError(null);
   }, [latestTerminal?.id]);
+
+  // 新訊息/新 Mission 進來、或進行中 Mission 往前跑一步時，自動捲到最新（底部）。修掉
+  // 「訊息不會自動跳到最新」。用底部哨兵 scrollIntoView，不必知道實際捲動容器是哪一層。
+  useEffect(() => {
+    threadBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [threadPayload?.messages.length, related.length, activeMission?.status, activeMission?.currentStepIndex]);
 
   useEffect(() => {
     if (!departmentRecord || !onLoadThread) return;
@@ -266,15 +214,27 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
         ? [{ workerId, request: event.request }]
         : [],
     );
-    const visibleActivity = (mission.executionEvents ?? [])
-      .filter(({ event }) => !["text_delta", "thinking_delta", "tool_call_output_delta", "meta"].includes(event.type))
-      .slice(-50);
+    // Keep text_delta (the NPCs' actual words) — only drop noisy raw deltas and meta.
+    const activityGroups = missionActivityGroups(mission.executionEvents);
+    const missionActive = mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing";
+    // 已結束的 Mission 在初始 snapshot 裡不帶 executionEvents（server 的 missionForSnapshot
+    // 為了不把手機的初始 snapshot 撐爆而拿掉），所以這裡即使目前是空的也要留下可展開的入口，
+    // 展開時才單筆補抓。少了它，重新整理後「部門討論與執行」就永遠消失了。
+    const canLoadActivity = activityGroups.length === 0 && Boolean(onLoadActivity)
+      && (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled");
     return <div key={mission.id} className="department-chat__exchange">
       <article className="department-chat__message department-chat__message--owner"><span>{t("老闆")}</span><p>{mission.objective}</p></article>
       <article className={`mission-card mission-card--${mission.status}`}>
       <header><div><strong>{mission.objective}</strong><span>{mission.steps.length > 0 ? `${strategy} · ` : ""}{statusLabel[mission.status]}</span></div><time>{new Date(mission.createdAt).toLocaleString()}</time></header>
       {mission.planSummary && <p>{mission.planSummary}</p>}
-      {mission.steps.length > 0 && <div className="mission-card__progress"><i style={{ width: `${Math.round((completed / mission.steps.length) * 100)}%` }} /><span>{completed}/{mission.steps.length}{current ? ` · ${current.title}` : ""}</span></div>}
+      {(mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing") && <div className="mission-card__working" role="status" aria-live="polite">
+        <span className="mission-card__working-dots" aria-hidden="true"><i /><i /><i /></span>
+        <em>{mission.status === "planning" ? t("主管規劃中")
+          : mission.status === "reviewing" ? t("審核交付中")
+          : current ? t("執行中：{title}", { title: current.title })
+          : t("執行中")}</em>
+      </div>}
+      {mission.steps.length > 0 && <div className={`mission-card__progress ${mission.status === "executing" || mission.status === "reviewing" ? "mission-card__progress--active" : ""}`}><i style={{ width: `${Math.round((completed / mission.steps.length) * 100)}%` }} /><span>{completed}/{mission.steps.length}{current ? ` · ${current.title}` : ""}</span></div>}
       {mission.steps.length > 0 && <ol>{mission.steps.map((step, index) => {
         const assignee = workers.find((worker) => worker.id === step.assigneeWorkerId);
         return <li key={step.id} className={`mission-step mission-step--${step.status}`}>
@@ -306,26 +266,13 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
           </article>;
         })}
       </section>}
-      {visibleActivity.length > 0 && <details className="mission-card__activity">
-        <summary>{t("任務執行紀錄 · {count}", { count: visibleActivity.length })}</summary>
-        <div className="mission-card__activity-list">
-          {groupMissionActivity(visibleActivity).map((group) => {
-            const workerName = workers.find((candidate) => candidate.id === group.workerId)?.name ?? t("部門成員");
-            if (group.kind === "tools") {
-              return <div key={group.key} className="mission-activity-row">
-                <span className="mission-activity-row__who">{workerName}</span>
-                <div className="mission-activity-row__body">
-                  {group.items.length > 1 ? <ToolGroup items={group.items} summary /> : <ToolRow item={group.items[0]} />}
-                </div>
-              </div>;
-            }
-            return <div key={group.key} className={`mission-activity-row mission-activity-row--${group.tone}`}>
-              <span className="mission-activity-row__who">{workerName}</span>
-              <span className="mission-activity-row__icon">{MISSION_ACTIVITY_TONE_ICON[group.tone]}</span>
-              <span className="mission-activity-row__label">{group.label}</span>
-            </div>;
-          })}
-        </div>
+      {(activityGroups.length > 0 || canLoadActivity) && <details
+        className="mission-card__activity"
+        open={missionActive}
+        onToggle={(event) => { if (event.currentTarget.open && canLoadActivity) void onLoadActivity!(mission.id); }}
+      >
+        <summary>{activityGroups.length > 0 ? t("部門討論與執行 · {count}", { count: activityGroups.length }) : t("部門討論與執行")}</summary>
+        <MissionActivityFeed events={mission.executionEvents} workers={workers} />
       </details>}
       {mission.error && <div className="handoff-dialog__error">{mission.error}</div>}
       {mission.status === "completed" && mission.steps.find((step) => step.kind === "synthesize")?.result && <section className="mission-card__final-report" aria-label={t("部門最終報告")}>
@@ -333,16 +280,20 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
         <h4>{t("部門最終報告")}</h4>
         <RichText text={mission.steps.find((step) => step.kind === "synthesize")!.result!} />
       </section>}
-      {(mission.status === "failed" || (mission.status === "needs_attention" && mission.attentionReason !== "plan_approval")) && <div className="mission-card__resolution">
-        <label>{t("補充指示")}<textarea value={guidance} rows={2} maxLength={2000} placeholder={t("告訴部門要補充什麼、接受哪些限制")} onChange={(event) => setGuidance(event.target.value)} /></label>
-        <div>
-          <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry", guidance))}>{mission.status === "failed" ? t("從失敗處恢復") : t("重試目前步驟")}</button>
-          {guidance.trim() && <button type="button" onClick={() => void action(() => onResolve(mission.id, "guide", guidance))}>{t("補充指示並重試")}</button>}
-          {current?.kind === "review" && <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry_execute", guidance))}>{t("退回 Execute")}</button>}
-          {current?.kind === "review" && current.reviewResult && <button type="button" onClick={() => void action(() => onResolve(mission.id, "accept_risk", guidance))}>{t("接受風險繼續")}</button>}
-        </div>
-        {current && <div><select aria-label={t("重新指派 NPC")} value={reassignWorkerId} onChange={(event) => setReassignWorkerId(event.target.value)}><option value="">{t("選擇其他 NPC")}</option>{department.filter((worker) => worker.id !== current.assigneeWorkerId).map((worker) => <option key={worker.id} value={worker.id}>{worker.name}{worker.persona?.role ? ` · ${worker.persona.role}` : ""}</option>)}</select><button type="button" disabled={!reassignWorkerId} onClick={() => void action(() => onResolve(mission.id, "reassign", guidance, reassignWorkerId))}>{t("重新指派")}</button></div>}
-      </div>}
+      {(mission.status === "failed" || (mission.status === "needs_attention" && mission.attentionReason !== "plan_approval")) && (() => {
+        const guidance = guidanceByMission[mission.id] ?? "";
+        const reassignWorkerId = reassignByMission[mission.id] ?? "";
+        return <div className="mission-card__resolution">
+          <label>{t("補充指示")}<textarea value={guidance} rows={2} maxLength={2000} placeholder={t("告訴部門要補充什麼、接受哪些限制")} onChange={(event) => setGuidanceByMission((current) => ({ ...current, [mission.id]: event.target.value }))} /></label>
+          <div>
+            <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry", guidance))}>{mission.status === "failed" ? t("從失敗處恢復") : t("重試目前步驟")}</button>
+            {guidance.trim() && <button type="button" onClick={() => void action(() => onResolve(mission.id, "guide", guidance))}>{t("補充指示並重試")}</button>}
+            {current?.kind === "review" && <button type="button" onClick={() => void action(() => onResolve(mission.id, "retry_execute", guidance))}>{t("退回 Execute")}</button>}
+            {current?.kind === "review" && current.reviewResult && <button type="button" onClick={() => void action(() => onResolve(mission.id, "accept_risk", guidance))}>{t("接受風險繼續")}</button>}
+          </div>
+          {current && <div><select aria-label={t("重新指派 NPC")} value={reassignWorkerId} onChange={(event) => setReassignByMission((current) => ({ ...current, [mission.id]: event.target.value }))}><option value="">{t("選擇其他 NPC")}</option>{department.filter((worker) => worker.id !== current.assigneeWorkerId).map((worker) => <option key={worker.id} value={worker.id}>{worker.name}{worker.persona?.role ? ` · ${worker.persona.role}` : ""}</option>)}</select><button type="button" disabled={!reassignWorkerId} onClick={() => void action(() => onResolve(mission.id, "reassign", guidance, reassignWorkerId))}>{t("重新指派")}</button></div>}
+        </div>;
+      })()}
       <footer>
         {mission.status === "needs_attention" && mission.attentionReason === "plan_approval" && <button type="button" className="collaboration-dialog__primary" onClick={() => void action(() => onApprovePlan(mission.id))}>{t("核准計畫並開始")}</button>}
         {["planning", "executing", "reviewing", "needs_attention"].includes(mission.status) && <button type="button" onClick={() => void action(() => onCancel(mission.id))}>{t("取消 Mission")}</button>}
@@ -369,6 +320,33 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
     </details></div>{department.length === 1 && <div className="department-chat__single" role="status">{t("單人部門：可直接執行；不會安排獨立 Review。")}</div>}</>}
     onSubmit={continueWithDepartment}
   />;
+
+  // 把「部門訊息」與「Mission 卡片」合成一條依時間排序的時間軸（舊在上、新在下）。以前是
+  // 先渲染整塊訊息、再把所有 Mission 放到下面（非時間序），導致「部門問你的問題」永遠跑到
+  // 舊會議上面、也讓自動捲到底沒意義。合併後就是正常的聊天流。
+  const threadTimeline: Array<{ key: string; at: string; node: ReactNode }> = [];
+  for (const message of threadPayload?.messages ?? []) {
+    const messageAttachments = message.attachmentIds.flatMap((id) => {
+      const attachment = threadPayload?.attachments.find((candidate) => candidate.id === id);
+      return attachment ? [attachment] : [];
+    });
+    threadTimeline.push({
+      key: `m:${message.id}`,
+      at: message.createdAt,
+      node: (
+        <article key={`m:${message.id}`} className={`department-thread__message department-thread__message--${message.role}`}>
+          <header><strong>{message.role === "owner" ? t("老闆") : message.role === "report" ? t("部門最終報告") : departmentRecord?.name ?? boss.name}</strong><time>{new Date(message.createdAt).toLocaleString()}</time></header>
+          <RichText text={message.text} compact={message.role !== "report"} />
+          {messageAttachments.length > 0 && <ul className="department-thread__attachments">{messageAttachments.map((attachment) => <li key={attachment.id}>{attachment.kind === "image" ? t("圖片") : t("文件")} · {attachment.name}</li>)}</ul>}
+          {message.role === "owner" && message.deliveryStatus === "pending" && <small>{t("已保存，等待部門處理")}</small>}
+        </article>
+      ),
+    });
+  }
+  for (const mission of related) {
+    threadTimeline.push({ key: `x:${mission.id}`, at: mission.createdAt, node: <div key={`x:${mission.id}`} className="mission-dialog__history">{renderMissionCard(mission)}</div> });
+  }
+  threadTimeline.sort((left, right) => left.at.localeCompare(right.at) || left.key.localeCompare(right.key));
 
   const inner = <>
       <header className="department-chat__header">
@@ -415,26 +393,10 @@ export function DepartmentMissionDialog({ boss, workers, missions, legacyTasks =
 
       <section className="department-thread" aria-label={t("部門對話紀錄")}>
         {threadLoading && <p className="department-thread__loading">{t("正在讀取部門對話…")}</p>}
-        {!threadLoading && threadPayload && threadPayload.messages.length === 0 && <p className="department-thread__loading">{t("這個部門還沒有對話紀錄。")}</p>}
-        {threadPayload?.messages.map((message) => {
-          const messageAttachments = message.attachmentIds.flatMap((id) => {
-            const attachment = threadPayload.attachments.find((candidate) => candidate.id === id);
-            return attachment ? [attachment] : [];
-          });
-          return <article key={message.id} className={`department-thread__message department-thread__message--${message.role}`}>
-            <header><strong>{message.role === "owner" ? t("老闆") : message.role === "report" ? t("部門最終報告") : departmentRecord?.name ?? boss.name}</strong><time>{new Date(message.createdAt).toLocaleString()}</time></header>
-            <RichText text={message.text} compact={message.role !== "report"} />
-            {messageAttachments.length > 0 && <ul className="department-thread__attachments">{messageAttachments.map((attachment) => <li key={attachment.id}>{attachment.kind === "image" ? t("圖片") : t("文件")} · {attachment.name}</li>)}</ul>}
-            {message.role === "owner" && message.deliveryStatus === "pending" && <small>{t("已保存，等待部門處理")}</small>}
-          </article>;
-        })}
+        {!threadLoading && threadTimeline.length === 0 && <p className="department-thread__loading">{t("這個部門還沒有對話紀錄。")}</p>}
+        {threadTimeline.map((item) => item.node)}
+        <div ref={threadBottomRef} aria-hidden="true" />
       </section>
-
-      {currentMission && <section className="mission-dialog__history">{renderMissionCard(currentMission)}</section>}
-      {historicalMissions.length > 0 && <details className="mission-dialog__past-missions" open={focusSection === "history"}>
-        <summary>{t("此部門過往 Mission · {count}", { count: historicalMissions.length })}</summary>
-        {historicalMissions.map((mission) => renderMissionCard(mission))}
-      </details>}
       {!activeMission && latestTerminal && <section className="department-continuation" aria-label={t("部門報告後續")}>
         <header>
           <div><span>CONTINUE WITH DEPARTMENT</span><strong>{t("接著追問或交辦")}</strong></div>

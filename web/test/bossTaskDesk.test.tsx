@@ -130,7 +130,6 @@ test("new Boss tasks use a compact chat-first starter state", () => {
     confirm={async () => true}
   />);
   assert.match(html, /今天想完成什麼？/);
-  assert.match(html, /規劃並開發一套簡易 ERP/);
   assert.match(html, /驗收條件/);
   assert.doesNotMatch(html, /<details open/);
 });

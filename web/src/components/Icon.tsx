@@ -18,7 +18,8 @@ export type IconName =
   | "wrench" | "search" | "paperclip" | "image" | "file" | "table" | "archive"
   | "code" | "flag" | "target" | "fire" | "running" | "cat" | "lock"
   | "cloud" | "phone" | "thought" | "check" | "trash"
-  | "power" | "star" | "clock" | "stop";
+  | "power" | "star" | "clock" | "stop" | "film" | "briefcase"
+  | "send" | "layout" | "enter";
 
 const PATHS: Record<IconName, JSX.Element> = {
   globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18" /></>,
@@ -58,11 +59,17 @@ const PATHS: Record<IconName, JSX.Element> = {
   phone: <><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></>,
   thought: <><path d="M7 14a4 4 0 0 1 .5-8a4.5 4.5 0 0 1 8.5 1a3.5 3.5 0 0 1-.5 7Z" /><circle cx="6" cy="18" r="1.4" /><circle cx="3" cy="21" r="1" /></>,
   check: <path d="m4 12 5 5L20 6" />,
-  trash: <><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13" /><path d="M10 11v6M14 11v6" /></>,
+  // 蓋子（橫線＋把手）獨立一組：hover 時掀起來（styles/motion-fx.css）。
+  trash: <><g className="ui-icon__lid"><path d="M4 7h16M10 7V4h4v3" /></g><path d="M6 7l1 13h10l1-13" /><path d="M10 11v6M14 11v6" /></>,
   power: <><path d="M12 3v9" /><path d="M6.5 7a8 8 0 1 0 11 0" /></>,
   star: <path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.2L12 17.4 6.4 20.3l1.1-6.2L3 9.7l6.2-.9Z" />,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+  film: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m10 9 5 3-5 3Z" /></>,
+  briefcase: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18" /></>,
+  send: <><path d="M21 3 10.5 13.5" /><path d="M21 3 14.5 21l-4-7.5L3 9.5Z" /></>,
+  layout: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M10 9v11" /></>,
+  enter: <><path d="M20 5v6a3 3 0 0 1-3 3H5" /><path d="m9 10-4 4 4 4" /></>,
 };
 
 type Props = {
@@ -86,6 +93,7 @@ export function Icon({ name, size = 16, className }: Props) {
       strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
+      data-icon={name}
     >
       {PATHS[name]}
     </svg>

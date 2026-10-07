@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ApprovalDecision } from "../src/claudeRunner.js";
-import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand } from "../src/nativeCommands.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { cleanWorkerSession, interceptedAppCommand, isClearCommand, matchNativeCommand, parseGoalCommand } from "../src/nativeCommands.js";
 import type { AgentSession } from "../src/providers/session.js";
 
 class FakeSession implements AgentSession {
@@ -112,4 +114,38 @@ test("cleanWorkerSession reports failure when persistence fails and keeps histor
   assert.deepEqual(result, { ok: false, error: "無法重建工作階段" });
   assert.equal(worker.runner, previous);
   assert.equal(worker.history.length, 1);
+});
+
+test("interceptedAppCommand: /clean and bare /clear are app-handled for both providers", () => {
+  for (const provider of ["claude", "codex"] as const) {
+    assert.deepEqual(interceptedAppCommand(provider, "/clear", false), { type: "clean" });
+    assert.deepEqual(interceptedAppCommand(provider, "/clean now", true), { type: "clean" });
+    // 帶附件的 /clear 是一般訊息（與 /message 原本的判定一致）。
+    assert.equal(interceptedAppCommand(provider, "/clear", true), null);
+    assert.equal(interceptedAppCommand(provider, "please clear the cache", false), null);
+  }
+});
+
+test("interceptedAppCommand: only Claude's /goal is emulated by the app", () => {
+  assert.deepEqual(interceptedAppCommand("claude", "/goal ship v2", false), { type: "goal", command: { type: "set", objective: "ship v2" } });
+  assert.deepEqual(interceptedAppCommand("claude", "/goal", false), { type: "goal", command: { type: "get" } });
+  assert.equal(interceptedAppCommand("claude", "/goal ship v2", true), null);
+  // Codex 的 /goal 由它自己的 app-server 處理。
+  assert.equal(interceptedAppCommand("codex", "/goal ship v2", false), null);
+});
+
+test("queued messages go through the same app-command interception as direct messages", () => {
+  const indexSource = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  const body = (marker: string) => {
+    const start = indexSource.indexOf(marker);
+    assert.ok(start >= 0, `index.ts 找不到 ${marker}`);
+    return indexSource.slice(start, indexSource.indexOf("\n}", start));
+  };
+  const drain = body("function drainWorkerQueue(");
+  assert.match(drain, /interceptedAppCommand\(worker\.runner\.provider, next\.message/);
+  assert.match(drain, /runAppCommand\(worker, appCommand\)/);
+  // 成功才移出佇列（peek → 處理 → remove），失敗沿用有上限的重試。
+  assert.ok(drain.indexOf("runAppCommand(") < drain.indexOf("store.removeQueueItem(worker.id, next.id);\n  if (appCommand)"));
+  const direct = body('app.post("/api/workers/:id/message"');
+  assert.match(direct, /interceptedAppCommand\(worker\.runner\.provider, message/);
 });

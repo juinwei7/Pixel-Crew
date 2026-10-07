@@ -12,7 +12,7 @@ import cors, { type CorsOptions } from "cors";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -30,8 +30,10 @@ import { claudeChildEnv } from "./claudeEnv.js";
 import {
   isLegacyEphemeralWorkerName, parseWarroomResult, sanitizeCustomStances, warroomModels, warroomOpeningPrompt, warroomRebuttalPrompt,
   warroomSynthesisPrompt, warroomStances, type WarRoomDifficulty, type WarRoomResult, type WarRoomStance,
+  warroomContextBrief, warroomHostConfidenceNote, warroomOthersDigest, warroomRebuttalNeeded, warroomReportExtras, parseWarroomPosition,
 } from "./warroom.js";
 import type { EphemeralWorkerKind } from "./warroom.js";
+import { WarroomQueue, WARROOM_QUEUE_MAX_WAIT_MS } from "./warroomQueue.js";
 import { costMicrosForTurnEnd } from "./costTracking.js";
 import { executionBudgetFor, normalizeExecutionProfile } from "./executionBudget.js";
 import { buildClaudeMcpAddArgs, buildClaudeMcpRemoveArgs, CapabilityRegistry } from "./capabilities.js";
@@ -61,7 +63,7 @@ import { registerBackupImportTransport } from "./backupImportTransport.js";
 import { commitBackupRestore } from "./backupRestoreCommit.js";
 import { registerOperationalSettingsRoutes } from "./operationalSettingsRoutes.js";
 import { registerReportingRoutes } from "./reportingRoutes.js";
-import { registerScheduleRoutes } from "./scheduleRoutes.js";
+import { registerScheduleRoutes, ScheduleBudgetNotices, scheduleOverDailyBudget } from "./scheduleRoutes.js";
 import { registerAccountRoutes } from "./accountRoutes.js";
 import { registerApprovalRoutes } from "./approvalRoutes.js";
 import { VoiceModelManager } from "./voice/voiceModel.js";
@@ -69,6 +71,12 @@ import { VoiceEngineServer } from "./voice/voiceEngineServer.js";
 import { VoiceEngineInstaller } from "./voice/voiceEngineInstaller.js";
 import { VoiceTranscriber, resolveWhisperBinary } from "./voice/voiceTranscribe.js";
 import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
+import multer from "multer";
+import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
+import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
+import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot, trimRetainedHistory } from "./snapshotHistory.js";
+import { DeltaCoalescer } from "./deltaCoalescer.js";
+import { wsPerMessageDeflate } from "./wsCompression.js";
 import {
   readAndClearRestoreMarker,
 } from "./backupImport.js";
@@ -83,6 +91,7 @@ import {
   type PersonaTemplate,
 } from "./persona.js";
 import {
+  addLesson,
   addMemoryNote,
   composeMemorySection,
   composeOutboxSection,
@@ -100,7 +109,7 @@ import {
 } from "./globalMemory.js";
 import type { AutoApproveMode } from "./dangerousCommand.js";
 import { MessageImageValidationError, parseMessageImages } from "./messageImages.js";
-import { MessageDocumentValidationError, parseMessageDocuments } from "./messageDocuments.js";
+import { isRequestBodyTooLarge, MESSAGE_JSON_BODY_LIMIT_BYTES, MessageDocumentValidationError, parseMessageDocuments, requestBodyTooLargeMessage } from "./messageDocuments.js";
 import {
   bootstrapPrompt,
   buildLocalHandoff,
@@ -109,6 +118,7 @@ import {
   summaryMarkdown,
   summaryPrompt,
   usageBlockReason,
+  withOpenUserRequests,
   type HandoffProgress,
   type HandoffSummary,
 } from "./handoff.js";
@@ -136,12 +146,15 @@ import {
   isAsyncAgentLaunch,
   missionActiveWorkerId,
   missionLocksWorkspace,
+  missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
   missionStepPrompt,
   parseMissionPlan,
   precedingExecuteIndex,
+  previewTerminalMissionSteps,
   type DepartmentMission,
   type DepartmentMissionStep,
   type MissionActivity,
@@ -153,26 +166,158 @@ import {
   parseDepartmentPlan,
   type DepartmentPlan,
 } from "./departmentPlan.js";
-import { normalizeDepartmentName, type Department } from "./department.js";
+import { normalizeDepartmentName, routableDepartment, type Department } from "./department.js";
 import {
   assignmentDecisionPrompt,
   normalizeAssignmentClarifications,
   parseAssignmentDecision,
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
-import { replaceWithFreshSession } from "./freshSession.js";
-import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
+import { replaceWithFreshSession, switchAccountWithReset } from "./freshSession.js";
+import { cleanWorkerSession, interceptedAppCommand, isClearCommand, matchNativeCommand, type AppCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
   bossTaskDecisionPrompt,
   bossTaskClarificationBudget,
   bossTaskFinalReport,
+  bossTaskAcceptancePrompt,
+  parseBossTaskAcceptanceVerdicts,
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
+  reconcileBossTaskStall,
+  shareGuestBossTaskError,
+  dedicatedCrewApproveMode,
+  isShareGuestAccess,
   type BossTask,
+  type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
   type BossTaskMessageRole,
 } from "./bossTask.js";
+import { resolveOutboxFile } from "./outboxFile.js";
+import {
+  expertAdvisorPrompt,
+  ADVISOR_VARIETY_LENSES,
+  parseAdvisorResult,
+  explainAdvisorFailure,
+} from "./expertAdvisor.js";
+import {
+  autopilotNextPrompt,
+  autopilotTriggerRearms,
+  clampAutopilotSteps,
+  clampAutopilotMinutes,
+  decideWithFormatRepair,
+  DeferredAutopilotTriggers,
+  explainAutopilotFailure,
+  parseAutopilotDecision,
+  type AutopilotHistoryEntry,
+} from "./autopilot.js";
+import {
+  AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
+  autopilotAnswerPrompt,
+  autopilotResolvePrompt,
+  explainAutopilotAnswerFailure,
+  explainAutopilotResolveFailure,
+  parseAutopilotAnswerDecision,
+  parseAutopilotResolveDecision,
+} from "./autopilotResolve.js";
+import { AutopilotStateStore } from "./autopilotState.js";
+import {
+  BossDispatchRetryTracker,
+  BOSS_DISPATCH_RETRY_MAX_ATTEMPTS,
+  dispatchRetryAction,
+  isPreDispatchStall,
+  runnableNextStage,
+} from "./bossDispatchRetry.js";
+import {
+  DeptCreateRetryTracker,
+  DEPT_CREATE_RETRY_MAX_ATTEMPTS,
+  bootRebuildKind,
+  deptCreateRetryAction,
+  deptCreateStallKind,
+} from "./bossDeptCreateRetry.js";
+import {
+  UsageRetryTracker,
+  USAGE_RETRY_MAX_PROBES,
+  usageRetryAction,
+  usageStallKind,
+} from "./bossUsageRetry.js";
+import { BackoffRetryTracker } from "./backoffRetry.js";
+import {
+  MISSION_STEP_RETRY_MAX_ATTEMPTS,
+  MISSION_STEP_RETRY_POLICY,
+  missionStepRetryAction,
+  type MissionStepRetryPayload,
+} from "./missionStepRetry.js";
+import {
+  BossTaskWorkCounter,
+  newCrewOrphaned,
+  pendingQuestionUnchanged,
+  restartBlockedByActiveWork,
+  snapshotStillCurrent,
+  synthesizingZombieAction,
+} from "./bossTaskReconcile.js";
+import {
+  clampWorkerAutopilotMinutes,
+  clampWorkerAutopilotSteps,
+  appendWorkerAutopilotRetro,
+  autopilotContextFromHistory,
+  explainWorkerAutopilotFailure,
+  parseWorkerAutopilotDecision,
+  workerAutopilotNextPrompt,
+  workerAutopilotProgressGuard,
+  workerAutopilotPlanProgressGuard,
+  workerAutopilotRepairPrompt,
+  workerAutopilotSweepAction,
+  workerAutopilotExplorePrompt,
+  parseExplorationFindings,
+  parseAutopilotAskOptions,
+  workerAutopilotStallSignals,
+  workerAutopilotStepActivity,
+  workerAutopilotIdleStreak,
+  latestOwnerInstruction,
+  WORKER_AUTOPILOT_IDLE_STOP,
+  workerAutopilotStepNotice,
+  workerAutopilotStopNote,
+  workerAutopilotShouldAutoPick,
+  workerAutopilotAutoPickPrompt,
+  workerAutopilotChoiceNotice,
+  workerAutopilotPausedNote,
+  workerAutopilotSwapCarryNote,
+  lastTurnWasSystem,
+  workerAutopilotInstructionWithCriterion,
+  isWorkerAutopilotPlanEmpty,
+  mergeWorkerAutopilotPlan,
+  seedWorkerAutopilotPlan,
+  WORKER_AUTOPILOT_RETRY_POLICY,
+  WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP,
+  WorkerAutopilotRetroStore,
+  WorkerAutopilotStateStore,
+  WorkerAutopilotPlanStore,
+  type PersistedWorkerAutopilotState,
+  type WorkerAutopilotContext,
+  type WorkerAutopilotRetro,
+  type WorkerAutopilotPlan,
+  type WorkerAutopilotDecision,
+  type WorkerAutopilotFinding,
+} from "./workerAutopilot.js";
+import { PendingSelfInstallStore, evaluateBootResolution, readSelfInstallVerdict, type SelfInstallVerdict } from "./selfEvolvePending.js";
+import { planPromoteOnSuccess } from "./selfInstallLifecycle.js";
+import { type PostInstallChecks } from "./selfEvolveInstall.js";
+import {
+  lastAttemptedCommit, lastShippedCommit, readRepoHead, recordShippedCommit, selfInstallAutoEnabled, setSelfInstallAuto,
+  shouldAutoGateSelfInstall, triggerSelfInstall as runSelfInstallTrigger, type AutoSelfInstallMemo, type SelfInstallTriggerResult,
+} from "./selfInstallTrigger.js";
+import {
+  OpenUserRequestStore,
+  appendOpenRequest,
+  clearOpenRequests,
+  lastSuccessfulTurnAt,
+  listOpenRequests,
+  openRequestsForHandoff,
+  pruneResolved,
+  resolveOpenRequests,
+  type OpenUserRequest,
+} from "./openRequests.js";
 import { AttachmentRepository, type AttachmentRecord } from "./attachmentRepository.js";
 import {
   boundedDepartmentContext,
@@ -183,14 +328,15 @@ import {
   type DepartmentThread,
   type IntentClassification,
 } from "./departmentThread.js";
-import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
+import { isSessionPlanTool, queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
 import { localDay } from "./dayReport.js";
-import { decideBrainSwap, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
+import { brainSwapLessonNotice, decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
 import { composeConsultAsk, composeConsultDigest, composeConsultSection, selectConsultTargets } from "./consult.js";
+import { detectGarbledText, garbledTextError } from "./textIntegrity.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -215,10 +361,10 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self' http://localhost:8790 http://127.0.0.1:8790");
   next();
 });
-// Four documents (20 MiB total) plus images (10 MiB total) expand by roughly
-// one third when transported as base64. Keep the HTTP ceiling just above the
-// validated attachment budget; individual parsers still enforce tighter caps.
-app.use(express.json({ limit: "44mb" }));
+// The HTTP ceiling is derived from the validated image + document budgets
+// (base64 expands them by a third); individual parsers still enforce tighter
+// caps. An oversized body gets a 413 from the terminal error handler below.
+app.use(express.json({ limit: MESSAGE_JSON_BODY_LIMIT_BYTES }));
 // A backup restore in progress means the DB is being swapped out from under
 // this process — every write API except the backup routes themselves must
 // be rejected until the process exits and relaunches against the new data.
@@ -235,13 +381,41 @@ const server = createServer(app);
 const wss = new WebSocketServer({
   server,
   path: "/ws",
+  // 壓縮 >1KB 的訊息（初始 snapshot 是大宗）；細節見 wsCompression.ts。
+  perMessageDeflate: wsPerMessageDeflate,
   verifyClient(info, done) {
     done(!maintenanceMode && isAllowedLocalRequest(info.req.headers.host, info.origin));
   },
 });
+// 同一 worker 的高頻串流 delta 在 ~33ms 視窗內合併後才廣播（見 deltaCoalescer.ts）。任何非 delta
+// 的廣播都會先 flush，順序不變；新連線組 snapshot 前也會 flush，避免重複文字。
+const deltaCoalescer = new DeltaCoalescer((workerId, event) => sendToAllClients(JSON.stringify({ type: "event", workerId, event })));
 
 const MAX_HISTORY = 2000;
 const MAX_WORKERS = 20;
+// 作戰室成員、委派研究員這類「用完即刪」的臨時 NPC 另有保留名額，不跟常駐 NPC 搶上限：
+// 以前共用 20 人上限，辦公室 19 人時作戰室只開得出 1 位成員、沒有主持，還會把單人發言當裁決交出。
+// 6 席＝作戰室最多 4 位成員＋1 位主持，再留 1 席給委派研究員。
+const EPHEMERAL_HEADROOM = 6;
+function persistentWorkerCount(): number {
+  let count = 0;
+  for (const worker of workers.values()) if (!worker.ephemeralKind) count += 1;
+  return count;
+}
+// 已開場、但主持還沒上桌的作戰室替主持預留的席位。開場時只檢查「成員＋主持」夠不夠，
+// 主持卻要等兩輪辯論後才建立；沒預留的話，這段期間另一場作戰室會把那席坐走，
+// 先開的那場只能拿未整理的辯論原文當裁決。
+let reservedEphemeralSeats = 0;
+function ephemeralSeatsLeft(): number {
+  return MAX_WORKERS + EPHEMERAL_HEADROOM - workers.size - reservedEphemeralSeats;
+}
+// 理論上最多能有幾個臨時席（所有臨時 NPC 都散場、只剩常駐 NPC 時）。作戰室需求超過這個數就永遠
+// 等不到，直接報錯、不排隊。
+function maxEphemeralSeats(): number {
+  return MAX_WORKERS + EPHEMERAL_HEADROOM - persistentWorkerCount();
+}
+// 「為此交辦開專屬部門」建立的臨時團隊部門名稱前綴——用完即散；重啟時靠這個前綴清掉殘留。
+const EPHEMERAL_DEPT_PREFIX = "臨時團隊·";
 const MAX_ACTIVE_COLLABORATIONS = 5;
 const AVATAR_PRESET_IDS = new Set(["classic", "cyber", "signal", "spark", "ops"]);
 const store = new LocalStore(config.dbPath);
@@ -508,6 +682,37 @@ function requireWorker(res: Response, id: string): Worker | null {
   }
   return worker;
 }
+// 刪掉短命 worker 的資料列，但保留還被部門 Mission 當 boss 引用的那一列：
+// department_missions.boss_worker_id 是 ON DELETE CASCADE，刪了會把封存的 Mission
+// 紀錄一起銷毀，而交辦頁明說「封存會保留全部對話、部門階段與報告」。留下來的列帶著
+// ephemeral_kind 標記，不會被還原成 NPC，也不佔滿編名額——它只是封存紀錄的外鍵錨點。
+function deleteEphemeralWorkerRow(workerId: string): void {
+  if (store.countMissionsByBossWorker(workerId) > 0) return;
+  store.deleteWorker(workerId);
+}
+// 清掉上次中斷（例如崩潰/重啟在任務中途）留下的臨時團隊：短命部門用完即散，重啟不該殘留。
+// 認法是成員持久化的 ephemeral_kind，不是部門名稱——名稱是使用者可改的顯示字串，拿它
+// 當協定一改名就失效（見 warroom.ts 的同一個教訓）。名稱前綴只留作舊 DB 的相容退路。
+const persistedWorkersAtStartup = store.loadWorkers(0);
+const ephemeralWorkerIdsByDepartment = new Map<string, string[]>();
+for (const worker of persistedWorkersAtStartup) {
+  if (!worker.ephemeralKind || !worker.departmentId) continue;
+  ephemeralWorkerIdsByDepartment.set(
+    worker.departmentId,
+    [...(ephemeralWorkerIdsByDepartment.get(worker.departmentId) ?? []), worker.id],
+  );
+}
+const staleEphemeralDepartments = store.listDepartments().filter((department) =>
+  ephemeralWorkerIdsByDepartment.has(department.id) || department.name.startsWith(EPHEMERAL_DEPT_PREFIX));
+for (const department of staleEphemeralDepartments) {
+  const memberIds = ephemeralWorkerIdsByDepartment.get(department.id)
+    ?? persistedWorkersAtStartup.filter((worker) => worker.departmentId === department.id).map((worker) => worker.id);
+  for (const workerId of memberIds) deleteEphemeralWorkerRow(workerId);
+  store.deleteDepartment(department.id);
+}
+if (staleEphemeralDepartments.length > 0) {
+  console.warn(`[startup] removed ${staleEphemeralDepartments.length} stale ephemeral department(s) from an interrupted run`);
+}
 const departments = new Map<string, Department>(store.listDepartments().map((department) => [department.id, department]));
 const activeCollaborations = new Map<string, CollaborationTask>();
 const collaborationActivities = new Map<string, MissionActivity>();
@@ -515,6 +720,12 @@ const activeMissions = new Map<string, DepartmentMission>(
   store.listReservedDepartmentMissions().map((mission) => [mission.id, mission]),
 );
 const missionActivities = new Map<string, MissionActivity>();
+// 個別 worker（含 BOSS）的背景 Agent 追蹤：一個 NPC 在某回合用 Agent 工具開了背景代理
+// （run_in_background）後，自己的 turn 會先 turn_end（busy 翻 false），但背景代理還在跑。
+// 若只看 runner.busy，BOSS 旁會誤顯「待命」。沿用 Mission 那套 applyMissionActivityEvent：
+// 背景 Agent 跨 turn_end 不清、只在收到非 async 的收尾結果／error 或逾時才銷號。這裡的偏誤
+// 刻意倒向「寧可多顯一下執行中」——owner 只嫌過它誤顯待命，從不嫌它顯執行中。
+const workerActivities = new Map<string, MissionActivity>();
 // How long a Mission/collaboration turn may stay open waiting for a
 // background "async agent" tool call's closing event before it's treated as
 // stuck. See the missionActivityTimeoutSweep below.
@@ -526,6 +737,11 @@ type MissionRunnerHandle = {
 };
 const missionRunners = new Map<string, MissionRunnerHandle>();
 const pendingMissionReplans = new Map<string, { message: string; attachmentIds: string[]; sourceMessageId: string }>();
+// 交辦決策把某個 stage 標為 noReview（簡單、低風險的多步交付）時，記下它的 missionId；
+// 規劃計畫解析完成後（finishMission）據此結構性剝掉所有 review 步驟，不靠規劃模型自律。
+const noReviewMissions = new Set<string>();
+// 換腦完成、交接摘要還沒送進新 session 的 worker：佇列排空要先讓路（摘要必須是新 session 的第一則）。
+const pendingSwapSummaries = new Set<string>();
 let workerCounter = 0;
 
 function workerSummary(w: Worker) {
@@ -541,7 +757,10 @@ function workerSummary(w: Worker) {
     id: w.id,
     name: w.runner.name,
     model: w.runner.getModel() ?? null,
-    busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy,
+    busy: w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy || workerHasBackgroundAgents(w.id),
+    // busy 只因背景代理在跑（本人沒在跑回合）：場景照樣顯執行中，但輸入框不顯「中止」——
+    // 這時中止打不到任何東西，新訊息也會直接送出、不用排隊。
+    backgroundOnly: workerHasBackgroundAgents(w.id) && !(w.runner.busy || handoffBusy || collaborationIds.length > 0 || missionBusy),
     colorIndex: w.colorIndex,
     avatarId: w.avatarId,
     avatarKind: w.avatarKind,
@@ -555,6 +774,7 @@ function workerSummary(w: Worker) {
     handoff: w.handoff,
     resumeCandidate: w.resumeCandidate,
     ephemeralKind: w.ephemeralKind,
+    autopilot: workerAutopilotSnapshot(w.id),
     collaborationIds,
     missionIds,
   };
@@ -562,6 +782,36 @@ function workerSummary(w: Worker) {
 
 function handoffInProgress(worker: Worker): boolean {
   return Boolean(worker.handoff && !["completed", "failed"].includes(worker.handoff.stage));
+}
+
+// 這個 worker 目前是否還掛著跑不停的背景 Agent（見 workerActivities / workerAsyncAgentHook）。
+function workerHasBackgroundAgents(workerId: string): boolean {
+  return (workerActivities.get(workerId)?.openAgentIds.length ?? 0) > 0;
+}
+
+// 把每個 RunnerEvent 餵進這顆 worker 的背景 Agent 追蹤。開了背景代理→turn_end 不清；收到非 async
+// 收尾結果／error 或逾時才銷號。只有在「有無背景 Agent」的布林邊界真的翻轉時才廣播 worker_updated，
+// 讓前端的 busy（含 BOSS 旁狀態）即時跟著亮／滅，又不會每個事件都洗一次廣播。
+function workerAsyncAgentHook(worker: Worker, event: RunnerEvent): void {
+  const before = workerHasBackgroundAgents(worker.id);
+  const current = workerActivities.get(worker.id) ?? createMissionActivity();
+  const { activity } = applyMissionActivityEvent(current, event);
+  if (activity.openAgentIds.length > 0) workerActivities.set(worker.id, activity);
+  else workerActivities.delete(worker.id);
+  const after = activity.openAgentIds.length > 0;
+  // turn_end 會讓所有在線前端把 busy 翻 false；背景代理還在跑時要緊接著補發一次，
+  // 否則只有重新連線（拿 snapshot）的裝置顯示執行中，電腦和手機各說各話。
+  if (before !== after || (after && event.type === "turn_end")) {
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  }
+}
+
+// 換成全新工作階段時，舊 session 開的背景代理隨舊行程結束、不會再有 task_notification。
+// 補記 subagent_done（寫進歷史，重整後重播也一致）並銷號，免得畫面留著已死的子代理、busy 卡到逾時。
+function dropBackgroundAgents(worker: Worker): void {
+  const open = workerActivities.get(worker.id)?.openAgentIds ?? [];
+  for (const id of open) record(worker, { type: "subagent_done", id });
+  workerActivities.delete(worker.id);
 }
 
 function collaborationInProgress(workerId: string): boolean {
@@ -708,7 +958,16 @@ function broadcastCollaboration(task: CollaborationTask, created = false): void 
 }
 
 function broadcast(payload: unknown): void {
-  const raw = JSON.stringify(payload);
+  // 先送出緩衝中的串流 delta，確保它們排在這則廣播之前（例如 worker_updated busy=false）。
+  deltaCoalescer.flush();
+  sendToAllClients(JSON.stringify(payload));
+}
+
+function broadcastWorkerEvent(workerId: string, event: RunnerEvent): void {
+  deltaCoalescer.push(workerId, event);
+}
+
+function sendToAllClients(raw: string): void {
   for (const client of wss.clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
     // A single client's send failure (socket closing mid-send, etc.) must
@@ -819,6 +1078,7 @@ function workerPersistenceRecord(worker: Worker): Omit<PersistedWorker, "events"
     departmentId: worker.departmentId,
     accountId: worker.accountId,
     claudeHomeMode: worker.claudeHomeMode,
+    ephemeralKind: worker.ephemeralKind,
     ...session,
   };
 }
@@ -971,6 +1231,7 @@ function failMission(mission: DepartmentMission, message: unknown): void {
   mission.completedAt = now;
   activeMissions.delete(mission.id);
   missionActivities.delete(mission.id);
+  noReviewMissions.delete(mission.id); // 規劃前就失敗的 noReview mission 不會走到 finishMission 的清除點，這裡一併清掉避免殘留
   stopMissionRunners(mission.id);
   store.saveDepartmentMission(mission);
   updateDepartmentThreadMission(mission.departmentId, null);
@@ -1011,6 +1272,11 @@ function dispatchMissionStep(
 ): void {
   const step = mission.steps[stepIndex];
   const assignee = step ? workers.get(step.assigneeWorkerId) : null;
+  // 先對位再做前置檢查：pause 發生在檢查階段時（NPC 消失／忙碌／未登入…），人工解卡
+  // （applyMissionResolution 的 retry／reassign）與自動重派讀的都是 currentStepIndex——
+  // 不先更新會指著上一個已完成步，retry 變成重做完成步、reassign 改到錯的步（bd15861
+  // 交互自審 #2 證實，先前行為就有、exhausted 引導訊息把人帶進這條路後危害放大）。
+  if (step) mission.currentStepIndex = stepIndex;
   if (!step || !assignee) {
     pauseMission(mission, t("Mission 指派的 NPC 已不存在，請重新指派"), "member_unavailable");
     return;
@@ -1020,15 +1286,19 @@ function dispatchMissionStep(
     return;
   }
   if (assignee.runner.busy || handoffInProgress(assignee) || collaborationInProgress(assignee.id)) {
+    // 暫時性卡住（NPC 忙碌／交接／協作中）：登記自動重派，NPC 空出（turn_end／定期掃）就重走本函式，
+    // 不用等人回覆。同函式上方兩種 member_unavailable（NPC 消失／離開部門）是永久性缺人，不登記。
     pauseMission(mission, t("{name} 正在執行其他工作，請稍後重試或重新指派", { name: assignee.runner.name }), "member_unavailable");
+    missionStepRetry.note(mission.id, { stepIndex, assigneeWorkerId: step.assigneeWorkerId, pausedError: mission.error ?? "", priorReview }, Date.now());
     return;
   }
   if (!workerProviderReady(assignee)) {
+    // 同款登記：登入是人工動作，但登入後也沒有任何機制回來重派——由掃描在 provider 恢復時接手。
     pauseMission(mission, t("{provider} 尚未登入，請登入後重試或重新指派", { provider: providerLabel(assignee.runner.provider) }), "member_unavailable");
+    missionStepRetry.note(mission.id, { stepIndex, assigneeWorkerId: step.assigneeWorkerId, pausedError: mission.error ?? "", priorReview }, Date.now());
     return;
   }
   const now = new Date().toISOString();
-  mission.currentStepIndex = stepIndex;
   mission.status = step.kind === "execute" ? "executing" : "reviewing";
   mission.attentionReason = null;
   mission.error = null;
@@ -1220,7 +1490,7 @@ function finishMission(
         mission.error = t("計畫格式不完整，正在要求主管只修復輸出格式");
         store.saveDepartmentMission(mission);
         broadcastMission(mission);
-        const repair = missionFormatRepairPrompt("plan", output);
+        const repair = missionFormatRepairPrompt("plan", output, parsed.error);
         try {
           sendMissionRunner(
             mission,
@@ -1256,7 +1526,15 @@ function finishMission(
       completedAt: null,
       formatRepairCount: 0,
     }));
-    if (mission.executionMode !== "research") mission.steps.push({
+    // noReview：交辦決策判定這是簡單、低風險的交付——結構性剝掉規劃模型排的所有 review 步驟（不靠它自律）。
+    // review 一定緊接在某個 execute 之後，剝掉後至少仍留一個 execute。接著若只剩單一步驟，下方 synthesize
+    // 的追加條件（steps.length > 1）自然不成立，等於連最後的彙整回合一起省掉。
+    if (noReviewMissions.delete(mission.id)) {
+      mission.steps = mission.steps.filter((step) => step.kind !== "review");
+    }
+    // 單步 mission 不再追加獨立的「彙整報告」回合——那一步的輸出本身就是交付物，
+    // missionReport 會取最後一步結果當部門報告，省下一整輪重貼所有步驟結果的 LLM 呼叫。
+    if (mission.executionMode !== "research" && mission.steps.length > 1) mission.steps.push({
       id: randomUUID(),
       title: t("向老闆提交部門報告"),
       objective: t("整合所有成員的執行、Consult 與 Review 結果，提交一份包含結論、驗收狀態、主要交付、驗證、風險與待決事項的最終報告"),
@@ -1434,9 +1712,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   } else {
     worker.history.push(event);
   }
-  if (worker.history.length > MAX_HISTORY) {
-    worker.history.splice(0, worker.history.length - MAX_HISTORY);
-  }
+  trimRetainedHistory(worker.history, MAX_HISTORY); // 超長 turn 也保留它的 user_message（見 snapshotHistory.ts）
   if (worker.persistent && event.type !== "tool_call_output_delta") {
     store.appendEvent(worker.id, event, MAX_HISTORY);
   }
@@ -1444,6 +1720,8 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
     claudeCapabilitiesFor(worker.runner.workspacePath).mergeWorkerMeta(event);
   }
   if (worker.persistent && (event.type === "turn_end" || event.type === "error")) persistWorker(worker);
+  // 這回合結束、worker 空下來了 → 若它還有排隊，server 自己送出下一則（背景也照跑）。
+  if (event.type === "turn_end" || event.type === "error") scheduleQueueDrain(worker);
   // `/usage` is handled by Claude inside its already-authenticated session.
   // `claude -p /usage` opens a different empty session, so only the completed
   // turn's own result is authoritative for this worker's assigned account.
@@ -1487,11 +1765,16 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
     broadcast({ type: "stats_updated", stats: { completedTurns, totalCostUsd } });
   }
   const collaborationTerminal = collaborationEventIsTerminal(worker, event);
-  broadcast({ type: "event", workerId: worker.id, event });
+  broadcastWorkerEvent(worker.id, event);
+  // 必須排在 event 廣播「之後」：turn_end 事件會讓前端把 busy 翻 false，這裡若還有背景 Agent
+  // 就緊接著補一發 worker_updated(busy=true) 把它蓋回來，BOSS 旁才不會在背景代理還在跑時顯待命。
+  workerAsyncAgentHook(worker, event);
   if ((event.type === "turn_end" || event.type === "error") && collaborationTerminal) finishCollaboration(worker, event);
   warroomRecordHook(worker, event);
   brainSwapHook(worker, event);
   limitResumeHook(worker, event);
+  workerAutopilotHook(worker, event);
+  bossDispatchRetryHook(event);
 }
 
 function todayCostUsd(workerId: string): number {
@@ -1551,20 +1834,34 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
   }
   if (decision.action === "disable") {
     brainSwapDisabled.add(worker.id);
-    record(worker, { type: "user_message", text: decision.message });
+    record(worker, { type: "user_message", text: decision.message, notice: true });
     return;
   }
   if (decision.action === "cooldown") {
     if (decision.message) {
       brainSwapCooldownNoted.add(worker.id);
-      record(worker, { type: "user_message", text: decision.message });
+      record(worker, { type: "user_message", text: decision.message, notice: true });
     }
     return;
   }
   if (decision.action === "complete_swap") {
-    // 摘要回合結束 → 執行換腦
+    // 摘要回合結束 → 執行換腦。先把 NPC 夾帶的「一句可複用心法」切出來沉澱進 Playbook：
+    // 換腦＝學習事件，每換一次腦這顆 NPC 就多學一條做事慣例（複利）。切不出來就只換腦、不學，
+    // 餵進新 session 的永遠是乾淨的交接摘要本體（splitHandoffLesson 保證活命優先於學習）。
     brainSwapPending.delete(worker.id);
-    const summary = decision.summary;
+    const { summary, lesson } = splitHandoffLesson(decision.summary);
+    // 誠實訊號：learnedLesson 只有在心法「真的落盤」時才非 null——被去重擋下
+    // 或走「只換腦不學」活命分支（lesson 為 null）都維持 null，前端據此決定要不要閃「＋1 心法」。
+    let learnedLesson: string | null = null;
+    if (lesson) {
+      const stored = addLesson(worker.id, lesson);
+      if (stored.ok) {
+        learnedLesson = stored.lesson;
+        record(worker, brainSwapLessonNotice(stored.lesson));
+      }
+    }
+    // 只在 complete_swap 路徑發這個事件，不污染其他流程；前端拿 learned 決定閃現內容。
+    broadcast({ type: "brain_swapped", workerId: worker.id, learned: learnedLesson != null, lesson: learnedLesson });
     const provider = worker.runner.provider;
     const workspacePath = worker.runner.workspacePath;
     const model = worker.runner.getModel() ?? undefined;
@@ -1582,27 +1879,46 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
     brainSwapLastAt.set(worker.id, Date.now());
     brainSwapCooldownNoted.delete(worker.id);
     brainSwapOverflowStreak.delete(worker.id); // 全新 session＝重新起算連續超標
+    dropBackgroundAgents(worker);
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
-    setTimeout(() => {
-      if (worker.runner.busy) return;
-      record(worker, { type: "user_message", text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
+    // 交接摘要必須是新 session 收到的第一則訊息。掛 pending 旗標讓 drainWorkerQueue 先讓路
+    //（同一個 turn_end 已排了 drain，不擋的話排隊訊息會搶先送進零上下文的新 session、摘要被 busy 丟棄）；
+    // 若使用者搶先發話（busy），不再直接放棄，改為重試等它回合結束，重試耗盡才把摘要留在紀錄裡讓人手動接。
+    pendingSwapSummaries.add(worker.id);
+    let swapSendAttempts = 0;
+    const trySendSummary = () => {
+      if (!workers.has(worker.id)) { pendingSwapSummaries.delete(worker.id); return; }
+      if (worker.runner.busy) {
+        swapSendAttempts += 1;
+        if (swapSendAttempts < 150) { setTimeout(trySendSummary, 2_000); return; }
+        pendingSwapSummaries.delete(worker.id);
+        record(worker, { type: "user_message", notice: true, text: t("🧠 自動換腦完成，但新工作階段持續忙碌，交接摘要未能自動送入。摘要保留如下，可貼給 NPC 手動接手：\n\n{summary}", { summary }) });
+        scheduleQueueDrain(worker);
+        return;
+      }
+      pendingSwapSummaries.delete(worker.id);
+      record(worker, { type: "user_message", system: true, text: t("🧠 自動換腦完成：交接摘要已送進全新工作階段") });
       try {
         worker.runner.send(t("（系統自動換腦）你前一個工作階段的 context 已滿。以下是它留下的交接摘要，請讀完後簡短回覆「已接手」，之後依摘要繼續服務：\n\n{summary}", { summary }), [], []);
         broadcast({ type: "worker_status", workerId: worker.id, busy: true });
       } catch { /* 送不進去就留著摘要在紀錄裡，使用者可手動接 */ }
-    }, 300);
+    };
+    setTimeout(trySendSummary, 300);
     return;
   }
 
   // decision.action === "start_swap"：先請 NPC 寫交接摘要
   brainSwapPending.add(worker.id);
   const announcement = decision.message;
+  // 循環開著：要求摘要保留循環目標與進度，新腦才知道自己在循環裡、做到哪。
+  const loopState = workerAutopilotByWorker.get(worker.id);
+  const loopCarry = loopState ? workerAutopilotSwapCarryNote(loopState.goal, workerAutopilotPlans[worker.id]) : "";
   setTimeout(() => {
     if (!brainSwapPending.has(worker.id)) return;
     if (worker.runner.busy) { brainSwapPending.delete(worker.id); return; } // 使用者搶先發話，等下個回合再觸發
-    record(worker, { type: "user_message", text: announcement });
+    record(worker, { type: "user_message", system: true, text: announcement });
     try {
-      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。"), [], []);
+      worker.runner.send(t("【系統通知】你的 context 已接近上限，即將換到全新的工作階段（自動換腦）。請把「進行中的工作與狀態、重要結論、待辦事項、使用者的偏好與約定」整理成一份簡潔的交接摘要（markdown、800 字內）。下一個你會以這份摘要為唯一起點，請確保它自足。只輸出摘要本身，不要開場白。\n\n摘要寫完後，若這段工作讓你學到一條「下次換了腦也值得記得、可複用」的做事慣例或踩雷教訓，在最後另起一行用底下格式補一句（沒有就整段省略，別硬湊）：\n---LESSON---\n<一句話、動作導向、不含本次任務細節的可複用心法>") + loopCarry, [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch {
       brainSwapPending.delete(worker.id);
@@ -1659,7 +1975,7 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
   const existing = limitResumeTimers.get(worker.id);
   if (existing) clearTimeout(existing);
   const fireLabel = new Date(fireAt).toTimeString().slice(0, 5);
-  record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }) });
+  record(worker, { type: "user_message", text: t("⏰ 撞到用量上限，已排 {time} 自動繼續（⚙ 功能可關閉；伺服器重啟會取消這次排程）", { time: fireLabel }), notice: true });
   const timer = setTimeout(() => {
     limitResumeTimers.delete(worker.id);
     // 累積清單不在守門前銷毀：worker 沒了才清，其餘早退情形（功能關閉／使用者接手）保留，
@@ -1668,7 +1984,7 @@ function limitResumeHook(worker: Worker, event: RunnerEvent): void {
     if (!appSettings.get().limitResumeEnabled) return;
     if (worker.runner.busy) return; // 已在忙＝使用者或其他機制已接手，成功回合會清掉累積
     const swallowed = limitSwallowedTexts.get(worker.id) ?? [];
-    record(worker, { type: "user_message", text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
+    record(worker, { type: "user_message", system: true, text: t("⏰ 用量上限已重置，自動繼續先前被中斷的工作") });
     const prompt = swallowed.length > 0
       ? t("【系統通知】剛才你的回合因為訂閱用量上限中斷，現在上限已重置。中斷期間收到的下列指示可能沒有被處理（依先後排序），請逐一檢查、把沒完成的完成並回報：\n{list}", {
           list: swallowed.map((item, index) => `${index + 1}. ${item}`).join("\n"),
@@ -1858,7 +2174,9 @@ function cleanWorkerAndAnnounce(worker: Worker): { ok: true } | { ok: false; err
   // Goals belong to a conversation, unlike long-term memory notes and daily
   // budgets. A fresh `/clear` session must not inherit its old objective.
   setWorkerGoal(worker.id, null);
+  clearCapturedRequests(worker.id); // 對話重來：舊請求不能再被當成未結案帶進教練 prompt 或交接
   clearWorkerHookState(worker.id); // 取消待觸發的自動繼續計時器，別把清除前的舊指示注入乾淨 session
+  workerActivities.delete(worker.id); // 舊 session 的背景代理隨行程結束；歷史已清空，不必補記 subagent_done
   broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
   const announcement = t("已清除工作階段，NPC 記憶重新開始。");
   record(worker, { type: "text_delta", text: announcement });
@@ -1904,6 +2222,17 @@ function announceClaudeGoal(worker: Worker, command: GoalCommand): void {
   });
 }
 
+// 執行 interceptedAppCommand 攔下的指令（/message 與排隊 drain 共用）。兩者都會補一個 turn_end，
+// 所以排隊的下一則會照常接著 drain。
+function runAppCommand(worker: Worker, command: AppCommand): { ok: true; cleaned?: true; goal?: string | null } | { ok: false; error: string } {
+  if (command.type === "clean") {
+    const result = cleanWorkerAndAnnounce(worker);
+    return result.ok ? { ok: true, cleaned: true } : result;
+  }
+  announceClaudeGoal(worker, command.command);
+  return { ok: true, goal: getExtras(worker.id).goal };
+}
+
 function missionRunnerKey(missionId: string, workerId: string): string {
   return `${missionId}\0${workerId}`;
 }
@@ -1941,7 +2270,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         onEvent,
         mission.workspacePath,
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       )
@@ -1950,7 +2279,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         mission.workspacePath,
         () => claudeCapabilitiesFor(mission.workspacePath).getAllowedTools(),
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       );
@@ -2108,7 +2437,7 @@ function resolveDecisionRuntime(
     return { error: t("指定的決策模型目前不在任何已登入 provider 的可用清單中") };
   }
   if (preferredWorkspace) {
-    const recent = store.listBossTasks(preferredWorkspace).find((task) =>
+    const recent = store.listBossTasks(registryKey(preferredWorkspace)).find((task) =>
       task.stages.length > 0
       && providerReady(task.decisionProvider)
       && runtimeModels(task.decisionProvider).includes(task.decisionModel),
@@ -2126,6 +2455,38 @@ function resolveDecisionRuntime(
     if (model) return { provider, model };
   }
   return { error: t("Claude 與 Codex 目前都無法進行部門判斷；請先登入至少一個 provider") };
+}
+
+// 自動循環的「教練決策」要對準這位 NPC 指定的帳號，而不是共用登入——否則你把 NPC 設成某個
+// 有 token 的帳號，決定「下一步做什麼」的那通模型呼叫卻跑在共用登入上，共用登入沒 token 就整個
+// 循環卡死。共用登入可用時沿用原本的 provider/model 選法（不動模型行為、避免回歸）；只有共用
+// 登入不可用、但 NPC 指定帳號可用時，才改用 NPC 自己的 provider/model 讓循環照常跑。
+function resolveWorkerDecisionRuntime(worker: Worker): { provider: ProviderId; model: string } | { error: string } {
+  const provider = worker.runner.provider;
+  // 決策要用「這位 NPC 自己設定的模型」——而不是 resolveDecisionRuntime 依工作區挑的模型。後者會
+  // 優先挑到工作區最近一張 BOSS 任務用的決策模型（例如工作區「測試」把 總管小揮 的決策挑成 fable），
+  // 那可能是一個額度已用盡的模型（fable 在該帳號已耗盡 → out of credits），即使 NPC 明明設的是 opus。
+  // 用 NPC 自己的模型既符合「決策繼承 NPC 模型」的設定，也吃對帳號對模型的額度。
+  if (workerProviderReady(worker)) {
+    const model = worker.runner.getModel();
+    if (model && validModel(provider, model)) return { provider, model };
+  }
+  // NPC 沒設明確模型（繼承預設）時才回退到工作區啟發式；指定帳號可用但共用登入未登入時，
+  // 退而用該 provider 的可用模型，不被共用登入狀態綁死。
+  const base = resolveDecisionRuntime(undefined, undefined, worker.runner.workspacePath);
+  if (!("error" in base)) return base;
+  if (worker.accountId && workerProviderReady(worker)) {
+    const fallback = resolveDecisionRuntime(provider, undefined, worker.runner.workspacePath);
+    if (!("error" in fallback)) return fallback;
+  }
+  return base;
+}
+
+// 用量/受限判斷同樣要對準 NPC 的帳號：有指定帳號就看該帳號的即時工作能量，否則看共用登入。
+function refreshWorkerDecisionUsage(worker: Worker, provider: ProviderId) {
+  return worker.accountId
+    ? accountUsageRegistry.refresh(worker.accountId, true)
+    : usageRegistry.refresh(provider, true);
 }
 
 function normalizeWorkspacePath(input: unknown): string {
@@ -2176,9 +2537,11 @@ function capabilitiesSnapshot(): Record<string, Record<ProviderId, ReturnType<Ca
 
 function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
   for (let index = events.length - 1; index >= 0; index--) {
-    const type = events[index].type;
-    if (type === "turn_end" || type === "error") return false;
-    if (type === "user_message") return true;
+    const event = events[index];
+    if (event.type === "turn_end" || event.type === "error") return false;
+    // notice 型 user_message 是純系統通知，沒有真的送進 runner、不會有 turn_end 收尾——
+    // 不能當成「開著的回合」，否則冷卻/排程通知會被誤判成未完成回合。
+    if (event.type === "user_message" && !event.notice) return true;
   }
   return false;
 }
@@ -2186,9 +2549,28 @@ function hasUnfinishedTurn(events: RunnerEvent[]): boolean {
 function lastUnfinishedTask(events: RunnerEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
-    if (event.type === "user_message") return event.text.trim().slice(0, 12_000) || null;
+    // 跳過 notice：它是系統通知不是任務原文，拿去當 resumeCandidate 會把「🧠 冷卻通知」重新送給 NPC。
+    if (event.type === "user_message" && !event.notice) return event.text.trim().slice(0, 12_000) || null;
   }
   return null;
+}
+
+// 未完成回合的「權威收尾」：一個 worker 已經 idle（runner 不 busy）卻在 history 裡還掛著一個
+// 開著的 turn（有 user_message、後面沒有 turn_end/error）時，補一個中止事件。
+// 這是為了修「電腦還在跑、手機卻顯示工作階段已中止」的顯示 bug：以前完全靠前端在 snapshot 用
+// `!busy && 最後一個 turn 還 running` 自己猜，一旦某條路徑（例如 stop()）把 busy 設成 false 卻沒往
+// history 補 terminal 事件，前端就會誤報中止、而且各裝置狀態不一致。改由 server 在權威來源補齊，
+// 讓所有裝置看到相同且正確的結果。故意「不」走 record()/recordUnsafe()——那會觸發 turn_end/error 的
+// 各種 hook（佇列排空、換腦、成本統計），補一筆收尾不該誤觸發它們；這裡只寫 history＋SQLite＋廣播。
+// idempotent：補完 hasUnfinishedTurn 就為 false，重複呼叫不會再補。
+function reconcileDanglingTurn(worker: Worker): boolean {
+  if (worker.runner.busy || !hasUnfinishedTurn(worker.history)) return false;
+  const event: RunnerEvent = { type: "error", message: t("工作階段已中止；請重新下指令"), at: Date.now() };
+  worker.history.push(event);
+  trimRetainedHistory(worker.history, MAX_HISTORY);
+  if (worker.persistent) store.appendEvent(worker.id, event, MAX_HISTORY);
+  broadcastWorkerEvent(worker.id, event);
+  return true;
 }
 
 function providerLabel(provider: ProviderId): string {
@@ -2257,7 +2639,7 @@ function detachedRunner(
 type DetachedTurnPolicy =
   | { kind: "normal" }
   | { kind: "no_tools" }
-  | { kind: "read_only_query"; allowedTools: string[] };
+  | { kind: "read_only_query"; allowedTools: string[]; allowSafeShell?: boolean };
 
 function runDetachedTurn(
   provider: ProviderId,
@@ -2291,15 +2673,31 @@ function runDetachedTurn(
       else if (!state) rejectPromise(new Error(t("無法建立 LLM 交接工作階段")));
       else resolvePromise({ text, state, toolCalls: [...toolCalls.values()] });
     };
+    const detachedSpawnStart = Date.now();
+    let firstEventLogged = false;
     runner = detachedRunner(provider, workspacePath, model, initialState, (event) => {
+      // 量測冷啟：spawn 到第一個事件＝CLI 啟動+init 的成本（只對決策用的 no_tools 呼叫落檔，避免噪音）。
+      if (!firstEventLogged && policy.kind === "no_tools") {
+        firstEventLogged = true;
+        appendRuntimeLog(config.dataDirectory, "detached(no_tools) first event", { spawnToFirstMs: Date.now() - detachedSpawnStart, provider });
+      }
       if (event.type === "text_delta") streamedText += event.text;
       else if (event.type === "tool_call_start") {
+        if (isSessionPlanTool(event.name)) return;
         if (policy.kind === "no_tools") {
           finish(new Error(t("這個模型回合不得使用工具")));
           return;
         }
         if (policy.kind === "read_only_query") {
-          const decision = queryToolPolicy(event.name, allowedQueryTools);
+          // 次級擋刀（縱深防禦）：runner 的核准橋是權威判定，這裡用同一把尺複判——Bash 帶出指令內容
+          // 交 autoApprovalPolicy（allowSafeShell 時），確保安全 Bash 不被這層誤殺、危險 Bash 雙重擋下。
+          const command = event.name === "Bash" && event.input && typeof event.input === "object"
+            ? (event.input as Record<string, unknown>).command
+            : undefined;
+          const decision = queryToolPolicy(event.name, allowedQueryTools, {
+            allowSafeShell: policy.allowSafeShell === true,
+            command: typeof command === "string" ? command : undefined,
+          });
           if (!decision.allowed) {
             finish(new Error(t("唯讀查詢已拒絕 {name}：{reason}", { name: event.name, reason: decision.reason })));
             return;
@@ -2325,7 +2723,7 @@ function runDetachedTurn(
     timer = setTimeout(() => finish(new Error(t("LLM 交接逾時"))), timeoutMs);
     try {
       runner.send(prompt, [], [], policy.kind === "read_only_query"
-        ? { executionProfile: "read_only_query", queryAllowedTools: policy.allowedTools }
+        ? { executionProfile: "read_only_query", queryAllowedTools: policy.allowedTools, queryAllowSafeShell: policy.allowSafeShell === true }
         : undefined);
     } catch (error) {
       finish(error as Error);
@@ -2370,7 +2768,13 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     }
 
     const gitState = await workspaceGitState(workspacePath);
-    const localSummary = buildLocalHandoff(worker.history, gitState);
+    // 未結案使用者請求：從帳本取原文，餵進本機備援＋摘要後權威覆寫，確保逐字跨換腦、不被 LLM 壓縮掉。
+    // 只帶還算數的（見 openRequestsForHandoff：沒開循環時帳本不會結案）。
+    const openRequestTexts = openRequestsForHandoff(listOpenRequests(openUserRequests, worker.id), {
+      autopilotArmed: workerAutopilotByWorker.has(worker.id),
+      lastCompletedAt: lastSuccessfulTurnAt(worker.history),
+    }).map((entry) => entry.text);
+    const localSummary = buildLocalHandoff(worker.history, gitState, openRequestTexts);
     source = "agent";
     setHandoff(worker, { ...progress, stage: "summarizing", message: t("請 {provider} 整理工作大綱", { provider: providerLabel(sourceProvider) }), source: null });
     const sourceUsage = await usageRegistry.refresh(sourceProvider, true);
@@ -2388,6 +2792,9 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
       sourceState = result.state;
       summary = parseHandoffSummary(result.text);
       if (!summary) throw new Error(t("來源 LLM 沒有回傳有效的交接格式"));
+      // 權威覆寫：使用者未結案請求以帳本原文為準，不信任摘要 LLM 是否逐字複製（防漏／防壓縮）；
+      // 仍走遮蔽與尺寸上限。
+      summary = withOpenUserRequests(summary, openRequestTexts);
     } catch (error) {
       source = "local_fallback";
       summary = localSummary;
@@ -2421,7 +2828,7 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     worker.handoff = completed;
     if (!persistWorker(worker)) throw new Error(t("無法保存新的 LLM 工作階段"));
     if (!store.saveProviderHandoff(worker.id, completed, summary)) throw new Error(t("無法保存 LLM 交接紀錄"));
-    record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+    record(worker, { type: "user_message", system: true, text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
     record(worker, { type: "text_delta", text: t("{summary}\n\n**接手確認**\n{result}", { summary: summaryMarkdown(summary), result: targetResult.text }) });
     record(worker, { type: "turn_end", resultText: t("{summary}\n\n接手確認：{result}", { summary: summaryMarkdown(summary), result: targetResult.text }), costUsd: 0, durationMs: 0, isError: false, permissionDenials: [] });
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
@@ -2441,68 +2848,38 @@ async function performProviderHandoff(worker: Worker, progress: HandoffProgress)
     persistWorker(worker);
     store.saveProviderHandoff(worker.id, failed, summary);
     if (hasHistory) {
-      record(worker, { type: "user_message", text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
+      record(worker, { type: "user_message", system: true, text: t("LLM 交接：{from} → {to}", { from: providerLabel(sourceProvider), to: providerLabel(progress.toProvider) }) });
       record(worker, { type: "error", message: t("交接失敗，已恢復 {provider}：{error}", { provider: providerLabel(sourceProvider), error: (error as Error).message }) });
     }
     broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   }
 }
 
-// 初始 snapshot 瘦身：**保留完整訊息筆數**（日誌照樣看得到），只把單筆超大的工具
-// 輸出/輸入等內容截短。真正把歷史脹到十幾 MB 的是少數幾筆巨大的工具輸出（單筆可達
-// 200KB+ 的檔案內容/截圖等），不是訊息「數量」。截短後手機收得動，完整內容仍保存在
-// 本機 SQLite。另設一個很寬鬆的筆數上限當保險絲，避免極端情況整包無界成長。
-const SNAPSHOT_MAX_EVENTS = 800;        // 每 worker 最多送這麼多筆（對齊 turn 邊界）
-const SNAPSHOT_MAX_FIELD_CHARS = 6_000; // 單一欄位序列化長度上限，超過就截短
 // 預算守門：初始 snapshot 曾肥到 18.7MB 讓手機卡死在「尋找AI隊員」，瘦身到 4.85MB
 // 才勉強打平。之後任何改動把它推回 5MB 以上，就在這裡大聲告警抓回歸。
+// snapshot 瘦身/裁切邏輯（含「至少保留最近 N 個完整 turn，日誌不空白」）已抽到
+// snapshotHistory.ts，方便單元測試。
 const SNAPSHOT_BUDGET_BYTES = 5 * 1024 * 1024;
 let snapshotBudgetWarnedAt = 0;
 
-function clampField(value: unknown): unknown {
-  let s: string;
-  try {
-    s = typeof value === "string" ? value : JSON.stringify(value);
-  } catch {
-    return value;
+// 初始 snapshot 瘦身：已結束（completed/failed/cancelled）的 Mission 去掉 executionEvents。
+// 那是初始 snapshot 肥大的主因（實測 16MB，完成的量化 mission 單筆可達 1~2.5MB）；完成的
+// Mission 的活動流前端會在你點開「部門討論與執行」時用 GET /api/missions/:id 單筆補抓
+// （web 的 useWorkers.loadMissionActivity），snapshot 不必帶。進行中的
+// Mission 保留事件（活著要看），只把單筆超大的工具輸出/輸入裁短。
+function missionForSnapshot(mission: DepartmentMission): DepartmentMission {
+  if (mission.status === "completed" || mission.status === "failed" || mission.status === "cancelled") {
+    // 已結束：去掉活動流事件，並把中間步驟的原始輸出截成預覽（最終報告保留完整）。
+    // 兩者都是隨 mission 數量無上限累積、會撐爆手機初始 snapshot 的元兇。
+    return { ...mission, executionEvents: [], steps: previewTerminalMissionSteps(mission.steps ?? []) };
   }
-  if (s == null || s.length <= SNAPSHOT_MAX_FIELD_CHARS) return value;
-  return s.slice(0, SNAPSHOT_MAX_FIELD_CHARS) + `…（省略 ${s.length - SNAPSHOT_MAX_FIELD_CHARS} 字；完整內容保存於本機）`;
+  return {
+    ...mission,
+    executionEvents: (mission.executionEvents ?? []).map((entry) => ({ ...entry, event: trimEventForSnapshot(entry.event) })),
+  };
 }
 
-// 只截「內容型」的大欄位，事件的結構與型別（type/id/name…）保持不變，前端照常渲染。
-function trimEventForSnapshot(ev: RunnerEvent): RunnerEvent {
-  switch (ev.type) {
-    case "tool_call_result":
-      return { ...ev, output: clampField(ev.output) };
-    case "tool_call_start":
-      return { ...ev, input: clampField(ev.input) };
-    case "tool_call_output_delta":
-      return ev.delta.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, delta: String(clampField(ev.delta)) } : ev;
-    case "text_delta":
-    case "thinking_delta":
-      return ev.text.length > SNAPSHOT_MAX_FIELD_CHARS ? { ...ev, text: String(clampField(ev.text)) } : ev;
-    default:
-      return ev;
-  }
-}
-
-function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
-  let events = history;
-  if (events.length > SNAPSHOT_MAX_EVENTS) {
-    const windowStart = events.length - SNAPSHOT_MAX_EVENTS;
-    // 從視窗起點往後找第一個 turn 開頭（user_message），讓前端重建完整的 turn，不會
-    // 拿到半截 turn；找不到（單一超長 turn）就用尾段，前端會安全略過孤兒事件。
-    let start = windowStart;
-    for (let i = windowStart; i < events.length; i++) {
-      if (events[i]?.type === "user_message") { start = i; break; }
-    }
-    events = events.slice(start);
-  }
-  return events.map(trimEventForSnapshot);
-}
-
-wss.on("connection", (socket) => {
+wss.on("connection", (socket, request) => {
   // A client that drops mid-handshake (page reload, laptop sleep/wake, a
   // network blip) emits 'error' with no listener otherwise — that's an
   // uncaughtException that used to take the entire server, and every running
@@ -2510,10 +2887,16 @@ wss.on("connection", (socket) => {
   socket.on("error", (error) => {
     console.error("[wss] client socket error:", error);
   });
+  // 遠端存取轉接站(_tsproxy)在升級請求注入 x-pc-access：分享訪客(shr)標為 guest。
+  // 8787 只綁 127.0.0.1，公網流量必經轉接站，而轉接站會刪掉用戶端自帶的同名 header
+  // 再蓋上驗證後的值，所以這個判定不可被偽造；本機直連(owner 在主機上)沒有此 header
+  // ＝非訪客＝完整權限。
+  const shareGuest = String(request.headers["x-pc-access"] ?? "") === "shr";
   // The black-window mode opens a second websocket for an explicit, raw shell.
   // Keep it separate from worker events so CLI output can never be mistaken for
-  // an Agent event or become part of an NPC conversation.
-  attachTerminalSocket(socket, normalizeManagedTerminalWorkspacePath);
+  // an Agent event or become part of an NPC conversation. Share guests get the
+  // live event stream but never the shell control channel.
+  attachTerminalSocket(socket, normalizeManagedTerminalWorkspacePath, { shareGuest });
   for (const task of store.listBossTasksByStatus(["ready", "running"])) {
     // One malformed persisted boss task must not crash-loop the server on
     // every reconnect (crash → supervisor restart → client reconnects →
@@ -2522,8 +2905,15 @@ wss.on("connection", (socket) => {
       advanceBossTask(task);
     } catch (error) {
       console.error(`[wss] advanceBossTask failed for task ${task.id}:`, error);
+      quarantineAdvanceFailure(task, error);
     }
   }
+  // 組 snapshot 前先把「idle 卻還掛著開著 turn」的 worker 權威收尾（見 reconcileDanglingTurn）：
+  // 連上來的裝置會拿到一致狀態，已在線的裝置也會收到廣播同步——修掉「電腦還在跑但手機顯示已中止」。
+  for (const worker of workers.values()) reconcileDanglingTurn(worker);
+  // snapshot 取自 worker.history（已含緩衝中的 delta）；先把緩衝送出，否則這個新連線稍後
+  // 會再收到同一段 delta、文字重複。flush 送到新 socket 的事件會被隨後的 snapshot 整個蓋掉。
+  deltaCoalescer.flush();
   const snapshotPayload =
     JSON.stringify({
       type: "snapshot",
@@ -2544,12 +2934,13 @@ wss.on("connection", (socket) => {
       accountUsage: accountUsageRegistry.getStates(),
       capabilitiesByWorkspace: capabilitiesSnapshot(),
       collaborations: store.listRecentCollaborationTasks(),
-      missions: store.listDepartmentMissions(),
+      missions: store.listDepartmentMissions().map(missionForSnapshot),
       bossTasks: store.listBossTasks().map(bossTaskForDisplay),
       departments: store.listDepartments(),
       workers: [...workers.values()].map((w) => ({
         ...workerSummary(w),
-        events: snapshotHistory(w.history),
+        events: coalesceDeltaEvents(snapshotHistory(w.history)),
+        queue: store.listQueue(w.id),
       })),
     });
   const snapshotBytes = Buffer.byteLength(snapshotPayload);
@@ -2774,6 +3165,10 @@ function failServerRestart(message: string): void {
 }
 
 function finishServerRestart(): void {
+  // 告訴原生控制器「這是計畫中的重啟，不是崩潰」——它看到這個 marker 就會安靜地重啟，不跳
+  // 「內附服務意外結束（exit code 0）」的假警報（比照 update.pending 的自我更新機制）。
+  try { writeFileSync(join(config.dataDirectory, "logs", "restart.pending"), new Date().toISOString()); }
+  catch { /* 寫不進去也無妨，頂多還是跳那個舊警報 */ }
   // The restart response has already reached the browser. Use the same orderly
   // path as normal shutdown so provider children, Mission runners, sockets,
   // and the SQLite handle are all released before the replacement starts.
@@ -2841,13 +3236,16 @@ async function launchWindowsSelfUpdate(version: string): Promise<void> {
 }
 
 function performServerRestart(): void {
+  // 有原生控制器監督時（Windows Pixel Crew.exe / macOS menu bar 都會設這個旗標）：直接優雅退出，
+  // 由監督者偵測結束後重生。這樣就不必 spawn 外部 restart helper——Windows 那個 helper 會用
+  // taskkill 殺掉 8787 樹，反而把控制器剛重啟的 server 也殺掉，製造第二次「意外結束」假警報。
+  if (process.env.PIXEL_CREW_SUPERVISED === "1") {
+    console.log("[restart] 所有 NPC 空檔，交由原生控制器重啟…");
+    finishServerRestart();
+    return;
+  }
   if (process.platform !== "win32") {
     console.log("[restart] 所有 NPC 空檔，重啟中…");
-    if (process.env.PIXEL_CREW_SUPERVISED === "1") {
-      // macOS 的 menu bar launcher 監督中：直接退出，由它偵測結束後重生。
-      finishServerRestart();
-      return;
-    }
     // 無監督（手動 node 啟動）：detached shell 等 3 秒（讓觸發者的回合落地、
     // 連接埠釋放）後用同一組 argv/cwd 重啟自己。
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -2984,19 +3382,20 @@ app.get("/api/remote-access/status", async (_req, res) => {
   res.json({ running: await tsproxyRunning(), port: TSPROXY_PORT, platform: process.platform });
 });
 
-app.post("/api/remote-access/start", async (_req, res) => {
-  if (await tsproxyRunning()) { res.json({ ok: true, running: true, already: true }); return; }
+// 拉起轉接站的共用邏輯：手動按鈕（下方路由）與「開機自動啟動遠端」（server.listen 後）共用。
+async function startTsproxyRelay(): Promise<{ ok: boolean; running: boolean; already?: boolean; status?: number; error?: string }> {
+  if (await tsproxyRunning()) return { ok: true, running: true, already: true };
   try {
     writeTsproxyStartupLog("Starting relay");
     if (process.platform === "win32") {
       // Windows：用隱藏視窗的 vbs 拉起（不彈黑窗）。
       const vbs = join(REPO_ROOT, "_tsproxy_launch.vbs");
-      if (!existsSync(vbs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy_launch.vbs") }); return; }
+      if (!existsSync(vbs)) return { ok: false, running: false, status: 404, error: t("找不到 _tsproxy_launch.vbs") };
       spawn("wscript.exe", [vbs], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     } else {
       // macOS / Linux：直接用當前 node 執行檔跑 _tsproxy.mjs，detached 讓它獨立存活。
       const mjs = join(REPO_ROOT, "_tsproxy.mjs");
-      if (!existsSync(mjs)) { res.status(404).json({ ok: false, error: t("找不到 _tsproxy.mjs") }); return; }
+      if (!existsSync(mjs)) return { ok: false, running: false, status: 404, error: t("找不到 _tsproxy.mjs") };
       const child = spawn(process.execPath, [mjs], {
         detached: true, stdio: "ignore", cwd: REPO_ROOT,
         env: { ...process.env, PC_TSPROXY_LOG: TSPROXY_START_LOG },
@@ -3005,8 +3404,7 @@ app.post("/api/remote-access/start", async (_req, res) => {
       child.unref();
     }
   } catch (err) {
-    res.status(500).json({ ok: false, error: (err as Error).message });
-    return;
+    return { ok: false, running: false, status: 500, error: (err as Error).message };
   }
   // 等它綁定連接埠（最多 ~4 秒）
   let running = false;
@@ -3014,11 +3412,17 @@ app.post("/api/remote-access/start", async (_req, res) => {
     await new Promise((r) => setTimeout(r, 400));
     running = await tsproxyRunning();
   }
-  res.json({
+  return {
     ok: running,
     running,
     error: running ? undefined : (tsproxyStartupDetail() || t("轉接站啟動失敗，請稍後再試")),
-  });
+  };
+}
+
+app.post("/api/remote-access/start", async (_req, res) => {
+  const outcome = await startTsproxyRelay();
+  if (outcome.status && !outcome.ok) { res.status(outcome.status).json({ ok: false, error: outcome.error }); return; }
+  res.json({ ok: outcome.ok, running: outcome.running, already: outcome.already, error: outcome.error });
 });
 
 // 同源代理：把前端對 /api/remote-access/api/* 的呼叫轉發到轉接站 8790 的 /__gate/api/*。
@@ -3082,36 +3486,114 @@ registerReportingRoutes({
 // ── 排程任務設定；實際觸發迴圈保留在下方程序組裝層 ───────────────────────────
 registerScheduleRoutes({ app, store, workerExists: (workerId) => workers.has(workerId) });
 
+// ── 專家顧問：把一個粗略念頭展開成「以你自身專業不一定知道」的幾個專業方向，讓你
+//     只需挑一個，再直接餵進既有 Boss Task 執行到完成。無工具、一次性判斷（沿用
+//     Boss Task 的 decision runtime 與 no_tools 政策）；解析失敗補一次 repair 重試。
+app.post("/api/advisor/propose", async (req, res) => {
+  const idea = collaborationText(req.body?.idea, 4_000).trim();
+  // 主動模式：沒給念頭（或前端明確要求 proactive）就讓顧問從工作區脈絡主動端方向，不再擋。
+  const proactive = Boolean(req.body?.proactive) || idea.length === 0;
+  const preferredWorkspace = collaborationText(req.body?.workspacePath, 1_000) || null;
+  const runtime = resolveDecisionRuntime(req.body?.provider, req.body?.model, preferredWorkspace);
+  if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  const maxProposals = Number.isFinite(req.body?.maxProposals) ? Number(req.body.maxProposals) : undefined;
+  const workspace = preferredWorkspace || config.targetRepoPath;
+  const usage = await usageRegistry.refresh(runtime.provider, true);
+  const usageError = usageBlockReason(runtime.provider, usage, runtime.model);
+  if (usageError) {
+    res.status(409).json({ error: t("{provider} 目前無法進行顧問判斷：{error}", { provider: providerLabel(runtime.provider), error: usageError }), usage });
+    return;
+  }
+  // 主動模式每次隨機挑一個探索視角，逼模型每回從不同角度切入，降低重複（使用者反映重複性高）。
+  const varietyHint = proactive ? ADVISOR_VARIETY_LENSES[Math.floor(Math.random() * ADVISOR_VARIETY_LENSES.length)] : undefined;
+  const prompt = expertAdvisorPrompt({ idea, workspacePath: workspace, maxProposals, proactive, varietyHint });
+  let text: string;
+  try {
+    text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+  } catch (error) {
+    res.status(502).json({ error: t("顧問模型無法完成判斷：{error}", { error: (error as Error).message }) });
+    return;
+  }
+  let result = parseAdvisorResult(text, maxProposals);
+  if (!result) {
+    const reason = explainAdvisorFailure(text, maxProposals) ?? "The response did not match the required format.";
+    const repair = `${prompt}\n\nYour previous response was invalid: ${reason} Return one corrected <expert_advisor> block only.`;
+    try {
+      text = (await runDetachedTurn(runtime.provider, workspace, runtime.model, undefined, null, repair, 150_000, { kind: "no_tools" })).text;
+      result = parseAdvisorResult(text, maxProposals);
+    } catch { result = null; }
+  }
+  if (!result) { res.status(502).json({ error: t("顧問模型未能給出有效的方向建議，請換個說法再試一次") }); return; }
+  res.json({ result });
+});
+
 // ── 全域功能開關與本機診斷 ────────────────────────────────────────────────────
 registerOperationalSettingsRoutes({ app, appSettings, store, localDay, setLang });
 
 // 每 30 秒掃一次：到點、今天沒跑過、NPC 空檔 → 送出排程指示。
 // NPC 在忙就先不標記，30 秒後再試（同一天內補跑）。
+const scheduleBudgetNotices = new ScheduleBudgetNotices();
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const nowMs = now.getTime();
   const today = localDay(now);
   for (const schedule of store.listSchedules()) {
-    if (!schedule.enabled || schedule.lastRunDay === today || schedule.time > hhmm) continue;
+    if (!schedule.enabled) continue;
+    // interval_minutes 有值＝每 N 分鐘重複（用 last_run_at 判斷是否到點）；否則＝每日 HH:MM 一次。
+    const recurring = typeof schedule.intervalMinutes === "number" && schedule.intervalMinutes > 0;
+    if (recurring) {
+      const lastMs = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : NaN;
+      if (Number.isFinite(lastMs) && nowMs < lastMs + schedule.intervalMinutes! * 60_000) continue;
+    } else if (schedule.lastRunDay === today || schedule.time > hhmm) {
+      continue;
+    }
     const worker = workers.get(schedule.workerId);
     if (!worker) continue;
     if (!workerProviderReady(worker)) continue;
+    const scheduleLabel = recurring
+      ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes ?? 0 })
+      : t("每日 {time}", { time: schedule.time });
     // 無人看管風險口（作戰室裁決 P1）：⚡無限制模式跳過所有審批，不給自動排程觸發。
     // 標記為今天已處理＋留一則說明，避免每 30 秒重試洗版。
     if (worker.autoApproveMode === "invincible") {
-      store.markScheduleRun(schedule.id, today);
-      record(worker, { type: "error", message: t("⏰ 排程（每日 {time}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後，明天起自動恢復。", { time: schedule.time }) });
+      store.markScheduleRun(schedule.id, today, now.toISOString());
+      record(worker, { type: "error", message: t("⏰ 排程（{label}）未執行：此 NPC 處於⚡無限制模式（跳過所有審批），無人看管時段不自動執行。審批改為「完全信任」或「安全」後會自動恢復。", { label: scheduleLabel }) });
       continue;
     }
     if (worker.runner.busy || handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) continue;
-    store.markScheduleRun(schedule.id, today);
-    record(worker, { type: "user_message", text: t("⏰ 排程任務（每日 {time}）：{prompt}", { time: schedule.time, prompt: schedule.prompt }) });
+    // 每日預算用完：比照排隊 drain 留著不標記（當天調高上限就補跑、否則明天恢復），說明每個排程每天一則。
+    const budget = getExtras(worker.id).dailyBudgetUsd;
+    const spentUsd = todayCostUsd(worker.id);
+    if (scheduleOverDailyBudget(budget, spentUsd)) {
+      if (scheduleBudgetNotices.shouldNote(schedule.id, today)) {
+        record(worker, { type: "user_message", notice: true, text: t("⏰ 排程（{label}）未執行：{name} 今天已花 ${spent}，達到每日上限 ${cap}。明天自動恢復，或到 📊營運 調高上限。", {
+          label: scheduleLabel,
+          name: worker.runner.name,
+          spent: spentUsd.toFixed(2),
+          cap: (budget ?? 0).toFixed(2),
+        }) });
+      }
+      continue;
+    }
+    store.markScheduleRun(schedule.id, today, now.toISOString());
+    record(worker, { type: "user_message", text: t("⏰ 排程任務（{label}）：{prompt}", { label: scheduleLabel, prompt: schedule.prompt }) });
     try {
-      worker.runner.send(t("【排程任務，每日 {time} 自動觸發】{prompt}", { time: schedule.time, prompt: schedule.prompt }), [], []);
+      worker.runner.send(t("【排程任務，{label} 自動觸發】{prompt}", { label: scheduleLabel, prompt: schedule.prompt }), [], []);
       broadcast({ type: "worker_status", workerId: worker.id, busy: true });
     } catch { /* 送失敗就等明天；user_message 已留在紀錄裡可追查 */ }
   }
 }, 30_000);
+
+// 排隊佇列的安全掃描：正常情況下 turn_end/error 一發生就會 drain，但少數「worker 變回空閒
+// 卻沒有 turn_end 來觸發」的路徑（例如 mission/協作結束的當下）會漏。每 15 秒補掃一次，
+// 讓任何 idle 又有排隊的 NPC 一定會被 drain。drainWorkerQueue 自帶 idle/預算守衛，busy 的
+// worker 只做一次極輕量的記憶體檢查就跳過；不可能無限循環（每次每 worker 最多送 1 則）。
+setInterval(() => {
+  for (const worker of workers.values()) {
+    try { drainWorkerQueue(worker); } catch { /* 安全掃描 best-effort，不可影響主流程 */ }
+  }
+}, 15_000);
 
 app.post("/api/auth/refresh", async (req, res) => {
   const requested = String(req.body?.provider ?? "");
@@ -3151,7 +3633,7 @@ app.post("/api/providers/:provider/install", (req, res) => {
 });
 
 app.post("/api/workers", (req, res) => {
-  if (workers.size >= MAX_WORKERS) {
+  if (persistentWorkerCount() >= MAX_WORKERS) {
     res.status(409).json({ error: t("NPC 已達上限（最多 {max} 位）", { max: MAX_WORKERS }) });
     return;
   }
@@ -3271,16 +3753,6 @@ app.patch("/api/workers/:id/account", (req, res) => {
     res.status(409).json({ error: t("NPC 忙碌中，請等目前回合結束再切換帳號") });
     return;
   }
-  // Switching accounts only takes effect on the session's next restart, at
-  // which point it can't resume the old thread under the new account's home
-  // directory (thread/conversation history is scoped per CODEX_HOME /
-  // CLAUDE_CONFIG_DIR) and silently starts a blank one. Rather than let that
-  // happen as a surprising side effect of switching, require the owner to
-  // explicitly clear the session first.
-  if (worker.runner.getPersistenceState().completedTurns > 0) {
-    res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
-    return;
-  }
   const raw = req.body?.accountId;
   const accountId = raw === null || raw === undefined || raw === "" ? null : String(raw);
   if (accountId) {
@@ -3290,7 +3762,31 @@ app.patch("/api/workers/:id/account", (req, res) => {
       return;
     }
   }
+  // Switching accounts only takes effect on the session's next restart, at
+  // which point it can't resume the old thread under the new account's home
+  // directory (thread/conversation history is scoped per CODEX_HOME /
+  // CLAUDE_CONFIG_DIR) and silently starts a blank one. We still refuse to do
+  // that silently — but when the owner passes force:true they've already
+  // confirmed the reset in the UI, so we fold the clear INTO the switch (one
+  // click) instead of making them clear the session as a separate step first.
+  const previousAccountId = worker.accountId;
+  let respawned = false;
+  if (worker.runner.getPersistenceState().completedTurns > 0) {
+    if (req.body?.force !== true) {
+      res.status(409).json({ error: t("這位 NPC 已有對話紀錄，請先清除工作階段再切換帳號") });
+      return;
+    }
+    // 先換帳號再清：清除會當場暖機新 runner，得讓它生在新帳號的 home（見 switchAccountWithReset）。
+    const cleared = switchAccountWithReset(worker, accountId, () => cleanWorkerAndAnnounce(worker));
+    if (!cleared.ok) { persistWorker(worker); res.status(409).json({ error: cleared.error }); return; }
+    respawned = true;
+  }
   worker.accountId = accountId;
+  // 沒有對話紀錄就不必清除，但已暖機的 CLI 仍是用舊帳號的 home 生出來的：重生一次，第一回合才會跑在新帳號上。
+  if (!respawned && previousAccountId !== accountId) {
+    worker.runner.stop();
+    if (workerProviderReady(worker)) worker.runner.warmup();
+  }
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
@@ -3550,12 +4046,16 @@ app.get("/api/outbox/file", (req, res) => {
   const workerId = typeof req.query.worker === "string" ? req.query.worker : "";
   const name = typeof req.query.name === "string" ? req.query.name : "";
   const worker = workers.get(workerId);
-  if (!worker || !name || /[\\/]/.test(name) || name.includes("..")) { res.status(400).json({ error: t("無效請求") }); return; }
-  const full = join(worker.runner.workspacePath, "outbox", name);
-  let st: ReturnType<typeof statSync>;
-  try { st = statSync(full); } catch { res.status(404).json({ error: t("檔案不存在") }); return; }
-  if (!st.isFile()) { res.status(404).json({ error: t("檔案不存在") }); return; }
-  if (st.size > 100 * 1024 * 1024) { res.status(413).json({ error: t("檔案過大，請直接到工作區 outbox 資料夾開啟") }); return; }
+  if (!worker) { res.status(400).json({ error: t("無效請求") }); return; }
+  // 守門判定（檔名穿越／symlink／非檔／過大）抽到 resolveOutboxFile，見 outboxFile.ts 與其回歸測試。
+  const resolved = resolveOutboxFile(worker.runner.workspacePath, name);
+  if (!resolved.ok) {
+    const error = resolved.status === 400 ? t("無效請求")
+      : resolved.status === 413 ? t("檔案過大，請直接到工作區 outbox 資料夾開啟")
+      : t("檔案不存在");
+    res.status(resolved.status).json({ error }); return;
+  }
+  const full = resolved.fullPath;
   const ext = name.toLowerCase().split(".").pop() ?? "";
   const inlineTypes: Record<string, string> = {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
@@ -3655,6 +4155,61 @@ const voiceEngineServer = new VoiceEngineServer(
 );
 const voiceTranscriber = new VoiceTranscriber(voiceEngineServer);
 registerVoiceRoutes({ app, modelManager: voiceModelManager, transcriber: voiceTranscriber, engineInstaller: voiceEngineInstaller });
+
+// ── 影片理解：上傳影片 → ffmpeg 抽關鍵影格＋音訊 → whisper 轉文字 → 回傳「影格(當圖片)＋
+//     文字稿」，前端把它們塞進訊息一起送給 Claude（Claude 不吃影片，但吃圖片＋文字）。
+//     影片音訊可能很長，所以另建一個逾時放寬到 5 分鐘的 transcriber（語音輸入那顆維持 15 秒）。
+const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+const videoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VIDEO_BYTES } });
+const videoAudioTranscriber = new VoiceTranscriber(voiceEngineServer, fetch, 300_000);
+// 影片 buffer → 抽影格＋whisper → 回應 JSON。上傳檔與貼連結兩條入口共用同一段管線。
+async function respondWithVideoAnalysis(res: Response, video: Buffer): Promise<void> {
+  let extracted;
+  try {
+    extracted = await extractVideoFramesAndAudio(video, { ffmpegBin: config.ffmpegBin, ffprobeBin: config.ffprobeBin, maxFrames: 8 });
+  } catch (error) {
+    const detail = error instanceof VideoProcessingError ? error.message : t("影片處理失敗");
+    res.status(422).json({ error: detail });
+    return;
+  }
+  // 音訊轉文字（whisper）：引擎沒裝或轉寫失敗都不致命——至少影格還在。
+  let transcript = "";
+  let transcriptError: string | null = null;
+  if (extracted.audioWav && videoAudioTranscriber.engineAvailable) {
+    try { transcript = await videoAudioTranscriber.transcribe(extracted.audioWav); }
+    catch (error) { transcriptError = error instanceof Error ? error.message : t("語音轉寫失敗"); }
+  } else if (extracted.audioWav) {
+    transcriptError = t("找不到本機語音轉寫引擎（音訊未轉文字，僅送出畫面）");
+  }
+  res.json({
+    images: extracted.frames.map((frame) => ({ name: frame.name, mimeType: "image/jpeg", dataBase64: frame.dataBase64 })),
+    transcript,
+    durationSeconds: extracted.durationSeconds,
+    audioAvailable: Boolean(extracted.audioWav),
+    transcriptError,
+  });
+}
+
+app.post("/api/video/process", videoUpload.single("video"), async (req, res) => {
+  if (!req.file || req.file.buffer.length === 0) { res.status(400).json({ error: t("請提供影片檔") }); return; }
+  await respondWithVideoAnalysis(res, req.file.buffer);
+});
+
+// 貼連結看影片：yt-dlp 下載公開影片 → 走上面同一條抽影格＋轉字幕管線。
+app.post("/api/video/from-link", express.json({ limit: "8kb" }), async (req, res) => {
+  const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+  if (!url) { res.status(400).json({ error: t("請提供影片連結") }); return; }
+  if (!isProbableVideoUrl(url)) { res.status(400).json({ error: t("請提供有效的 http(s) 影片連結") }); return; }
+  let downloaded;
+  try {
+    downloaded = await downloadVideoFromUrl(url, { ytDlpBin: config.ytDlpBin, maxBytes: MAX_VIDEO_BYTES, timeoutMs: 240_000 });
+  } catch (error) {
+    const detail = error instanceof VideoDownloadError ? error.message : t("影片下載失敗");
+    res.status(422).json({ error: detail });
+    return;
+  }
+  await respondWithVideoAnalysis(res, downloaded.buffer);
+});
 
 registerBackupImportTransport({
   app,
@@ -3785,6 +4340,8 @@ function launchDepartmentMission(
     executionProfile?: DepartmentMission["executionProfile"];
     maxAgents?: number;
     maxPlanSteps?: number;
+    directExecute?: boolean;
+    noReview?: boolean;
   } = {},
 ): { mission?: DepartmentMission; error?: string } {
   const now = new Date().toISOString();
@@ -3804,7 +4361,8 @@ function launchDepartmentMission(
     steps: [],
     currentStepIndex: null,
     correctionCount: 0,
-    maxCorrections: options.executionMode === "research" ? 0 : 2,
+    // 依老闆指示不做自動修正回合（research 本就是 0，project 也改成 0），理由與恢復方式見常數註解。
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     error: null,
     createdAt: now,
     startedAt: now,
@@ -3834,6 +4392,44 @@ function launchDepartmentMission(
     parentMissionId: mission.parentMissionId,
   });
   broadcastMission(mission, true);
+  // 單步直執行快速道：決策模型把這個 stage 標為 directExecute（單一動作、無需多步規劃與獨立查證，
+  // 例如回答一個問題、寫一個小檔）時，跳過整輪規劃 LLM，本地合成一個 execute 步驟直接開跑。
+  // 複用一般計畫解析後的同一條下游路徑（executing → dispatchMissionStep → completeMissionStep →
+  // completed），只是不呼叫規劃模型、不追加 review／synthesize 步驟。狀態機是寬鬆的：單一 execute
+  // 步驟不會進 reviewing，最後一步完成即 completed，review 契約因沒有 review 步驟而完全不觸發。
+  if (options.directExecute) {
+    mission.planSummary = t("單步直執行：{objective}", { objective: mission.objective });
+    mission.steps = [{
+      id: randomUUID(),
+      title: t("直接執行並交付"),
+      objective: mission.objective,
+      kind: "execute",
+      assigneeWorkerId: mission.bossWorkerId,
+      acceptanceCriteria: mission.acceptanceCriteria,
+      attachmentIds,
+      status: "pending",
+      attempt: 0,
+      result: null,
+      reviewResult: null,
+      startedAt: null,
+      completedAt: null,
+      formatRepairCount: 0,
+    }];
+    mission.currentStepIndex = 0;
+    mission.status = "executing";
+    mission.attentionReason = null;
+    mission.error = null;
+    store.saveDepartmentMission(mission);
+    departmentAudit("mission_started", mission.departmentId, mission.id, {
+      planSummary: mission.planSummary,
+      stepCount: mission.steps.length,
+    });
+    broadcastMission(mission);
+    dispatchMissionStep(mission, 0);
+    return { mission };
+  }
+  // 走一般規劃路徑時，若交辦決策標了 noReview，記下 missionId，等計畫解析完在 finishMission 剝掉 review。
+  if (options.noReview) noReviewMissions.add(mission.id);
   const attachmentMetadata = resolveAttachmentMetadata(attachmentIds);
   const prompt = missionPlanningPrompt({
     missionId: mission.id,
@@ -3888,7 +4484,10 @@ function missionDepartmentEligibility(boss: Worker): { members?: Worker[]; error
 
 function departmentMissions(department: Department): DepartmentMission[] {
   const clearedAt = store.getDepartmentThread(department.id)?.historyClearedAt ?? null;
-  return store.listDepartmentMissions(department.workspacePath, 200)
+  // Mission 的 workspace_path 存的是正規化（win32 小寫）路徑，但部門保留使用者原始大小寫。
+  // 直接拿 department.workspacePath 做 exact-match 會在大小寫不同的工作區撈到 0 筆 → 任務日誌
+  // 重整後整片空白。用 registryKey 正規化再查。
+  return store.listDepartmentMissions(registryKey(department.workspacePath), 200)
     .filter((mission) => mission.departmentId === department.id && mission.origin !== "boss")
     .filter((mission) => !clearedAt || mission.createdAt > clearedAt)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -4296,6 +4895,7 @@ app.post("/api/assignments", async (req, res) => {
   const eligible = new Map<string, { coordinator: Worker; members: Worker[] }>();
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments)) continue; // 別張交辦的臨時團隊，派進去會跟著它解散
     const departmentMembers = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const coordinator = workers.get(department.leadWorkerId) ?? departmentMembers[0];
     if (!coordinator) continue;
@@ -4419,9 +5019,12 @@ function bossTaskMessage(
   };
 }
 
-function bossTaskCandidates(): AssignmentDecisionCandidate[] {
+// ownCrewIds：這張交辦自己的臨時團隊（剛為它開的、重新交辦前原本在用的）；別張交辦的臨時團隊
+// 一律不列入——那張交辦收工就整支解散，派進去的 Mission 會失去全部成員、卡死工作區鎖。
+function bossTaskCandidates(ownCrewIds: readonly string[] = []): AssignmentDecisionCandidate[] {
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments, ownCrewIds)) continue;
     const members = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const lead = workers.get(department.leadWorkerId) ?? members[0];
     if (!lead || members.length === 0) continue;
@@ -4444,14 +5047,298 @@ function bossTaskCandidates(): AssignmentDecisionCandidate[] {
 }
 
 function persistBossTask(task: BossTask, created = false): void {
+  // stall 標記的中央護欄：所有 boss task 變更都經本函式落地，任務推進或 error 被任何
+  // 寫入點改寫時在這裡統一清掉結構化停滯標記——散落各處的 error 寫入點不必各自維護。
+  task.stall = reconcileBossTaskStall(task);
   task.updatedAt = new Date().toISOString();
+  // 同一個中央寫入點順手重新武裝自動循環：交辦回到進行中（老闆回覆、解卡、重派…）就清掉上一個
+  // 終態的觸發標記，否則它下一次完成／卡住都會被 hook 當成重複而略過，開關亮著卻不再推進。
+  if (autopilotTriggerRearms(task.status)) autopilotFired.delete(task.id);
   store.saveBossTask(task);
   broadcastBossTask(task, created);
 }
 
-async function decideBossTask(task: BossTask): Promise<void> {
-  const candidates = bossTaskCandidates();
-  if (candidates.length === 0) {
+// 為一個交辦目標即時建立一支專屬部門（AI 規劃成員→建立→上線），讓決策模型在沒有
+// 合適既有部門時能「自己開部門」再討論、執行。成功回傳部門，失敗回 null（呼叫端回退）。
+// 專屬部門用「短命工」組成臨時團隊：像作戰室一樣繞過 20 人上限（createWorker 本身不擋，
+// 上限只在端點擋），2–4 人、persist:false，只註冊在記憶體不寫 SQLite——所以重啟後短命工
+// 被清、部門也不會變殭屍。任務一結束由 disbandEphemeralDepartment 整支解散。
+const ephemeralDepartments = new Set<string>();
+
+async function createDepartmentForObjective(input: {
+  purpose: string;
+  workspacePath: string;
+  provider: ProviderId;
+  count: number;
+  /** 見 dedicatedCrewApproveMode：主人的交辦 full，分享訪客碰過的交辦 safe。 */
+  approveMode: "full" | "safe";
+}): Promise<Department | null> {
+  const { workspacePath, provider } = input;
+  const purpose = normalizeDepartmentPurpose(input.purpose);
+  if (!purpose) return null;
+  if (workspaceMission(workspacePath)) return null; // 此工作區正在跑 mission，先不建
+  if (!providerReady(provider)) return null;
+  // 至少 2 人（Execute 與 Review 需不同 NPC），最多 4 人；不受滿編影響（短命工）。
+  const count = Math.min(Math.max(2, Math.floor(input.count) || 3), 4);
+  const existingMembers = [...workers.values()]
+    .filter((member) => sameWorkspacePath(member.runner.workspacePath, workspacePath))
+    .map((member) => ({ name: member.runner.name, role: member.persona?.role || null }));
+  const prompt = departmentPlanPrompt({ purpose, count, workspacePath, existingMembers });
+  let plan: DepartmentPlan | null;
+  try {
+    const result = await runDetachedTurn(provider, workspacePath, null, undefined, null, prompt, 90_000);
+    plan = parseDepartmentPlan(result.text, count);
+  } catch { return null; }
+  const existingNames = new Set([...workers.values()].map((member) => member.runner.name.toLocaleLowerCase()));
+  // 需要至少 2 人，否則部門 Mission 的 Execute/Review 無法交給不同 NPC。
+  if (!plan || plan.members.length < 2 || plan.members.some((member) => existingNames.has(member.name.toLocaleLowerCase()))) return null;
+  const departmentId = randomUUID();
+  const now = new Date().toISOString();
+  const created = plan.members.map((member) => createWorker(
+    member.name,
+    undefined,
+    provider,
+    workspacePath,
+    undefined,
+    normalizePersona({ role: member.role, instructions: member.instructions }),
+    departmentId,
+    { warmup: false, persist: false, broadcast: false, ephemeralKind: "dedicated" },
+  ));
+  // 老闆交辦的專屬部門 NPC 預設「完全自動核准（full）」：這些是為單一交辦臨時建、任務一結束就
+  // 解散的短命工，讓它們能自己把交辦一路做完，不必每顆指令都停下來等老闆點核准（否則像 `which
+  // python` 這種安全指令也會卡住整張交辦）。full 仍會擋下 rm -rf 這類毀滅性指令當最後安全網。
+  // 分享訪客碰過的交辦例外，降成 safe（見 dedicatedCrewApproveMode）。
+  for (const worker of created) worker.autoApproveMode = input.approveMode;
+  const department: Department = {
+    id: departmentId,
+    name: `${EPHEMERAL_DEPT_PREFIX}${purpose.slice(0, 14)}`,
+    purpose,
+    workspacePath,
+    leadWorkerId: created[0].id,
+    memberWorkerIds: created.map((worker) => worker.id),
+    createdAt: now,
+    updatedAt: now,
+  };
+  // 必須持久化：部門 Mission 的 boss_worker_id 外鍵指向 workers 表，lead 要在表裡 mission 才存得下。
+  // 用名稱前綴標記為臨時；任務結束由 disbandEphemeralDepartment 解散，重啟殘留由啟動掃描清掉。
+  if (!store.saveDepartmentWithWorkers(department, created.map(workerPersistenceRecord))) {
+    for (const worker of created) { try { worker.runner.stop(); } catch { /* noop */ } workers.delete(worker.id); }
+    return null;
+  }
+  departments.set(department.id, department);
+  ephemeralDepartments.add(department.id);
+  broadcast({ type: "department_created", department });
+  for (const worker of created) broadcast({ type: "worker_added", worker: workerSummary(worker) });
+  if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
+  else void codexCapabilitiesFor(workspacePath).refresh();
+  return department;
+}
+
+// 解散一支臨時部門：停掉並移除全部短命成員，再移除部門本身。冪等（重複呼叫安全）。
+function disbandEphemeralDepartment(departmentId: string): void {
+  if (!ephemeralDepartments.has(departmentId)) return;
+  ephemeralDepartments.delete(departmentId);
+  // 先收掉還跑在這支隊上的 Mission：成員一移除，Mission 就再也收不到事件，卻仍佔著工作區鎖
+  //（重啟後照樣被還原）。runner 一併停掉；解散完再讓引用它的交辦依 Mission 終態誠實收尾。
+  const orphanedMissions = [...activeMissions.values()].filter((mission) => mission.departmentId === departmentId && missionLocksWorkspace(mission));
+  for (const mission of orphanedMissions) cancelMissionForScopedRestart(mission);
+  const memberIds = [...workers.values()].filter((worker) => worker.departmentId === departmentId).map((worker) => worker.id);
+  for (const workerId of memberIds) {
+    const worker = workers.get(workerId);
+    if (!worker) continue;
+    try { worker.runner.stop(); } catch { /* already stopped */ }
+    workers.delete(workerId);
+    deleteEphemeralWorkerRow(workerId);
+    deleteExtras(workerId);
+    clearWorkerHookState(workerId);
+    broadcast({ type: "worker_removed", workerId });
+  }
+  if (departments.has(departmentId)) {
+    departments.delete(departmentId);
+    store.deleteDepartment(departmentId);
+    broadcast({ type: "department_removed", departmentId });
+  }
+  for (const mission of orphanedMissions) advanceBossTasksForMission(mission.id);
+}
+
+// 解散一個交辦底下所有臨時部門。idempotent。
+function disbandTaskEphemeralDepartments(task: BossTask): void {
+  for (const stage of task.stages) {
+    if (ephemeralDepartments.has(stage.departmentId)) disbandEphemeralDepartment(stage.departmentId);
+  }
+}
+
+// 由 advanceBossTask 統一呼叫：只有「取消」才立即解散臨時團隊。
+// 完成/失敗「不」解散——使用者可能要追問或重試（追問會重用同一支部門）；那些留給
+// 封存/刪除、閒置清掃、或巡迴推進下一步時才解散。
+function ephemeralCleanupHook(task: BossTask): void {
+  if (task.status === "cancelled") disbandTaskEphemeralDepartments(task);
+}
+
+// 探索 in-flight 追蹤：/restart 只該擋「本程序真的有背景探索在跑」的 discovering，
+// 重啟殭屍（狀態卡著但沒有工作在跑）要放行手動重開（卡點盤點 P0）。synthesizing 的
+// in-flight 既有 bossTaskFinalizing 可判，這裡只補探索側。
+const bossTaskDiscoveryWork = new BossTaskWorkCounter();
+
+// 專屬部門建立失敗的三個入口各自的錯誤文案。純粹是給人看的共用文案——入口識別已改用
+// task.stall.kind 結構化標記（引擎認領與開機重建都認它，不 parse 文案），這裡改寫措辭
+// 或換語系都不影響自動重試（2026-09-30 結構化改造，拔掉文案認領的漂移病根）。
+const deptCreateFailureError = {
+  dedicated: () => t("無法自動建立專屬臨時部門（可能此工作區正在執行其他 Mission，或團隊規劃失敗）；可稍後再試，或關掉「專屬部門」改用既有部門路由。"),
+  follow_up: () => t("無法為追問重建專屬部門（可能此工作區正在執行其他 Mission）；可稍後再試。"),
+  decide: () => t("無法自動建立專屬部門（可能此工作區正在執行、人數已滿或規劃失敗），請手動建立部門後再交辦。"),
+} as const;
+
+// 「為此交辦開專屬部門」的直接路徑：完全跳過決策模型路由——直接為目標規劃並建立一支
+// 專屬新部門，掛一個單一 stage，直接開跑（討論[目前無]＋規劃＋執行）。不呼叫決策模型、
+// 不重跑、不會卡到既有部門。省下整條管線最大的那顆 prompt（決策模型讀全部門目錄）。
+async function runDedicatedDepartmentTask(task: BossTask): Promise<void> {
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await runDedicatedDepartmentTaskInner(task);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
+  const usage = await usageRegistry.refresh(task.decisionProvider, true);
+  const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
+  if (usageError) {
+    const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
+    task.status = "needs_attention";
+    task.error = blockedError;
+    task.stall = { kind: usageStallKind("dedicated"), error: blockedError };
+    task.messages.push(bossTaskMessage("system", blockedError));
+    // 登記恢復探測：用量視窗重置後自動接手重跑本路徑，不用等人回覆（卡點盤點 P1-5）。
+    bossUsageRetry.note(task.id, "dedicated", Date.now());
+    persistBossTask(task);
+    return;
+  }
+  task.messages.push(bossTaskMessage("system", t("正在為這個交辦建立一支專屬部門並直接開工…")));
+  persistBossTask(task);
+  const department = await createDepartmentForObjective({
+    purpose: task.objective,
+    workspacePath: task.workspacePath,
+    provider: task.decisionProvider,
+    count: task.executionBudget?.maxAgents ?? 3,
+    approveMode: dedicatedCrewApproveMode(task),
+  });
+  // 建部門要跑最長 90s 的規劃 LLM：期間老闆可能已取消／刪除這張交辦，手上是舊快照
+  // （decide 路徑既有同款護欄；自動重試讓這條競態更容易踩到——交互自審補上）。
+  // 套用結果前重讀權威狀態，已終結（或已被重新交辦等別條路徑接手）就放手，剛建好的臨時部門
+  // 一併解散不留孤兒。
+  if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
+    if (department) disbandEphemeralDepartment(department.id);
+    return;
+  }
+  if (!department) {
+    const failure = deptCreateFailureError.dedicated();
+    task.status = "needs_attention";
+    task.error = failure;
+    task.stall = { kind: deptCreateStallKind("dedicated"), error: failure };
+    task.messages.push(bossTaskMessage("system", failure));
+    // 登記自動重試：工作區空出（阻塞 Mission 結束）後由掃描重走本路徑，不用等人回覆（P1-3）。
+    bossDeptCreateRetry.note(task.id, "dedicated", null, Date.now());
+    persistBossTask(task);
+    return;
+  }
+  task.executionMode = "project";
+  task.stages = [{
+    id: randomUUID(),
+    departmentId: department.id,
+    departmentName: department.name,
+    title: t("執行交辦"),
+    objective: task.objective,
+    acceptanceCriteria: task.acceptanceCriteria,
+    dependsOn: [],
+    executionMode: "project",
+    status: "pending",
+    missionId: null,
+    report: null,
+  }];
+  task.status = "ready";
+  task.error = null;
+  task.messages.push(bossTaskMessage("system", t("已建立「{name}」，直接交給它規劃與執行。", { name: department.name })));
+  persistBossTask(task);
+  advanceBossTask(task);
+}
+
+// 追問「專屬部門」跑完的交辦：不再丟回決策模型亂路由——原隊還活著就直接交回同一隊；
+// 被重啟掃掉就自動重建一支專屬部門接手。追問的目標帶上原交辦當背景，成果可延續。
+async function runDedicatedFollowUp(task: BossTask, followUp: string, liveDepartmentId: string | null): Promise<void> {
+  // 追問期間 task 也掛在 discovering（可能要重建部門、跑規劃 LLM）——一樣要進 in-flight
+  // 計數，否則 /restart 的殭屍判定會把「正在跑的追問」誤當殭屍放行，造成並發互踩（自審發現）。
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await runDedicatedFollowUpInner(task, followUp, liveDepartmentId);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveDepartmentId: string | null): Promise<void> {
+  let department = liveDepartmentId ? departments.get(liveDepartmentId) ?? null : null;
+  if (!department) {
+    task.messages.push(bossTaskMessage("system", t("原專屬部門已解散（伺服器重啟或已清理），正在重建一支專屬部門接手追問…")));
+    persistBossTask(task);
+    department = await createDepartmentForObjective({
+      purpose: task.objective,
+      workspacePath: task.workspacePath,
+      provider: task.decisionProvider,
+      count: task.executionBudget?.maxAgents ?? 3,
+      approveMode: dedicatedCrewApproveMode(task),
+    });
+    // 與 dedicated 路徑同款取消護欄：重建部門的長流程期間交辦被終結就放手（交互自審補上）。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
+      if (department) disbandEphemeralDepartment(department.id);
+      return;
+    }
+    if (!department) {
+      const failure = deptCreateFailureError.follow_up();
+      task.status = "needs_attention";
+      task.error = failure;
+      task.stall = { kind: deptCreateStallKind("follow_up"), error: failure };
+      task.messages.push(bossTaskMessage("system", failure));
+      // 帶上追問文字登記，重試時走回同一條追問路徑（P1-3）。
+      bossDeptCreateRetry.note(task.id, "follow_up", followUp, Date.now());
+      persistBossTask(task);
+      return;
+    }
+  }
+  task.executionMode = "project";
+  task.stages = [{
+    id: randomUUID(),
+    departmentId: department.id,
+    departmentName: department.name,
+    title: t("追問處理"),
+    objective: t("這是對已完成交辦的後續追問，請延續先前成果處理，不要從頭重做。\n【原交辦】{objective}\n【追問】{followUp}", { objective: task.objective.slice(0, 600), followUp }),
+    acceptanceCriteria: [],
+    dependsOn: [],
+    executionMode: "project",
+    status: "pending",
+    missionId: null,
+    report: null,
+  }];
+  task.status = "ready";
+  task.error = null;
+  task.messages.push(bossTaskMessage("system", t("追問已交回「{name}」處理。", { name: department.name })));
+  persistBossTask(task);
+  advanceBossTask(task);
+}
+
+async function decideBossTask(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
+  bossTaskDiscoveryWork.enter(task.id);
+  try {
+    return await decideBossTaskInner(task, allowCreateDepartment, ownCrewIds);
+  } finally {
+    bossTaskDiscoveryWork.exit(task.id);
+  }
+}
+
+async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
+  const candidates = bossTaskCandidates(ownCrewIds);
+  if (candidates.length === 0 && !allowCreateDepartment) {
     task.status = "needs_attention";
     task.error = t("目前沒有可用的部門；請先建立具有職務的部門");
     task.messages.push(bossTaskMessage("system", task.error));
@@ -4461,19 +5348,23 @@ async function decideBossTask(task: BossTask): Promise<void> {
   const usage = await usageRegistry.refresh(task.decisionProvider, true);
   const usageError = usageBlockReason(task.decisionProvider, usage, task.decisionModel);
   if (usageError) {
+    const blockedError = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
     task.status = "needs_attention";
-    task.error = t("{provider} 無法進行任務判斷：{error}", { provider: providerLabel(task.decisionProvider), error: usageError });
-    task.messages.push(bossTaskMessage("system", task.error));
+    task.error = blockedError;
+    task.stall = { kind: usageStallKind("decide"), error: blockedError };
+    task.messages.push(bossTaskMessage("system", blockedError));
+    // 登記恢復探測：用量視窗重置後自動接手重跑 decide，不用等人回覆（卡點盤點 P1-5）。
+    bossUsageRetry.note(task.id, "decide", Date.now());
     persistBossTask(task);
     return;
   }
   const clarificationBudget = bossTaskClarificationBudget(task);
   const prompt = bossTaskDecisionPrompt({ task, candidates });
   const workspace = candidates.find((candidate) => sameWorkspacePath(candidate.workspacePath, task.workspacePath))?.workspacePath
-    ?? candidates[0].workspacePath;
+    ?? candidates[0]?.workspacePath ?? task.workspacePath;
   let output = "";
   try {
-    output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, prompt, 60_000, { kind: "no_tools" })).text;
+    output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
     let decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     const clarificationPastBudget = decision?.status === "clarification" && clarificationBudget.remaining === 0;
     if (!decision || clarificationPastBudget) {
@@ -4481,17 +5372,63 @@ async function decideBossTask(task: BossTask): Promise<void> {
         ? "You asked another clarification question, but the clarification budget is exhausted."
         : explainBossTaskDecisionFailure(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile)) ?? "The response did not match the required format.";
       const repair = `${prompt}\n\nYour previous response was invalid: ${reason}${clarificationPastBudget ? " You must produce a ready execution graph from the existing answers." : ""} Return one corrected <boss_task_decision> block only.`;
-      output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, repair, 60_000, { kind: "no_tools" })).text;
+      output = (await runDetachedTurn(task.decisionProvider, workspace, task.decisionModel, undefined, null, repair, 150_000, { kind: "no_tools" })).text;
       decision = parseBossTaskDecision(output, candidates, task.executionBudget ?? normalizeExecutionProfile(task.executionProfile));
     }
     if (!decision || (decision.status === "clarification" && clarificationBudget.remaining === 0)) {
       throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
     }
+    // 探索是背景長流程（LLM 最長 150s×2）：期間老闆可能已取消或刪除這張交辦，而手上是舊快照。
+    // 套用決策前重讀權威狀態，已終結（或已被別條路徑接手）就直接放手——否則已取消的交辦會被
+    // 蓋回 ready 並真的派工復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.error = null;
     if (decision.status === "clarification") {
       task.status = "needs_input";
       task.messages.push(bossTaskMessage("decision_model", decision.question));
       persistBossTask(task);
+      // 自動接手開著時，讓幕僚長代答 clarification（能用安全假設回答就回答，
+      // 需要老闆本人的東西才停下等人）。
+      autopilotHook(task);
+      return;
+    }
+    if (decision.status === "create_department") {
+      // 沒有合適的既有部門：自己開一支專屬部門，再重跑一次決策把工作交給它（只建一次，防迴圈）。
+      if (!allowCreateDepartment) {
+        throw new Error(t("決策模型無法依現有資訊建立有效的跨部門計畫"));
+      }
+      task.messages.push(bossTaskMessage("system", t("沒有合適的既有部門，正在為這個交辦建立專屬部門：{purpose}…", { purpose: decision.departmentPurpose })));
+      persistBossTask(task);
+      const department = await createDepartmentForObjective({
+        purpose: decision.departmentPurpose,
+        workspacePath: task.workspacePath,
+        provider: task.decisionProvider,
+        count: decision.memberCount,
+        approveMode: dedicatedCrewApproveMode(task),
+      });
+      // 建部門又跑了最長 90s 的規劃 LLM：與 dedicated 路徑同款護欄，套用前重讀，作廢就放手；
+      // 剛建好的隊一併解散——它還不在任何 stage 上，取消／刪除的清理掃不到它。
+      if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
+        if (department) disbandEphemeralDepartment(department.id);
+        return;
+      }
+      if (!department) {
+        const failure = deptCreateFailureError.decide();
+        task.status = "needs_attention";
+        task.error = failure;
+        task.stall = { kind: deptCreateStallKind("decide"), error: failure };
+        task.messages.push(bossTaskMessage("system", failure));
+        // 登記自動重試：重走整條 decide（部門版圖可能已變，讓決策模型重新路由）（P1-3）。
+        bossDeptCreateRetry.note(task.id, "decide", null, Date.now());
+        persistBossTask(task);
+        return;
+      }
+      task.messages.push(bossTaskMessage("system", t("已建立「{name}」，交給它繼續規劃與執行。", { name: department.name })));
+      persistBossTask(task);
+      await decideBossTask(task, false, [department.id]);
+      // 第二輪決策期間交辦被取消／刪除，或決策最後沒把工作交給這支新隊（失敗、改問老闆）：
+      // 沒有 stage 指向它就沒人會解散它，在這裡收掉，不留佔位的孤兒臨時部門。
+      if (newCrewOrphaned(store.getBossTask(task.id), department.id)) disbandEphemeralDepartment(department.id);
       return;
     }
     const byDepartment = new Map(candidates.map((candidate) => [candidate.departmentId, candidate]));
@@ -4517,10 +5454,15 @@ async function decideBossTask(task: BossTask): Promise<void> {
     persistBossTask(task);
     advanceBossTask(task);
   } catch (error) {
+    // LLM 逾時／出錯常發生在等了好一陣之後：期間被取消或刪除的交辦不能被這份舊快照改判失敗或復活。
+    if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) return;
     task.status = "failed";
     task.error = (error as Error).message || t("無法完成 Boss Task 判斷");
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
+    // 探索就失敗的交辦不會再經過 advanceBossTask：直接通知自動循環，否則自動開出的下一張在
+    // 這裡失敗時，開關會一直亮著、循環卻再也沒有下一步，也沒有任何說明。
+    autopilotHook(task);
   }
 }
 
@@ -4533,10 +5475,48 @@ function missionReport(mission: DepartmentMission): string {
 }
 
 function advanceBossTask(task: BossTask): void {
+  advanceBossTaskStages(task);
+  autopilotHook(task);
+  ephemeralCleanupHook(task);
+}
+
+// 開機自癒／wss 重連的 advanceBossTask 防 crash-loop catch 原本只 console.error（全庫盤點
+// #19）：交辦停在 ready/running 外觀像執行中、實際永遠沒人推進，也沒有任何訊息。改誠實
+// 轉 needs_attention——一轉就離開 ready/running 掃描名單，不會再被反覆嘗試；若其實是
+// 誤傷（mission 還活著），mission 事件的 advanceBossTasksForMission 也掃 needs_attention，
+// 會自動撥回 running。訊息與上一則相同就不重複 push（重連迴圈／來回翻轉不轟炸）。
+function quarantineAdvanceFailure(task: BossTask, error: unknown): void {
+  try {
+    const detail = (error as Error).message || t("推進交辦時發生未預期錯誤");
+    task.status = "needs_attention";
+    task.error = detail;
+    const warning = collaborationText(t("⚠️ 自動推進這張交辦時發生錯誤：{error}；回覆這張交辦或按「重新交辦」再試。", { error: detail }), 40_000);
+    const last = task.messages[task.messages.length - 1];
+    if (!(last && last.role === "system" && last.text === warning)) {
+      task.messages.push(bossTaskMessage("system", warning));
+    }
+    persistBossTask(task);
+  } catch (persistError) {
+    // 降級寫入自己失敗（壞資料連 persist 都過不了）：回到原行為只留 log，絕不讓收斂邏輯反過來弄掛開機／重連。
+    console.error(`[boss-task] 推進失敗降級寫入也失敗 ${task.id}:`, persistError);
+  }
+}
+
+function advanceBossTaskStages(task: BossTask): void {
   for (const stage of task.stages) {
     if (!stage.missionId || stage.status === "completed" || stage.status === "failed" || stage.status === "cancelled") continue;
     const mission = store.getDepartmentMission(stage.missionId);
-    if (!mission) continue;
+    if (!mission) {
+      // Mission 紀錄不見了（多半是伺服器重啟時進行中的臨時部門 mission 沒保存下來）：
+      // 把 stage 打回 pending 重新派工，而不是讓 boss task 永遠掛在 running 指著幽靈
+      // mission。若所屬部門也一併消失，下方派工會走「找不到部門主管」的 needs_attention
+      // 路徑，至少狀態誠實可見、自動接手也有機會處理。
+      stage.status = "pending";
+      stage.missionId = null;
+      task.messages.push(bossTaskMessage("system", t("「{title}」的 Mission 在重啟後遺失，已重新排入派工。", { title: stage.title })));
+      persistBossTask(task);
+      continue;
+    }
     if (mission.status === "completed") {
       stage.status = "completed";
       stage.report = collaborationText(missionReport(mission), 12_000);
@@ -4568,12 +5548,25 @@ function advanceBossTask(task: BossTask): void {
     }
   }
   if (task.stages.length > 0 && task.stages.every((stage) => stage.status === "completed")) {
-    task.status = "completed";
-    task.error = null;
-    task.completedAt = new Date().toISOString();
-    task.finalReport = bossTaskFinalReport(task);
-    task.messages.push(bossTaskMessage("report", task.finalReport));
-    persistBossTask(task);
+    // 沒有驗收條件可核對：直接產出報告（維持原行為，省一次判斷）。
+    if (task.acceptanceCriteria.length === 0) {
+      task.status = "completed";
+      task.error = null;
+      task.completedAt = new Date().toISOString();
+      task.finalReport = bossTaskFinalReport(task);
+      task.messages.push(bossTaskMessage("report", task.finalReport));
+      persistBossTask(task);
+      return;
+    }
+    // 有驗收條件：先讓決策模型逐條核對各部門報告，再出報告（非同步，避免阻塞推進鏈）。
+    if (!bossTaskFinalizing.has(task.id)) {
+      bossTaskFinalizing.add(task.id);
+      task.status = "synthesizing";
+      task.error = null;
+      task.messages.push(bossTaskMessage("system", t("所有部門已交付，正在逐條核對驗收條件…")));
+      persistBossTask(task);
+      void finalizeBossTaskWithAcceptance(task).finally(() => bossTaskFinalizing.delete(task.id));
+    }
     return;
   }
   if (task.stages.some((stage) => stage.status === "running" || stage.status === "needs_attention")) {
@@ -4593,7 +5586,9 @@ function advanceBossTask(task: BossTask): void {
   const lead = department ? workers.get(department.leadWorkerId) : null;
   if (!department || !lead) {
     task.status = "needs_attention";
-    task.error = t("找不到「{department}」的部門主管", { department: next.departmentName });
+    // 部門或主管整個消失是永久性缺口（多半是部門被解散／重啟後臨時部門沒還原），自動重試
+    // 救不回來——訊息把下一步說清楚，不讓人對著「找不到主管」乾瞪眼（全庫盤點 C-1）。
+    task.error = t("找不到「{department}」的部門主管；部門可能已解散或重啟後未還原，請按「重新交辦」重新派工，或先重建部門再回覆這張交辦。", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
     persistBossTask(task);
     return;
@@ -4603,6 +5598,8 @@ function advanceBossTask(task: BossTask): void {
     task.status = "needs_attention";
     task.error = t("{department} 暫時無法開始：{error}", { department: next.departmentName, error: eligibility.error || t("部門不可用") });
     task.messages.push(bossTaskMessage("system", task.error));
+    // 登記自動重派：主管轉閒置（turn_end）或定期掃描時會重試，不用等人回覆交辦。
+    bossDispatchRetry.note(task.id, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4616,6 +5613,11 @@ function advanceBossTask(task: BossTask): void {
     taskObjective: task.objective,
     upstream: upstream ? t("\n\n上游部門交付：\n{upstream}", { upstream }) : "",
   }).slice(0, 30_000);
+  // Boss 交辦跑在「既有部門」時，成員的自動核准預設是 "off"，每個唯讀工具（WebSearch/
+  // WebFetch/Read…）都會停下來等老闆點核准，整張交辦被拖到極慢（使用者實際回報）。交辦
+  // 本來就是「授權這支部隊去把事做完」，所以 origin: "boss" 的 Mission runner 一律以
+  // missionRunnerApproveMode 從 off 升到 safe——只在這支 Mission 的 runner 上，不改成員本身
+  // 的設定，交辦一結束、成員回到直接對話就還是原本的 off。dedicated 專屬部隊建立時已設 full。
   const launched = launchDepartmentMission(lead, eligibility.members, objective, next.acceptanceCriteria, {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
@@ -4623,11 +5625,16 @@ function advanceBossTask(task: BossTask): void {
     executionProfile: task.executionProfile,
     maxAgents: task.executionBudget?.maxAgents,
     maxPlanSteps: task.executionBudget?.maxMissionSteps,
+    directExecute: next.directExecute === true,
+    noReview: next.noReview === true,
   });
   if (!launched.mission || launched.error) {
     task.status = "needs_attention";
     task.error = launched.error || t("無法啟動 {department}", { department: next.departmentName });
     task.messages.push(bossTaskMessage("system", task.error));
+    // 與 eligibility 擋下同型的卡住（常見：工作區正在執行其他 Mission）——一樣登記自動重派，
+    // 讓 turn_end／定期掃在條件恢復時重試，不用等人回覆交辦（卡點盤點 P1）。
+    bossDispatchRetry.note(task.id, Date.now());
     persistBossTask(task);
     return;
   }
@@ -4639,11 +5646,1384 @@ function advanceBossTask(task: BossTask): void {
   persistBossTask(task);
 }
 
+// 同一張交辦只跑一次逐條驗收收尾（advanceBossTaskStages 可能被多次呼叫）。
+const bossTaskFinalizing = new Set<string>();
+
+// 所有部門階段完成後的收尾：讓決策模型逐條核對驗收條件，再產出最終報告。
+// 任何失敗（用量受限、模型異常、解析不出）都保底降級為「無法驗證」，絕不讓交辦卡在 synthesizing。
+async function finalizeBossTaskWithAcceptance(task: BossTask): Promise<void> {
+  let verdicts: BossTaskAcceptanceVerdict[] | null = null;
+  try {
+    const prompt = bossTaskAcceptancePrompt(task);
+    const text = (await runDetachedTurn(task.decisionProvider, task.workspacePath, task.decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+    verdicts = parseBossTaskAcceptanceVerdicts(text, task.acceptanceCriteria);
+  } catch (error) {
+    console.error(`[boss-task] acceptance verification failed for task ${task.id}:`, error);
+  }
+  // LLM 驗收可跑上兩分鐘：期間老闆可能已取消或刪除這張交辦（cancel 端點對 synthesizing 放行，
+  // 且 store 每次讀取回新物件——手上這份是舊快照）。收尾前重讀權威狀態，已終結就不覆寫，
+  // 否則取消會被靜默蓋回 completed、autopilotHook 還會再開下一張循環交辦。
+  const current = store.getBossTask(task.id);
+  if (!current || current.status !== "synthesizing") return;
+  task.status = "completed";
+  task.error = null;
+  task.completedAt = new Date().toISOString();
+  task.finalReport = bossTaskFinalReport(task, verdicts ?? undefined);
+  task.messages.push(bossTaskMessage("report", task.finalReport));
+  persistBossTask(task);
+  // 收尾完成才是真正的終態：此時再觸發自動循環與臨時團隊清理。
+  autopilotHook(task);
+  ephemeralCleanupHook(task);
+}
+
+// ── 派工卡住自動重派 ───────────────────────────────────────────────────────
+// 派工被 missionDepartmentEligibility 擋下（最常見：部門主管正是對話中的 worker）時，
+// 「回覆交辦」只做立即同步重試，主管沒空就再失敗且沒有任何自癒機制（2026-09-30
+// autoResolve 實測）。這裡在任一 worker 的 turn_end 與定期掃描時，對登記過的卡住
+// 交辦重新檢查 eligibility，通過才重派；次數與冷卻上限在 bossDispatchRetry.ts。
+const bossDispatchRetry = new BossDispatchRetryTracker();
+
+function sweepStalledBossDispatch(): void {
+  const now = Date.now();
+  for (const id of bossDispatchRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    const next = task ? runnableNextStage(task.stages) : null;
+    const department = next ? departments.get(next.departmentId) : null;
+    const lead = department ? workers.get(department.leadWorkerId) : null;
+    const action = dispatchRetryAction(bossDispatchRetry, id, {
+      status: task?.status ?? "missing",
+      stages: task?.stages ?? [],
+      leadPresent: Boolean(lead),
+      leadEligible: Boolean(lead && missionDepartmentEligibility(lead).members),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop") { bossDispatchRetry.resolve(id); continue; }
+    if (!task || !next) { bossDispatchRetry.resolve(id); continue; } // action 是 retry/exhausted 時必有，防衛一下
+    if (action.kind === "exhausted") {
+      bossDispatchRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("自動重派已達 {max} 次上限，請直接回覆這張交辦再試一次。", { max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
+      persistBossTask(task);
+      continue;
+    }
+    task.messages.push(bossTaskMessage("system", t("⏯️ {department} 已空出，自動重新派工（第 {n}/{max} 次）。", { department: next.departmentName, n: action.attempt, max: BOSS_DISPATCH_RETRY_MAX_ATTEMPTS })));
+    try {
+      advanceBossTask(task);
+    } catch (error) {
+      console.error("[boss-dispatch-retry] 自動重派失敗:", error);
+    }
+    // advanceBossTask 會就地改 status，TS 的控制流縮窄不知道——重新取一次再比對。
+    const afterRetry = store.getBossTask(id);
+    if (afterRetry && afterRetry.status === "running") bossDispatchRetry.resolve(id);
+  }
+}
+
+// ── 專屬部門建立失敗自動重試（卡點盤點 P1-3）──────────────────────────────
+// createDepartmentForObjective 回 null（最常見：工作區正在跑別的 Mission）後，阻塞
+// 的 Mission 結束也沒有任何人重試建部門，交辦停在 needs_attention 只能等老闆回覆。
+// 這裡對登記過的失敗交辦在 turn_end 與定期掃描時檢查工作區是否空出，空出才依原入口
+// 重試；指數退避、次數上限與降級決策在 bossDeptCreateRetry.ts。
+const bossDeptCreateRetry = new DeptCreateRetryTracker();
+// 重試本體是長流程（規劃 LLM 最長 90s）而退避最短 15s——in-flight 期間掃描一律 wait，
+// 擋住對同一張的重疊發動。
+const bossDeptCreateRetryInFlight = new Set<string>();
+
+function sweepFailedDeptCreation(): void {
+  const now = Date.now();
+  for (const id of bossDeptCreateRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    const action = deptCreateRetryAction(bossDeptCreateRetry, id, {
+      status: task?.status ?? "missing",
+      stallKind: task?.stall?.kind ?? null,
+      workspaceFree: task ? !workspaceMission(task.workspacePath) : false,
+      providerReady: task ? providerReady(task.decisionProvider) : false,
+      inFlight: bossDeptCreateRetryInFlight.has(id),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !task) { bossDeptCreateRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：明確回報主人，不靜默吞掉。除名後使用者回覆交辦仍可手動重試（會重新登記）。
+      bossDeptCreateRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("⛔ 已自動重試 {max} 次仍無法建立專屬部門。請回覆這張交辦重新嘗試、手動建立部門後再交辦，或關掉「專屬部門」改用既有部門路由。", { max: DEPT_CREATE_RETRY_MAX_ATTEMPTS })));
+      persistBossTask(task);
+      continue;
+    }
+    task.messages.push(bossTaskMessage("system", t("🔁 自動重試建立專屬部門（第 {n}/{max} 次）…", { n: action.attempt, max: DEPT_CREATE_RETRY_MAX_ATTEMPTS })));
+    persistBossTask(task);
+    bossDeptCreateRetryInFlight.add(id);
+    const rerun = action.entry.kind === "dedicated"
+      ? runDedicatedDepartmentTask(task)
+      : action.entry.kind === "follow_up"
+        ? runDedicatedFollowUp(task, action.entry.followUp ?? task.objective, null)
+        : decideBossTask(task);
+    void rerun
+      .catch((error) => console.error("[dept-create-retry] 自動重試失敗:", error))
+      .finally(() => {
+        bossDeptCreateRetryInFlight.delete(id);
+        // 成功（ready/running）就除名；又失敗則入口已重新 note()，留給下一輪退避後再試。
+        const after = store.getBossTask(id);
+        if (after && after.status !== "needs_attention") bossDeptCreateRetry.resolve(id);
+      });
+  }
+}
+
+// ── 用量受限恢復探測自動重跑（卡點盤點 P1-5）──────────────────────────────
+// usageBlockReason 擋下任務判斷後，usage 視窗重置（整點／5h）也沒有任何人重試。
+// 這裡對登記過的受限交辦定期探測即時用量，usageBlockReason 歸空（明確依據，不猜
+// 時間）才走回原入口重跑；探測退避、次數上限與作廢決策在 bossUsageRetry.ts。
+// 不做開機重建（設計留白）：task.stall.kind 落地後結構上已認得回入口，但本輪維持
+// 既有語義——重啟後 needs_attention 等人回覆，不會誤動作。
+const bossUsageRetry = new UsageRetryTracker();
+const bossUsageRetryInFlight = new Set<string>();
+
+function sweepUsageBlockedBossTasks(): void {
+  const now = Date.now();
+  for (const id of bossUsageRetry.trackedIds()) {
+    const task = store.getBossTask(id);
+    const action = usageRetryAction(bossUsageRetry, id, {
+      status: task?.status ?? "missing",
+      stallKind: task?.stall?.kind ?? null,
+      inFlight: bossUsageRetryInFlight.has(id),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !task) { bossUsageRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：明確回報主人後停止自動等待，不靜默。回覆交辦仍可手動續跑（會重新登記）。
+      bossUsageRetry.resolve(id);
+      task.messages.push(bossTaskMessage("system", t("⛔ 已定期探測 {max} 次，用量仍受限，停止自動等待。額度恢復後回覆這張交辦即可續跑。", { max: USAGE_RETRY_MAX_PROBES })));
+      persistBossTask(task);
+      continue;
+    }
+    // probe：查即時用量，恢復才重跑原入口；仍受限就等下一輪（這次探測已計數並退避）。
+    bossUsageRetryInFlight.add(id);
+    void (async () => {
+      try {
+        const usage = await usageRegistry.refresh(task.decisionProvider, true);
+        if (usageBlockReason(task.decisionProvider, usage, task.decisionModel)) return;
+        // 探測期間老闆可能已回覆或取消——重讀權威狀態，登記已作廢就放手。後續的訊息、
+        // persist 與重跑都對這份重讀物件做（掃描開頭的 task 是探測前的舊快照，直接整列
+        // persist 會蓋掉探測期間新寫入的訊息——交互自審補上）。
+        const current = store.getBossTask(id);
+        if (!current || current.status !== "needs_attention" || current.stall?.kind !== usageStallKind(action.entry.kind)) {
+          bossUsageRetry.resolve(id);
+          return;
+        }
+        current.messages.push(bossTaskMessage("system", t("🔁 {provider} 用量已恢復（第 {n} 次探測），自動接手重跑任務判斷。", { provider: providerLabel(current.decisionProvider), n: action.probe })));
+        persistBossTask(current);
+        await (action.entry.kind === "dedicated" ? runDedicatedDepartmentTask(current) : decideBossTask(current));
+        // 成功（ready/running）就除名；又失敗則入口已依新失敗型態重新登記（usage 再受限→
+        // 本追蹤器；建立失敗→bossDeptCreateRetry），stall 標記換人的舊登記下一輪掃描 drop。
+        const after = store.getBossTask(id);
+        if (after && after.status !== "needs_attention") bossUsageRetry.resolve(id);
+      } catch (error) {
+        console.error("[usage-retry] 恢復探測失敗:", error);
+      } finally {
+        bossUsageRetryInFlight.delete(id);
+      }
+    })();
+  }
+}
+
+// ── Mission 步驟派工卡住自動重派（needs_attention 全庫盤點續篇 A-1）───────────
+// dispatchMissionStep 遇被指派 NPC 忙碌／provider 未登入而 pauseMission 後，NPC 空出
+// 也沒有任何人重派——bossDispatchRetry 只涵蓋交辦「派工前」的卡住（stage 已
+// needs_attention 的形狀被 isPreDispatchStall 明確排除）。守衛與退避在 missionStepRetry.ts。
+const missionStepRetry = new BackoffRetryTracker<MissionStepRetryPayload<ReturnType<typeof parseCollaborationResult>>>(MISSION_STEP_RETRY_POLICY);
+
+function sweepPausedMissionSteps(): void {
+  const now = Date.now();
+  for (const id of missionStepRetry.trackedIds()) {
+    const mission = activeMissions.get(id) ?? store.getDepartmentMission(id);
+    const payload = missionStepRetry.get(id)?.payload;
+    const step = payload ? mission?.steps[payload.stepIndex] ?? null : null;
+    const assignee = payload ? workers.get(payload.assigneeWorkerId) ?? null : null;
+    const action = missionStepRetryAction(missionStepRetry, id, {
+      status: mission?.status ?? "missing",
+      attentionReason: mission?.attentionReason ?? null,
+      error: mission?.error ?? null,
+      stepStatus: step?.status ?? null,
+      stepAssigneeId: step?.assigneeWorkerId ?? null,
+      assigneePresent: Boolean(assignee),
+      // 與 dispatchMissionStep 的前置檢查同一套條件：不忙、無交接／協作、provider 已登入。
+      assigneeReady: Boolean(assignee && !assignee.runner.busy && !handoffInProgress(assignee) && !collaborationInProgress(assignee.id) && workerProviderReady(assignee)),
+    }, now);
+    if (action.kind === "wait") continue;
+    if (action.kind === "drop" || !mission) { missionStepRetry.resolve(id); continue; }
+    if (action.kind === "exhausted") {
+      // 降級路徑：更新 mission.error 明確告知後除名，不靜默。人工從 Mission 面板重試／
+      // 重新指派仍可解（若又卡住會重新登記、次數重算）。
+      missionStepRetry.resolve(id);
+      mission.error = t("已自動等待 {max} 次仍派不出「{title}」，請在 Mission 面板重試或重新指派。", { max: MISSION_STEP_RETRY_MAX_ATTEMPTS, title: mission.steps[action.payload.stepIndex]?.title ?? "" });
+      store.saveDepartmentMission(mission);
+      broadcastMission(mission);
+      advanceBossTasksForMission(mission.id); // 讓 boss task 上的引用文案同步成最新的 mission.error
+      continue;
+    }
+    // retry：與 applyMissionResolution 的 retry 尾段同款恢復（步驟本就停在 pending，
+    // 只需清 attention 再走一次 dispatchMissionStep；再卡住會在 pause 分支重新登記並退避）。
+    mission.attentionReason = null;
+    mission.error = null;
+    mission.completedAt = null;
+    activeMissions.set(mission.id, mission);
+    store.saveDepartmentMission(mission);
+    broadcastMission(mission);
+    try {
+      dispatchMissionStep(mission, action.payload.stepIndex, action.payload.priorReview);
+    } catch (error) {
+      console.error("[mission-step-retry] 自動重派失敗:", error);
+    }
+    const after = activeMissions.get(id) ?? store.getDepartmentMission(id);
+    if (after && after.status !== "needs_attention") missionStepRetry.resolve(id);
+  }
+}
+
+function bossDispatchRetryHook(event: RunnerEvent): void {
+  if (event.type !== "turn_end") return;
+  if (bossDispatchRetry.size > 0) sweepStalledBossDispatch();
+  if (bossDeptCreateRetry.size > 0) sweepFailedDeptCreation();
+  if (missionStepRetry.size > 0) sweepPausedMissionSteps();
+}
+
 function advanceBossTasksForMission(missionId: string): void {
-  for (const task of store.listRunningBossTasks()) {
+  // 也要掃 needs_attention：boss task 因部門 Mission 卡住而標成 needs_attention 後，老闆若從
+  // Mission 面板解卡（resolve/retry），mission 恢復與完成時的通知進來，只掃 running 會漏掉它，
+  // task 就永遠停在 needs_attention 不推進（advanceBossTaskStages 會把恢復中的 stage 撥回 running）。
+  for (const task of store.listBossTasksByStatus(["running", "needs_attention"])) {
     if (task.stages.some((stage) => stage.missionId === missionId)) advanceBossTask(task);
   }
 }
+
+// ===== Autopilot（老闆交辦自動循環）==========================================
+// 開關按 workspace 記在記憶體：有值＝開，重啟後全清空（護欄：重啟預設關，無人時不偷跑）。
+type AutopilotState = { stepsRemaining: number; running: boolean; deadlineAt: number | null; autoResolve: boolean };
+const autopilotByWorkspace = new Map<string, AutopilotState>();
+// 開關持久化：存 dataDir 的 JSON（server 端，不經瀏覽器），重啟後還原——使用者
+// 不用每次重啟都重新打開自動循環。running 一律以 false 還原（重啟時沒有進行中的推進）。
+const autopilotStateStore = new AutopilotStateStore(config.dataDirectory);
+for (const [key, state] of Object.entries(autopilotStateStore.load())) {
+  autopilotByWorkspace.set(key, { ...state, running: false });
+}
+function persistAutopilotStates(): void {
+  const snapshot: Record<string, { stepsRemaining: number; deadlineAt: number | null; autoResolve: boolean }> = {};
+  for (const [key, state] of autopilotByWorkspace) {
+    snapshot[key] = { stepsRemaining: state.stepsRemaining, deadlineAt: state.deadlineAt, autoResolve: state.autoResolve };
+  }
+  autopilotStateStore.save(snapshot);
+}
+// 同一張交辦的終態只觸發一次循環（advanceBossTask 可能被多次呼叫）。
+const autopilotFired = new Set<string>();
+// 全域鎖：一次只推進一步，杜絕並發生出多張交辦。
+let autopilotAdvancing = false;
+// 撞到全域鎖而讓出的觸發（見 autopilotHook）：鎖釋放時由 replayDeferredAutopilotTriggers 重播。
+const autopilotDeferred = new DeferredAutopilotTriggers();
+// 自動接手：每張交辦已嘗試次數（護欄：超過 AUTOPILOT_RESOLVE_MAX_ATTEMPTS 就停下等人）。
+const autopilotResolveAttempts = new Map<string, number>();
+// 全域鎖：一次只自動接手一個卡點，避免並發對同一 Mission 重複派工。
+let autopilotResolving = false;
+
+function autopilotKey(workspacePath: string): string {
+  return registryKey(workspacePath);
+}
+
+function autopilotWorkspaceLabel(workspacePath: string): string {
+  return workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath;
+}
+
+function autopilotSnapshot(workspacePath: string): { enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve: boolean } {
+  const state = autopilotByWorkspace.get(autopilotKey(workspacePath));
+  return { enabled: Boolean(state), stepsRemaining: state?.stepsRemaining ?? 0, deadlineAt: state?.deadlineAt ?? null, autoResolve: state?.autoResolve ?? false };
+}
+
+function broadcastAutopilot(workspacePath: string): void {
+  // 每一次狀態變動（開關、步數遞減、自動熄火）都會走到這裡——順手持久化，重啟後可還原。
+  persistAutopilotStates();
+  const snap = autopilotSnapshot(workspacePath);
+  broadcast({ type: "autopilot", workspacePath: autopilotKey(workspacePath), enabled: snap.enabled, stepsRemaining: snap.stepsRemaining, deadlineAt: snap.deadlineAt, autoResolve: snap.autoResolve });
+}
+
+function setAutopilot(workspacePath: string, enabled: boolean, maxSteps?: number, maxMinutes?: number, autoResolve = false): void {
+  const key = autopilotKey(workspacePath);
+  if (enabled) {
+    const minutes = clampAutopilotMinutes(maxMinutes);
+    autopilotByWorkspace.set(key, {
+      stepsRemaining: clampAutopilotSteps(maxSteps),
+      running: false,
+      deadlineAt: minutes ? Date.now() + minutes * 60_000 : null,
+      autoResolve,
+    });
+  } else {
+    autopilotByWorkspace.delete(key);
+  }
+  broadcastAutopilot(workspacePath);
+}
+
+// 鎖一釋放就重播先前讓出的觸發。重讀權威狀態再進 hook：期間被回覆、取消或刪除的交辦，
+// hook 依新狀態自己放行或略過；又撞到鎖的會再讓出，留給下一次釋放。
+function replayDeferredAutopilotTriggers(): void {
+  for (const taskId of autopilotDeferred.drain()) {
+    try {
+      const live = store.getBossTask(taskId);
+      if (live) autopilotHook(live);
+    } catch (error) {
+      console.error(`[autopilot] 重播讓出的觸發失敗 ${taskId}:`, error);
+    }
+  }
+}
+
+// 背景推進（下一步／代答／解卡）意外丟錯：記錄並誠實停下留言——不讓 unhandledRejection 拖垮
+// 整台伺服器，也不讓開關亮著、循環卻已無聲熄火。
+function autopilotCrashed(task: BossTask, error: unknown): void {
+  console.error(`[autopilot] 背景推進意外失敗 ${task.id}:`, error);
+  try {
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：{error}", { error: (error as Error)?.message || String(error) }));
+  } catch (noteError) {
+    console.error("[autopilot] 無法留下停止說明:", noteError);
+  }
+}
+
+function disableAutopilotWithNote(task: BossTask, note: string): void {
+  const had = autopilotByWorkspace.delete(autopilotKey(task.workspacePath));
+  if (!had) return;
+  // 呼叫端多半剛等完一兩分鐘的 LLM，手上 task 可能是舊快照：說明掛到重讀的權威版本上，
+  // 已刪除就不寫（saveBossTask 是 upsert，寫回會讓刪掉的交辦復活、蓋掉期間的取消或回覆）。
+  const message = bossTaskMessage("system", note);
+  task.messages.push(message);
+  const live = store.getBossTask(task.id);
+  if (live) {
+    live.messages.push(message);
+    persistBossTask(live);
+  }
+  broadcastAutopilot(task.workspacePath);
+}
+
+// 從交辦目標直接開一張新的 Boss Task（給自動循環程式化建立用；行為對齊 POST /api/boss-tasks）。
+async function spawnBossTask(workspacePath: string, objective: string, note?: string, requestedByShareGuest = false): Promise<BossTask | null> {
+  const runtime = resolveDecisionRuntime(undefined, undefined, workspacePath);
+  if ("error" in runtime) return null;
+  const now = new Date().toISOString();
+  const executionProfile = normalizeExecutionProfile(undefined);
+  const executionBudget = executionBudgetFor(executionProfile, {});
+  const messages = [bossTaskMessage("boss", objective)];
+  if (note) messages.push(bossTaskMessage("system", note));
+  const task: BossTask = {
+    id: randomUUID(),
+    title: objective.slice(0, 120),
+    archivedAt: null,
+    workspacePath,
+    decisionProvider: runtime.provider,
+    decisionModel: runtime.model,
+    objective,
+    acceptanceCriteria: [],
+    attachmentIds: [],
+    clientMessageId: null,
+    idempotencyKey: null,
+    status: "discovering",
+    executionProfile,
+    executionBudget,
+    messages,
+    stages: [],
+    finalReport: null,
+    error: null,
+    ...(requestedByShareGuest ? { requestedByShareGuest: true } : {}),
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+  };
+  if (!store.saveBossTask(task)) return null;
+  broadcastBossTask(task, true);
+  try {
+    await decideBossTask(task);
+  } catch (error) {
+    // 比照 POST /api/boss-tasks 的兜底：探索意外丟錯不能讓新交辦永遠卡在 discovering；
+    // 錯誤照樣往外丟，讓自動循環把「開不出下一張」誠實回報出來。
+    if (task.status === "discovering") {
+      task.status = "needs_attention";
+      task.error = (error as Error).message || t("探索失敗");
+      task.messages.push(bossTaskMessage("system", t("⛔ 探索失敗：{error}", { error: task.error })));
+      persistBossTask(task);
+    }
+    throw error;
+  }
+  return task;
+}
+
+// 交辦任務進入終態時的自動循環 hook（由 advanceBossTask 統一呼叫）：
+// 完成 → 讓決策模型自己決定下一步 → 再開一張；卡住／失敗 → 停下等人（護欄）。
+function autopilotHook(task: BossTask): void {
+  const state = autopilotByWorkspace.get(autopilotKey(task.workspacePath));
+  if (!state) return;
+  const terminal = task.status === "completed" || task.status === "needs_attention" || task.status === "failed" || task.status === "cancelled";
+  // needs_input（決策模型問老闆問題）不是終態；只有開了「自動接手」才介入代答，
+  // 沒開就維持原行為：循環留著、安靜等老闆回。
+  const answerable = task.status === "needs_input" && state.autoResolve;
+  if ((!terminal && !answerable) || autopilotFired.has(task.id)) return;
+  autopilotFired.add(task.id);
+  if (answerable) {
+    const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
+    if (autopilotResolving) {
+      // 另一件自動接手正在進行：把觸發權還回去並登記重播——needs_input 之後不會再有事件
+      // 把這張送回 hook，只「還回去」等於永遠沒人代答。
+      autopilotFired.delete(task.id);
+      autopilotDeferred.defer(task.id);
+      return;
+    }
+    if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
+      void autoAnswerBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
+      return;
+    }
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：代答次數已用完，這個問題需要你親自回答；回覆後可再打開開關。"));
+    return;
+  }
+  if (task.status !== "completed") {
+    // 開了「自動接手」的卡住（needs_attention）：先讓決策模型試著解卡，次數護欄內
+    // 不停循環；失敗／取消或次數用盡照舊停下等人。
+    if (state.autoResolve && task.status === "needs_attention") {
+      if (autopilotResolving) {
+        // 另一件自動接手正在進行（可能是別的 workspace 的）：比照 needs_input 分支把觸發權
+        // 還回去並登記重播，不能直接把這條循環關掉——它根本還沒嘗試過；暫停中的 Mission
+        // 也不一定還會有事件把它送回來。
+        autopilotFired.delete(task.id);
+        autopilotDeferred.defer(task.id);
+        return;
+      }
+      const attempts = autopilotResolveAttempts.get(task.id) ?? 0;
+      if (attempts < AUTOPILOT_RESOLVE_MAX_ATTEMPTS) {
+        void autoResolveBossTask(task, attempts).catch((error) => autopilotCrashed(task, error));
+        return;
+      }
+    }
+    autopilotResolveAttempts.delete(task.id); // 循環要停了，這張的接手計數不再需要
+    disableAutopilotWithNote(task, t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
+    return;
+  }
+  autopilotResolveAttempts.delete(task.id);
+  if (state.running || autopilotAdvancing) {
+    // 另一條 workspace 的循環正在推進（全域鎖）：把觸發權還回去並登記重播。completed 之後
+    // 不會再有任何事件把這張送回 hook——只還回去不重播，這條循環就無聲熄火。
+    autopilotFired.delete(task.id);
+    autopilotDeferred.defer(task.id);
+    return;
+  }
+  void advanceAutopilot(task, state).catch((error) => autopilotCrashed(task, error));
+}
+
+// 自動循環的決策呼叫（不用工具、150s 上限）；格式修復重問也走同一條。
+function autopilotDecisionRunner(provider: ProviderId, workspacePath: string, model: string | null): (prompt: string) => Promise<string> {
+  return async (prompt) => (await runDetachedTurn(provider, workspacePath, model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+}
+
+// 格式修了一次仍壞：誠實標成失敗（不是正常結束），附上最後一次被拒的原因。
+function autopilotFormatFailureNote(failure: string): string {
+  return t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: failure });
+}
+
+// 自動接手代答：決策模型在 discovery 問了 clarification、老闆不在時，讓幕僚長用安全
+// 有界的假設代答（例如問題給了「先出範本版」的退路就選它），代答後重新跑決策；
+// 真的需要老闆本人的資訊（實體資料、憑證、不可逆決定）就停下等人。
+async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<void> {
+  autopilotResolving = true;
+  let answered: BossTask | null = null;
+  try {
+    const question = [...task.messages].reverse().find((message) => message.role === "decision_model")?.text ?? "";
+    const runtime = resolveDecisionRuntime(undefined, undefined, task.workspacePath);
+    if ("error" in runtime) {
+      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    const conversation = task.messages
+      .filter((message) => message.role === "boss" || message.role === "decision_model")
+      .slice(-8)
+      .map((message) => ({ role: message.role, text: message.text }));
+    const prompt = autopilotAnswerPrompt({
+      objective: task.objective,
+      question,
+      conversation,
+      attemptNumber: attempts + 1,
+      maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
+    });
+    let parsed;
+    try {
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_answer",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotAnswerDecision,
+        explain: explainAutopilotAnswerFailure,
+      });
+    } catch (error) {
+      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    // 開關可能在生成期間被關掉；老闆也可能已親自回覆、取消或刪除——都不再動任何東西。
+    if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
+    // 手上 task 是 hook 當下的快照（代答 LLM 可跑兩分鐘）：重讀權威狀態，那一題已不再懸著就放手，
+    // 後續變更全掛在重讀的版本上——舊快照整列寫回會蓋掉期間的回覆／取消，刪掉的交辦還會復活。
+    const live = store.getBossTask(task.id);
+    if (!pendingQuestionUnchanged(task, live)) return;
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
+      disableAutopilotWithNote(live, reason
+        ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
+        : t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
+      return;
+    }
+    autopilotResolveAttempts.set(task.id, attempts + 1);
+    autopilotFired.delete(task.id);
+    live.messages.push(bossTaskMessage("boss", t("🤝（自動接手代答，第 {n}/{max} 次，可隨時修正）{reply}", {
+      n: attempts + 1,
+      max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
+      reply: decision.reply,
+    })));
+    live.status = "discovering";
+    live.error = null;
+    persistBossTask(live);
+    answered = live;
+  } finally {
+    autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
+  }
+  // 先釋放全域鎖再重跑決策：decideBossTask 若再問一題，hook 需要能進入下一次代答（遞迴深度由
+  // AUTOPILOT_RESOLVE_MAX_ATTEMPTS 保底）。決策放在 finally 之外，跑完後也不會把期間別人剛拿到的鎖清掉。
+  if (answered) await decideBossTask(answered);
+}
+
+// 自動接手一張卡在 needs_attention 的交辦：找出中斷的部門 Mission，讓決策模型讀中斷
+// 脈絡選一個處理動作（retry / retry_execute / accept_risk），wait 或任何失敗就停下等人。
+async function autoResolveBossTask(task: BossTask, attempts: number): Promise<void> {
+  autopilotResolving = true;
+  try {
+    const stopNote = t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。");
+    const blockedStage = task.stages.find((stage) => {
+      if (!stage.missionId) return false;
+      const mission = activeMissions.get(stage.missionId) ?? store.getDepartmentMission(stage.missionId);
+      return mission?.status === "needs_attention";
+    });
+    const mission = blockedStage?.missionId
+      ? activeMissions.get(blockedStage.missionId) ?? store.getDepartmentMission(blockedStage.missionId)
+      : null;
+    // 沒有可解的 Mission 中斷（環境類卡住）或等的是計畫核准：不是指示能解的，停下等人。
+    if (!blockedStage || !mission || mission.attentionReason === "plan_approval") {
+      disableAutopilotWithNote(task, stopNote);
+      return;
+    }
+    const runtime = resolveDecisionRuntime(undefined, undefined, task.workspacePath);
+    if ("error" in runtime) {
+      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    const stepIndex = mission.currentStepIndex;
+    const step = stepIndex == null ? null : mission.steps[stepIndex];
+    const reviewSummary = step?.kind === "review" && step.reviewResult
+      ? collaborationText(JSON.stringify(step.reviewResult), 4_000)
+      : "";
+    const prompt = autopilotResolvePrompt({
+      objective: task.objective,
+      stageTitle: blockedStage.title,
+      departmentName: blockedStage.departmentName,
+      attentionReason: mission.attentionReason ?? "",
+      missionError: mission.error ?? "",
+      stepTitle: step?.title ?? "",
+      stepKind: step?.kind ?? "",
+      reviewSummary,
+      attemptNumber: attempts + 1,
+      maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
+    });
+    let parsed;
+    try {
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_resolve",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotResolveDecision,
+        explain: explainAutopilotResolveFailure,
+      });
+    } catch (error) {
+      disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    // 使用者可能在生成期間關掉了開關——關了就不再動任何東西。
+    if (!autopilotByWorkspace.has(autopilotKey(task.workspacePath))) return;
+    // 解卡 LLM 可跑兩分鐘：老闆可能已親自從 Mission 面板解卡、取消或刪除交辦。交辦與 Mission 都
+    // 重讀權威狀態，已不再卡著就放手；後續變更掛在重讀的版本上，不拿舊快照整列寫回。
+    const live = store.getBossTask(task.id);
+    if (!snapshotStillCurrent(task.status, live)) return;
+    const liveMission = activeMissions.get(mission.id) ?? store.getDepartmentMission(mission.id);
+    if (!liveMission || liveMission.status !== "needs_attention") return;
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
+      disableAutopilotWithNote(live, reason
+        ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
+        : stopNote);
+      return;
+    }
+    autopilotResolveAttempts.set(task.id, attempts + 1);
+    const guidance = decision.action === "retry" ? "" : decision.guidance;
+    const outcome = applyMissionResolution(liveMission, decision.action, guidance);
+    if (outcome.error) {
+      disableAutopilotWithNote(live, t("⛔ 自動循環已停止：自動接手失敗（{error}）。", { error: outcome.error }));
+      return;
+    }
+    // 解卡已派工：把這張交辦移出「已觸發」集合，讓下一次終態（完成→續循環、
+    // 再卡→再接手或停）能重新進 hook。
+    autopilotFired.delete(task.id);
+    const actionLabel = decision.action === "accept_risk"
+      ? t("接受 Review 風險並繼續")
+      : decision.action === "retry_execute"
+        ? t("帶指示重跑 Execute")
+        : t("原步驟重試");
+    live.messages.push(bossTaskMessage("system", t("🤝 自動接手（第 {n}/{max} 次）：{action}{guidance}", {
+      n: attempts + 1,
+      max: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
+      action: actionLabel,
+      guidance: guidance ? t("——{guidance}", { guidance }) : "",
+    })));
+    advanceBossTaskStages(live);
+  } finally {
+    autopilotResolving = false;
+    replayDeferredAutopilotTriggers();
+  }
+}
+
+async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): Promise<void> {
+  const workspacePath = justFinished.workspacePath;
+  if (state.stepsRemaining <= 0) {
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達步數上限，已自動停止。要接著討論或調整，直接在這張交辦回覆即可；要再自動接續就重開開關。"));
+    return;
+  }
+  // 時間上限是「軟上限」：在每張交辦收工的節點檢查，過了截止時刻就停在這個邊界（不會攔腰砍斷進行中的交辦）。
+  if (state.deadlineAt && Date.now() >= state.deadlineAt) {
+    disableAutopilotWithNote(justFinished, t("✅ 自動循環已達時間上限，已自動停止。要接著討論或調整，直接在這張交辦回覆即可；要再自動接續就重開開關。"));
+    return;
+  }
+  state.running = true;
+  autopilotAdvancing = true;
+  try {
+    const runtime = resolveDecisionRuntime(undefined, undefined, workspacePath);
+    if ("error" in runtime) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    // 提示池：拿近期已完成交辦當脈絡，讓決策模型自己決定下一步。
+    const history: AutopilotHistoryEntry[] = store.listBossTasks()
+      .filter((item) => sameWorkspacePath(item.workspacePath, workspacePath) && item.status === "completed")
+      .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""))
+      .slice(-8)
+      .map((item) => ({ objective: item.objective, report: item.finalReport ? collaborationText(item.finalReport, 600) : undefined }));
+    const prompt = autopilotNextPrompt({ workspaceLabel: autopilotWorkspaceLabel(workspacePath), history, stepsRemaining: state.stepsRemaining - 1 });
+    let parsed;
+    try {
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_next",
+        run: autopilotDecisionRunner(runtime.provider, workspacePath, runtime.model),
+        parse: parseAutopilotDecision,
+        explain: explainAutopilotFailure,
+      });
+    } catch (error) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    // 格式修了一次仍壞是失敗，不能跟模型自己選擇 stop 一樣標成「正常結束」。
+    if (!parsed.ok) {
+      disableAutopilotWithNote(justFinished, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "stop") {
+      const reason = decision.reason;
+      disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要接著討論或調整，直接在這張交辦回覆即可（有專屬團隊會由同一隊接手）；要再自動接續就重開開關。", { reason: reason ? t("：{reason}", { reason }) : "" }));
+      return;
+    }
+    // 使用者可能在生成期間關掉了開關——關了就不再推進。
+    if (!autopilotByWorkspace.has(autopilotKey(workspacePath))) return;
+    state.stepsRemaining -= 1;
+    // 巡迴推進到下一步＝上一個交辦收工，先把它的臨時團隊解散（不會再手動追問）——要在開下一張
+    // 之前：下一張的決策若把工作派進這支隊，接著一解散就會把它的 Mission 連同成員一起抽走。
+    disbandTaskEphemeralDepartments(justFinished);
+    let spawned: BossTask | null;
+    try {
+      // 下一張是從上一張接續出來的：訪客碰過的交辦，接續的交辦也一樣不給臨時隊 full。
+      spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }), justFinished.requestedByShareGuest === true);
+    } catch (error) {
+      // 以前這裡沒有 catch：探索意外丟錯會變成 unhandledRejection，循環既沒回報也沒停。
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦（{error}）。", { error: (error as Error).message || String(error) }));
+      return;
+    }
+    if (!spawned) {
+      disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
+      return;
+    }
+    broadcastAutopilot(workspacePath);
+  } finally {
+    state.running = false;
+    autopilotAdvancing = false;
+    replayDeferredAutopilotTriggers();
+  }
+}
+
+app.get("/api/autopilot", (req, res) => {
+  const requested = collaborationText(req.query.workspacePath, 1_000);
+  let workspacePath: string;
+  try { workspacePath = normalizeManagedWorkspacePath(requested || config.targetRepoPath); }
+  catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+  res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
+});
+
+app.post("/api/autopilot", (req, res) => {
+  let workspacePath: string;
+  try { workspacePath = normalizeManagedWorkspacePath(collaborationText(req.body?.workspacePath, 1_000) || config.targetRepoPath); }
+  catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
+  const enabled = Boolean(req.body?.enabled);
+  if (enabled) {
+    // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火。
+    const runtime = resolveDecisionRuntime(req.body?.decisionProvider, req.body?.decisionModel, workspacePath);
+    if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  }
+  const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
+  const maxMinutes = enabled && Number.isFinite(req.body?.maxMinutes) ? Number(req.body.maxMinutes) : undefined;
+  const autoResolve = enabled && Boolean(req.body?.autoResolve);
+  setAutopilot(workspacePath, enabled, maxSteps, maxMinutes, autoResolve);
+  res.json({ ok: true, ...autopilotSnapshot(workspacePath) });
+});
+
+// ===== 個人自動循環（worker autopilot）======================================
+// 單一 NPC 做完一回合後，決策模型看它最近在做什麼、決定下一句指示送回給它，形成個人循環。
+// 與 BOSS 層循環的分工見 workerAutopilot.ts。開關按 workerId 記，檔案式 JSON 持久化。
+const workerAutopilotByWorker = new Map<string, PersistedWorkerAutopilotState>();
+const workerAutopilotStateStore = new WorkerAutopilotStateStore(config.dataDirectory);
+for (const [key, state] of Object.entries(workerAutopilotStateStore.load())) {
+  workerAutopilotByWorker.set(key, { ...state });
+}
+// 每位 NPC 同時只允許一個「想下一步」在跑（決策 LLM 最長 150s）。
+const workerAutopilotAdvancing = new Set<string>();
+// 決策模型呼叫失敗的退避重試（P1-1）：一次失敗不熄火，登記後由 15s 保底掃接手。
+const workerAutopilotRetry = new BackoffRetryTracker<null>(WORKER_AUTOPILOT_RETRY_POLICY);
+// 重試前的用量探測進行中（防掃描班次重疊發動）。
+const workerAutopilotProbing = new Set<string>();
+
+// 循環復盤記憶：每輪收尾留一行教訓，下輪決策 prompt 帶入（見 workerAutopilot.ts 機制一）。
+const workerAutopilotRetroStore = new WorkerAutopilotRetroStore(config.dataDirectory);
+const workerAutopilotRetros: Record<string, WorkerAutopilotRetro[]> = workerAutopilotRetroStore.load();
+
+function saveWorkerAutopilotRetro(workerId: string, note: string | undefined): void {
+  if (appendWorkerAutopilotRetro(workerAutopilotRetros, workerId, note, Date.now())) {
+    workerAutopilotRetroStore.save(workerAutopilotRetros);
+  }
+}
+
+// 活的計畫（支柱 A · 增量 1）：跨回合演進的單一事實來源（目標→假設→已試→待試→卡點），
+// 取代「每回合從近幾回合重推下一步」的貪心單步。檔案式 JSON 持久化、key=workerId（見 workerAutopilot.ts）。
+const workerAutopilotPlanStore = new WorkerAutopilotPlanStore(config.dataDirectory);
+const workerAutopilotPlans: Record<string, WorkerAutopilotPlan> = workerAutopilotPlanStore.load();
+
+function saveWorkerAutopilotPlan(workerId: string, plan: WorkerAutopilotPlan): void {
+  workerAutopilotPlans[workerId] = plan;
+  workerAutopilotPlanStore.save(workerAutopilotPlans);
+}
+
+// 未結案使用者請求帳本：真人臨時請求落地，在教練 prompt 與換腦交接兩處原文注入，防被循環議程
+// 或摘要壓縮蒸發（見 openRequests.ts）。只收真人非 notice 訊息——自動循環自己在 6168 也用
+// 非 notice user_message 送指示，所以只在真人入口（drainWorkerQueue／/message）落帳。
+const openUserRequestStore = new OpenUserRequestStore(config.dataDirectory);
+const openUserRequests: Record<string, OpenUserRequest[]> = openUserRequestStore.load();
+
+function captureOpenUserRequest(worker: Worker, text: string): void {
+  // 記所有真人請求，不論有沒有開循環——「做一半換腦就忘」在互動對話同樣會發生（甚至更常，
+  // 因為互動對話最容易被 context 撐滿觸發換腦）。上限 12 筆 open、超額最舊自動降級（見
+  // openRequests.ts），一般閒聊也不會無限堆積；教練回報結案或人工確認才離開 open 清單。
+  if (appendOpenRequest(openUserRequests, worker.id, text, Date.now(), randomUUID())) {
+    pruneResolved(openUserRequests);
+    openUserRequestStore.save(openUserRequests);
+  }
+}
+
+function clearCapturedRequests(workerId: string): void {
+  if (clearOpenRequests(openUserRequests, workerId)) openUserRequestStore.save(openUserRequests);
+}
+
+function resolveCapturedRequests(workerId: string, ids: string[] | undefined): void {
+  if (!ids?.length) return;
+  if (resolveOpenRequests(openUserRequests, workerId, ids, Date.now()) > 0) {
+    pruneResolved(openUserRequests);
+    openUserRequestStore.save(openUserRequests);
+  }
+}
+
+function persistWorkerAutopilotStates(): void {
+  const snapshot: Record<string, PersistedWorkerAutopilotState> = {};
+  for (const [key, state] of workerAutopilotByWorker) snapshot[key] = { ...state };
+  workerAutopilotStateStore.save(snapshot);
+}
+
+function workerAutopilotSnapshot(workerId: string): { stepsRemaining: number; deadlineAt: number | null; proactive: boolean; goal: string | null; paused: { question: string; options: string[]; at: number } | null } | null {
+  const state = workerAutopilotByWorker.get(workerId);
+  return state ? {
+    stepsRemaining: state.stepsRemaining,
+    deadlineAt: state.deadlineAt,
+    proactive: state.proactive,
+    goal: state.goal ?? null,
+    paused: state.paused ? { question: state.paused.question, options: state.paused.options, at: state.paused.at } : null,
+  } : null;
+}
+
+// owner 對暫停中的循環發話＝回答了它的問題：解除暫停、時限順延暫停的時長（人不在的時間不算），
+// 這則回覆跑完的 turn_end 會照常觸發教練想下一步（教練在最近回合裡看得到 owner 的回答）。
+function resumeWorkerAutopilotIfPaused(worker: Worker): void {
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (!state?.paused) return;
+  const pausedFor = Math.max(0, Date.now() - state.paused.at);
+  if (state.deadlineAt) state.deadlineAt += pausedFor;
+  state.paused = null;
+  persistWorkerAutopilotStates();
+  appendRuntimeLog(config.dataDirectory, "autopilot resumed by owner reply", { worker: worker.runner.name, pausedMs: pausedFor });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 循環開著時改目標：換根錨並重種計畫（舊計畫以舊目標為錨，留著只會拉回舊方向）。
+function updateWorkerAutopilotGoal(worker: Worker, goalText: string): boolean {
+  const state = workerAutopilotByWorker.get(worker.id);
+  const goal = goalText.trim().slice(0, 800);
+  if (!state || !goal) return false;
+  state.goal = goal;
+  saveWorkerAutopilotPlan(worker.id, seedWorkerAutopilotPlan(goal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse()));
+  persistWorkerAutopilotStates();
+  record(worker, { type: "user_message", text: t("🎯 自動循環目標已改為：{goal}", { goal }), notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  return true;
+}
+
+function setWorkerAutopilot(worker: Worker, enabled: boolean, maxSteps?: number, maxMinutes?: number, proactive?: boolean, goalText?: string): void {
+  if (enabled) {
+    const minutes = clampWorkerAutopilotMinutes(maxMinutes);
+    // 這輪的目標＝owner 開循環當下的原話（明給的優先，否則取最近一則真人指示），整輪固定不讓模型改寫。
+    const goal = goalText?.trim().slice(0, 800) || latestOwnerInstruction(worker.history) || null;
+    workerAutopilotByWorker.set(worker.id, {
+      stepsRemaining: clampWorkerAutopilotSteps(maxSteps),
+      deadlineAt: minutes ? Date.now() + minutes * 60_000 : null,
+      proactive: proactive === true,
+      goal,
+    });
+    // 換了目標：舊計畫（以舊目標為根錨的已試／待試）歸零重種，過往教訓仍由 retros 帶入新計畫。
+    const existing = workerAutopilotPlans[worker.id];
+    if (goal && existing && existing.goal !== goal) {
+      saveWorkerAutopilotPlan(worker.id, seedWorkerAutopilotPlan(goal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse()));
+    }
+  } else {
+    workerAutopilotByWorker.delete(worker.id);
+    workerAutopilotRetry.resolve(worker.id);
+  }
+  persistWorkerAutopilotStates();
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+function disableWorkerAutopilotWithNote(worker: Worker, note: string, ask?: { options: string[] }): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  // ask 非空＝循環停下來是要 owner 決定(非單純做完/出錯)。標成 autopilotAsk 讓 UI 渲染醒目「循環問你」卡、
+  // askOptions 給一鍵回答按鈕。owner 之後對這位 NPC 發話即視為已回答(UI 由訊息流自行判定，不需額外 server 狀態)。
+  record(worker, { type: "user_message", text: note, notice: true, ...(ask ? { autopilotAsk: true, askOptions: ask.options } : {}) });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 由外部動作撤掉循環（按停止、切成無限制模式…）：立即撤掉武裝（決策進行中的那步也會因狀態不在
+// 而作廢），註記則等 NPC 正在跑的回合真的收尾才貼——回合還開著時插 notice 卡，前端會把那張卡當成
+// 最後一個 turn，正在跑的回合就永遠掛著「進行中」。
+const workerAutopilotStopNotes = new Map<string, string>();
+
+function disarmWorkerAutopilot(worker: Worker, note: string): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  if (worker.runner.busy) workerAutopilotStopNotes.set(worker.id, note);
+  else record(worker, { type: "user_message", text: note, notice: true });
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// ⚡無限制模式（--dangerously-skip-permissions、不掛核准橋）不給無人看管的自動循環驅動，
+// 比照排程（見排程掃描）與隊員商量（consult.ts）。開啟時拒絕；之後才切成無限制則在每個入口撤掉。
+function workerAutopilotInvincibleNote(): string {
+  return t("⛔ 自動循環已停止：此 NPC 處於⚡無限制模式（跳過所有審批），不給自動循環無人看管地驅動。審批改為「完全信任」或「安全」後可再打開開關。");
+}
+// 每次都現讀（別讓 TS 的型別收窄跨 await 沿用）：決策期間 owner 可能才切成無限制模式。
+function workerAutopilotForbidden(worker: Worker): boolean {
+  return worker.autoApproveMode === "invincible";
+}
+
+// 循環撞到步數／時間上限而停時用：除了貼停止註記，再補送一個「收尾交接」回合，讓 NPC 主動給擁有者
+// 一份看得懂的結案（做了什麼／結論／下一步／怎麼接續）。這條在拿掉「剩 N 步」倒數後尤其重要——否則
+// NPC 不知道是最後一步、不會自己總結，循環就這樣停在半空，擁有者回頭看不懂也不知怎麼接。
+function concludeWorkerAutopilotWithHandoff(worker: Worker, note: string, ask?: { options: string[] }): void {
+  if (!workerAutopilotByWorker.delete(worker.id)) return;
+  workerAutopilotRetry.resolve(worker.id);
+  persistWorkerAutopilotStates();
+  // ask 非空＝教練停下來是要你拍板：停止註記照樣標成「循環問你」卡＋一鍵選項；下面的四段收尾仍照送，
+  // 讓你同時有「做了什麼的完整回顧」與「一鍵回答的決定」。
+  record(worker, { type: "user_message", text: note, notice: true, ...(ask ? { autopilotAsk: true, askOptions: ask.options } : {}) });
+  // 只有 NPC 當下閒著、provider 就緒、且沒有在交接/協作/Mission/換腦/排隊時，才補送收尾回合。
+  // 送不出就只留停止註記，不硬塞（寧可少一份交接，也不要卡住或拋錯）。
+  const canHandoff = !worker.runner.busy && workerProviderReady(worker)
+    && !handoffInProgress(worker) && !collaborationInProgress(worker.id) && !missionInProgress(worker.id)
+    && !pendingSwapSummaries.has(worker.id) && !brainSwapPending.has(worker.id)
+    && store.listQueue(worker.id).length === 0;
+  if (canHandoff) {
+    const handoff = t("🏁 自動循環在此結束，請只做一件事：給擁有者一份看得懂的收尾交接，寫完就停、不要再開始任何新工作或新測試。用四段寫清楚：① 這段循環實際做了什麼（具體、可核對，不要只說「驗了幾支」要講結論）② 現在的結論／狀態 ③ 建議的下一步 ④ 擁有者要怎麼接續（直接回什麼一句話、或怎麼重開循環）。");
+    // system:true＝系統產生、非真人目標：若之後重開循環，別把這句交接指令誤當成原始大局目標。
+    record(worker, { type: "user_message", text: handoff, system: true });
+    try {
+      worker.runner.send(handoff, [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch { /* 送不出就算了，停止註記已經在了 */ }
+  }
+  broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// 從 worker 對話歷史組出教練決策要的脈絡（純邏輯抽到 workerAutopilot.ts 便於單測）：跳過
+// notice 通知與 system 系統回合（換腦/交接/續跑）避免把交接摘要誤當「最新結果」診斷；另抽出
+// originalGoal（大局目標）與 carriedSummary（換腦帶來的先前摘要背景）。
+function recentWorkerAutopilotTurns(worker: Worker): WorkerAutopilotContext {
+  return autopilotContextFromHistory(worker.history);
+}
+
+// 工作區實況（唯讀、便宜、不可拋錯）：outbox 成品與最近改動的檔名，給決策教練對照
+// NPC 的自述抓落差（「說交付了但 outbox 是空的」）。任何 IO 失敗都當成沒有實況。
+function collectWorkerWorkspaceFacts(workspacePath: string): { outbox: string[]; recent: string[] } | null {
+  const listByMtime = (dir: string, limit: number): string[] => {
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .slice(0, 200)
+      .map((entry) => {
+        try { return { name: entry.name, mtime: statSync(join(dir, entry.name)).mtimeMs }; }
+        catch { return null; }
+      })
+      .filter((item): item is { name: string; mtime: number } => item !== null)
+      .sort((a, b) => b.mtime - a.mtime);
+    return entries.slice(0, limit).map((item) => item.name);
+  };
+  try {
+    const recent = listByMtime(workspacePath, 10);
+    let outbox: string[] = [];
+    try { outbox = listByMtime(join(workspacePath, "outbox"), 12); } catch { /* 沒有 outbox 目錄＝沒有成品 */ }
+    return { outbox, recent };
+  } catch {
+    return null;
+  }
+}
+
+// 某段時間內工作區有沒有檔案被改過（空轉偵測的補充實測：Bash 跑腳本產檔不會出現 Write 工具）。
+// 有界遞迴（略過 node_modules/.git/dist 等、最多掃 4000 個項目），IO 失敗一律當「沒看到改動」。
+const WORKSPACE_SCAN_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", ".venv", "__pycache__", ".cache"]);
+function workspaceChangedBetween(workspacePath: string, startAt: number | null, endAt: number | null): boolean {
+  if (startAt == null) return false;
+  const until = (endAt ?? Date.now()) + 2_000;
+  let budget = 4_000;
+  const walk = (dir: string, depth: number): boolean => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+    for (const entry of entries) {
+      if (--budget <= 0) return false;
+      if (entry.isDirectory()) {
+        if (depth < 6 && !WORKSPACE_SCAN_SKIP.has(entry.name) && walk(join(dir, entry.name), depth + 1)) return true;
+      } else if (entry.isFile()) {
+        try {
+          const mtime = statSync(join(dir, entry.name)).mtimeMs;
+          if (mtime >= startAt && mtime <= until) return true;
+        } catch { /* 讀不到就略過 */ }
+      }
+    }
+    return false;
+  };
+  return walk(workspacePath, 0);
+}
+
+function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
+  const stopNote = event.type === "turn_end" || event.type === "error" ? workerAutopilotStopNotes.get(worker.id) : undefined;
+  if (stopNote) {
+    workerAutopilotStopNotes.delete(worker.id);
+    record(worker, { type: "user_message", text: stopNote, notice: true });
+  }
+  if (event.type !== "turn_end") return;
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (!state) return;
+  if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
+  if (workerAutopilotForbidden(worker)) { disableWorkerAutopilotWithNote(worker, workerAutopilotInvincibleNote()); return; }
+  // 暫停等 owner 回覆中：什麼都不做（owner 發話時 resumeWorkerAutopilotIfPaused 會先解除暫停）。
+  if (state.paused) return;
+  if (event.isError && lastTurnWasSystem(worker.history)) {
+    // 出錯的是換腦／交接這類系統回合（不是循環派的工作）：換腦流程自己會放棄或重來，循環不該跟著熄火，
+    // 往下照常讓路／推進（下一步教練會在新的或原本的 session 上接著做）。
+    appendRuntimeLog(config.dataDirectory, "autopilot ignored system-turn error", { worker: worker.runner.name });
+  } else if (event.isError) {
+    disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。"));
+    return;
+  }
+  if (state.stepsRemaining <= 0) {
+    // 步數用完時，最後一步的指示本來就要求 NPC 收尾並附收尾報告（見 workerAutopilot.ts 的 FINAL STEP），
+    // 不再補送收尾交接回合——實測會產出兩份重複的收尾、白花一個回合。時間上限則照舊補送（教練事先不知道）。
+    disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止；收尾報告在上一則回覆。要繼續就再打開開關。"));
+    return;
+  }
+  if (state.deadlineAt && Date.now() >= state.deadlineAt) {
+    concludeWorkerAutopilotWithHandoff(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。"));
+    return;
+  }
+  // 讓路：交接/協作/Mission 進行中、換腦流程中、或佇列還有排隊訊息時不觸發——
+  // 循環保持武裝，之後的回合結束會再進來。
+  if (handoffInProgress(worker) || collaborationInProgress(worker.id) || missionInProgress(worker.id)) return;
+  if (pendingSwapSummaries.has(worker.id) || brainSwapPending.has(worker.id)) return;
+  if (store.listQueue(worker.id).length > 0) return;
+  if (workerAutopilotAdvancing.has(worker.id)) return;
+  void advanceWorkerAutopilot(worker, state);
+}
+
+async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAutopilotState): Promise<void> {
+  if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
+  workerAutopilotAdvancing.add(worker.id);
+  // 決策要跑上分鐘：期間 owner 可能關掉循環、刪掉 NPC，或把它搬到別的工作位置——搬走後這步是
+  // 針對舊 repo 想的，即使循環又被重新打開也不能送進新位置的 runner。
+  const decisionWorkspace = worker.runner.workspacePath;
+  const decisionStale = () => !workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id) || worker.runner.workspacePath !== decisionWorkspace;
+  try {
+    const runtime = resolveWorkerDecisionRuntime(worker);
+    if ("error" in runtime) {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：{error}", { error: runtime.error }));
+      return;
+    }
+    // 決策/探索/修復三通呼叫都跑在這位 NPC 指定帳號的 home 上（而非共用登入的預設 home）。
+    const workerHome = homeForWorker(worker) ?? undefined;
+    const context = recentWorkerAutopilotTurns(worker);
+    const { turns, carriedSummary } = context;
+    // 目標用 owner 開循環時的原話（state.goal）；舊版持久化沒有 goal 的才退回歷史推得的目標。
+    const originalGoal = state.goal || context.originalGoal;
+    // 空轉偵測（伺服器實測）：連 N 步沒改檔／commit／查資料就停，不再花決策呼叫；差一步就先警告教練。
+    const idleStreak = workerAutopilotIdleStreak(
+      workerAutopilotStepActivity(worker.history),
+      (step) => workspaceChangedBetween(worker.runner.workspacePath, step.startAt, step.endAt),
+    );
+    if (idleStreak >= WORKER_AUTOPILOT_IDLE_STOP) {
+      appendRuntimeLog(config.dataDirectory, "autopilot idle stop", { worker: worker.runner.name, idleStreak });
+      concludeWorkerAutopilotWithHandoff(worker, t("⏸ 自動循環：連續 {n} 步沒有新產出（沒改檔、沒 commit、也沒查資料），先停下來避免空轉。要繼續就再打開開關。", { n: idleStreak }));
+      return;
+    }
+    // 活計畫（支柱 A）：載入既有計畫；空則用大局目標＋過往教訓種入一份（吃掉既有狀態、不並存）。
+    let plan = workerAutopilotPlans[worker.id];
+    if (!plan || isWorkerAutopilotPlanEmpty(plan)) {
+      plan = seedWorkerAutopilotPlan(originalGoal, (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse());
+    }
+    // 決策沿用 resolveDecisionRuntime 選的模型。實測（874d990）換成 sonnet 不但沒加速、反而更慢
+    // （85s vs opus 48s）——證明接回延遲的大頭是「決策走完整 CLI turn＋大量 extended thinking」的
+    // 本質成本，與模型無關，故不再做模型替換（避免回歸）。真正要秒級需改走輕量決策路徑，屬較大工程。
+    const decisionModel = runtime.model;
+    let decision: WorkerAutopilotDecision | null = null;
+    // 兩段式決策（支柱 B）：決策 →（需要查證就 explore → 真的查 → 結構化回灌 → 再決策），
+    // 每步最多探索 WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP 次，用盡就逼它用現有資訊 continue/stop。
+    const findingsThisStep: WorkerAutopilotFinding[] = [];
+    let exploreRounds = 0;
+    // 原地踏步軟訊號（純字串比對、零額外呼叫）：有才注入 prompt 逼教練換角度。
+    const stallSignals = workerAutopilotStallSignals(turns);
+    if (idleStreak > 0) {
+      stallSignals.push(`The last loop step produced NO new output (server-checked: no file changed, no commit, no research). ${WORKER_AUTOPILOT_IDLE_STOP - idleStreak} more empty step and the server stops the loop — make this step produce something concrete toward the owner's goal, or STOP honestly now.`);
+    }
+    let lastPrompt = "";
+    for (;;) {
+      const canExplore = exploreRounds < WORKER_AUTOPILOT_MAX_EXPLORE_PER_STEP;
+      const prompt = workerAutopilotNextPrompt({
+        workerName: worker.runner.name,
+        role: worker.persona?.role || null,
+        workspaceLabel: worker.runner.workspacePath,
+        turns,
+        originalGoal,
+        carriedSummary,
+        freshSession: context.freshSession,
+        stepsRemaining: state.stepsRemaining - 1,
+        proactive: state.proactive,
+        retros: (workerAutopilotRetros[worker.id] ?? []).map((entry) => entry.note).reverse(),
+        workspaceFacts: collectWorkerWorkspaceFacts(worker.runner.workspacePath),
+        openRequests: listOpenRequests(openUserRequests, worker.id),
+        plan,
+        canExplore,
+        explorationFindings: findingsThisStep,
+        stallSignals,
+      });
+      lastPrompt = prompt;
+      try {
+        // 量測：接回延遲的大頭是這通決策呼叫——落檔總耗時＋prompt 長度＋用的模型，供診斷「冷啟 vs 推論」。
+        const decisionStart = Date.now();
+        appendRuntimeLog(config.dataDirectory, `autopilot decision call start`, { worker: worker.runner.name, provider: runtime.provider, model: decisionModel, promptChars: prompt.length, exploreRounds });
+        const text = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, prompt, 150_000, { kind: "no_tools" }, workerHome)).text;
+        appendRuntimeLog(config.dataDirectory, `autopilot decision call done`, { worker: worker.runner.name, model: decisionModel, ms: Date.now() - decisionStart, replyChars: text.length });
+        // 呼叫成功即清失敗連勝（無論 parse 結果）——退避追蹤的是「模型叫不動」，不是格式。
+        workerAutopilotRetry.resolve(worker.id);
+        decision = parseWorkerAutopilotDecision(text);
+        if (!decision) {
+          // 格式修復重問（一次）：把被拒的具體原因附回去。以前 parse 失敗被當成「正常結束」
+          // 靜默收場，一次格式抖動就浪費整輪循環。
+          const failure = explainWorkerAutopilotFailure(text) ?? "unrecognized reply";
+          const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" }, workerHome)).text;
+          decision = parseWorkerAutopilotDecision(repaired);
+          if (!decision) {
+            if (decisionStale()) return;
+            disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
+            return;
+          }
+        }
+      } catch (error) {
+        // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
+        // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
+        if (decisionStale()) return;
+        const firstFailure = !workerAutopilotRetry.get(worker.id);
+        workerAutopilotRetry.note(worker.id, null, Date.now());
+        if (firstFailure) {
+          // 登入過期（OAuth refresh 失敗）不是模型壞了——明講要重新登入，免得被誤認成換模型造成的故障。
+          const message = (error as Error).message;
+          const text = /OAuth|authenticat|not logged in|log ?in/i.test(message)
+            ? t("🔑 自動循環：Claude 登入已過期（{error}）。請重新登入這位 NPC 用的帳號；登入恢復後循環會自動重試接續。", { error: message })
+            : t("⏳ 自動循環：決策模型暫時失敗（{error}），將自動退避重試；連續失敗才會停止。", { error: message });
+          record(worker, { type: "user_message", text, notice: true });
+          broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+        }
+        return;
+      }
+      // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
+      if (decisionStale()) return;
+      // 活計畫（支柱 A）：把教練回傳的更新後計畫併回並落盤（探索輪與定稿輪都併，跨回合不歸零）。
+      if (decision.planUpdate !== undefined) {
+        plan = mergeWorkerAutopilotPlan(plan, decision.planUpdate, plan.updatedRound + 1).plan;
+        saveWorkerAutopilotPlan(worker.id, plan);
+      }
+      if (decision.action !== "explore") break;
+      // 支柱 B 第二段：真的去查——唯讀查詢回合（WebSearch/WebFetch 真上網＋Read/Grep 讀檔＋
+      // allowSafeShell 跑唯讀安全指令如 npm test/tsc），危險指令由 queryToolPolicy+通道 E 擋死。
+      exploreRounds += 1;
+      record(worker, { type: "user_message", text: t("🔎 查證：{query}", { query: decision.query }), notice: true });
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      let finding: WorkerAutopilotFinding;
+      try {
+        const exploreText = (await runDetachedTurn(
+          runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null,
+          workerAutopilotExplorePrompt({ workerName: worker.runner.name, workspaceLabel: worker.runner.workspacePath, query: decision.query, originalGoal }),
+          150_000,
+          { kind: "read_only_query", allowedTools: [], allowSafeShell: true },
+          workerHome,
+        )).text;
+        finding = parseExplorationFindings(exploreText, decision.query);
+      } catch (error) {
+        // 探索失敗不熄火：記一條 low 信心「查不到」，讓決策照樣用現有資訊決定，不整輪浪費。
+        finding = { query: decision.query, summary: t("（探索失敗：{error}）", { error: (error as Error).message }), confidence: "low", sources: [] };
+      }
+      findingsThisStep.push(finding);
+      if (decisionStale()) return;
+    }
+    const live = workerAutopilotByWorker.get(worker.id);
+    if (!live || decisionStale()) return;
+    // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
+    if (decision) decision = workerAutopilotProgressGuard(decision, turns);
+    // 計畫感知護欄（支柱 A 結構面）：用完整 tried 清單抓長程繞圈——第 N 回合又提早已試過的做法即停。
+    if (decision) decision = workerAutopilotPlanProgressGuard(decision, plan);
+    // 教練回報「已真正處理完」的使用者請求即結案（resolve 語義 (a)）——指的是先前回合已完成的工作，
+    // 與這步是否送出無關，故在此committed decision 一有就結案。
+    // owner 授權：循環開著時，可逆的選項分岔由教練自己分析選最佳、繼續跑（不停下來等人）。
+    // 只重問一次；花錢／不可逆／owner 私有資料（gate authorization/owner_data）不在此列，照樣暫停等回覆。
+    if (decision && workerAutopilotShouldAutoPick(decision) && decision.action === "stop" && lastPrompt) {
+      appendRuntimeLog(config.dataDirectory, "autopilot auto-pick", { worker: worker.runner.name, gate: decision.gate ?? null });
+      try {
+        const pickedText = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotAutoPickPrompt(lastPrompt, decision.reason), 150_000, { kind: "no_tools" }, workerHome)).text;
+        if (decisionStale()) return;
+        const picked = parseWorkerAutopilotDecision(pickedText);
+        if (picked && picked.action !== "explore") {
+          if (picked.planUpdate !== undefined) {
+            plan = mergeWorkerAutopilotPlan(plan, picked.planUpdate, plan.updatedRound + 1).plan;
+            saveWorkerAutopilotPlan(worker.id, plan);
+          }
+          decision = workerAutopilotPlanProgressGuard(workerAutopilotProgressGuard(picked, turns), plan);
+          appendRuntimeLog(config.dataDirectory, "autopilot auto-pick result", { worker: worker.runner.name, action: decision.action, picked: decision.action === "continue" ? decision.choice?.picked ?? null : null });
+        }
+      } catch (error) {
+        // 自選呼叫失敗：退回原本的「問 owner」→ 下面會暫停等回覆，不熄火。
+        appendRuntimeLog(config.dataDirectory, "autopilot auto-pick failed", { worker: worker.runner.name, error: (error as Error).message });
+      }
+    }
+    if (decision && decision.action !== "explore") resolveCapturedRequests(worker.id, decision.resolvedRequestIds);
+    // 真的需要 owner（花錢／不可逆／對外／私有資料）：暫停而非結束——開關留著、不扣步數、不補收尾回合，
+    // owner 一回覆就自動接著跑（目標、計畫、剩餘步數都保留）。
+    if (decision && decision.action === "stop" && decision.kind === "ask") {
+      const live2 = workerAutopilotByWorker.get(worker.id);
+      if (!live2) return;
+      const options = parseAutopilotAskOptions(decision.reason);
+      live2.paused = { question: decision.reason, options, at: Date.now(), ...(decision.gate ? { gate: decision.gate } : {}) };
+      persistWorkerAutopilotStates();
+      appendRuntimeLog(config.dataDirectory, "autopilot paused for owner", { worker: worker.runner.name, gate: decision.gate ?? null });
+      record(worker, { type: "user_message", text: workerAutopilotPausedNote(decision.reason, decision.gate), notice: true, autopilotAsk: true, askOptions: options });
+      broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+      return;
+    }
+    if (!decision || decision.action !== "continue") {
+      if (decision && decision.action === "stop" && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
+      const reason = decision && decision.action === "stop" ? decision.reason : "";
+      // 停止類型決定註記措辭與要不要標成「循環問你」卡（見 workerAutopilotStopNote）：
+      // done＝達標不打擾、ask/stuck＝問題卡＋一鍵選項；沒給類型的舊輸出沿用「有理由就問你」。
+      const stopNote = workerAutopilotStopNote({ kind: decision && decision.action === "stop" ? decision.kind : undefined, reason, plan });
+      const ask = stopNote.ask ? { options: parseAutopilotAskOptions(reason) } : undefined;
+      // 教練判定做完而停＝正常停：和撞上限一樣補一份四段收尾交接（看得懂＋怎麼接），
+      // 有待拍板的決定時停止註記照樣帶一鍵選項卡。只有「出錯停」才不補交接。
+      concludeWorkerAutopilotWithHandoff(worker, stopNote.note, ask);
+      return;
+    }
+    // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
+    if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
+    // 決策期間被切成⚡無限制模式：這步不送。
+    if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
+    live.stepsRemaining -= 1;
+    persistWorkerAutopilotStates();
+    // 最後一步的決策帶著整輪復盤——存起來讓下一輪循環從這裡往上爬（機制一）。
+    if (live.stepsRemaining <= 0 && decision.retro) saveWorkerAutopilotRetro(worker.id, decision.retro);
+    // 刻意不把「剩 N 步」寫進給 NPC 的指令：讓 NPC 看到倒數會誘發「交券效應」——快沒步數時提早草草
+    // 收尾、為了在上限前交東西而非真推進。步數只留在引擎內部當安全界限；NPC 靠教練判斷真完成才停。
+    // 完成標準附在指示尾端：NPC 知道做到什麼算完成，下一步教練據此驗收（prevMet）。
+    const text = t("🔁（自動循環）{instruction}", { instruction: workerAutopilotInstructionWithCriterion(decision.instruction, decision.doneWhen) });
+    record(worker, { type: "user_message", text, autopilot: true });
+    try {
+      worker.runner.send(text, [], []);
+      broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+    } catch (error) {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：無法送出下一步（{error}）。", { error: (error as Error).message }));
+      return;
+    }
+    // 階梯可見化：教練每步都判斷「工作站在哪一階」，只進決策不給主人看太可惜。
+    // notice 型訊息只顯示、不進 NPC session、也不進 recentWorkerAutopilotTurns 的回合彙整。
+    // 一句話進度：上一步驗收 · 所在階 · 這步推進什麼 · 完成標準（見 workerAutopilotStepNotice）。
+    // 教練替 owner 選了分岔：留一則看得懂的紀錄（選了什麼、為什麼），owner 回來想改直接回一句。
+    if (decision.choice) record(worker, { type: "user_message", text: workerAutopilotChoiceNotice(decision.choice), notice: true });
+    const stepNotice = workerAutopilotStepNotice(decision);
+    if (stepNotice) record(worker, { type: "user_message", text: stepNotice, notice: true });
+    broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  } finally {
+    workerAutopilotAdvancing.delete(worker.id);
+  }
+}
+
+// 自動循環保底掃描（P1-2）：turn_end 讓路後（協作／交接／Mission／換腦）那些流程結束
+// 不一定伴隨這位 NPC 的 turn_end，循環會武裝著卻停擺；決策失敗的退避重試（P1-1）也靠
+// 這班掃。決策抽純函式 workerAutopilotSweepAction。無武裝循環時零成本。
+function sweepWorkerAutopilot(): void {
+  const now = Date.now();
+  for (const [workerId, state] of workerAutopilotByWorker) {
+    const worker = workers.get(workerId);
+    const action = workerAutopilotSweepAction({
+      present: !!worker,
+      unattendedForbidden: worker ? workerAutopilotForbidden(worker) : false,
+      paused: !!state.paused,
+      busy: worker?.runner.busy ?? false,
+      queued: worker ? store.listQueue(workerId).length > 0 : false,
+      yielding: worker
+        ? (handoffInProgress(worker) || collaborationInProgress(workerId) || missionInProgress(workerId)
+          || pendingSwapSummaries.has(workerId) || brainSwapPending.has(workerId))
+        : false,
+      advancing: workerAutopilotAdvancing.has(workerId) || workerAutopilotProbing.has(workerId),
+      stepsRemaining: state.stepsRemaining,
+      deadlinePassed: !!(state.deadlineAt && now >= state.deadlineAt),
+      retry: {
+        registered: !!workerAutopilotRetry.get(workerId),
+        due: workerAutopilotRetry.due(workerId, now),
+        exhausted: workerAutopilotRetry.exhausted(workerId),
+      },
+    });
+    if (action === "wait") continue;
+    if (action === "drop" || !worker) {
+      workerAutopilotByWorker.delete(workerId);
+      workerAutopilotRetry.resolve(workerId);
+      persistWorkerAutopilotStates();
+      continue;
+    }
+    if (action === "disable_unattended") { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); continue; }
+    if (action === "disable_steps") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。")); continue; }
+    if (action === "disable_deadline") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。")); continue; }
+    if (action === "exhausted") {
+      disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續失敗 {n} 次；處理後可再打開開關。", { n: WORKER_AUTOPILOT_RETRY_POLICY.maxAttempts }));
+      continue;
+    }
+    // advance：失敗重試型先探測用量——受限期間不消耗次數（比照 dept-create 的
+    // 「條件未恢復不花次數」語義）；一般停擺型直接補觸發。
+    if (workerAutopilotRetry.get(workerId)) {
+      workerAutopilotProbing.add(workerId);
+      void (async () => {
+        try {
+          const runtime = resolveWorkerDecisionRuntime(worker);
+          if (!("error" in runtime)) {
+            const usage = await refreshWorkerDecisionUsage(worker, runtime.provider);
+            if (usageBlockReason(runtime.provider, usage, runtime.model)) return;
+          }
+          workerAutopilotRetry.begin(workerId, Date.now());
+          const live = workerAutopilotByWorker.get(workerId);
+          if (live && workers.has(workerId)) await advanceWorkerAutopilot(worker, live);
+        } catch (error) {
+          console.error("[worker-autopilot] 重試探測失敗:", error);
+        } finally {
+          workerAutopilotProbing.delete(workerId);
+        }
+      })();
+    } else {
+      void advanceWorkerAutopilot(worker, state);
+    }
+  }
+}
+
+app.get("/api/workers/:id/autopilot", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
+
+app.post("/api/workers/:id/autopilot", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  const enabled = Boolean(req.body?.enabled);
+  if (enabled) {
+    if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開自動循環") }); return; }
+    if (workerAutopilotForbidden(worker)) {
+      res.status(409).json({ error: t("此 NPC 處於⚡無限制模式（跳過所有審批），不能開自動循環；審批改為「完全信任」或「安全」後再開。") });
+      return;
+    }
+    // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
+    // 用 account-aware 版本：指定帳號可用時就能開，不被共用登入狀態綁死。
+    const runtime = resolveWorkerDecisionRuntime(worker);
+    if ("error" in runtime) { res.status(503).json({ error: runtime.error }); return; }
+  }
+  const maxSteps = enabled && Number.isFinite(req.body?.maxSteps) ? Number(req.body.maxSteps) : undefined;
+  const maxMinutes = enabled && Number.isFinite(req.body?.maxMinutes) ? Number(req.body.maxMinutes) : undefined;
+  // 主動模式預設開（owner 回饋：開循環的本意就是「持續思考下一步發展」，不是把當前線收尾就停）。
+  // 非主動（收尾型）改成明確傳 proactive:false 才啟用。
+  const proactive = enabled && req.body?.proactive !== false;
+  const goalText = enabled && typeof req.body?.goal === "string" ? req.body.goal : undefined;
+  setWorkerAutopilot(worker, enabled, maxSteps, maxMinutes, proactive, goalText);
+  // 開啟當下 NPC 若閒著：立即想第一步（只靠 turn_end 觸發的話，開了會毫無反應）。
+  const state = workerAutopilotByWorker.get(worker.id);
+  if (enabled && state && !worker.runner.busy && !workerAutopilotAdvancing.has(worker.id)
+    && !handoffInProgress(worker) && !collaborationInProgress(worker.id) && !missionInProgress(worker.id)
+    && !pendingSwapSummaries.has(worker.id) && store.listQueue(worker.id).length === 0) {
+    void advanceWorkerAutopilot(worker, state);
+  }
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
+
+app.post("/api/workers/:id/autopilot/goal", (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) { res.status(404).json({ error: t("找不到 NPC") }); return; }
+  const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
+  if (!goal) { res.status(400).json({ error: t("目標不能是空的") }); return; }
+  if (!workerAutopilotByWorker.has(worker.id)) { res.status(409).json({ error: t("自動循環沒有開著") }); return; }
+  updateWorkerAutopilotGoal(worker, goal);
+  res.json({ ok: true, autopilot: workerAutopilotSnapshot(worker.id) });
+});
 
 app.get("/api/boss-tasks", (req, res) => {
   const requested = collaborationText(req.query.workspacePath, 1_000);
@@ -4652,7 +7032,7 @@ app.get("/api/boss-tasks", (req, res) => {
     try { workspacePath = normalizeManagedWorkspacePath(requested); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
   }
-  res.json({ bossTasks: store.listBossTasks(workspacePath).map(bossTaskForDisplay) });
+  res.json({ bossTasks: store.listBossTasks(workspacePath ? registryKey(workspacePath) : undefined).map(bossTaskForDisplay) });
 });
 
 app.get("/api/boss-tasks/:id", (req, res) => {
@@ -4664,6 +7044,9 @@ app.get("/api/boss-tasks/:id", (req, res) => {
 app.post("/api/boss-tasks", async (req, res) => {
   const objective = collaborationText(req.body?.message, 4_000);
   if (!objective) { res.status(400).json({ error: t("請輸入要交辦的工作") }); return; }
+  // 這條在轉接站的分享訪客安全寫入白名單上：會拉高核准模式的輸入（專屬部門＝full）不能讓訪客自己開。
+  const shareGuestError = shareGuestBossTaskError(req.headers["x-pc-access"], req.body);
+  if (shareGuestError) { res.status(403).json({ error: shareGuestError }); return; }
   const clientMessageId = collaborationText(req.body?.clientMessageId, 200) || null;
   const idempotencyKey = collaborationText(req.body?.idempotencyKey, 200) || clientMessageId;
   if (idempotencyKey) {
@@ -4723,14 +7106,29 @@ app.post("/api/boss-tasks", async (req, res) => {
     stages: [],
     finalReport: null,
     error: null,
+    ...(isShareGuestAccess(req.headers["x-pc-access"]) ? { requestedByShareGuest: true } : {}),
     createdAt: now,
     updatedAt: now,
     completedAt: null,
   };
   if (!store.saveBossTask(task)) { res.status(500).json({ error: t("無法保存 Boss Task") }); return; }
   broadcastBossTask(task, true);
-  await decideBossTask(task);
+  // 立即回應：探索（決策模型）或建專屬部門都可能跑十幾秒以上，不讓建立端點同步阻塞到前端逾時、看起來像卡住。
+  // 任務已存為 discovering 並廣播；之後每次狀態改變都經 persistBossTask → broadcast 由 WebSocket 推給前端。
   res.status(201).json({ bossTask: bossTaskForDisplay(task) });
+  // 「為此交辦開專屬部門」：走直接建部門路徑，跳過決策模型路由（省 token、不卡既有部門）。背景執行。
+  void (req.body?.dedicatedDepartment ? runDedicatedDepartmentTask(task) : decideBossTask(task))
+    .catch((error) => {
+      // decideBossTask / runDedicatedDepartmentTask 內部已處理常見錯誤並廣播；這裡只兜住未預期的丟出，
+      // 避免任務永遠卡在 discovering。
+      console.error(`[boss-task] 背景探索意外失敗 ${task.id}:`, error);
+      if (task.status === "discovering") {
+        task.status = "needs_attention";
+        task.error = (error as Error).message || t("探索失敗");
+        task.messages.push(bossTaskMessage("system", t("⛔ 探索失敗：{error}", { error: task.error })));
+        persistBossTask(task);
+      }
+    });
 });
 
 app.patch("/api/boss-tasks/:id", (req, res) => {
@@ -4741,6 +7139,8 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
     res.status(patchError.includes("不能封存") ? 409 : 400).json({ error: patchError });
     return;
   }
+  // 封存＝使用者收工，把這個交辦的臨時團隊解散（不再追問了）。
+  if (task.archivedAt) disbandTaskEphemeralDepartments(task);
   persistBossTask(task);
   res.json({ bossTask: bossTaskForDisplay(task) });
 });
@@ -4748,10 +7148,19 @@ app.patch("/api/boss-tasks/:id", (req, res) => {
 app.delete("/api/boss-tasks/:id", (req, res) => {
   const task = store.getBossTask(req.params.id);
   if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
-  if (!["completed", "failed", "cancelled"].includes(task.status)) {
-    res.status(409).json({ error: t("進行中或等待處理的 Boss Task 不能刪除") });
+  // 可刪除：終態(完成/失敗/取消)＋「等你處理」的卡住狀態(needs_attention/needs_input)——
+  // 那些沒有背景在跑，卡著也刪不掉會很煩。只有真正執行中(discovering/ready/running/
+  // synthesizing)才擋，避免刪掉正在跑的任務。
+  if (!["completed", "failed", "cancelled", "needs_attention", "needs_input"].includes(task.status)) {
+    res.status(409).json({ error: t("進行中的 Boss Task 不能刪除；請等它完成或先取消") });
     return;
   }
+  // needs_attention 的交辦底下常有一支暫停中的部門 Mission：它仍佔著工作區＋部門鎖（重啟後
+  // 照樣被還原），交辦一刪就再也沒有入口能取消它。比照 /cancel 先把進行中的 Mission 收掉。
+  for (const mission of bossTaskRestartScope(task).activeMissions) cancelMissionForScopedRestart(mission);
+  disbandTaskEphemeralDepartments(task); // 刪除交辦＝連它的臨時團隊一起收掉
+  autopilotFired.delete(task.id); // 任務不存在了，觸發標記與接手計數一併回收
+  autopilotResolveAttempts.delete(task.id);
   if (!store.deleteBossTask(task.id)) {
     res.status(500).json({ error: t("無法刪除 Boss Task") });
     return;
@@ -4764,8 +7173,16 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   const task = store.getBossTask(req.params.id);
   if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
   if (task.archivedAt) { res.status(409).json({ error: t("封存的 Boss Task 不能重新交辦") }); return; }
-  if (task.status === "discovering" || task.status === "synthesizing") { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
+  // 只擋「本程序真的有背景在跑」的探索/驗收；重啟殭屍（狀態卡著但工作已隨重啟蒸發）放行，
+  // 讓手動重開能救——否則 409 連人工都解不了（卡點盤點 P0）。
+  if (restartBlockedByActiveWork({
+    status: task.status,
+    discoveryInFlight: bossTaskDiscoveryWork.inFlight(task.id),
+    synthesisInFlight: bossTaskFinalizing.has(task.id),
+  })) { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
   const restartScope = bossTaskRestartScope(task);
+  // 重新規劃前記下這張交辦自己的臨時團隊：清空 stages 後決策仍可把工作交回同一隊，不另開新隊。
+  const ownCrewIds = task.stages.map((stage) => stage.departmentId).filter((id) => ephemeralDepartments.has(id));
   const preflightError = restartScope.members.length > 0
     ? await scopedRestartPreflightError(restartScope.members, restartScope.activeMissions)
     : null;
@@ -4796,10 +7213,36 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   task.completedAt = null;
   task.status = "discovering";
   task.error = null;
+  // 重新交辦＝新的一輪：清掉上一輪的自動循環觸發標記與接手計數，讓新一輪的終態能正常進 hook。
+  autopilotFired.delete(task.id);
+  autopilotResolveAttempts.delete(task.id);
   task.messages.push(bossTaskMessage("system", t("已清空原本交辦並重新規劃；附件與稽核紀錄已保留。"), [], null, null, timestampAfter(clearedAt)));
   persistBossTask(task);
-  await decideBossTask(task);
+  await decideBossTask(task, true, ownCrewIds);
   res.json({ bossTask: bossTaskForDisplay(task), ...preview });
+});
+
+// 老闆手動中止交辦：取消所有進行中的部門 Mission、標記交辦為已取消、解散臨時團隊。
+// 給前端一顆一鍵「中止」按鈕用——不必再繞進部門任務面板找 Mission 取消。
+app.post("/api/boss-tasks/:id/cancel", (req, res) => {
+  const task = store.getBossTask(req.params.id);
+  if (!task) { res.status(404).json({ error: t("找不到 Boss Task") }); return; }
+  if (["completed", "failed", "cancelled"].includes(task.status)) {
+    res.status(409).json({ error: t("Boss Task 已結束，不需要中止") });
+    return;
+  }
+  const scope = bossTaskRestartScope(task);
+  for (const mission of scope.activeMissions) cancelMissionForScopedRestart(mission);
+  for (const stage of task.stages) {
+    if (stage.status === "running" || stage.status === "pending") stage.status = "cancelled";
+  }
+  task.status = "cancelled";
+  task.error = null;
+  task.completedAt = new Date().toISOString();
+  task.messages.push(bossTaskMessage("system", t("⛔ 交辦已由老闆手動中止；進行中的部門工作已停止，臨時團隊已解散。")));
+  persistBossTask(task);
+  ephemeralCleanupHook(task);
+  res.json({ ok: true, bossTask: bossTaskForDisplay(task) });
 });
 
 app.post("/api/boss-tasks/:id/messages", async (req, res) => {
@@ -4871,6 +7314,8 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   if (!attachmentRecordsForPersist) return;
   const attachmentIds = attachmentRecordsForPersist.map((attachment) => attachment.id);
   task.attachmentIds = [...new Set([...(task.attachmentIds ?? []), ...attachmentIds])];
+  // 訪客追問也算碰過：之後重建的臨時隊不給 full（見 dedicatedCrewApproveMode）。
+  if (isShareGuestAccess(req.headers["x-pc-access"])) task.requestedByShareGuest = true;
   task.messages.push(bossTaskMessage(
     "boss",
     message || t("請依附加檔案處理後續工作"),
@@ -4897,9 +7342,24 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
     return;
   }
   if (task.status === "completed" || task.status === "failed") {
+    // 追問前先記住這張交辦是否由「專屬部門」執行——是的話追問要回到同一隊
+    //（或重建同型的隊），不能丟回決策模型路由去打擾其他部門。
+    const hadDedicatedCrew = task.stages.some((stage) => stage.departmentName?.startsWith(EPHEMERAL_DEPT_PREFIX));
+    const liveDedicatedId = task.stages.map((stage) => stage.departmentId).find((id) => ephemeralDepartments.has(id)) ?? null;
     task.stages = [];
     task.finalReport = null;
     task.completedAt = null;
+    // 追問＝新的一輪：清掉上一輪的循環觸發標記與接手計數，新一輪完成時自動循環才會再推進。
+    autopilotFired.delete(task.id);
+    autopilotResolveAttempts.delete(task.id);
+    if (hadDedicatedCrew) {
+      task.status = "discovering";
+      task.error = null;
+      persistBossTask(task);
+      await runDedicatedFollowUp(task, message || t("請依附加檔案處理後續工作"), liveDedicatedId);
+      res.json({ bossTask: bossTaskForDisplay(task) });
+      return;
+    }
   }
   task.status = "discovering";
   task.error = null;
@@ -4998,12 +7458,12 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
     members: eligibility.members.map(workerSummary),
     objective,
     acceptanceCriteria,
-    maxCorrections: 2,
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     warnings: [
       t("這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。"),
       t("NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。"),
       t("Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。"),
-      t("Review 最多自動退回修正兩輪，超過後會停下來請你決定。"),
+      t("Review 要求修改時不會自動退回重做，會直接停下來請你決定（重試、帶指示重跑或接受風險）。"),
       t("Mission 不會自動 commit、push、merge、tag、publish 或 release。"),
     ],
   });
@@ -5054,7 +7514,7 @@ app.get("/api/missions", (req, res) => {
     try { workspacePath = normalizeManagedWorkspacePath(requested); }
     catch (error) { res.status(400).json({ error: (error as Error).message }); return; }
   }
-  res.json({ missions: store.listDepartmentMissions(workspacePath) });
+  res.json({ missions: store.listDepartmentMissions(workspacePath ? registryKey(workspacePath) : undefined) });
 });
 
 app.get("/api/missions/:id", (req, res) => {
@@ -5199,37 +7659,34 @@ function retryMissionPlanning(mission: DepartmentMission): string | null {
   }
 }
 
-app.post("/api/missions/:id/resolve", (req, res) => {
-  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
-  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
+// Mission 中斷處理的核心規則：/api/missions/:id/resolve 與自動循環的「自動接手」共用，
+// 兩邊行為必須一致（同樣的守衛、同樣的步驟重置與派工）。回傳 error 即失敗（附 HTTP 狀態碼）。
+function applyMissionResolution(
+  mission: DepartmentMission,
+  action: string,
+  guidance: string,
+  workerId = "",
+): { status: number; error?: string } {
   if (!(["needs_attention", "failed"] as DepartmentMission["status"][]).includes(mission.status) || mission.attentionReason === "plan_approval") {
-    res.status(409).json({ error: t("這個 Mission 目前沒有可處理的中斷") });
-    return;
+    return { status: 409, error: t("這個 Mission 目前沒有可處理的中斷") };
   }
   const reserved = workspaceMission(mission.workspacePath, mission.departmentId);
   if (mission.status === "failed" && reserved && reserved.id !== mission.id) {
-    res.status(409).json({ error: t("同一工作位置已有進行中的 Department Mission") });
-    return;
+    return { status: 409, error: t("同一工作位置已有進行中的 Department Mission") };
   }
-  const action = String(req.body?.action ?? "");
-  const guidance = collaborationText(req.body?.guidance, 2_000);
   if (guidance) mission.ownerGuidance = guidance;
   if (action === "retry" && mission.steps.length === 0) {
     const error = retryMissionPlanning(mission);
-    if (error) { res.status(409).json({ error }); return; }
-    res.status(202).json({ mission });
-    return;
+    return error ? { status: 409, error } : { status: 202 };
   }
   const currentIndex = mission.currentStepIndex;
   const current = currentIndex == null ? null : mission.steps[currentIndex];
   if (!current || currentIndex == null) {
-    res.status(409).json({ error: t("Mission 找不到可恢復的步驟") });
-    return;
+    return { status: 409, error: t("Mission 找不到可恢復的步驟") };
   }
   if (action === "accept_risk") {
     if (current.kind !== "review" || !current.reviewResult) {
-      res.status(409).json({ error: t("只有已有結果的 Review 才能接受風險繼續") });
-      return;
+      return { status: 409, error: t("只有已有結果的 Review 才能接受風險繼續") };
     }
     current.status = "completed";
     mission.attentionReason = null;
@@ -5237,37 +7694,31 @@ app.post("/api/missions/:id/resolve", (req, res) => {
     store.saveDepartmentMission(mission);
     broadcastMission(mission);
     completeMissionStep(mission, currentIndex);
-    res.status(202).json({ mission });
-    return;
+    return { status: 202 };
   }
   let targetIndex = currentIndex;
   if (action === "retry_execute" || action === "guide") {
     if (current.kind === "review") {
       const executeIndex = precedingExecuteIndex(mission, currentIndex);
-      if (executeIndex == null) { res.status(409).json({ error: t("找不到可重試的 Execute 步驟") }); return; }
+      if (executeIndex == null) return { status: 409, error: t("找不到可重試的 Execute 步驟") };
       targetIndex = executeIndex;
       current.status = "pending";
       current.completedAt = null;
     } else if (current.kind !== "execute") {
-      res.status(409).json({ error: t("目前步驟不能退回 Execute") });
-      return;
+      return { status: 409, error: t("目前步驟不能退回 Execute") };
     }
   } else if (action === "reassign") {
-    const workerId = String(req.body?.workerId ?? "");
     const replacement = workers.get(workerId);
     if (!replacement || !sameWorkspacePath(replacement.runner.workspacePath, mission.workspacePath)) {
-      res.status(409).json({ error: t("只能重新指派給同部門 NPC") });
-      return;
+      return { status: 409, error: t("只能重新指派給同部門 NPC") };
     }
     const preceding = current.kind === "review" ? precedingExecuteIndex(mission, currentIndex) : null;
     if (preceding != null && mission.steps[preceding]?.assigneeWorkerId === workerId) {
-      res.status(409).json({ error: t("Review 必須由與 Execute 不同的 NPC 負責") });
-      return;
+      return { status: 409, error: t("Review 必須由與 Execute 不同的 NPC 負責") };
     }
     current.assigneeWorkerId = workerId;
   } else if (action !== "retry") {
-    res.status(400).json({ error: t("不支援的 Mission 處理方式") });
-    return;
+    return { status: 400, error: t("不支援的 Mission 處理方式") };
   }
   const target = mission.steps[targetIndex];
   target.status = "pending";
@@ -5280,6 +7731,16 @@ app.post("/api/missions/:id/resolve", (req, res) => {
   store.saveDepartmentMission(mission);
   broadcastMission(mission);
   dispatchMissionStep(mission, targetIndex, current.kind === "review" ? current.reviewResult : null);
+  return { status: 202 };
+}
+
+app.post("/api/missions/:id/resolve", (req, res) => {
+  const mission = activeMissions.get(req.params.id) ?? store.getDepartmentMission(req.params.id);
+  if (!mission) { res.status(404).json({ error: t("找不到 Department Mission") }); return; }
+  const action = String(req.body?.action ?? "");
+  const guidance = collaborationText(req.body?.guidance, 2_000);
+  const outcome = applyMissionResolution(mission, action, guidance, String(req.body?.workerId ?? ""));
+  if (outcome.error) { res.status(outcome.status).json({ error: outcome.error }); return; }
   res.status(202).json({ mission });
 });
 
@@ -5295,6 +7756,7 @@ app.post("/api/missions/:id/cancel", (req, res) => {
   mission.completedAt = new Date().toISOString();
   store.saveDepartmentMission(mission);
   pendingMissionReplans.delete(mission.id);
+  noReviewMissions.delete(mission.id);
   updateDepartmentThreadMission(mission.departmentId, null);
   departmentAudit("mission_cancelled", mission.departmentId, mission.id);
   broadcastMission(mission);
@@ -5752,8 +8214,13 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     broadcast({ type: "department_created", department: newDepartment });
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
+    broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
+    // 個人自動循環的目標與活計畫都以舊 repo 為錨：搬到新位置後不能接著驅動它（進行中的決策也會因
+    // 位置變了而作廢，見 advanceWorkerAutopilot）。過往教訓（retros）是通用心法，留著。
+    disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。", { path: workspacePath }));
+    if (workerAutopilotPlans[worker.id]) { delete workerAutopilotPlans[worker.id]; workerAutopilotPlanStore.save(workerAutopilotPlans); }
+    clearCapturedRequests(worker.id); // 對話已清空，舊位置的請求不再算數
     const summary = workerSummary(worker);
-    broadcast({ type: "worker_updated", worker: summary, reset: true });
     res.json({ ...summary, conversationReset });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
@@ -5786,6 +8253,9 @@ app.delete("/api/workers/:id", async (req, res) => {
   store.deleteWorker(worker.id);
   deleteExtras(worker.id);
   clearWorkerHookState(worker.id);
+  if (workerAutopilotByWorker.delete(worker.id)) persistWorkerAutopilotStates(); // NPC 沒了，個人循環狀態一併回收
+  if (workerAutopilotRetros[worker.id]) { delete workerAutopilotRetros[worker.id]; workerAutopilotRetroStore.save(workerAutopilotRetros); }
+  clearCapturedRequests(worker.id);
   repairDepartmentAfterMemberLeaves(departmentId, worker.id);
   broadcast({ type: "worker_removed", workerId: worker.id });
   res.json({ ok: true });
@@ -5886,9 +8356,15 @@ function deleteWarroomPeer(id: string): void {
   store.deleteWorker(id);
   repairDepartmentAfterMemberLeaves(departmentId, id);
   broadcast({ type: "worker_removed", workerId: id });
+  scheduleWarroomQueuePump(); // 臨時成員離場＝席位釋出，看看排隊的作戰室能不能開場
 }
 
-async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, customStances: WarRoomStance[] = []): Promise<WarRoomResult> {
+// 作戰室上桌的角色：使用者有自訂角色（⚙ 面板）就用自訂的，否則依難度配。所需臨時席＝角色數＋主持。
+function resolveWarroomStances(difficulty: WarRoomDifficulty, customStances: WarRoomStance[]): WarRoomStance[] {
+  return customStances.length >= 2 ? customStances : warroomStances(difficulty);
+}
+
+async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspacePath: string, provider: ProviderId, accountId: string | null, stances: WarRoomStance[], context = ""): Promise<WarRoomResult> {
   const { peer: peerModel, lead: leadModel } = warroomModels(provider, difficulty);
   const timeoutMs = difficulty === "hard" ? 240_000 : 150_000;
   const deadlineAt = Date.now() + WARROOM_TOTAL_TIMEOUT_MS;
@@ -5896,12 +8372,23 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
   let costMicros = 0;
   let completed = false;
   // 上桌人數與輪數隨難度伸縮：簡單 2 人 1 輪（快又省）、中等 3 人 2 輪、困難 4 人（含查證方）2 輪。
-  // 使用者有自訂角色（⚙ 面板）就用自訂的，輪數仍照難度。
-  const stances = customStances.length >= 2 ? customStances : warroomStances(difficulty);
+  // 使用者有自訂角色（⚙ 面板）就用自訂的（由呼叫端 resolveWarroomStances 決定），輪數仍照難度。
   const rounds = difficulty === "simple" ? 1 : 2;
+  // 席位不夠開完整一場（全部成員＋主持）就直接說清楚，不要默默少開人、拿殘缺辯論去裁決。
+  // 正常路徑由 /api/warroom 的排隊閘門保證席位夠了才會走到這裡；這裡是最後一道防線。
+  if (ephemeralSeatsLeft() < stances.length + 1) {
+    throw new Error(t("作戰室需要 {n} 個臨時席位，但辦公室目前已滿。請先移除幾位閒置的 NPC，或等其他作戰室散會後再開。", { n: stances.length + 1 }));
+  }
+  reservedEphemeralSeats += 1; // 主持的席位，主持上桌或本場結束時歸還
+  let leadSeatReserved = true;
+  const releaseLeadSeat = () => {
+    if (!leadSeatReserved) return;
+    leadSeatReserved = false;
+    reservedEphemeralSeats -= 1;
+  };
   try {
     for (const stance of stances) {
-      if (workers.size >= MAX_WORKERS) break;
+      if (ephemeralSeatsLeft() <= 0) break; // 主持的席位已預留
       const peer = createWorker(stance.name, peerModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       // 「安全」自動核准：讓臨時成員能自己跑唯讀工具（WebSearch/Read…）查證即時資料、不彈確認窗，
       // 但寫檔/危險指令仍會被擋——議會只該查證，不該動手改東西。
@@ -5913,7 +8400,7 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     await waitForWarroomWarmup(1_500, deadlineAt); // 讓 peers 暖機到位再開講
     // 第 1 輪：各自鮮明表態
     const r1 = await Promise.allSettled(peers.map((worker, i) =>
-      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief }), warroomTurnTimeout(timeoutMs, deadlineAt))));
+      warroomSend(worker, warroomOpeningPrompt({ topic, stanceBrief: stances[i].brief, context }), warroomTurnTimeout(timeoutMs, deadlineAt))));
     const r1texts = r1.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
     for (const s of r1) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
     // 全員第一輪都沒能發言（額度滿、供應商掛…）→ 整場中止，別拿空辯論去「裁決」。
@@ -5922,12 +8409,23 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
       throw new Error(t("作戰室成員全數未能發言（可能是使用額度已滿或供應商故障），本場中止。請稍後再試。"));
     }
     warroomTurnTimeout(1, deadlineAt);
-    // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決。
+    // 第 2 輪：看到彼此意見後互相反駁（真辯論）。簡單題只跑 1 輪，直接拿表態去裁決；
+    // 第 1 輪全員判斷已一致（GO/HOLD/NO 相同、且無查證席）也省略，直接裁決——省一整輪。
     let r2texts: string[] = peers.map(() => "");
-    if (rounds >= 2) {
-      const others = peers.map((_, i) => t("【{name}】\n{text}", { name: stances[i].name, text: r1texts[i] || t("(無)") })).join("\n\n");
-      const r2 = await Promise.allSettled(peers.map((worker, i) =>
-        warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: others }), warroomTurnTimeout(timeoutMs, deadlineAt))));
+    const seated = stances.slice(0, peers.length);
+    const earlyConsensus = rounds >= 2 && !warroomRebuttalNeeded(seated, r1texts);
+    // 各方第 1 輪的底線落檔，事後才查得出「為什麼這場沒省到反駁輪」。
+    appendRuntimeLog(config.dataDirectory, "warroom round-1 positions", {
+      positions: seated.map((stance, i) => `${stance.key}:${parseWarroomPosition(r1texts[i]) ?? "-"}`).join(" "),
+      earlyConsensus,
+    });
+    if (rounds >= 2 && !earlyConsensus) {
+      // 每人只看「別人」的第 1 輪：自己的主張已在同一個 session 裡，不重送。
+      // 第 1 輪沒發言成功（多半是逾時、還在跑）的成員不送反駁：它手上那回合還沒結束，
+      // 再送只會撞忙碌或白等到逾時，實測會把整場拖過 5 分鐘。
+      const r2 = await Promise.allSettled(peers.map((worker, i) => !r1texts[i].trim()
+        ? Promise.reject(new Error("skipped: no opening"))
+        : warroomSend(worker, warroomRebuttalPrompt({ stanceBrief: stances[i].brief, othersDebate: warroomOthersDigest(seated, r1texts, i) }), warroomTurnTimeout(timeoutMs, deadlineAt))));
       r2texts = r2.map((s) => s.status === "fulfilled" ? warroomEventText(s.value) : "");
       for (const s of r2) if (s.status === "fulfilled") costMicros += warroomEventCost(provider, s.value);
       warroomTurnTimeout(1, deadlineAt);
@@ -5939,12 +8437,13 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     })).join("\n\n");
     // 主持裁決（可見的臨時 lead，用較強模型）
     let result: WarRoomResult | null = null;
-    if (workers.size < MAX_WORKERS) {
+    releaseLeadSeat();
+    if (ephemeralSeatsLeft() > 0) {
       const lead = createWorker(t("主持"), leadModel, provider, workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "warroom" }, accountId);
       lead.autoApproveMode = "safe";
       created.push(lead);
       await waitForWarroomWarmup(1_200, deadlineAt);
-      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate }), warroomTurnTimeout(timeoutMs, deadlineAt));
+      const ev = await warroomSend(lead, warroomSynthesisPrompt({ topic, debate, context, peerCount: peers.length, rounds, earlyConsensus }), warroomTurnTimeout(timeoutMs, deadlineAt));
       costMicros += warroomEventCost(provider, ev);
       result = parseWarroomResult(warroomEventText(ev));
       if (result && !result.structured) { // 議會裁決：格式重試一次就好、有上限
@@ -5956,9 +8455,13 @@ async function runWarroom(topic: string, difficulty: WarRoomDifficulty, workspac
     }
     if (!result) result = parseWarroomResult(debate) ?? { verdict: debate, consensus: [], disputes: [], actions: [], metrics: [], charts: [], structured: false };
     if (provider === "claude") result.costUsd = costMicros / 1_000_000;
+    result.rounds = rounds >= 2 && !earlyConsensus ? 2 : 1;
+    if (earlyConsensus) result.earlyConsensus = true;
     completed = true;
     return result;
   } finally {
+    releaseLeadSeat();
+    scheduleWarroomQueuePump(); // 主持席歸還（失敗時成員也已立即清掉），讓排隊中的下一場有機會開
     // 正常完成才留一小段時間讓畫面播放散會；失敗／整場逾時則立即中止並清掉，避免留下
     // 仍在跑的 CLI session 或卡在桌上的 NPC。server 非正常重啟則由 startup sweep 接手。
     const ids = created.map((worker) => worker.id);
@@ -5982,6 +8485,7 @@ function formatWarroomVerdictForHost(topic: string, result: WarRoomResult, hostN
       verdict: result.verdict.slice(0, 600),
       ellipsis: result.verdict.length > 600 ? "…" : "",
     }) +
+    warroomHostConfidenceNote(result) +
     (p1 ? t("P1 行動：\n{p1}\n\n", { p1 }) : "") +
     t("完整內容（共識/分歧/數據/圖表）不貼進對話以節省 token——已存檔：{reportPath}，", { reportPath: reportPath ?? t("（工作區 .warroom/）") }) +
     t("結果卡與 📜 歷史也看得到。請你（{hostName}）接手：可執行的就讀檔細看再動工（高風險先確認），純諮詢的就簡短總結重點給使用者。", { hostName });
@@ -5997,6 +8501,7 @@ function warroomReportMarkdown(topic: string, difficulty: WarRoomDifficulty, res
   const actions = result.actions.map((a) => `- **[${a.priority}]** ${a.title}${a.how ? `\n  - ${a.how}` : ""}`).join("\n");
   return t("# 作戰室裁決\n\n**主題**：{topic}\n**難度／模型**：{difficulty}\n**時間**：{time}\n\n", { topic, difficulty, time: new Date().toISOString() }) +
     t("## 最終裁決\n{verdict}\n\n", { verdict: result.verdict }) +
+    warroomReportExtras(result) +
     (metrics ? t("## 關鍵數字\n{metrics}\n\n", { metrics }) : "") +
     (charts ? t("## 圖表數據\n{charts}\n\n", { charts }) : "") +
     (consensus ? t("## 共識\n{consensus}\n\n", { consensus }) : "") +
@@ -6050,13 +8555,130 @@ function postToHost(hostWorkerId: string | null, message: string): void {
   } catch { /* host 忙碌或送失敗就略過 */ }
 }
 
+// ===== 作戰室排隊：臨時席位不夠時改排 FIFO 佇列，席位釋出自動開場（純邏輯在 warroomQueue.ts） =====
+// - 排隊中的請求不佔席位；開場那一刻才同步建立成員、預留主持席（runWarroom 開頭到第一個 await 前）。
+// - 排隊的請求 POST 立即回 202 { queued, ticketId, ahead }；前端用 GET /api/warroom/queue/:ticketId
+//   輪詢名次／開場／結果，DELETE 同一路徑取消排隊（已開場就不能取消）。
+// - 佇列與票據只存在記憶體：server 重啟後全部失效，前端輪詢會拿到 404 並請使用者重新開場。
+//   已開場的那場本來就會被重啟中斷（殘留的臨時 NPC 由啟動清理處理），不另外持久化。
+type WarroomJob = {
+  topic: string;
+  difficulty: WarRoomDifficulty;
+  workspacePath: string;
+  provider: ProviderId;
+  hostWorkerId: string;
+  stances: WarRoomStance[];
+  context: string;
+};
+type WarroomTicket =
+  | { state: "queued"; seats: number }
+  | { state: "running"; seats: number }
+  | { state: "done"; seats: number; result: WarRoomResult; difficulty: WarRoomDifficulty; finishedAt: number }
+  | { state: "failed" | "cancelled"; seats: number; error: string; finishedAt: number };
+// 結束的票據留一段時間給前端來拿結果；之後就回收，避免記憶體慢慢長大。
+const WARROOM_TICKET_KEEP_MS = 30 * 60_000;
+const warroomQueue = new WarroomQueue<WarroomJob>();
+const warroomTickets = new Map<string, WarroomTicket>();
+let warroomQueuePumpPending = false;
+let warroomQueueSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+// 一場作戰室從開場到收尾（存檔＋把精簡裁決交回召集人）。立即開場與排隊開場共用。
+async function executeWarroomJob(job: WarroomJob): Promise<WarRoomResult> {
+  const accountId = workers.get(job.hostWorkerId)?.accountId ?? null;
+  const result = await runWarroom(job.topic, job.difficulty, job.workspacePath, job.provider, accountId, job.stances, job.context);
+  const reportPath = saveWarroomReport(job.topic, job.difficulty, result, job.workspacePath); // 自動存檔（人不在也拿得到）
+  // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
+  const hostMessage = formatWarroomVerdictForHost(job.topic, result, workers.get(job.hostWorkerId)?.runner.name ?? t("你"), reportPath);
+  const liveHost = workers.get(job.hostWorkerId);
+  if (liveHost?.runner.busy) {
+    // 開會這幾分鐘召集人可能被派了別的事；以前會直接略過、裁決就此沒送到。改排進它的佇列，忙完自動接手。
+    store.enqueueCommand(randomUUID(), liveHost.id, hostMessage, [], []);
+    broadcastQueue(liveHost.id);
+    scheduleQueueDrain(liveHost);
+  } else {
+    postToHost(job.hostWorkerId, hostMessage);
+  }
+  return result;
+}
+
+function warroomImpossibleMessage(seats: number): string {
+  return t("作戰室需要 {n} 個臨時席位，但扣掉常駐 NPC 後最多只有 {max} 席，排隊也等不到。請減少自訂角色或移除幾位常駐 NPC。", {
+    n: String(seats), max: String(Math.max(0, maxEphemeralSeats())),
+  });
+}
+
+function finishWarroomTicket(id: string, ticket: WarroomTicket): void {
+  warroomTickets.set(id, ticket);
+  const now = Date.now();
+  for (const [key, value] of warroomTickets) {
+    if ((value.state === "done" || value.state === "failed" || value.state === "cancelled") && now - value.finishedAt > WARROOM_TICKET_KEEP_MS) {
+      warroomTickets.delete(key);
+    }
+  }
+}
+
+// 席位可能釋出的時機（成員離場、主持席歸還、整場結束）都會呼叫；延到下一個 tick 再跑，
+// 免得在 runWarroom「歸還主持席→立刻讓主持上桌」之間被排隊的下一場搶走那一席。
+function scheduleWarroomQueuePump(): void {
+  if (warroomQueue.size === 0 || warroomQueuePumpPending) return;
+  warroomQueuePumpPending = true;
+  setImmediate(() => {
+    warroomQueuePumpPending = false;
+    pumpWarroomQueue();
+  });
+}
+
+function pumpWarroomQueue(): void {
+  for (;;) {
+    const step = warroomQueue.next(ephemeralSeatsLeft(), maxEphemeralSeats(), Date.now());
+    for (const { item, reason } of step.dropped) {
+      finishWarroomTicket(item.id, {
+        state: "failed",
+        seats: item.seats,
+        finishedAt: Date.now(),
+        error: reason === "expired"
+          ? t("作戰室排隊超過 {minutes} 分鐘仍等不到席位，已自動取消；請稍後再開。", { minutes: String(WARROOM_QUEUE_MAX_WAIT_MS / 60_000) })
+          : warroomImpossibleMessage(item.seats),
+      });
+    }
+    const next = step.start;
+    if (!next) break;
+    if (!workers.get(next.payload.hostWorkerId)) {
+      finishWarroomTicket(next.id, { state: "failed", seats: next.seats, finishedAt: Date.now(), error: t("召集的 NPC 已不在，排隊中的作戰室已取消") });
+      continue;
+    }
+    const { id: ticketId, seats } = next;
+    const difficulty = next.payload.difficulty;
+    warroomTickets.set(ticketId, { state: "running", seats });
+    appendRuntimeLog(config.dataDirectory, "warroom dequeued", { ticketId, seats, waitedMs: Date.now() - next.enqueuedAt });
+    // runWarroom 在第一個 await 前就同步建好成員、預留主持席，所以下一圈拿到的剩餘席位已扣掉這場。
+    executeWarroomJob(next.payload).then(
+      (result) => finishWarroomTicket(ticketId, { state: "done", seats, result, difficulty, finishedAt: Date.now() }),
+      (error) => finishWarroomTicket(ticketId, { state: "failed", seats, finishedAt: Date.now(), error: error instanceof Error ? error.message : t("作戰室執行失敗") }),
+    );
+  }
+  syncWarroomQueueSweep();
+}
+
+// 保底輪詢：常駐 NPC 被刪除、委派研究員散場等「不經過作戰室」的席位釋出，以及排隊逾時，
+// 都靠這個每 5 秒的檢查接住。佇列空了就停掉，不常駐跑。
+function syncWarroomQueueSweep(): void {
+  if (warroomQueue.size > 0 && !warroomQueueSweepTimer) {
+    warroomQueueSweepTimer = setInterval(pumpWarroomQueue, 5_000);
+    warroomQueueSweepTimer.unref?.();
+  } else if (warroomQueue.size === 0 && warroomQueueSweepTimer) {
+    clearInterval(warroomQueueSweepTimer);
+    warroomQueueSweepTimer = null;
+  }
+}
+
 app.post("/api/warroom", async (req, res) => {
   const topic = String(req.body?.topic ?? "").trim();
   if (!topic) { res.status(400).json({ error: t("請提供討論主題") }); return; }
   const requested = String(req.body?.difficulty);
   const hostWorkerId = typeof req.body?.hostWorkerId === "string" ? req.body.hostWorkerId : null;
   const host = hostWorkerId ? workers.get(hostWorkerId) : null;
-  if (!host) { res.status(400).json({ error: t("請從目前 NPC 開啟作戰室") }); return; }
+  if (!host || !hostWorkerId) { res.status(400).json({ error: t("請從目前 NPC 開啟作戰室") }); return; }
   let workspacePath: string;
   try { workspacePath = normalizeWorkspacePath(req.body?.workspacePath ?? config.targetRepoPath); }
   catch { workspacePath = config.targetRepoPath; }
@@ -6073,16 +8695,63 @@ app.post("/api/warroom", async (req, res) => {
   const difficulty: WarRoomDifficulty = ["simple", "medium", "hard"].includes(requested)
     ? (requested as WarRoomDifficulty)
     : await triageDifficulty(topic, workspacePath, provider, homeForWorker(host));
-  const customStances = sanitizeCustomStances(req.body?.stances);
+  const stances = resolveWarroomStances(difficulty, sanitizeCustomStances(req.body?.stances));
+  // 議題背景：召集人＋專案名＋召集人最近幾則對話（封頂 900 字），讓成員不必就字面空談。
+  const context = warroomContextBrief({ hostName: host.runner.name, hostRole: host.persona?.role, workspacePath, events: host.history });
+  const job: WarroomJob = { topic, difficulty, workspacePath, provider, hostWorkerId, stances, context };
+  const seats = stances.length + 1; // 全部成員＋主持
+  // 分級要等 LLM 回覆，期間席位可能變動；所以在 await 之後才判定開場／排隊，判定後同步開場。
+  const admission = warroomQueue.admit(seats, ephemeralSeatsLeft(), maxEphemeralSeats());
+  if (admission.kind === "impossible") {
+    res.status(409).json({ error: warroomImpossibleMessage(seats) });
+    return;
+  }
+  if (admission.kind === "full") {
+    res.status(429).json({ error: t("作戰室排隊已滿（最多 {max} 場），請等前面幾場開完再試。", { max: String(warroomQueue.maxQueued) }) });
+    return;
+  }
+  if (admission.kind === "queue") {
+    const ticketId = randomUUID();
+    const ahead = warroomQueue.enqueue(ticketId, seats, job, Date.now());
+    warroomTickets.set(ticketId, { state: "queued", seats });
+    appendRuntimeLog(config.dataDirectory, "warroom queued", { ticketId, seats, ahead, seatsLeft: ephemeralSeatsLeft() });
+    syncWarroomQueueSweep();
+    res.status(202).json({ ok: true, queued: true, ticketId, ahead, seats, difficulty });
+    return;
+  }
   try {
-    const result = await runWarroom(topic, difficulty, workspacePath, provider, host.accountId, customStances);
-    const reportPath = saveWarroomReport(topic, difficulty, result, workspacePath); // 自動存檔（人不在也拿得到）
-    // 閉環：把「精簡版」裁決貼回召集者（host NPC＝持久大腦），它接手執行；細節靠檔案指針。
-    postToHost(hostWorkerId, formatWarroomVerdictForHost(topic, result, workers.get(hostWorkerId ?? "")?.runner.name ?? t("你"), reportPath));
+    const result = await executeWarroomJob(job);
     res.json({ ok: true, result, difficulty });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : t("作戰室執行失敗") });
   }
+});
+
+// 排隊票據：前端輪詢名次與結果。state＝queued（附 ahead）／running／done（附 result）／failed／cancelled。
+app.get("/api/warroom/queue/:ticketId", (req, res) => {
+  const ticketId = String(req.params.ticketId);
+  const ticket = warroomTickets.get(ticketId);
+  if (!ticket) { res.status(404).json({ error: t("找不到這場排隊（伺服器可能已重啟），請重新開場。") }); return; }
+  if (ticket.state === "queued") {
+    res.json({ ok: true, state: "queued", ahead: warroomQueue.ahead(ticketId) ?? 0, seats: ticket.seats });
+    return;
+  }
+  res.json({ ok: true, ...ticket });
+});
+
+// 取消排隊：只有還在排的能取消；已開場的照常跑完（散會後裁決仍會交回召集人）。
+app.delete("/api/warroom/queue/:ticketId", (req, res) => {
+  const ticketId = String(req.params.ticketId);
+  const ticket = warroomTickets.get(ticketId);
+  if (!ticket) { res.status(404).json({ error: t("找不到這場排隊（伺服器可能已重啟），請重新開場。") }); return; }
+  if (ticket.state !== "queued" || !warroomQueue.cancel(ticketId)) {
+    res.status(409).json({ error: t("這場作戰室已開場或已結束，無法取消排隊"), state: ticket.state });
+    return;
+  }
+  finishWarroomTicket(ticketId, { state: "cancelled", seats: ticket.seats, error: t("已取消排隊"), finishedAt: Date.now() });
+  syncWarroomQueueSweep();
+  scheduleWarroomQueuePump(); // 取消的若是隊首，後面那場可能已坐得下
+  res.json({ ok: true, state: "cancelled" });
 });
 
 // ===== 作戰室歷史：列出／讀取／刪除 .warroom/ 裡的報告（讓使用者在 app 內回看過往裁決） =====
@@ -6150,7 +8819,7 @@ app.delete("/api/warroom/history/:file", (req, res) => {
 // ===== 委派（Delegate）：派工給一個「可見的臨時 NPC」查/分析，結果回傳給 host、NPC 用完即刪。 =====
 // 跟作戰室同一套精神：工作在委派對象的 context 做，只有結果回到 host，省 host 的 context。
 async function runDelegate(task: string, workspacePath: string): Promise<string> {
-  if (workers.size >= MAX_WORKERS) throw new Error(t("已達 NPC 上限，無法派工"));
+  if (ephemeralSeatsLeft() <= 0) throw new Error(t("已達 NPC 上限，無法派工"));
   const worker = createWorker(t("研究員"), "sonnet", "claude", workspacePath, undefined, null, null, { warmup: true, persist: false, broadcast: true, ephemeralKind: "research" });
   worker.autoApproveMode = "safe"; // 研究員可自行跑唯讀工具（WebSearch/Read）查證，不彈確認窗
   try {
@@ -6215,8 +8884,9 @@ async function runConsult(dept: Department, lead: Worker, question: string): Pro
     };
   });
   const digest = composeConsultDigest(question, replies, skipped);
-  // 隊長可能正在跟使用者講話：等它這回合結束再送，回報才不會被丟掉
-  if (workers.get(lead.id)?.runner.busy) await awaitWorkerTurn(lead.id, 120_000);
+  // 隊長可能正在跟使用者講話：等它這回合結束再送，回報才不會被丟掉。
+  // awaitWorkerTurn 回傳 { wait, cancel }，必須 await 其 .wait（await 物件本身會立刻 resolve、根本沒等）。
+  if (workers.get(lead.id)?.runner.busy) await awaitWorkerTurn(lead.id, 120_000).wait;
   postToHost(lead.id, digest);
 }
 
@@ -6227,12 +8897,137 @@ app.post("/api/workers/:id/consult", (req, res) => {
   if (!dept || dept.leadWorkerId !== worker.id) { res.status(403).json({ error: t("只有部門/小隊的隊長可以發起商量") }); return; }
   const question = String(req.body?.question ?? "").trim();
   if (!question) { res.status(400).json({ error: t("請提供要商量的問題") }); return; }
+  if (detectGarbledText(question)) { res.status(400).json({ error: garbledTextError() }); return; }
   if (consultPending.has(dept.id)) { res.status(409).json({ error: t("這個小隊已有一場商量進行中，等回報送達後再發起") }); return; }
   consultPending.add(dept.id);
   runConsult(dept, worker, question)
     .catch(() => { /* 個別失敗已反映在 digest；這裡只保底不讓 unhandled rejection 炸掉 */ })
     .finally(() => consultPending.delete(dept.id));
   res.json({ ok: true, note: t("已把問題發給隊員，回覆彙整後會以【隊員商量回報】訊息送回給你。請先結束這回合等回報。") });
+});
+
+// ── 跨裝置排隊佇列：drain＋端點 ───────────────────────────────────────────────
+// 佇列存 server（不再只在瀏覽器 IndexedDB）。任何 NPC 一空下來 server 自己 drain 下一
+// 則，所以「切走的 NPC 也會自動跑」＋「手機排的隊電腦照跑」一次解決。
+function broadcastQueue(workerId: string): void {
+  broadcast({ type: "queue_updated", workerId, queue: store.listQueue(workerId) });
+}
+
+function workerAcceptsUserSend(worker: Worker): boolean {
+  return workerProviderReady(worker)
+    && !worker.runner.busy
+    && !handoffInProgress(worker)
+    && !collaborationInProgress(worker.id)
+    && !missionInProgress(worker.id);
+}
+
+// 送出失敗時佇列項目要留著（不能先刪再送，失敗就永久消失），但 record() 遇到 error
+// 事件自己會再排一次 drain，所以同一則必須限制重試次數，否則會變成每個 tick 重試一次
+// 的無窮迴圈。連續失敗這麼多次才放棄並移除。
+const QUEUE_MAX_SEND_ATTEMPTS = 3;
+const queueSendAttempts = new Map<string, { itemId: string; attempts: number }>();
+
+// worker 空閒時把佇列最前面一則送出。預算超標就留著（下次再試），不丟。
+function drainWorkerQueue(worker: Worker): void {
+  // 換腦交接摘要還沒送進新 session：先讓路，摘要送達後會再排 drain（見 trySendSummary）。
+  if (pendingSwapSummaries.has(worker.id)) return;
+  if (!workerAcceptsUserSend(worker)) return;
+  const budget = getExtras(worker.id).dailyBudgetUsd;
+  if (budget != null && todayCostUsd(worker.id) >= budget) return;
+  const next = store.peekFirstQueued(worker.id);
+  if (!next) return;
+  let images: ReturnType<typeof parseMessageImages> = [];
+  let documents: ReturnType<typeof parseMessageDocuments> = [];
+  try { images = parseMessageImages(next.images); documents = parseMessageDocuments(next.documents); }
+  catch { images = []; documents = []; }
+  const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
+  const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
+  const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  // 排隊的 /clear、/clean、Claude /goal 跟直送一樣由 app 處理，不能原樣送進 CLI（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, next.message, images.length + documents.length > 0);
+  try {
+    if (appCommand) {
+      const result = runAppCommand(worker, appCommand);
+      if (!result.ok) throw new Error(result.error);
+    } else {
+      worker.runner.send(next.message, images, documents);
+    }
+  } catch (error) {
+    const previous = queueSendAttempts.get(worker.id);
+    const attempts = previous?.itemId === next.id ? previous.attempts + 1 : 1;
+    const givingUp = attempts >= QUEUE_MAX_SEND_ATTEMPTS;
+    if (givingUp) {
+      queueSendAttempts.delete(worker.id);
+      store.removeQueueItem(worker.id, next.id);
+    } else {
+      queueSendAttempts.set(worker.id, { itemId: next.id, attempts });
+    }
+    record(worker, { type: "error", message: error instanceof Error ? error.message : t("無法送出排隊訊息") });
+    if (givingUp) broadcastQueue(worker.id);
+    return;
+  }
+  queueSendAttempts.delete(worker.id);
+  store.removeQueueItem(worker.id, next.id);
+  if (appCommand) { broadcastQueue(worker.id); return; }
+  record(worker, { type: "user_message", text });
+  captureOpenUserRequest(worker, text); // 真人佇列訊息（循環武裝時）落帳，防換腦／議程蒸發
+  resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
+  limitTurnText.set(worker.id, text);
+  broadcast({ type: "worker_status", workerId: worker.id, busy: true });
+  broadcastQueue(worker.id);
+}
+
+// 延到下一個 tick 再 drain：turn_end 當下 busy 可能還沒翻回 false，等它落定再送。
+function scheduleQueueDrain(worker: Worker): void {
+  setTimeout(() => { try { drainWorkerQueue(worker); } catch { /* drain 為 best-effort，不可影響主流程 */ } }, 0);
+}
+
+app.get("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  res.json({ queue: store.listQueue(worker.id) });
+});
+
+app.post("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  const message = String(req.body?.message ?? "").trim();
+  try {
+    const images = parseMessageImages(req.body?.images);
+    const documents = parseMessageDocuments(req.body?.documents);
+    if (!message && images.length === 0 && documents.length === 0) {
+      res.status(400).json({ error: "message or attachment required" });
+      return;
+    }
+  } catch (error) {
+    const detail = error instanceof MessageImageValidationError || error instanceof MessageDocumentValidationError ? error.message : t("附件無效");
+    res.status(400).json({ error: detail });
+    return;
+  }
+  // 存原始 images/documents（drain 時再用 parseMessage* 驗一次，與 /message 一致）。
+  const queueId = randomUUID();
+  store.enqueueCommand(queueId, worker.id, message, req.body?.images ?? [], req.body?.documents ?? []);
+  broadcastQueue(worker.id);
+  scheduleQueueDrain(worker); // 若其實現在就空閒，立刻開跑
+  // 回傳新項目 id：遠端轉接站靠它記「這是這位分享訪客排的」，讓訪客能免監護密碼撤回自己的。
+  res.json({ ok: true, id: queueId, queue: store.listQueue(worker.id) });
+});
+
+app.patch("/api/workers/:id/queue", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  const order = Array.isArray(req.body?.order) ? req.body.order.map((value: unknown) => String(value)) : [];
+  store.reorderQueue(worker.id, order);
+  broadcastQueue(worker.id);
+  res.json({ ok: true, queue: store.listQueue(worker.id) });
+});
+
+app.delete("/api/workers/:id/queue/:queueId", (req, res) => {
+  const worker = requireWorker(res, req.params.id);
+  if (!worker) return;
+  store.removeQueueItem(worker.id, req.params.queueId);
+  broadcastQueue(worker.id);
+  res.json({ ok: true, queue: store.listQueue(worker.id) });
 });
 
 app.post("/api/workers/:id/message", (req, res) => {
@@ -6287,29 +9082,16 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(400).json({ error: "message or attachment required" });
     return;
   }
-  if (matchNativeCommand(message) === "clean" || (
-    images.length === 0
-    && documents.length === 0
-    && isClearCommand(message)
-  )) {
-    const result = cleanWorkerAndAnnounce(worker);
+  // `/clear`、`/clean` 由 app 重建工作階段；Codex 的 `/goal` 走 app-server，Claude 的 stream-json
+  // 沒有對應 RPC，由 app 模擬同樣的 get/set/clear 並帶著目標重生閒置的 transport（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, message, images.length + documents.length > 0);
+  if (appCommand) {
+    const result = runAppCommand(worker, appCommand);
     if (!result.ok) {
       res.status(409).json({ error: result.error });
       return;
     }
-    res.json({ ok: true, cleaned: true });
-    return;
-  }
-  // Codex dispatches `/goal` through its app-server. Claude's stream-json
-  // transport has no equivalent slash-command RPC, so mirror the same
-  // get/set/clear semantics here and re-spawn its idle transport with the
-  // persisted goal appended to its system prompt.
-  const claudeGoal = worker.runner.provider === "claude" && images.length === 0 && documents.length === 0
-    ? parseGoalCommand(message)
-    : null;
-  if (claudeGoal) {
-    announceClaudeGoal(worker, claudeGoal);
-    res.json({ ok: true, goal: getExtras(worker.id).goal });
+    res.json(result);
     return;
   }
   if (worker.resumeCandidate) {
@@ -6318,7 +9100,10 @@ app.post("/api/workers/:id/message", (req, res) => {
   }
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
-  record(worker, { type: "user_message", text: [message, imageLabels, documentLabels].filter(Boolean).join("\n") });
+  const userText = [message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  record(worker, { type: "user_message", text: userText });
+  captureOpenUserRequest(worker, userText); // 真人直送訊息（循環武裝時）落帳，防換腦／議程蒸發
+  resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
   try {
     worker.runner.send(message, images, documents);
   } catch (error) {
@@ -6479,6 +9264,7 @@ function cancelMissionForScopedRestart(mission: DepartmentMission): void {
   mission.completedAt = new Date().toISOString();
   store.saveDepartmentMission(mission);
   pendingMissionReplans.delete(mission.id);
+  noReviewMissions.delete(mission.id);
   updateDepartmentThreadMission(mission.departmentId, null);
   departmentAudit("mission_cancelled_for_restart", mission.departmentId, mission.id);
   broadcastMission(mission);
@@ -6685,6 +9471,7 @@ app.post("/api/workers/:id/model/fresh", (req, res) => {
   }
 
   fresh.warmup();
+  dropBackgroundAgents(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true });
 });
@@ -6745,6 +9532,7 @@ app.post("/api/workers/:id/provider/fresh", (req, res) => {
   }
 
   fresh.warmup();
+  dropBackgroundAgents(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   if (targetProvider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
   else void codexCapabilitiesFor(workspacePath).refresh();
@@ -6838,6 +9626,8 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
     if (worker.runner.busy) worker.runner.interrupt(); else worker.runner.stop();
     if (workerProviderReady(worker)) worker.runner.warmup();
   }
+  // 切成無限制模式：個人自動循環不能在無人看管下繼續驅動它。
+  if (mode === "invincible") disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote());
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, autoApproveMode: worker.autoApproveMode });
@@ -7558,19 +10348,41 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
     res.status(409).json({ error: missionInProgress(worker.id) ? t("Department Mission 請從 Mission 面板取消") : t("協作任務請從協作面板取消") });
     return;
   }
+  // 按停止＝連個人自動循環一起停：Claude 的中止只發 error、不經 turn_end，循環會被 15s 保底掃
+  // 當成停擺而補送下一步；Codex 的中止回合則會被當成「上一回合發生錯誤」。先撤再中止。
+  disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。"));
   worker.runner.interrupt();
   broadcast({ type: "worker_status", workerId: worker.id, busy: false });
   res.json({ ok: true });
 });
 
 for (const savedWorker of store.loadWorkers(MAX_HISTORY)
-  // 同上：資料列只有名字，舊版殘骸靠字首認。
+  // 短命工不還原成 NPC——包含為了 Mission 外鍵留下的封存錨點列，它們也不該佔滿編名額。
+  .filter((worker) => !worker.ephemeralKind)
+  // 同上：舊資料列沒有 ephemeral_kind，只有名字，舊版殘骸靠字首認。
   .filter((worker) => !isLegacyEphemeralWorkerName(worker.name))
   .slice(0, MAX_WORKERS)) {
   createWorker(undefined, undefined, savedWorker.provider, savedWorker.workspacePath, savedWorker, null, null, { warmup: true });
 }
 if (workers.size === 0 && config.targetRepoConfigured) {
   createWorker(undefined, undefined, "claude", config.targetRepoPath, undefined, null, null, { warmup: true });
+}
+
+// 重啟和解：進行中的 Mission/協作是純記憶體驅動（missionRunners/activeCollaborations 開機為空、
+// 事件不會再來），從 SQLite 還原成 planning/executing/reviewing 的 Mission 若不處理會變殭屍——
+// 永遠顯示執行中、被指派者恆 busy、同 workspace 全員 409、也沒有任何端點能解（/resolve 只收
+// needs_attention/failed）。開機時統一打成 needs_attention，老闆可重試/取消，自動接手也有機會處理。
+for (const mission of [...activeMissions.values()]) {
+  if (mission.status === "planning" || mission.status === "executing" || mission.status === "reviewing" || mission.status === "discussing") {
+    pauseMission(mission, t("伺服器重啟，進行中的步驟已中斷；請重試或取消"), "step_failed");
+  }
+}
+// 進行中的協作同理：開機不還原 runner，資料庫裡 running/returning 的協作永遠收不了尾，直接標失敗。
+for (const collaborationTask of store.listActiveCollaborationTasks()) {
+  collaborationTask.status = "failed";
+  collaborationTask.error = t("伺服器重啟，協作已中斷；請重新發起");
+  collaborationTask.completedAt = new Date().toISOString();
+  store.saveCollaborationTask(collaborationTask);
 }
 
 const workflowWatcher = new WorkflowLibraryWatcher(recentWorkspacePaths, ({ workspacePath, provider, revision }) => {
@@ -7622,6 +10434,34 @@ const usageRefreshTimer = setInterval(() => {
 }, 5 * 60_000);
 usageRefreshTimer.unref();
 
+// 派工卡住自動重派的保底掃描：主要靠 turn_end 即時觸發，但主管轉閒置不一定伴隨
+// turn_end（例如協作/交接結束、Mission 收尾），定期掃補上這些空窗。無登記時零成本。
+const bossDispatchRetrySweepTimer = setInterval(() => {
+  if (bossDispatchRetry.size > 0) {
+    try { sweepStalledBossDispatch(); } catch (error) { console.error("[boss-dispatch-retry] 定期掃描失敗:", error); }
+  }
+  // 建立失敗重試同用這班定期掃：阻塞 Mission 結束不一定伴隨 turn_end（收尾路徑多），保底補上。
+  if (bossDeptCreateRetry.size > 0) {
+    try { sweepFailedDeptCreation(); } catch (error) { console.error("[dept-create-retry] 定期掃描失敗:", error); }
+  }
+  // 用量恢復探測只靠定期掃（恢復與 turn_end 無關；探測退避最短 60s，15s 班次只是上限頻率）。
+  if (bossUsageRetry.size > 0) {
+    try { sweepUsageBlockedBossTasks(); } catch (error) { console.error("[usage-retry] 定期掃描失敗:", error); }
+  }
+  // Mission 步驟重派同用這班定期掃：NPC 轉閒置不一定伴隨 turn_end（協作／交接收尾）、
+  // provider 登入完成更沒有 turn_end，保底補上。無登記時零成本。
+  if (missionStepRetry.size > 0) {
+    try { sweepPausedMissionSteps(); } catch (error) { console.error("[mission-step-retry] 定期掃描失敗:", error); }
+  }
+  // 個人自動循環保底掃同班：讓路後停擺補觸發＋決策失敗退避重試。無武裝循環時零成本。
+  if (workerAutopilotByWorker.size > 0) {
+    try { sweepWorkerAutopilot(); } catch (error) { console.error("[worker-autopilot] 定期掃描失敗:", error); }
+  }
+  // 自我進化全自動觸發（預設關、保守閘門）：開了才動，HEAD 未出貨過且沒人在忙才自裝。
+  try { maybeAutoSelfInstall(); } catch (error) { console.error("[self-install] 自動觸發檢查失敗:", error); }
+}, 15_000);
+bossDispatchRetrySweepTimer.unref();
+
 // A Mission/collaboration turn is deliberately kept open while a background
 // "async agent" tool call is outstanding (see applyMissionActivityEvent), but
 // the CLI's matching closing event is empirical and not guaranteed — if it
@@ -7646,7 +10486,19 @@ const missionActivityTimeoutSweep = setInterval(() => {
     if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
     timeoutCollaboration(taskId);
   }
+  // 逾時保底：某顆 worker 的背景 Agent 超過上限還沒回報收尾（CLI 的收尾事件是經驗性的、不保證
+  // 一定到），就銷號並補廣播 worker_updated，讓 BOSS 旁的「執行中」不會卡死回不到待命。
+  for (const [workerId, activity] of workerActivities) {
+    if (activity.openedAt == null || now - activity.openedAt < MISSION_ASYNC_AGENT_TIMEOUT_MS) continue;
+    workerActivities.delete(workerId);
+    const worker = workers.get(workerId);
+    if (worker) broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+  }
 }, 60_000);
+
+// 臨時團隊「不」按閒置自動解散：使用者可能放著讓它跑、事後才回來看結果或追問，時間到就
+// 解散會讓人以為沒做、也拿不到追問。改成只在使用者明確收工時解散（取消／封存／刪除交辦，
+// 或巡迴推進下一步）。注意：解散的只是臨時 NPC，交辦與最終報告、產出檔案一律保留。
 missionActivityTimeoutSweep.unref();
 
 if (config.production && existsSync(config.webDistPath)) {
@@ -7674,6 +10526,8 @@ if (config.production && existsSync(config.webDistPath)) {
 // crashing the process. Must be registered after every other app.use/route.
 app.use((err: unknown, _req: express.Request, res: Response, next: express.NextFunction) => {
   if (res.headersSent) { next(err); return; }
+  // 附件總量超過 HTTP 上限：回 413 與看得懂的說明，別落到下面的通用 500。
+  if (isRequestBodyTooLarge(err)) { res.status(413).json({ error: requestBodyTooLargeMessage() }); return; }
   console.error("[http] request handler error:", err);
   res.status(500).json({ error: t("伺服器發生未預期的錯誤") });
 });
@@ -7763,12 +10617,244 @@ process.on("unhandledRejection", (reason) => {
   exitAfterShutdown("unhandled rejection", 1);
 });
 
+// 自我進化 · 開機解析自裝結果（Stage 3 跨重啟狀態機的收尾）：上一輪若剛自裝完會留一張 pending
+// marker，重啟後在這裡驗收——等 detached 的 pc-selfinstall 對「這次安裝」下結論（換入＋打 8787
+// 健康輪詢），健康才晉升回滾點（rollback := 這次成功的好版，供下次回滾）並清 marker。
+// 不能一進 listen 就晉升：pc-selfinstall 的健康輪詢那時還沒跑完，晉升後它若判失敗，回滾會回到
+// 這個剛被晉升的壞版本。真正「爛到起不來」的回滾由 pc-selfinstall 負責，app 自己沒機會跑這段。
+const SELF_INSTALL_VERDICT_TIMEOUT_MS = 5 * 60_000; // pc-selfinstall 的健康輪詢最多 60 秒，留足餘裕
+const SELF_INSTALL_VERDICT_POLL_MS = 3_000;
+async function resolvePendingSelfInstallOnBoot(): Promise<void> {
+  try {
+    const dir = config.dataDirectory;
+    const store = new PendingSelfInstallStore(dir);
+    let marker = store.read();
+    if (!marker) return;
+    let verdict: SelfInstallVerdict = { state: "pending", swapped: false };
+    const deadline = Date.now() + SELF_INSTALL_VERDICT_TIMEOUT_MS;
+    for (;;) {
+      let logTail = "";
+      try { logTail = readFileSync(join(dir, "logs", "self-install.log"), "utf8").slice(-200_000); } catch { /* 沒 log */ }
+      verdict = readSelfInstallVerdict(logTail, marker);
+      if (verdict.state !== "pending" || Date.now() >= deadline) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, SELF_INSTALL_VERDICT_POLL_MS).unref());
+      if (shuttingDown) return; // 等到一半被關掉：marker 留著，下次開機再驗
+      marker = store.read();
+      if (!marker) return; // pc-selfinstall 判失敗會先刪 marker 再回滾——回滾歸它管，這裡不晉升
+    }
+    // 降落傘2.0事故的根修：不能把「進得了 listen callback」當健康——壞版(聽錯port)也進得來，
+    // 還會把自己晉升成回滾點(污染)。健康以 pc-selfinstall 打 canonical 8787 的結論為準，自打一次只是附帶。
+    let selfHealthOk = false;
+    try {
+      const resp = await fetch(`http://127.0.0.1:${config.port}/`, { signal: AbortSignal.timeout(5000) });
+      selfHealthOk = resp.status === 200;
+    } catch { /* 打不到 8787 ＝ 不健康（例如本進程聽錯 port） */ }
+    const installedExe = join(dir, "app", "Pixel Crew.exe");
+    const stagedExe = join(dir, "coldinstall", "Pixel Crew.exe");
+    const rollbackExe = join(dir, "coldinstall", "Pixel Crew.rollback.exe");
+    let installedMtime = 0;
+    try { installedMtime = statSync(installedExe).mtimeMs; } catch { /* 取不到＝當沒換到 */ }
+    const checks: PostInstallChecks = {
+      exeFresh: installedMtime > marker.prevExeMtimeMs,
+      swappedOk: verdict.swapped,                // 只認這次安裝段落裡的 SWAPPED OK，不認舊安裝留下的
+      distHasNewCode: true,                      // 正在執行的就是新碼
+      apiOk: selfHealthOk,
+      healthOk: verdict.state === "healthy",     // pc-selfinstall 對這次安裝的最終結論
+    };
+    const res = evaluateBootResolution(marker, checks);
+    if (res.action === "confirm_ok") {
+      try {
+        // Hash 守衛（降落傘事故的直接教訓）：晉升前驗 staged 仍是 marker 記的那支新版。
+        // 回滾會把 staged 覆成舊版——此時若照舊晉升，就把回滾點污染成「不是剛驗過健康的那版」。
+        // pc-selfinstall 回滾路徑已會先刪 marker（第一道防線）；這裡是第二道，兩道都過才晉升。
+        if (marker.stagedSha256) {
+          const stagedHash = createHash("sha256").update(readFileSync(stagedExe)).digest("hex").toUpperCase();
+          if (stagedHash !== marker.stagedSha256.toUpperCase()) {
+            appendRuntimeLog(dir, "self-install promote SKIPPED: staged hash != marker (rollback likely touched staged)", { stagedHash, expected: marker.stagedSha256 });
+            store.clear();
+            return;
+          }
+        }
+        for (const op of planPromoteOnSuccess({ staged: stagedExe, rollback: rollbackExe })) copyFileSync(op.from, op.to);
+        appendRuntimeLog(dir, "self-install confirmed healthy; promoted rollback point", { prevMtime: marker.prevExeMtimeMs, installedMtime });
+        // 新版驗過健康才記「已上線」，下次閘門從這裡起算。
+        const attempted = lastAttemptedCommit(dir);
+        if (attempted) recordShippedCommit(dir, attempted);
+        // 把桌面啟動器也同步成這版好版(納入自動鏈,免得停在舊版、誤點降級)。路徑走環境變數,未設就跳過。
+        const launcher = process.env.PIXEL_CREW_DESKTOP_LAUNCHER?.trim();
+        if (launcher && existsSync(dirname(launcher))) {
+          try { copyFileSync(installedExe, launcher); appendRuntimeLog(dir, "desktop launcher synced to current good build", { launcher }); }
+          catch (e) { appendRuntimeLog(dir, "desktop launcher sync failed", { error: (e as Error).message }); }
+        }
+      } catch (error) {
+        appendRuntimeLog(dir, "self-install promote failed", { error: (error as Error).message });
+      }
+      store.clear();
+    } else if (res.action === "rollback") {
+      appendRuntimeLog(dir, "self-install boot checks failed; detached installer owns won't-boot rollback", { failed: res.result.failed, verdict: verdict.state });
+      store.clear();
+    }
+  } catch (error) {
+    try { appendRuntimeLog(config.dataDirectory, "resolvePendingSelfInstallOnBoot error", { error: (error as Error).message }); } catch { /* best-effort */ }
+  }
+}
+
+// 自我進化 · 觸發器：實作在 selfInstallTrigger.ts（整檔列為剎車，見 selfEvolveSafety）。
+const SELF_REPO = process.env.PIXEL_CREW_SELF_REPO?.trim() || "";
+function triggerSelfInstall(reason: string): SelfInstallTriggerResult {
+  return runSelfInstallTrigger({
+    repo: SELF_REPO,
+    dataDirectory: config.dataDirectory,
+    reason,
+    log: (message, detail) => appendRuntimeLog(config.dataDirectory, message, detail),
+  });
+}
+
+// 保守自動觸發：僅在開關開、HEAD 未出貨過、且沒有 NPC 正在忙（不打斷你）時才動。節奏閘防頻繁重裝。
+// 同一個 HEAD 沒裝成（被擋／髒目錄…）就記下來，隔一段時間才再跑一次同步 git 閘門，不每 15 秒卡一次。
+let autoSelfInstallMemo: AutoSelfInstallMemo | null = null;
+function maybeAutoSelfInstall(): void {
+  if (!selfInstallAutoEnabled(config.dataDirectory) || !SELF_REPO) return;
+  const head = readRepoHead(SELF_REPO);
+  if (!head || head === lastShippedCommit(config.dataDirectory) || head === lastAttemptedCommit(config.dataDirectory)) return; // 失敗過的同一 HEAD 不自動重試，等新 commit
+  if (!shouldAutoGateSelfInstall(autoSelfInstallMemo, head, Date.now())) return;
+  for (const w of workers.values()) { if (w.runner.busy) return; } // 有人在忙就不重啟
+  const r = triggerSelfInstall("auto");
+  if (r.outcome === "in_flight") return; // 上一次還沒走完：不記也不寫 log，走完後下一輪照常檢查
+  autoSelfInstallMemo = { head, outcome: r.outcome, at: Date.now() };
+  appendRuntimeLog(config.dataDirectory, "maybeAutoSelfInstall", { outcome: r.outcome, detail: r.detail });
+}
+
+// 手動觸發（首次驗降落傘、owner 想立刻出貨時用）。
+app.post("/api/self-install/trigger", (req, res) => {
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : "manual";
+  const result = triggerSelfInstall(reason);
+  res.json(result);
+});
+// 全自動開關（預設關；首次看著驗過降落傘後再開）。
+app.get("/api/self-install/auto", (_req, res) => { res.json({ enabled: selfInstallAutoEnabled(config.dataDirectory), repoConfigured: !!SELF_REPO }); });
+app.post("/api/self-install/auto", (req, res) => {
+  setSelfInstallAuto(config.dataDirectory, Boolean(req.body?.enabled));
+  res.json({ enabled: selfInstallAutoEnabled(config.dataDirectory) });
+});
+
 server.listen(config.port, config.host, () => {
   appendRuntimeLog(config.dataDirectory, `HTTP server listening on ${config.host}:${config.port}`);
+  void resolvePendingSelfInstallOnBoot();
   console.log(`pixel-crew server listening on http://${config.host}:${config.port}`);
   console.log(`target repo: ${config.targetRepoPath}`);
   console.log(`local database: ${config.dbPath}`);
   if (config.production && !existsSync(config.webDistPath)) {
     console.warn(`web build not found at ${config.webDistPath}; run npm run build first`);
+  }
+  // 重啟殭屍和解（卡點盤點 P0）：discovering（探索）與 synthesizing（驗收核對）都是
+  // 純記憶體 async，重啟後結果永遠不會回來；不處理就永卡該狀態。探索殭屍轉 needs_attention
+  // 引導回覆/重開；驗收殭屍若各部門交付俱在就打回 running 自動重新驗收，否則誠實轉 needs_attention。
+  for (const task of store.listBossTasksByStatus(["discovering"])) {
+    task.status = "needs_attention";
+    task.error = t("伺服器重啟時探索中斷");
+    task.messages.push(bossTaskMessage("system", t("⚠️ 伺服器重啟時探索被中斷；回覆這張交辦或按「重新交辦」即可重新開始。")));
+    persistBossTask(task);
+  }
+  for (const task of store.listBossTasksByStatus(["synthesizing"])) {
+    if (synthesizingZombieAction(task.stages) === "resynthesize") {
+      task.status = "running";
+      task.error = null;
+      task.messages.push(bossTaskMessage("system", t("🔄 伺服器重啟時驗收核對被中斷，已自動重新核對。")));
+      persistBossTask(task);
+      try { advanceBossTask(task); } catch (error) {
+        console.error(`[boss-task] 重啟後重新驗收失敗 ${task.id}:`, error);
+        // 剛把狀態打回 running 又推進失敗：不告知就是一張永遠顯示執行中、實際沒人在跑的
+        // 殭屍（全庫盤點 C-2）。誠實轉 needs_attention 並給出可行動的下一步。
+        task.status = "needs_attention";
+        task.error = (error as Error).message || t("重啟後重新驗收失敗");
+        task.messages.push(bossTaskMessage("system", t("⚠️ 重啟後自動重新驗收失敗：{error}；回覆這張交辦或按「重新交辦」再試。", { error: task.error })));
+        persistBossTask(task);
+      }
+    } else {
+      task.status = "needs_attention";
+      task.error = t("伺服器重啟時驗收中斷");
+      task.messages.push(bossTaskMessage("system", t("⚠️ 伺服器重啟時驗收被中斷；回覆這張交辦或按「重新交辦」處理。")));
+      persistBossTask(task);
+    }
+  }
+  // 開機自癒：重啟時進行中的 boss task 可能指著重啟後已遺失的 mission（臨時部門的
+  // mission 不跨重啟保存）。這種幽靈狀態不會再有 mission 事件來推進，開機主動掃一次，
+  // 讓 advanceBossTaskStages 的遺失處理把 stage 打回 pending 重新派工或誠實轉 needs_attention。
+  // ready 一併掃：status 寫成 "ready" 與 advance 之間崩潰的極小窗口（卡點盤點 P3-9），advance 一次就活。
+  for (const task of store.listBossTasksByStatus(["ready", "running"])) {
+    try { advanceBossTask(task); } catch (error) {
+      console.error(`[boss-task] 開機自癒失敗 ${task.id}:`, error);
+      quarantineAdvanceFailure(task, error);
+    }
+  }
+  // 派工卡住的交辦（needs_attention 且沒有任何 stage 在跑）追蹤器是記憶體態，重啟就掉——
+  // 開機時從現存交辦重建登記並立掃一次，主管此刻閒著就直接重派，忙著就交給雙掃描接手。
+  for (const task of store.listBossTasksByStatus(["needs_attention"])) {
+    if (isPreDispatchStall(task)) bossDispatchRetry.note(task.id, Date.now());
+    // 建立失敗的追蹤器同樣是記憶體態——靠落地的 task.stall.kind 結構化標記認回入口重建
+    // 登記（次數歸零，重啟視同重新開始），不比對文案，重啟前後改寫失敗訊息或切換語系
+    // 都不影響。stall 缺欄的舊版落地資料走 bootRebuildKind 的升級橋（文案僅在此對舊列
+    // 盡力比對一次），認回後回填 stall 標記落地——下次重啟就走結構化路徑，不再碰文案。
+    // 追問路徑的追問文字不跨重啟保存，無法安全重放，留給人工。
+    else {
+      const rebuilt = bootRebuildKind(task.stall?.kind ?? null, task.error, {
+        dedicated: deptCreateFailureError.dedicated(),
+        decide: deptCreateFailureError.decide(),
+      });
+      if (rebuilt) {
+        if (rebuilt.legacy && task.error !== null) {
+          task.stall = { kind: deptCreateStallKind(rebuilt.kind), error: task.error };
+          persistBossTask(task);
+        }
+        bossDeptCreateRetry.note(task.id, rebuilt.kind, null, Date.now());
+        // 冷安裝當天的驗證線索：認回幾張、走哪條路（結構化 vs 升級橋）只有這裡知道，
+        // 追蹤器是記憶體態、外部觀測不到，不留 log 就無從確認升級橋真的接住了舊列。
+        console.log(`[dept-create-retry] 開機重建認回 ${task.id}（${rebuilt.kind}${rebuilt.legacy ? "，升級橋以舊版文案橋接並回填 stall" : "，結構化 stall 標記"}）`);
+      }
+    }
+  }
+  if (bossDispatchRetry.size > 0) {
+    try { sweepStalledBossDispatch(); } catch (error) {
+      console.error("[boss-dispatch-retry] 開機重建掃描失敗:", error);
+    }
+  }
+  if (bossDeptCreateRetry.size > 0) {
+    try { sweepFailedDeptCreation(); } catch (error) {
+      console.error("[dept-create-retry] 開機重建掃描失敗:", error);
+    }
+  }
+  // 開機自癒：武裝中的個人自動循環（載入時已從 store 復原）在重啟後不會有 turn_end 來觸發
+  // 下一步，只靠 15s 保底掃會慢半拍——冷安裝重啟後「沒第一時間接回」的元兇。
+  // 實測（b993031 驗證紀錄）發現真正的延遲是「接回時那通決策模型呼叫」在冷重啟後偏慢，而非
+  // sweep 節奏；所以這裡做三件事把接回盡量提前：①開機就先 warmup 武裝 worker 的 runner（CLI
+  // 與決策並行暖機）②延遲縮到 2s 讓決策呼叫盡早開始（省掉乾等第一個 15s tick 的時間）③用
+  // appendRuntimeLog 落檔（console.log 會被 stdout block-buffer 吃掉，驗不到），記下開機補掃
+  // 真的在開機時跑過、掃了幾個循環，供冷安裝後對時間戳驗證。
+  if (workerAutopilotByWorker.size > 0) {
+    const armed = workerAutopilotByWorker.size;
+    for (const workerId of workerAutopilotByWorker.keys()) {
+      const worker = workers.get(workerId);
+      if (worker && !worker.runner.busy && providerReady(worker.runner.provider)) {
+        try { worker.runner.warmup(); } catch { /* 暖機失敗不擋開機，sweep 會再補 */ }
+      }
+    }
+    const bootResume = setTimeout(() => {
+      try {
+        appendRuntimeLog(config.dataDirectory, `worker-autopilot boot resume sweep: ${armed} armed loop(s)`);
+        sweepWorkerAutopilot();
+      } catch (error) {
+        appendRuntimeLog(config.dataDirectory, "worker-autopilot boot resume sweep failed", (error as Error).message);
+      }
+    }, 2_000);
+    bootResume.unref();
+  }
+  // 遠端存取自動啟動：設定開著就在開機時把轉接站拉起來，重開機後手機不用等人手動開。
+  if (appSettings.get().remoteAccessAutoStart) {
+    void startTsproxyRelay().then((outcome) => {
+      appendRuntimeLog(config.dataDirectory, outcome.running
+        ? "remote-access relay auto-started"
+        : `remote-access relay auto-start failed: ${outcome.error ?? "unknown"}`);
+    });
   }
 });

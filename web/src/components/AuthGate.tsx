@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 import type { AccountLoginState, ClaudeLoginState, CodexAccountLoginMode, ProviderAuthState, ProviderId, ProviderInstallState } from "../types";
 
 type Props = {
@@ -101,7 +101,7 @@ export function AuthGate({
         <p className="auth-gate__body">
           {blocking
             ? t("Claude Code 或 Codex 任一完成安裝與登入，就能開始工作。Pixel Crew 不會接收帳號、密碼或 token。")
-            : t("辦公室仍可使用 {providers}。你可以先切換隊員，或依下方步驟設定 {name}。", { providers: readyProviders.map((provider) => providers[provider].displayName).join(" 或 "), name: auth.displayName })}
+            : t("辦公室仍可使用 {providers}。你可以先切換隊員，或依下方步驟設定 {name}。", { providers: readyProviders.map((provider) => providers[provider].displayName).join(tc("punct", " 或 ")), name: auth.displayName })}
         </p>
 
         <div className={`auth-provider-grid ${blocking ? "" : "auth-provider-grid--single"}`}>

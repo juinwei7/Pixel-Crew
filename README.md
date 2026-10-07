@@ -36,6 +36,9 @@ Version **2.3.0** also adds conflict-safe layout synchronization across browser 
 - **Multi-department orchestration** — the decision model can build a validated dependency graph across PM, engineering, QA, or other real departments; each department receives bounded upstream reports and the Boss receives one consolidated result.
 - **Persistent per-NPC persona** — give an NPC a role + instructions that auto-apply on every launch (survives `/clear`, model switches, and restarts) and save reusable persona templates.
 - **AI-routed department work** — use one “Hand to department” action; the Boss chooses a focused read-only Consult/Review or a full 2–5 step Mission, assigns same-workspace specialists, and keeps handoffs moving until completion or a real approval is needed.
+- **Quick Roundtable and War Room** — get a fast single-NPC roundtable (always with a dissenting voice, bounded read-only lookups when the topic is about your project) or convene a multi-agent War Room debate whose verdict carries confidence, overturn conditions, rejected options, and one-click action items. War Room peers use 6 reserved seats outside the 20-NPC limit.
+- **Personal autopilot** — let one NPC keep going on its own: each step carries a done-criterion, checks the previous step first, and stops only when the goal is reached, a real decision needs you, or it is stuck. The loop survives restarts and resumes automatically after updates.
+- **A living office** — NPCs walk to the station that matches their current tool, nameplates show what they are doing right now, and a persistent working / needs-you / idle strip jumps straight to whoever is waiting on approval.
 - **Pixel avatars** — pick from built-in presets or upload your own PNG/GIF; everything stays local.
 - **Remote access / mobile control (optional)** — a bundled gateway puts a passcode or Google sign-in (plus brute-force lockout and time-limited share codes) in front of the local server and opens an HTTPS tunnel via cloudflared or Tailscale, so you can command your crew from a phone. The connection QR renders as a 3D neon night city that flips into a scannable aerial view — tap to explore, drag to orbit.
 - **Folders as rooms** — bind each worker to a local folder; the agent runs there.
@@ -55,7 +58,7 @@ macOS users can install the self-contained app without Node.js or npm:
 curl -fsSL https://github.com/juinwei7/Pixel-Crew/releases/latest/download/install-pixel-crew-macos.sh | /bin/bash
 ```
 
-Windows x64 users can download and double-click the single-file [Pixel Crew.exe](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe). It privately installs its bundled runtime under the current user's AppData, then its native Control Center owns the local service and tray controls without a persistent console window.
+Windows x64 users can download and double-click the single-file [Pixel Crew.exe](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel.Crew.exe). It privately installs its bundled runtime under the current user's AppData, then its native Control Center owns the local service and tray controls without a persistent console window.
 
 For source development on any platform:
 
@@ -112,12 +115,14 @@ Pixel Crew 把多個 Claude Code 與 Codex 工作階段放進一間像素辦公�
 - **資料夾即房間**：每位 Worker 綁定一個本機工作資料夾，並可從 macOS/Windows 系統選擇器、最近位置或絕對路徑原地搬遷；若已有對話，搬遷會重設該 NPC 的 CLI session，避免跨專案混用上下文。
 - **Provider 切換**：尚未對話時直接更換目前 NPC 類型；已有對話時透過摘要交接原地切換，但不混用兩邊不相容的原生 session 歷史。
 - **跨 LLM 交接**：空白 NPC 可直接原地更換 provider；已有對話時，會先整理目標、進度、決策與風險，再建立另一個 provider 的新 session 接手。交接摘要不是完整原生記憶，切換前會明確提醒並檢查目標 provider 的剩餘用量。
-- **AI 部門工作與辦公室**：你是老闆，只需在持久化任務日誌中選擇決策模型並直接描述工作。過於概略、涉及權限或欠缺驗收邊界時，模型會先逐題詢問，不會直接派工。資訊足夠後才建立一個或多個部門的執行圖，依相依關係傳遞部門報告並執行；不使用關鍵字配分或靜默備援。退件最多修正兩輪，只有權限、認證、重大決定或無法確認時才停下來；不會自行 commit、push、merge、tag 或 release。
+- **AI 部門工作與辦公室**：你是老闆，只需在持久化任務日誌中選擇決策模型並直接描述工作。過於概略、涉及權限或欠缺驗收邊界時，模型會先逐題詢問，不會直接派工。資訊足夠後才建立一個或多個部門的執行圖，依相依關係傳遞部門報告並執行；不使用關鍵字配分或靜默備援。Review 退件不會自動重做，會停下來讓你決定重試、帶指示重跑或接受風險；除此之外只有權限、認證、重大決定或無法確認時才停下來；不會自行 commit、push、merge、tag 或 release。
 - **有界的多 Agent 執行**：Boss Desk 可在開始前選擇「快速／標準／深度」執行級別，清楚預覽 Agent 回合數、時間區間，以及 Claude 預估費用或 Codex 五小時 quota 影響；同時強制限制 Agent、人工作業階段與 Mission 步數，超過邊界會暫停等待你決定。
 - **可恢復的長任務**：服務重啟、任務失敗或暫停後，Mission 與 Boss 工作會保留可恢復的候選步驟與原因；重新啟動前會重新確認 session／worker 狀態，避免不知情地重複執行。
-- **本機可觀測性與效能護欄**：營運面板提供可關閉、永不自動上傳的本機診斷（成功率、核准等待、Mission 失敗原因、WebSocket 重連、UI 長任務與 FPS）；CI 也會檢查主要 bundle 與 lazy chunk 預算。
-- **快速圓桌（低成本模擬討論）**：由目前選取的一位 NPC 在一次回合內自行分飾 2–4 個相關視角（提示要求不呼叫工具、不讀寫檔案），回傳結構化的「多方觀點＋結論」。用於快速、低成本的方向確認，而非動用整個部門派工。
-- **作戰室（多 Agent 辯論）**：面對高風險問題時，明確選擇「🏛️ 作戰室」才會臨時召集 2–4 位與目前 NPC 相同 LLM 的短命同儕（Claude 維持 Claude、Codex 維持 Codex；提案／挑戰／權衡，難題再加一個查證立場負責事實查核），平行跑一輪開場與一輪反駁。模型分級隨難度調整，由主持 NPC 彙整成結構化裁決——共識、爭點、優先行動、關鍵指標與圖表——結束後拆除臨時同儕；這會使用該 LLM 的用量並需數分鐘，辯論歷史之後可回顧或刪除。
+- **本機可觀測性與效能護欄**：營運面板提供可關閉、永不自動上傳的本機診斷（成功率、核准等待、Mission 失敗原因、WebSocket 重連、UI 長任務與 FPS）；CI 也會檢查主要 bundle 與 lazy chunk 預算。首屏必載 JS 約 51 KB，主程式、辦公室場景與英文字典都改為動態載入；串流訊息合併、WebSocket 壓縮，全員閒置時畫面降到 30 fps。
+- **快速圓桌（低成本模擬討論）**：由目前選取的一位 NPC 在一次回合內自行分飾 2–4 個相關視角，其中一定有一個反方。主題指涉目前專案時，會先做最多 3 次唯讀查閱（不寫檔）再上桌，不靠猜。結論附取捨、信心，以及哪些條件出現會改變結論；結論小卡可一鍵「照做」「反方檢驗」或「升級作戰室」。用於快速、低成本的方向確認，而非動用整個部門派工。
+- **作戰室（多 Agent 辯論）**：面對高風險問題時，明確選擇「作戰室」才會臨時召集 2–4 位與目前 NPC 相同 LLM 的短命同儕（Claude 維持 Claude、Codex 維持 Codex；提案／挑戰／權衡，難題再加一個查證立場負責事實查核），平行跑一輪開場與一輪反駁。成員會帶入召集人與專案背景，第 1 輪先標出各自的真實底線；若無人反對、至多一位有條件同意，就省略反駁輪以節省時間與用量。模型分級隨難度調整，由主持 NPC 彙整成結構化裁決——共識、爭點、信心、會推翻裁決的條件、被否決的選項、優先行動、關鍵指標與圖表——行動項可一鍵交給召集人，召集人忙碌時裁決會排隊等候。臨時同儕另有 6 個保留席次，不佔 20 位 NPC 上限；席次不足時會明確告知，不會默默少開人。結束後拆除臨時同儕；這會使用該 LLM 的用量並需數分鐘（中等難度實測約 2 分鐘），辯論歷史之後可回顧或刪除。
+- **個人自動循環**：替單一 NPC 開啟自動循環後，決策模型會在每回合結束時讀完最新結果與前文，決定下一步並自動送出（預設 5 步、最多 20 步，可另設時間上限）。每一步附完成標準，並先驗收上一步是否達標；會比較多個方向後再選，偵測到原地踏步時提醒。預設為「主動模式」：只要離原始目標還有實質進展就持續推進，只有需要你拍板、花錢或不可逆的事才停下，並把決定整理成一句話可答的問題。停止原因分成「完成」「等你拍板」「卡住」三類；循環狀態跨重啟保留，服務更新後會自動接回。
+- **活的辦公室**：NPC 依正在用的工具走到對應工作站，名牌第二行顯示當下動作（執行指令、查資料、寫程式、思考中等）；畫面左下常駐「工作中／需要你／待命」分流條，點「需要你」直接跳到等核准的 NPC。NPC 也有閒置小動作、部門任務完成時全隊慶祝；人多時辦公室向下延伸附屬區，鏡頭與名牌依擁擠程度自動調整。
 - **即時串流**：透過 WebSocket 顯示回覆、thinking、工具 INPUT、執行中 OUTPUT 與最終結果。
 - **圖片輸入**：可直接把 PNG / JPEG / WebP 圖片貼進底部輸入框，以 Claude / Codex 的原生多模態格式送出。
 - **等待佇列**：NPC 執行期間仍可輸入文字或貼圖；後續任務會保留各自附件並依序自動送出。
@@ -159,6 +164,7 @@ flowchart LR
 - macOS、Linux，或 64-bit Windows 10 22H2 / Windows 11
 - 至少安裝 Claude Code CLI 或 Codex CLI 其中一種（尚未登入也能啟動，介面會引導完成登入）
 - 一個允許所選 Agent 操作的本機 repository
+- 選用：影片理解需要本機有 `ffmpeg` 與 `ffprobe`（抽影格＋音訊）；貼影片連結另需 `yt-dlp`。三者都可用下表的環境變數指定絕對路徑；沒有安裝時只有影片相關功能不可用，其餘不受影響
 
 先確認 CLI 可用：
 
@@ -180,7 +186,7 @@ codex login
 
 ### Windows 快速安裝
 
-[下載單檔 Windows x64 應用 `Pixel Crew.exe`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel%20Crew.exe)，直接雙擊即可；原生「Pixel Crew 控制中心」會私下安裝 runtime 並在背景管理服務與系統匣，不會常駐黑色主控台視窗。一般使用者不需要另外安裝 Node.js、npm 或 Git。
+[下載單檔 Windows x64 應用 `Pixel Crew.exe`](https://github.com/juinwei7/Pixel-Crew/releases/latest/download/Pixel.Crew.exe)，直接雙擊即可；原生「Pixel Crew 控制中心」會私下安裝 runtime 並在背景管理服務與系統匣，不會常駐黑色主控台視窗。一般使用者不需要另外安裝 Node.js、npm 或 Git。
 
 完整步驟、CLI 安裝、更新與疑難排解請見 [Windows 安裝教學](./WINDOWS_SETUP.md)。
 
@@ -225,7 +231,7 @@ npm run dev
 4. Claude Worker 可輸入 `/` 查看目前房間、使用者層級與內建原生指令；Codex Worker 可輸入 `/` 使用 Pixel Crew 支援的原生對話控制，或輸入 `$` 查看目前房間的 repo skills。模型、權限、MCP 等 TUI 專屬控制則使用 Pixel Crew 頂部的對應介面。
 5. 從 NPC 的「•••」選單設定**個性 / 職務**：填入職務與詳細指示後，該 NPC 之後就會依人設工作；可套用或存為範本重複使用。
 6. 從頂部列開啟**帳號管理**，新增具名稱的 Claude Code 或 Codex 登入，在瀏覽器完成登入（Codex 也支援原本的 API key 流程）。建立 NPC 時，在選擇工作資料夾的畫面使用「選擇 AI 帳號」，可直接選擇 Claude Code／Codex 的共用登入或任何已登入具名稱帳號。已有原生對話歷史的 Worker 必須先清除工作階段才能換帳號，避免帳號切換悄悄放棄 provider 端的 thread。
-7. 按**老闆交辦**：先選擇決策模型，再填寫目標；驗收條件可選填，不必預先選 NPC 或部門。決策模型會從可接單部門的用途、成員職務與指示做結構化判斷；信心不足時先請你補充。路由成立後，部門主管會依成員職務選擇快速 Consult／Review 或完整 Mission，自動規劃、直接開始、依序交接、有限次修正，最後提交一份部門報告。單人部門可執行工作，但兩位以上才能安排獨立 Review。
+7. 按**老闆交辦**：先選擇決策模型，再填寫目標；驗收條件可選填，不必預先選 NPC 或部門。決策模型會從可接單部門的用途、成員職務與指示做結構化判斷；信心不足時先請你補充。路由成立後，部門主管會依成員職務選擇快速 Consult／Review 或完整 Mission，自動規劃、直接開始、依序交接（Review 要求修改時停下來等你決定，不自動重做），最後提交一份部門報告。單人部門可執行工作，但兩位以上才能安排獨立 Review。
 8. 使用左下角的 `＋` 建立同 provider、同帳號、同房間的新 Worker，再透過分頁切換任務。
 9. 從 NPC 選單開啟角色工坊；可選官方角色預設，或上傳圖片預覽裁切、位置、去背與色彩數量後套用。
 10. 點擊上方 MCP 狀態查看目前 provider 已設定的 servers；Claude 與 Codex 設定彼此獨立。
@@ -254,6 +260,9 @@ npm run dev
 | `PORT` | `8787` | 後端連接埠 |
 | `DB_PATH` | OS 使用者應用資料目錄 | SQLite 資料庫位置；Windows 預設 `%LOCALAPPDATA%\Pixel Crew\cockpit.sqlite` |
 | `AVATAR_DIR` | 與資料庫同層的 `avatars/` | 正規化 NPC PNG 與已驗證 GIF 的本機儲存目錄 |
+| `FFMPEG_BIN` | `ffmpeg` | 選用；影片抽影格與音訊的執行檔，可填絕對路徑 |
+| `FFPROBE_BIN` | `ffprobe` | 選用；探測影片長度的執行檔，可填絕對路徑 |
+| `YTDLP_BIN` | `yt-dlp` | 選用；「貼連結看影片」下載用的執行檔，可填絕對路徑 |
 | `WHISPER_SERVER_BIN` | `whisper-server` | 選用的 `whisper.cpp` 轉寫服務執行檔；可填絕對路徑 |
 | `VOICE_SERVER_PORT` | `8793` | 本機 `whisper-server` 的 loopback 連接埠 |
 

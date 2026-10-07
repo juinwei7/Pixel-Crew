@@ -5,6 +5,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Quick Roundtable conclusions now carry trade-offs, confidence, and what would change the call, and the conclusion card offers one-click "Do it", "Stress-test", and "Escalate to War Room". Topics about the current project get up to 3 read-only lookups before the discussion instead of guesses.
+- War Room verdicts include confidence, overturn conditions, and rejected options; action items can be handed to the convener in one click, and the verdict queues when the convener is busy.
+- Personal autopilot gives every step a done-criterion, checks the previous step first, compares directions before choosing, warns when it is going in circles, reports one line of progress per step, and labels stops as done, needs your decision, or stuck.
+- A persistent working / needs-you / idle strip, nameplate activity badges, and a livelier office: station-specific screens and poses, idle moments, department-wide celebrations, an annex that extends the office when it gets crowded, and 16 smaller office touches such as camera follow and per-desk queue notes.
+- The model menu explains what each model is good for, in a two-line list that no longer wraps inside the collapsed box.
+
+### Changed
+
+- War Room peers now use 6 reserved seats outside the 20-NPC limit. When seats run out, a War Room joins a first-come queue (up to 3 waiting, 30-minute limit) and opens automatically when seats free up; the status bar shows its place in line and lets you cancel. Only a War Room that could never fit is refused. The NPC count and add button only count permanent NPCs.
+- The self-update safety gate checks every commit since the last shipped build, not just the newest one, so a blocked change can no longer ride along with a harmless follow-up. Plain documentation files are judged by name only, so a README that mentions the stop rules no longer blocks an update; agent-instruction files such as CLAUDE.md are still scanned. A build is recorded as shipped only after it boots healthy, and a failed build is not retried until there is a new commit.
+- Personal autopilot also flags a step that only re-launches background work and then waits, and a loop instruction the NPC answers by saying the work was already done. In the replay it catches 10 of 12 genuine stalls (4 false alarms, one of which was a real redo loop).
+- NPCs save memories and consult questions by writing a UTF-8 file and sending it with `curl --data-binary`, because Git Bash's curl sends Chinese on the command line in the system code page.
+- The War Room skips its rebuttal round when nobody objects in round 1 and at most one peer agrees conditionally. The challenger states its real bottom line instead of being told to oppose by default, and peers that failed round 1 are not sent a rebuttal.
+- War Room peers now mark "yes, but do it this way" as GO and keep HOLD for a real "wait until we know X", so consensus is recognised and the rebuttal round is skipped when it would add nothing. In testing, a consensus topic dropped from about 90 s and $0.43 to about 55 s and $0.18 with the same disputes still ruled on.
+- Personal autopilot's going-in-circles detection was recalibrated against 198 real loop decisions, where the old thresholds never fired. It now flags back-to-back empty replies, replies that only say the NPC is waiting on background work, and loop instructions that re-issue the same move in different words (owner messages are ignored). In the replay it catches 8 of 12 genuine stalls instead of 0.
+- Personal autopilot no longer sends a duplicate wrap-up turn when it uses up its step budget.
+- First-screen JavaScript dropped from about 474 KB to 51 KB: the app shell, office scene, and English catalog load on demand. Streaming messages are coalesced, WebSocket traffic is compressed, render updates are batched, and the scene drops to 30 fps when everyone is idle.
+- Mission confirmations and the README now say what actually happens: a Review that requests changes pauses for your decision instead of auto-correcting up to two rounds.
+
+### Fixed
+
+- Two War Rooms opened back to back can no longer take each other's moderator seat: the seat is reserved when a session starts, so neither falls back to an unsynthesised transcript.
+- Memory and consult endpoints reject garbled text (replacement characters, question-mark runs, mojibake) with a message telling the NPC how to resend, instead of storing unreadable memories.
+- A foreground subagent that has finished is no longer shown as a background subagent still running. Its result ends with an `agentId:` line, which had been mistaken for a background launch.
+- War Room background subagents stay at the table until they actually finish instead of being cleared when the lead's turn ends.
+- Subagent-internal messages are no longer mistaken for the main NPC's turn.
+- NPCs on a mission walk to the station for the tool they are actually using, and mission speech bubbles show the current step instead of old chat.
+- Autopilot tells you to sign in again when the Claude login has expired, instead of reporting a generic decision-model failure.
+- The self-update safety gate only scans added and removed lines of a diff, so unchanged context no longer blocks a front-end-only change.
+- The bundle budget check matches the new chunk layout (entry shell, app chunk, lazily loaded English catalog).
+- One-click update on Windows downloads `Pixel.Crew.exe`, the name GitHub actually gives the release asset. Copies installed from v2.5.2 or earlier still request the old name and get a 404, so they need one manual download of the new release before one-click update works again.
+- A queued message is no longer lost when sending it fails: it stays queued until a send succeeds (giving up after 3 failed tries), instead of being removed first and dropped with its attachments.
+- Windows department task logs, assignment lists, and mission lists no longer come back empty: workspace paths are normalized when written as well as when queried, and existing rows are migrated.
+- Disbanding a dedicated team no longer deletes the mission records it ran, and leftover team members are recognised at startup by a stored marker instead of the team's (renamable) name.
+- A failed automatic retry after a lost `--resume` conversation no longer takes down every worker, and a later unrelated failure in a resumed session no longer silently discards the conversation.
+- The initial snapshot has a hard size ceiling again; one very long turn could make it send a worker's entire history.
+- A finished mission's "department discussion" can be opened again after a reload: its activity is fetched when you expand it, since the initial snapshot leaves it out.
+- Self-install only ships a clean working tree at the exact commit the safety gate reviewed; uncommitted or untracked files, or a commit landing mid-build, abort it. The trigger, the rebuild/install scripts, the gate's own range and promotion logic, and remote-access auth are now protected files, an NPC's shell command that reaches for the self-install switch or trigger needs your confirmation even under full auto-approve, and remote share guests can never trigger it.
+- A pasted video link that resolves to a loopback or private address is refused before `yt-dlp` runs, the same server-side request check the web screenshot tool already used.
+- A message waiting for a video to finish processing is only sent to the NPC it was written for: switching NPCs or pressing Stop cancels it, and if the video fails the draft and the error stay instead of the text going out without the video.
+- Autopilot progress and stop notices no longer steal a step's output or leave it stuck as running, and a stop or usage-limit notice right after a failed turn no longer reports it as completed (with confetti) or hides it from Needs You.
+- Starting a War Room no longer locks the command bar: you can keep messaging any NPC while it runs or waits for seats, and a second War Room while one is running keeps your draft.
+- Messages an older version left queued in this browser are put back in that NPC's input box with a notice, instead of staying invisible and impossible to send or delete.
+- Holding Enter on a hold-to-confirm button now waits the full hold instead of confirming early when key repeat kicks in.
+- Updating the installed app on Windows or macOS no longer resets remote access — the passcode, guardian password, Google sign-in settings and every signed-in phone now carry over from older versions too.
+- Share guests can queue a message while an NPC is busy and withdraw their own queued messages without the guardian password; reordering the queue still needs it.
+- Share guests can no longer switch remote-access auto-start on or off through the settings menu; like the rest of remote access, it is owner-only.
+- The self-install safety check can no longer be bypassed by marking files as binary, saving code as UTF-16, using symlinks, or editing the build/test scripts — those changes now wait for the owner.
+- A self-install is only marked as the new rollback point after the installer confirms that exact install healthy, so a failed install can no longer "roll back" to the bad build.
+- Automatic self-install no longer freezes the app every 15 seconds re-checking the same commit, and a second install can't start while one is still building or being verified.
+- A share-guest request with a malformed URL escape no longer crashes the remote-access relay.
+- A boss task no longer leaves its department's members on safe auto-approve after the task ends; the lift applies only while that task's mission runs.
+- Remote share guests can no longer open a dedicated (full auto-approve) crew for a boss task.
+- Cancelling or deleting a boss task while it is still planning or building its crew now sticks: it is no longer revived or dispatched, and the half-built crew is disbanded.
+- Autopilot no longer sends the next task into the previous task's temporary crew, and disbanding a crew cancels its missions instead of leaving the workspace locked until restart.
+- Deleting a boss task that needs your attention also cancels its paused mission, so it no longer blocks that workspace and department.
+- One malformed reply no longer stops the boss autopilot: it re-asks once, and a second bad reply is reported as a failure instead of a normal finish.
+- The boss autopilot no longer silently stalls with the switch on: it resumes after a task recovers, replays triggers that were waiting on another loop, and reports when it cannot start the next task.
+- A crew built for a boss task that a remote share guest started or replied to uses safe auto-approve instead of full, however the crew came to be created.
+- A Bash command padded past 20,000 characters is no longer judged by its harmless start: approval checks read the whole command, and one too long to show in full always asks you.
+- `rg`, `git`, `eslint`, `tsc` and package-manager commands with an unquoted wildcard now ask first, since a file named like `--pre=x` would expand into a flag.
+- Pressing Stop on an NPC now also stops its personal autopilot (Claude and Codex), instead of the loop sending a new step a minute later or claiming the last turn errored.
+- Switching an NPC to another account now really runs it under that account, so usage goes to the right account and the conversation survives the next restart.
+- Queued /clear, /clean and /goal now behave like sent ones, and queuing a roundtable topic behind a busy NPC keeps it a roundtable (war room asks you to wait instead of queuing it as a plain task).
+- LLM handoffs no longer present old, already-answered messages as top-priority unfinished requests, and request text in a handoff is redacted and size-capped.
+- The 'lesson learned' card after a brain swap no longer stays 'in progress' forever or turns into a spurious 'session was interrupted' error.
+- The task log no longer goes blank when a single turn produces more than 2,000 events.
+- Sending the full 30 MiB of images plus documents no longer fails with a generic server error; oversized messages get a clear 'too large' message.
+- Moving an NPC to another workspace now stops its personal autopilot instead of driving the new repo with the old repo's goal and plan.
+- Personal autopilot can no longer run an NPC in ⚡ unrestricted mode; turning it on is refused and switching an NPC to that mode stops its loop.
+- Scheduled tasks now respect each NPC's daily budget instead of running past the cap (a note explains the skip once per day).
+- Workers no longer read files outside their folder or fetch web pages without asking when auto-approve is off.
+- Unattended read-only checks and "safe" auto-approve no longer run commands that write files or launch programs through flags like `git diff --output`, `rg --pre` or `eslint --fix`.
+- Full auto-approve now stops for Windows mass deletes and disk formatting (`Remove-Item -Recurse -Force`, `rd /s`, `del /f /s /q`, `format`).
+- A worker whose saved conversation is gone after a restart now starts a fresh conversation and re-sends your message, instead of failing every turn.
+- Memory and team-consult calls in full auto-approve mode no longer stop at an approval card.
+- Codex autopilot investigations can now run read-only commands like `git status`, `ls` and `sed -n` instead of failing.
+- A Codex plan update no longer makes read-only or no-tool turns fail.
+- On Windows, writes to another drive or a network path are now blocked as outside the workspace.
+- The Bash write guard now also blocks `2>`, `&>`, `>|` and `~/` redirects that write outside the workspace.
+- The outbox panel no longer serves files when the outbox folder itself links outside the workspace.
+
+## [2.5.2] - 2026-10-05
+
+### Fixed
+
+- Personal autopilot now runs its coach-decision call on the NPC's own assigned account and configured model, instead of always falling back to the shared login and a workspace-picked model. Previously a worker pinned to an account with quota could still stall because the behind-the-scenes decision ran on the shared login (out of credits) or picked a different, exhausted model.
+- Switching an NPC's account is now one click: when the NPC already has a conversation, the UI asks for confirmation and then clears the session and switches in a single step, instead of forcing the owner to clear the session manually first.
+- Cold-install updates no longer pile up duplicate browser tabs. The relaunched controller skips auto-opening a new tab (the owner's existing tab reconnects on its own); the staged installer script is also kept in sync with the repo so fixes like this actually take effect.
+- Opening a lazy-loaded panel (e.g. the Outbox) in a tab left open across an in-place update no longer blanks the whole app to a black screen. A top-level error boundary now catches the stale-chunk failure and reloads once to pick up the new build automatically, instead of forcing the owner to refresh by hand; any other render crash shows a recoverable card rather than an unrecoverable blank.
+
+## [2.5.1] - 2026-09-25
+
+### Added
+
+- Autopilot can now take over when an assignment stalls. With "auto-resume when stuck" checked, the decision model retries the step, re-runs it with a concrete instruction, accepts a reviewed risk, or answers its own clarification question with a safe bounded assumption — at most twice per assignment, and always deferring anything that needs the boss personally (real data, credentials, spending, irreversible calls) back to a stop.
+- The autopilot switch survives restarts: its state persists server-side per workspace and is restored on boot, so an update or reboot no longer silently turns the loop off.
+- Remote access can start itself with the app: a new checkbox in the Remote Access panel launches the relay on boot, so after a reboot the phone can connect without anyone touching the desktop first.
+- The boss-room scene got livelier: the on-duty arrow bobs instead of sitting still, NPCs walk to the matching work station while their tool is running, and during discussion steps the current speaker's latest words float above their head like the web-search window does.
+
+### Changed
+
+- Autopilot's next-step decision no longer gives up early: when the finished thread is blocked on boss-only input it pivots to a different genuinely valuable objective (making deliverables more usable, hardening, tooling) and only stops when no direction offers real value.
+- Boss-task discovery now takes a required-input inventory before planning: if the objective depends on a file or dataset that was not attached, it asks for it up front instead of burning a whole run to find out.
+
+### Fixed
+
+- Assignment plans with a formality mistake — the lead assigning the quick consult/review to itself, the closing execute to someone else, or a review to its own executor — are now corrected in place, the way the resolve dialog would, instead of pausing the whole mission; the one-shot format repair also names the exact rejection reason so the retry knows what to fix.
+- Boss tasks no longer zombie after a restart: a stage whose mission record vanished is re-queued for dispatch, and a boot sweep advances every running task so the recovery actually happens without waiting for an event that will never come.
+- The remote-access secret file moved out of the app directory into the data root, so updates no longer regenerate the signing key — the passcode, guardian password, and every signed-in device now survive an update instead of being reset.
+- The pixel scene no longer empties out when the BOSS view is open without a dedicated crew: an empty boss room falls back to the main office instead of hiding every standing NPC.
+
+### Security
+
+- Share guests can no longer reach the host shell through the WebSocket path. The relay strips any client-supplied access-level header, stamps each proxied connection with the verified level, and the app refuses terminal control for share guests — closing a bypass around the HTTP-layer guardian and owner-only rules.
+
 ## [2.5.0] - 2026-09-23
 
 ### Added

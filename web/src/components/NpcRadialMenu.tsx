@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { t } from "../i18n";
 import type { WorkerState } from "../types";
 
@@ -45,28 +45,55 @@ const ICONS: Record<string, ReactNode> = {
   ),
 };
 
+// 選到一項之後先讓其他按鈕收回中心、被選的那顆脈衝一下，再真的執行動作。
+// 跟 styles/motion.css 的 .npc-radial--closing 時長一致（var(--dur-2)）。
+const CHOOSE_MS = 170;
+// 每顆按鈕比前一顆晚這麼久放射出去。
+const STAGGER_MS = 32;
+
 export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona, onRoom, onRemove, onClose, direction = "right" }: Props) {
   const [mode, setMode] = useState<"ring" | "rename">("ring");
   const [draft, setDraft] = useState(worker.name);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // 鍵盤游標（方向鍵沿弧線移動）；-1 = 還沒用鍵盤，hover 由 CSS 自己處理。
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const chooseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Mount collapsed at the sprite's center, then flip the class on the next
     // frame so the CSS transition fans the buttons out along the arc.
     const frame = requestAnimationFrame(() => setOpen(true));
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (chooseTimerRef.current !== null) window.clearTimeout(chooseTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (mode === "ring") onClose();
-      else { setMode("ring"); setError(null); }
+      if (event.key === "Escape") {
+        if (mode === "ring") onClose();
+        else { setMode("ring"); setError(null); }
+        return;
+      }
+      // 方向鍵：沿弧線順時針／逆時針換一顆。上下左右都收，因為弧線朝哪邊開
+      // 取決於 NPC 在畫面的哪一側，使用者不該需要先想「現在是哪個方向」。
+      if (mode !== "ring" || chosen) return;
+      const step = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
+      if (!step) return;
+      event.preventDefault();
+      setActiveIndex((index) => {
+        const next = index < 0 ? (step > 0 ? 0 : itemCount - 1) : (index + step + itemCount) % itemCount;
+        buttonRefs.current[next]?.focus();
+        return next;
+      });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, onClose]);
+  });
 
   async function saveName() {
     const result = await onRename(worker.id, draft);
@@ -86,19 +113,38 @@ export function NpcRadialMenu({ worker, canRemove, onRename, onAvatar, onPersona
       act: () => { onRemove(worker.id); onClose(); },
     }] : []),
   ];
+  const itemCount = items.length;
+
+  // 改名是原地換成輸入框，不用等收合動畫；其餘動作先播「選中」再執行。
+  function choose(item: (typeof items)[number]) {
+    if (chosen) return;
+    if (item.key === "rename") { item.act(); return; }
+    setChosen(item.key);
+    chooseTimerRef.current = window.setTimeout(() => {
+      chooseTimerRef.current = null;
+      item.act();
+    }, CHOOSE_MS);
+  }
 
   return (
-    <div className={`npc-radial npc-radial--${direction}${open ? " npc-radial--open" : ""}`} onClick={(event) => event.stopPropagation()}>
+    <div className={`npc-radial npc-radial--${direction}${open ? " npc-radial--open" : ""}${chosen ? " npc-radial--closing" : ""}`} onClick={(event) => event.stopPropagation()}>
+      {mode === "ring" && <span className="npc-radial__hub" aria-hidden="true" />}
       {mode === "ring" && items.map((item, index) => {
         const { x, y } = arcOffset(index, items.length, direction);
         return (
           <button
             key={item.key}
+            ref={(element) => { buttonRefs.current[index] = element; }}
             type="button"
             aria-label={item.label}
             className={`npc-radial__item${item.danger ? " npc-radial__item--danger" : ""}`}
-            style={{ "--tx": `${x.toFixed(1)}px`, "--ty": `${y.toFixed(1)}px`, transitionDelay: `${index * 35}ms` } as React.CSSProperties}
-            onClick={item.act}
+            data-active={activeIndex === index ? "true" : undefined}
+            data-chosen={chosen === item.key ? "true" : undefined}
+            // --d：放射出去的錯開延遲，只套在位移／透明度上（見 motion.css），
+            // hover 放大不吃這個延遲，滑過去立刻有反應。
+            style={{ "--tx": `${x.toFixed(1)}px`, "--ty": `${y.toFixed(1)}px`, "--d": `${index * STAGGER_MS}ms` } as React.CSSProperties}
+            onMouseEnter={() => setActiveIndex(-1)}
+            onClick={() => choose(item)}
           >
             {ICONS[item.key]}
             <span className="npc-radial__label">{item.label}</span>

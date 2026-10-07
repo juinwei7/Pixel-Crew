@@ -31,7 +31,12 @@ internal static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         var port = ReadPort(args);
         var minimized = args.Any(argument => string.Equals(argument, "--minimized", StringComparison.OrdinalIgnoreCase));
-        Application.Run(new ControllerApplicationContext(root, port, minimized, openSignal));
+        // A self-install cold-install relaunches the controller with --relaunch. The owner's
+        // existing browser tab auto-reconnects to 127.0.0.1:8787 once the server is back (the
+        // web client retries the WebSocket every second), so we must NOT pop a fresh tab on
+        // relaunch — doing so is what piled up duplicate "Pixel Crew" tabs after every update.
+        var relaunch = args.Any(argument => string.Equals(argument, "--relaunch", StringComparison.OrdinalIgnoreCase));
+        Application.Run(new ControllerApplicationContext(root, port, minimized, relaunch, openSignal));
     }
 
     private static bool TryOpenExistingController()
@@ -94,6 +99,7 @@ internal static class SingleFileInstaller
         try
         {
             Directory.CreateDirectory(dataRoot);
+            ClearStaleInstallDirs(dataRoot);
             staging = Path.Combine(dataRoot, $"app-staging-{Guid.NewGuid():N}");
             Directory.CreateDirectory(staging);
             using (var payload = Assembly.GetExecutingAssembly().GetManifestResourceStream(PayloadName)
@@ -104,14 +110,18 @@ internal static class SingleFileInstaller
             }
             File.Copy(currentExecutable, Path.Combine(staging, ExecutableName), overwrite: true);
 
+            // Release any handle on the old install tree before the atomic swap so a
+            // surviving server/worker can't lock us out (previously required a reboot).
+            TerminateInstallBlockers(installRoot, dataRoot);
+            PreserveRelaySecret(installRoot, dataRoot);
             if (Directory.Exists(installRoot))
             {
                 backup = Path.Combine(dataRoot, $"app.previous-{Guid.NewGuid():N}");
-                Directory.Move(installRoot, backup);
+                MoveWithRetry(installRoot, backup);
             }
-            Directory.Move(staging, installRoot);
+            MoveWithRetry(staging, installRoot);
             staging = null;
-            if (backup is not null) Directory.Delete(backup, recursive: true);
+            if (backup is not null) { try { Directory.Delete(backup, recursive: true); } catch { } }
 
             var restart = new ProcessStartInfo { FileName = installedExecutable, UseShellExecute = true };
             foreach (var argument in args) restart.ArgumentList.Add(argument);
@@ -149,13 +159,110 @@ internal static class SingleFileInstaller
         {
             if (!int.TryParse(File.ReadAllText(pidFile).Trim(), out var processId)) return false;
             using var server = Process.GetProcessById(processId);
-            return !server.HasExited;
+            if (server.HasExited) { try { File.Delete(pidFile); } catch { } return false; }
+            // Guard against a recycled PID: only trust server.pid if that process is
+            // actually running from our install tree. A stale pid file whose number was
+            // reused by an unrelated process would otherwise make the installer reattach
+            // forever and never apply the update — the "can't finish installing, must
+            // reboot" symptom. If in doubt (MainModule inaccessible), treat as stale.
+            string? modulePath = null;
+            try { modulePath = server.MainModule?.FileName; } catch { }
+            if (modulePath is null || !modulePath.StartsWith(dataRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.Delete(pidFile); } catch { }
+                return false;
+            }
+            return true;
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
             try { File.Delete(pidFile); } catch { }
             return false;
         }
+    }
+
+    // Forcibly clears anything that would lock the install directory and block the
+    // atomic swap below: the recorded managed server (whole tree) plus any straggler
+    // process still executing from inside the install root (orphan node.exe from
+    // app/runtime, leftover workers). Without this, a surviving handle makes
+    // Directory.Move fail and only a reboot recovers.
+    private static void TerminateInstallBlockers(string installRoot, string dataRoot)
+    {
+        var pidFile = Path.Combine(dataRoot, "logs", "server.pid");
+        try
+        {
+            if (int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+            {
+                using var server = Process.GetProcessById(pid);
+                try { server.Kill(entireProcessTree: true); } catch { }
+                try { server.WaitForExit(4000); } catch { }
+            }
+        }
+        catch { }
+        try { File.Delete(pidFile); } catch { }
+        if (!Directory.Exists(installRoot)) return;
+        foreach (var proc in Process.GetProcesses())
+        {
+            try
+            {
+                if (proc.Id == Environment.ProcessId) continue;
+                string? path = null;
+                try { path = proc.MainModule?.FileName; } catch { }
+                if (path is not null && path.StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    try { proc.WaitForExit(3000); } catch { }
+                }
+            }
+            catch { }
+            finally { proc.Dispose(); }
+        }
+    }
+
+    // Older relays kept the remote-access passcode and signing secret in app\_tsproxy.secret.json,
+    // and the swap below throws app\ away. Current relays read it from the data root instead, but
+    // they only start after the swap, so carry the old file over first; otherwise every update
+    // regenerates the secret and signs every phone out. Runs after TerminateInstallBlockers so a
+    // still-running relay can't be writing it mid-copy.
+    private static void PreserveRelaySecret(string installRoot, string dataRoot)
+    {
+        try
+        {
+            var legacy = Path.Combine(installRoot, "_tsproxy.secret.json");
+            var durable = Path.Combine(dataRoot, "_tsproxy.secret.json");
+            if (File.Exists(legacy) && !File.Exists(durable)) File.Copy(legacy, durable);
+        }
+        catch { }
+    }
+
+    // Directory.Move can transiently fail while the OS finishes releasing handles the
+    // processes above just held. Retry briefly before giving up.
+    private static void MoveWithRetry(string source, string destination)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { Directory.Move(source, destination); return; }
+            catch (Exception exception) when ((exception is IOException or UnauthorizedAccessException) && attempt < 8)
+            {
+                Thread.Sleep(400);
+            }
+        }
+    }
+
+    private static void ClearStaleInstallDirs(string dataRoot)
+    {
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(dataRoot))
+            {
+                var name = Path.GetFileName(dir);
+                if (name.StartsWith("app-staging-", StringComparison.Ordinal) || name.StartsWith("app.previous-", StringComparison.Ordinal))
+                {
+                    try { Directory.Delete(dir, recursive: true); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 
     private static bool PathsEqual(string left, string right) =>
@@ -187,10 +294,12 @@ internal sealed class ControllerApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer openSignalTimer;
     private readonly ControlCenterForm window;
     private readonly EventWaitHandle openSignal;
+    private readonly bool relaunch;
     private bool exiting;
 
-    public ControllerApplicationContext(string root, int port, bool minimized, EventWaitHandle openSignal)
+    public ControllerApplicationContext(string root, int port, bool minimized, bool relaunch, EventWaitHandle openSignal)
     {
+        this.relaunch = relaunch;
         this.openSignal = openSignal;
         host = new PixelCrewHost(root, port);
         host.StateChanged += (_, _) => OnUi(UpdateUi);
@@ -234,7 +343,9 @@ internal sealed class ControllerApplicationContext : ApplicationContext
         };
         openSignalTimer.Start();
         UpdateUi();
-        _ = StartAndMaybeOpenAsync(!minimized);
+        // On a self-install relaunch, don't auto-open a browser tab — the owner's existing
+        // tab reconnects on its own. Still show the control center so the new version is visibly up.
+        _ = StartAndMaybeOpenAsync(!minimized && !relaunch);
         if (!minimized) ShowControlCenter();
     }
 
@@ -319,6 +430,7 @@ internal sealed class PixelCrewHost : IDisposable
     private readonly string logsDirectory;
     private readonly string pidFile;
     private readonly string updateMarker;
+    private readonly string restartMarker;
     private readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(1) };
     private Process? process;
     private bool stopping;
@@ -330,6 +442,7 @@ internal sealed class PixelCrewHost : IDisposable
         logsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pixel Crew", "logs");
         pidFile = Path.Combine(logsDirectory, "server.pid");
         updateMarker = Path.Combine(logsDirectory, "update.pending");
+        restartMarker = Path.Combine(logsDirectory, "restart.pending");
     }
 
     public ServiceState State { get; private set; } = ServiceState.Stopped;
@@ -386,6 +499,10 @@ internal sealed class PixelCrewHost : IDisposable
             startInfo.ArgumentList.Add("server/dist/index.js");
             startInfo.ArgumentList.Add("--serve-web");
             startInfo.Environment["PORT"] = port.ToString();
+            // 告訴伺服器「有原生控制器在監督」：計畫重啟時它只要優雅退出，由這裡偵測後重生，
+            // 不必再 spawn 外部 restart helper（那個 helper 的 taskkill 會殺掉這裡剛重啟的 server，
+            // 製造第二次「意外結束」）。與 macOS menu bar launcher 用同一個旗標。
+            startInfo.Environment["PIXEL_CREW_SUPERVISED"] = "1";
             process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, line) => AppendLog("server.stdout.log", line.Data);
             process.ErrorDataReceived += (_, line) => AppendLog("server.stderr.log", line.Data);
@@ -472,6 +589,21 @@ internal sealed class PixelCrewHost : IDisposable
         {
             SetState(ServiceState.Stopped);
             return;
+        }
+        if (File.Exists(restartMarker))
+        {
+            // 伺服器自己發起的計畫重啟（例如網頁上的「重啟伺服器」或排程更新）。這是正常的、
+            // 預期中的退出，不是崩潰——安靜地把服務接回來，別再跳「內附服務意外結束」的假警報。
+            // 新鮮度檢查：只有剛寫下的 marker 才算數，避免上次殘留的陳舊檔把真正的崩潰誤判成計畫重啟。
+            var planned = false;
+            try { planned = (DateTime.UtcNow - File.GetLastWriteTimeUtc(restartMarker)).TotalSeconds < 60; } catch { }
+            try { File.Delete(restartMarker); } catch { }
+            if (planned)
+            {
+                SetState(ServiceState.Starting);
+                _ = RestartAfterUnexpectedExitAsync();
+                return;
+            }
         }
         var exitCode = process?.ExitCode;
         SetState(ServiceState.Error);

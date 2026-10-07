@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../api";
-import { t } from "../i18n";
+import { t, tc } from "../i18n";
 import { Modal } from "./Modal";
 import type { WorkerState } from "../types";
+import { Skeleton } from "./Skeleton";
+import { indicatorStyle, useTabIndicator } from "../flip";
 
 type CostRow = { day: string; workerId: string; workerName: string; costUsd: number };
-type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null };
+type Schedule = { id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null };
 type Diagnostics = { enabled: boolean; diagnostics: { generatedAt: string; scope: string; privacy: string; missions: { total: number; completed: number; failed: number; successRate: number | null; failuresByReason: Array<{ reason: string; count: number }> }; responsiveness: { websocketReconnects: number; longUiTasks: number; medianFps: number | null; fpsBand: string; medianApprovalWaitSeconds: number | null } } };
 
 type Props = {
@@ -21,11 +23,15 @@ export function OpsModal({ workers, notify, onClose }: Props) {
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
   const [newWorkerId, setNewWorkerId] = useState(workers[0]?.id ?? "");
   const [newTime, setNewTime] = useState("09:00");
+  const [newMode, setNewMode] = useState<"daily" | "interval">("daily");
+  const [newIntervalMinutes, setNewIntervalMinutes] = useState("60");
   const [newPrompt, setNewPrompt] = useState("");
   const [saving, setSaving] = useState(false);
   // 每日預算草稿：workerId → 輸入框文字（"" = 無上限）。
   const [budgets, setBudgets] = useState<Record<string, string>>({});
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const tabInk = useTabIndicator(tabsRef, tab);
 
   const loadCosts = useCallback(async () => {
     try {
@@ -82,12 +88,16 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
   async function addSchedule() {
     if (!newWorkerId || !newPrompt.trim()) { notify(t("請選擇 NPC 並填寫指示"), "error"); return; }
+    const interval = newMode === "interval" ? Math.floor(Number(newIntervalMinutes) || 0) : null;
+    if (newMode === "interval" && (!interval || interval < 5)) { notify(t("重複間隔需為至少 5 分鐘"), "error"); return; }
     setSaving(true);
     try {
-      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim() } });
+      const data = await apiRequest<{ schedules: Schedule[] }>("/api/schedules", { method: "POST", body: { workerId: newWorkerId, time: newTime, prompt: newPrompt.trim(), intervalMinutes: interval } });
       setSchedules(data.schedules);
       setNewPrompt("");
-      notify(t("排程已建立：每日 {time}", { time: newTime }));
+      notify(newMode === "interval"
+        ? t("排程已建立：每 {minutes} 分鐘", { minutes: interval ?? 0 })
+        : t("排程已建立：每日 {time}", { time: newTime }));
     } catch (error) {
       notify(error instanceof Error ? error.message : t("建立排程失敗"), "error");
     } finally {
@@ -116,7 +126,8 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
   return (
     <Modal label={t("營運面板")} eyebrow="OPERATIONS" title={t("營運面板")} cardClassName="warroom-result__card ops-modal" onClose={onClose}>
-        <div className="ops-modal__tabs" role="tablist">
+        <div className={`ops-modal__tabs${tabInk ? " r2-tabs--ink" : ""}`} role="tablist" ref={tabsRef}>
+          {tabInk && <span className="r2-tab-ink" aria-hidden="true" style={indicatorStyle(tabInk)} />}
           <button type="button" role="tab" aria-selected={tab === "costs"} className={tab === "costs" ? "active" : ""} onClick={() => setTab("costs")}>{t("成本日報")}</button>
           <button type="button" role="tab" aria-selected={tab === "schedules"} className={tab === "schedules" ? "active" : ""} onClick={() => setTab("schedules")}>{t("排程任務")}</button>
           <button type="button" role="tab" aria-selected={tab === "diagnostics"} className={tab === "diagnostics" ? "active" : ""} onClick={() => setTab("diagnostics")}>{t("本機診斷")}</button>
@@ -144,7 +155,7 @@ export function OpsModal({ workers, notify, onClose }: Props) {
                 </div>
               ))}
             </div>
-            {costs === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : dayTotals.length === 0 ? <p className="ops-modal__empty">{t("最近 14 天還沒有成本紀錄。")}</p> : (
+            {costs === null ? <Skeleton variant="bars" rows={6} /> : dayTotals.length === 0 ? <p className="ops-modal__empty">{t("最近 14 天還沒有成本紀錄。")}</p> : (
               <>
                 <h3>{t("每日總花費（近 14 天）")}</h3>
                 <div className="ops-costs__days">
@@ -177,12 +188,18 @@ export function OpsModal({ workers, notify, onClose }: Props) {
 
         {tab === "schedules" && (
           <div className="ops-modal__body">
-            <h3>{t("新增排程（每天固定時間把指示交給 NPC）")}</h3>
+            <h3>{t("新增排程（固定時間、或每隔一段時間把指示交給 NPC）")}</h3>
             <div className="ops-schedule__form">
               <select value={newWorkerId} onChange={(event) => setNewWorkerId(event.target.value)} aria-label={t("選擇 NPC")}>
                 {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
               </select>
-              <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
+              <select value={newMode} onChange={(event) => setNewMode(event.target.value as "daily" | "interval")} aria-label={t("排程模式")}>
+                <option value="daily">{t("每日固定時間")}</option>
+                <option value="interval">{t("每隔一段時間重複")}</option>
+              </select>
+              {newMode === "daily"
+                ? <input type="time" value={newTime} onChange={(event) => setNewTime(event.target.value)} aria-label={t("每日時間")} />
+                : <label className="ops-schedule__interval">{t("每")}<input type="number" min={5} step={5} value={newIntervalMinutes} onChange={(event) => setNewIntervalMinutes(event.target.value)} aria-label={t("重複間隔（分鐘）")} />{t("分鐘")}</label>}
               <textarea
                 value={newPrompt}
                 onChange={(event) => setNewPrompt(event.target.value)}
@@ -193,12 +210,12 @@ export function OpsModal({ workers, notify, onClose }: Props) {
               <button type="button" disabled={saving} onClick={() => void addSchedule()}>{saving ? t("建立中…") : t("＋ 新增")}</button>
             </div>
             <h3>{t("現有排程")}</h3>
-            {schedules === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : schedules.length === 0 ? <p className="ops-modal__empty">{t("還沒有排程。上面新增一個吧。")}</p> : (
+            {schedules === null ? <Skeleton variant="list" rows={3} /> : schedules.length === 0 ? <p className="ops-modal__empty">{t("還沒有排程。上面新增一個吧。")}</p> : (
               <ul className="ops-schedule__list">
                 {schedules.map((schedule) => (
                   <li key={schedule.id} className={schedule.enabled ? "" : "ops-schedule__item--off"}>
                     <div className="ops-schedule__meta">
-                      <strong>{schedule.time}</strong>
+                      <strong>{schedule.intervalMinutes ? t("每 {minutes} 分鐘", { minutes: schedule.intervalMinutes }) : schedule.time}</strong>
                       <span>{workerName(schedule.workerId) ?? t("（NPC 已刪除）")}</span>
                       {schedule.lastRunDay && <small>{t("上次執行 {day}", { day: schedule.lastRunDay })}</small>}
                     </div>
@@ -214,11 +231,11 @@ export function OpsModal({ workers, notify, onClose }: Props) {
           </div>
         )}
         {tab === "diagnostics" && <div className="ops-modal__body">
-          {diagnostics === null ? <p className="ops-modal__empty">{t("讀取中…")}</p> : <>
+          {diagnostics === null ? <Skeleton variant="tiles" rows={3} /> : <>
             <p className="ops-diagnostics__privacy">{t("只儲存在此裝置，不會上傳。診斷包不含 prompt、路徑、模型或工具輸出。")}</p>
             <div className="ops-diagnostics__grid">
               <div><small>{t("Mission 成功率")}</small><strong>{diagnostics.diagnostics.missions.successRate == null ? "—" : `${diagnostics.diagnostics.missions.successRate}%`}</strong></div>
-              <div><small>{t("完成／失敗")}</small><strong>{diagnostics.diagnostics.missions.completed}／{diagnostics.diagnostics.missions.failed}</strong></div>
+              <div><small>{t("完成／失敗")}</small><strong>{diagnostics.diagnostics.missions.completed}{tc("punct", "／")}{diagnostics.diagnostics.missions.failed}</strong></div>
               <div><small>{t("WebSocket 重連")}</small><strong>{diagnostics.diagnostics.responsiveness.websocketReconnects}</strong></div>
               <div><small>{t("3D FPS 分級")}</small><strong>{diagnostics.diagnostics.responsiveness.fpsBand === "unknown" ? "—" : diagnostics.diagnostics.responsiveness.fpsBand}</strong></div>
             </div>

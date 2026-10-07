@@ -6,18 +6,19 @@ import type {
   WorkerState,
 } from "./types";
 import { shortToolName, stationForTool } from "./stations";
-import { t } from "./i18n";
+import { t, tc } from "./i18n";
 
 // 把工具呼叫美化成好讀的中文短句（帶真實細節），取代直接吐英文工具名。3D/2D 小窗與對話泡共用。
-function friendlyToolSpeech(name: string, input: unknown): string {
+export function friendlyToolSpeech(name: string, input: unknown): string {
   const n = name.toLowerCase();
   const o = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const base = (p: unknown) => { const s = str(p); const parts = s.split(/[\\/]/); return parts[parts.length - 1] || s; };
   if (n === "bash" || n === "powershell" || n === "pwsh") {
     let c = str(o.command).replace(/\s+/g, " ").trim();
-    // 短短的顯示額度要留給真正的指令：去掉開頭的切目錄前綴、把長路徑縮成 …\最後兩段
-    c = c.replace(/^(?:Set-Location|Push-Location|cd)\s+(?:"[^"]*"|'[^']*'|[^\s;]+)\s*;\s*/i, "");
+    // 短短的顯示額度要留給真正的指令：去掉開頭的切目錄前綴（; 或 && 分隔皆可，可能連續多層），
+    // 把長路徑縮成 …\最後兩段。例：cd "…" && node "…\x.mjs" → node "…\x.mjs"
+    c = c.replace(/^(?:(?:Set-Location|Push-Location|cd)\s+(?:"[^"]*"|'[^']*'|[^\s;&]+)\s*(?:;|&&)\s*)+/i, "");
     c = c.replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"';|]+/g, (m) => { const parts = m.split(/[\\/]/); return parts.length > 2 ? `…\\${parts.slice(-2).join("\\")}` : m; });
     return c ? t("執行指令：{cmd}", { cmd: c.slice(0, 60) }) : t("執行指令");
   }
@@ -27,13 +28,17 @@ function friendlyToolSpeech(name: string, input: unknown): string {
   if (n === "grep") { const p = str(o.pattern); return p ? t("搜尋：{p}", { p: p.slice(0, 40) }) : t("搜尋程式碼"); }
   if (n === "glob") { const p = str(o.pattern); return p ? t("找檔案：{p}", { p: p.slice(0, 40) }) : t("找檔案"); }
   if (n === "task" || n.includes("agent")) return t("派發子任務…");
-  if (n === "todowrite" || n === "todoread") return t("整理待辦清單…");
+  if (n === "todowrite" || n === "todoread" || n.startsWith("task")) return t("整理任務清單…");
+  if (n === "websearch") return t("上網搜尋");
+  if (n === "skill") { const s = str(o.command ?? o.skill); return s ? t("啟用技能：{s}", { s: s.slice(0, 24) }) : t("啟用技能…"); }
+  if (n === "schedulewakeup" || n === "croncreate" || n === "cronlist" || n === "crondelete") return t("排定排程…");
+  if (n === "sendmessage" || n === "pushnotification") return t("傳訊給隊員…");
   if (n.includes("__")) return t("呼叫 {tool}…", { tool: shortToolName(name) });
-  return t("使用 {tool}…", { tool: shortToolName(name) });
+  return t("使用工具…");
 }
 
 // 從 WebSearch/WebFetch(及 firecrawl 等)的工具輸入撈出查詢字或網址，給工作小窗抓真實截圖用。
-function webQueryFromInput(input: unknown): string | undefined {
+export function webQueryFromInput(input: unknown): string | undefined {
   if (typeof input === "string") return input.trim() || undefined;
   if (!input || typeof input !== "object") return undefined;
   const o = input as Record<string, unknown>;
@@ -51,7 +56,7 @@ function readableFailureDetail(value: unknown): string {
   if (tool || reason) {
     return [tool ? t("工具 {name}", { name: String(tool) }) : t("權限遭拒"), reason ? String(reason) : t("未獲授權")]
       .filter(Boolean)
-      .join("：");
+      .join(tc("punct", "："));
   }
   try {
     return JSON.stringify(value);
@@ -88,9 +93,13 @@ function subagentInfo(input: unknown): { name: string; task: string } {
   };
 }
 
+const BACKGROUND_SUBAGENT_MAX_MS = 3 * 60 * 60 * 1000;
+
 function isAsyncAgentResult(output: unknown): boolean {
   const text = readableFailureDetail(output);
-  return /async agent launched successfully|agentId:\s*[a-z0-9]+/i.test(text);
+  // 只認「已在背景啟動」字樣；前景子代理跑完的結果尾巴也會附 agentId:，不能當背景訊號，
+  // 否則會被當成背景子代理留在會議桌上成殘影。
+  return /async agent launched successfully/i.test(text);
 }
 
 export const INITIAL_CHARACTER: CharacterState = {
@@ -130,6 +139,7 @@ export function emptyWorker(
     persona,
     autoApproveMode,
     handoff,
+    queue: [],
     turns: [],
     character: INITIAL_CHARACTER,
     subagents: [],
@@ -138,6 +148,15 @@ export function emptyWorker(
     openTextKey: null,
     openThinkingKey: null,
   };
+}
+
+/** 最近一個任務回合（跳過純通知回合）。「循環已停止」「撞到用量上限」這類通知常緊跟在失敗回合之後，它們不是任務：
+ *  判斷「剛完成還是失敗」（桌面通知、彩帶、需要你、隊員狀態）都看這個，不能看末尾那筆。 */
+export function latestTaskTurn(turns: readonly Turn[]): Turn | undefined {
+  for (let index = turns.length - 1; index >= 0; index--) {
+    if (!turns[index].notice) return turns[index];
+  }
+  return undefined;
 }
 
 /** Pure reducer — snapshot restore just replays the event history. */
@@ -160,10 +179,18 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
   const currentOrResumedTurn = (): Turn | null => {
     const running = currentTurn();
     if (running) return running;
-    const last = next.turns[next.turns.length - 1];
+    // 末尾的純通知回合不是任務：往前找最後一個任務回合接續（全是通知才退回接續最後一筆），
+    // 並把它移到最後——執行中的回合永遠排在末尾，輸出與 turn_end 才落得回它身上。
+    let index = next.turns.length - 1;
+    for (let candidate = index; candidate >= 0; candidate--) {
+      if (!next.turns[candidate].notice) { index = candidate; break; }
+    }
+    const last = next.turns[index];
     if (!last || last.status !== "done") return null;
     const resumed: Turn = { ...last, status: "running", items: [...last.items] };
-    next.turns[next.turns.length - 1] = resumed;
+    delete resumed.notice;
+    next.turns.splice(index, 1);
+    next.turns.push(resumed);
     next.busy = true;
     return resumed;
   };
@@ -179,14 +206,36 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
 
   switch (event.type) {
     case "user_message": {
+      // notice：純系統通知，沒有真的送進 runner、不會有 turn_end 收尾——顯示成已結束的訊息即可，
+      // 不能開一個 running turn 或翻 busy（否則通知會讓 NPC 看起來在忙、之後又被誤標成中止）。
+      if (event.notice) {
+        const notice: Turn = {
+          key: nextKey(),
+          command: event.text,
+          status: "done",
+          items: [],
+          notice: true,
+          ...(event.autopilotAsk ? { autopilotAsk: true, askOptions: event.askOptions ?? [] } : {}),
+        };
+        // 有回合正在跑（例如自動循環剛送出這一步、教練緊接著補一則階梯進度通知）：通知插在它
+        // 前面，執行中的回合留在末尾——否則後續輸出會被接到通知卡上、turn_end 收掉的也是通知，
+        // 真正那一步永遠停在「執行中」（重整重播也一樣）。
+        if (next.turns[next.turns.length - 1]?.status === "running") next.turns.splice(next.turns.length - 1, 0, notice);
+        else next.turns.push(notice);
+        break;
+      }
       next.turns.push({
         key: nextKey(),
         command: event.text,
         departmentFollowUpMissionId: event.departmentFollowUpMissionId,
         status: "running",
         items: [],
+        // 帶上 system 旗標讓日誌 feed 能把換腦等系統訊息濾掉（見 QuestLog），不影響既有的
+        // busy/回合驅動行為（protocol 註解：system 訊息仍照常顯示與驅動回合）。
+        ...(event.system ? { system: true } : {}),
       });
       next.busy = true;
+      next.backgroundOnly = false; // 本人開始跑回合：輸入框要能中止
       next.openTextKey = null;
       next.openThinkingKey = null;
       next.character = {
@@ -260,7 +309,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         const info = subagentInfo(event.input);
         next.subagents = [
           ...next.subagents.filter((agent) => agent.id !== event.id),
-          { id: event.id, name: info.name, task: info.task, background: false },
+          { id: event.id, name: info.name, task: info.task, background: false, startedAt: event.at },
         ];
       }
       const startStation = stationForTool(event.name, event.input);
@@ -318,7 +367,17 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       break;
     }
     case "tool_call_result": {
-      const turn = currentTurn();
+      // 工具結果可能晚於 turn_end 到達（其他 delta 事件走 currentOrResumedTurn 就是為此）。
+      // 這裡不用 resume（把已結束的 turn 翻回 running 會再造出「幽靈執行中」），
+      // 改成：沒有進行中的 turn 時，直接在「最後一個已結束的 turn」裡就地更新那張工具卡，
+      // 讓它從永遠轉圈變成完成，不動 turn 狀態與 busy。
+      let turn = currentTurn();
+      if (!turn) {
+        const last = next.turns[next.turns.length - 1];
+        if (last && last.status !== "running" && last.items.some((i) => i.kind === "tool_call" && (i as { id?: string }).id === event.id)) {
+          turn = { ...last, items: [...last.items] };
+        }
+      }
       let completedAgent = false;
       if (turn) {
         const idx = turn.items.findIndex(
@@ -346,7 +405,13 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       }
       next.character.activity = "idle";
       next.character.mood = event.isError ? "error" : "success";
+      // 單一工具呼叫結束（不是回合結束）：場景只播小勾／紅行，不開大慶祝。
+      next.character.outcome = "tool";
       next.character.bump = next.character.bump + 1;
+      break;
+    }
+    case "subagent_done": {
+      next.subagents = next.subagents.filter((agent) => agent.id !== event.id);
       break;
     }
     case "turn_end": {
@@ -400,12 +465,18 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       next.busy = false;
       next.openTextKey = null;
       next.openThinkingKey = null;
-      next.subagents = [];
+      // 背景子代理的回合結束後仍在跑——留在會議桌，等 subagent_done 才收；
+      // 萬一漏收通知，超過上限就當殘影清掉。前景子代理此時必已結束。
+      next.subagents = next.subagents.filter((agent) =>
+        agent.background &&
+        (event.at == null || agent.startedAt == null || event.at - agent.startedAt < BACKGROUND_SUBAGENT_MAX_MS),
+      );
       next.character = {
         ...next.character,
         activity: "idle",
         mood: event.isError ? "error" : "success",
         station: "home",
+        outcome: "turn",
         bump: next.character.bump + 1,
       };
       break;
@@ -452,6 +523,7 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
         mood: "error",
         speech: event.message,
         speechAt: event.at,
+        outcome: "turn",
         bump: next.character.bump + 1,
       };
       break;

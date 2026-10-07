@@ -1,0 +1,16 @@
+/* 第二輪（R2）scene 專屬樣式。 */
+
+/* 失敗未讀名牌：上一回合失敗、還沒點進去看。克制的一點紅——名牌框轉紅＋名字前一顆小方點，
+   不加字、不閃爍、不發光（選取這位 NPC 後兩者都消失）。 */
+.npc-nameplate--failed {
+  border-color: #e5484d;
+}
+
+.npc-nameplate__failed {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: #e5484d;
+}

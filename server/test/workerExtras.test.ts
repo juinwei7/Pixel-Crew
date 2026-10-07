@@ -14,6 +14,8 @@ process.env.DB_PATH = join(dataDir, "cockpit.sqlite");
 const {
   MAX_MEMORY_NOTES,
   MAX_MEMORY_NOTE_LENGTH,
+  MAX_LESSONS,
+  addLesson,
   addMemoryNote,
   composeMemorySection,
   deleteExtras,
@@ -27,7 +29,7 @@ const extrasDir = join(dataDir, "npc-extras");
 const extrasFile = (workerId: string) => join(extrasDir, `${workerId}.json`);
 
 test("getExtras returns empty defaults when no file exists", () => {
-  assert.deepEqual(getExtras("w-missing"), { notes: [], dailyBudgetUsd: null, goal: null });
+  assert.deepEqual(getExtras("w-missing"), { notes: [], lessons: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("addMemoryNote trims, collapses whitespace, persists to disk", () => {
@@ -35,7 +37,7 @@ test("addMemoryNote trims, collapses whitespace, persists to disk", () => {
   assert.deepEqual(result, { ok: true, note: "使用者喜歡 繁體中文 回覆" });
   assert.deepEqual(getExtras("w-add").notes, ["使用者喜歡 繁體中文 回覆"]);
   const onDisk = JSON.parse(readFileSync(extrasFile("w-add"), "utf8"));
-  assert.deepEqual(onDisk, { notes: ["使用者喜歡 繁體中文 回覆"], dailyBudgetUsd: null, goal: null });
+  assert.deepEqual(onDisk, { notes: ["使用者喜歡 繁體中文 回覆"], lessons: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("blank note is rejected with a zh-TW error", () => {
@@ -111,7 +113,7 @@ test("setWorkerGoal persists a bounded normalized goal and can clear it", () => 
 test("corrupt extras file on disk falls back to empty defaults", () => {
   mkdirSync(extrasDir, { recursive: true });
   writeFileSync(extrasFile("w-corrupt"), "not json at all", "utf8");
-  assert.deepEqual(getExtras("w-corrupt"), { notes: [], dailyBudgetUsd: null, goal: null });
+  assert.deepEqual(getExtras("w-corrupt"), { notes: [], lessons: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("malformed fields in the file are sanitized on load", () => {
@@ -137,7 +139,7 @@ test("deleteExtras removes the file and the cache", () => {
   assert.equal(existsSync(extrasFile("w-del")), true);
   deleteExtras("w-del");
   assert.equal(existsSync(extrasFile("w-del")), false);
-  assert.deepEqual(getExtras("w-del"), { notes: [], dailyBudgetUsd: null, goal: null });
+  assert.deepEqual(getExtras("w-del"), { notes: [], lessons: [], dailyBudgetUsd: null, goal: null });
 });
 
 test("worker ids are sanitized so they cannot traverse out of the extras dir", () => {
@@ -170,4 +172,65 @@ test("composeMemorySection includes an active goal before long-term memory", () 
   const section = composeMemorySection("w-goal-section");
   assert.match(section, /【目前目標 \/ Active goal】完成登入流程/);
   assert.ok(section.indexOf("【目前目標") < section.indexOf("【長期記憶"));
+});
+
+test("addLesson trims, collapses whitespace, persists into the separate lessons bucket", () => {
+  const result = addLesson("w-lesson", "  出 outbox 前\n  先做來源覆蓋矩陣  ");
+  assert.deepEqual(result, { ok: true, lesson: "出 outbox 前 先做來源覆蓋矩陣" });
+  const extras = getExtras("w-lesson");
+  assert.deepEqual(extras.lessons, ["出 outbox 前 先做來源覆蓋矩陣"]);
+  assert.deepEqual(extras.notes, []); // 心法不污染使用者事實桶
+});
+
+test("blank lesson is rejected with a zh-TW error", () => {
+  assert.deepEqual(addLesson("w-lesson-blank", "   \n  "), { ok: false, error: "心法內容不能是空白" });
+  assert.deepEqual(getExtras("w-lesson-blank").lessons, []);
+});
+
+test("duplicate lessons are rejected case-insensitively", () => {
+  assert.equal(addLesson("w-lesson-dup", "Always verify before reporting").ok, true);
+  assert.deepEqual(addLesson("w-lesson-dup", "ALWAYS verify before REPORTING"), { ok: false, error: "這條心法已經存在" });
+  assert.equal(getExtras("w-lesson-dup").lessons.length, 1);
+});
+
+test("lessons are a rolling window capped at MAX_LESSONS", () => {
+  for (let i = 0; i < MAX_LESSONS + 1; i++) {
+    assert.equal(addLesson("w-lesson-roll", `lesson-${i}`).ok, true);
+  }
+  const { lessons } = getExtras("w-lesson-roll");
+  assert.equal(lessons.length, MAX_LESSONS);
+  assert.equal(lessons[0], "lesson-1"); // lesson-0 已被擠掉
+  assert.equal(lessons.at(-1), `lesson-${MAX_LESSONS}`);
+});
+
+test("notes and lessons never evict each other", () => {
+  for (let i = 0; i < MAX_MEMORY_NOTES; i++) addMemoryNote("w-mixed", `note-${i}`);
+  for (let i = 0; i < MAX_LESSONS; i++) addLesson("w-mixed", `lesson-${i}`);
+  const extras = getExtras("w-mixed");
+  assert.equal(extras.notes.length, MAX_MEMORY_NOTES);
+  assert.equal(extras.lessons.length, MAX_LESSONS);
+});
+
+test("composeMemorySection renders the Playbook section after long-term memory", () => {
+  addMemoryNote("w-playbook", "偏好繁體中文");
+  addLesson("w-playbook", "報告直接打在對話日誌，不丟 outbox");
+  const section = composeMemorySection("w-playbook");
+  assert.match(section, /【做事心法 \/ Playbook】/);
+  assert.match(section, /- 報告直接打在對話日誌，不丟 outbox/);
+  assert.ok(section.indexOf("【長期記憶") < section.indexOf("【做事心法"));
+  assert.ok(section.indexOf("【做事心法") < section.indexOf("【記憶工具】"));
+});
+
+test("composeMemorySection omits the Playbook section when there are no lessons", () => {
+  const section = composeMemorySection("w-no-lessons");
+  assert.doesNotMatch(section, /【做事心法/);
+});
+
+test("the silent memory curl instruction auto-approves in full mode (cleanup must not trip the rm -f rule)", async () => {
+  const { evaluateAutoApproval } = await import("../src/dangerousCommand.js");
+  const step = composeMemorySection("w-full-mode").split("\n").find((line) => line.startsWith("② "));
+  assert.ok(step);
+  const command = step.slice(2);
+  assert.match(command, /pc-memory-w-full-mode\.json$/);
+  assert.equal(evaluateAutoApproval("full", "Bash", command).allowed, true);
 });

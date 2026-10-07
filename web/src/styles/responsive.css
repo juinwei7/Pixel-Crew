@@ -160,7 +160,39 @@
      --full    整頁佔滿（指令中心、角色工坊這種本來就接近全螢幕的工作台）
      --center  維持置中卡片（登入 gate 這種「關卡」而非「視窗」）
    ════════════════════════════════════════════════════════════════════════ */
+/* 進出場（全尺寸共用；keyframes 與 token 在 motion.css）。殼的樣式只准寫在
+   這個檔案，所以動態也跟著寫在這裡：遮罩淡入、卡片從下方 14px 帶一點彈簧
+   浮上來；關閉（Modal.tsx 把 data-closing 設成 true，120ms 後才卸載）比
+   打開快、不回彈。卡片用 translate / scale 屬性，不動各家自己的 transform。 */
+.ui-modal {
+  animation: pc-fade-in var(--dur-2) ease both;
+}
+.ui-modal__card {
+  animation: pc-dialog-in var(--dur-spring) var(--ease-spring-soft) both;
+}
+.ui-modal[data-closing="true"] {
+  animation: pc-fade-out var(--dur-1) ease forwards;
+  pointer-events: none;
+}
+.ui-modal[data-closing="true"] > .ui-modal__card {
+  animation: pc-dialog-out var(--dur-1) var(--ease-in) forwards;
+}
+/* 卡片是從某顆按鈕長出來的（interactionFx.ts 設的 data-pop-origin，入場在
+   motion-fx.css）：關閉時縮回那顆按鈕。!important 是為了蓋過入場那條同樣
+   帶 !important 的 animation。 */
+.ui-modal[data-closing="true"] > .ui-modal__card[data-pop-origin] {
+  animation: pc-origin-out var(--dur-1) var(--ease-in) forwards !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-modal[data-closing="true"] > .ui-modal__card[data-pop-origin] { animation: pc-fade-out var(--dur-1) ease forwards !important; }
+}
+
 @media (max-width: 600px) {
+  /* 手機的貼底抽屜：從底部滑上來，而不是在中間浮出。 */
+  .ui-modal:not(.ui-modal--center):not(.ui-modal--full) > .ui-modal__card {
+    animation-name: pc-sheet-in;
+  }
+
   /* overlay：一律改成貼底。原本各家寫的 place-items: center / padding: 28px
      會被這裡蓋掉（responsive.css 最後載入，同權重時後者勝）。 */
   .ui-modal {
@@ -184,6 +216,14 @@
        卡片本身維持 padding: 0，內部那些 calc(100% - 68px) 的高度才不會被
        安全區推歪。 */
     padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
+  }
+
+  /* Ctrl+K 指令面板（components/CommandPalette.tsx）：手機要貼「上」緣——
+     鍵盤一彈出來，貼底的面板會整個被蓋住。面板本身不是 __card，不吃抽屜樣式。 */
+  .ui-modal.pc-palette {
+    align-items: start;
+    justify-items: center;
+    padding: calc(var(--safe-t) + var(--sp-2)) var(--sp-2) var(--sp-2);
   }
 
   .ui-modal__card {
@@ -458,7 +498,15 @@
   }
   .crew-strip__status--approval { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
   .crew-strip__status--error { background: var(--err); box-shadow: 0 0 7px var(--err); }
-  .crew-strip__status--busy { background: var(--cyan); box-shadow: 0 0 7px var(--cyan); }
+  /* 執行中：亮青色脈動點，讓「背景正在跑」一眼可見。注意 workerAttention() 實際輸出
+     的是 --working（不是舊的 --busy），先前 class 名對不上，等於執行中完全沒有指示。 */
+  .crew-strip__status--working {
+    background: var(--cyan);
+    box-shadow: 0 0 7px var(--cyan);
+    animation: runningPulse 1.2s ease-in-out infinite;
+  }
+  /* 剛完成（有新產出可看）：靜態綠點，和閒置的無點區分開。 */
+  .crew-strip__status--done { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 
   .crew-strip__roster {
     display: grid;

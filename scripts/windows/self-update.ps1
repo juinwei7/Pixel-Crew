@@ -10,6 +10,9 @@ param(
 # hands over to the new single-file installer.
 $ErrorActionPreference = "Stop"
 $ReleaseFile = "Pixel Crew.exe"
+# GitHub replaces spaces with dots in uploaded asset names; SHA256SUMS.txt
+# still lists the original file name.
+$ReleaseAsset = "Pixel.Crew.exe"
 $logDirectory = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "Pixel Crew\logs"
 $updateMarker = Join-Path $logDirectory "update.pending"
 
@@ -39,8 +42,7 @@ try {
   if ($matches.Count -ne 1) { throw "Release checksum manifest is missing $ReleaseFile" }
   $expected = ([regex]::Match($matches[0], '^[0-9a-fA-F]{64}')).Value.ToLowerInvariant()
 
-  $encodedReleaseFile = [Uri]::EscapeDataString($ReleaseFile)
-  Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$encodedReleaseFile" -OutFile $installer
+  Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$ReleaseAsset" -OutFile $installer
   $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $expected) { throw "Release checksum verification failed; nothing was installed" }
   if ((Get-Item -LiteralPath $installer).Length -lt 1MB) { throw "Downloaded Pixel Crew installer is invalid" }

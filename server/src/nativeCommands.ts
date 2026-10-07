@@ -34,6 +34,20 @@ export function parseGoalCommand(text: string): GoalCommand | null {
   return { type: "set", objective: argument };
 }
 
+export type AppCommand = { type: "clean" } | { type: "goal"; command: GoalCommand };
+
+/**
+ * 要由 app 自己處理、不能原樣送進 CLI 的指令（/message 與排隊 drain 共用同一套判定）：
+ * `/clean`、`/clear` 由 app 重建工作階段——送進 CLI 的話，CLI 會重置自己的 session，但 app 還
+ * 留著舊 session id 與歷史；Claude 的 `/goal` 在 stream-json 沒有對應 RPC，由 app 模擬。
+ * 帶附件時 `/clear`、`/goal` 視為一般訊息。回傳 null＝一般訊息，照常送。
+ */
+export function interceptedAppCommand(provider: ProviderId, text: string, hasAttachments: boolean): AppCommand | null {
+  if (matchNativeCommand(text) === "clean" || (!hasAttachments && isClearCommand(text))) return { type: "clean" };
+  const goal = provider === "claude" && !hasAttachments ? parseGoalCommand(text) : null;
+  return goal ? { type: "goal", command: goal } : null;
+}
+
 export type CleanableWorker = {
   id: string;
   runner: AgentSession;

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   applyMissionActivityEvent,
   createMissionActivity,
   missionActiveWorkerId,
   missionLocksWorkspace,
+  missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -39,8 +43,41 @@ test("accepts a Quick Consult or Review only when it returns to the department l
   const continuation = { ...execute, title: "Boss continues", assigneeWorkerId: "boss" };
   const accepted = parseMissionPlan(plan([consult, continuation]), new Set(["boss", "builder", "reviewer"]), "boss");
   assert.equal(accepted.plan?.steps[0].kind, "consult");
+  // 收尾 Execute 排錯人是形式錯誤：自動收回主管，而不是打停整個 Mission。
   const wrongReturn = parseMissionPlan(plan([consult, { ...continuation, assigneeWorkerId: "builder" }]), new Set(["boss", "builder", "reviewer"]), "boss");
-  assert.match(wrongReturn.error ?? "", /必須交回部門主管/);
+  assert.equal(wrongReturn.error, undefined);
+  assert.equal(wrongReturn.plan?.steps[1].assigneeWorkerId, "boss");
+});
+
+test("assignment mistakes are auto-corrected in place instead of pausing the mission", () => {
+  // 快速協作的 Consult 排給主管自己 → 改派給第一位其他成員（真實案例：臨時團隊主管把 Review 排給自己，整單卡 needs_attention）。
+  const selfConsult = { title: "Ask", objective: "Investigate", kind: "consult", assigneeWorkerId: "boss", acceptanceCriteria: ["advice"] };
+  const back = { ...execute, title: "Boss continues", assigneeWorkerId: "boss" };
+  const fixedQuick = parseMissionPlan(plan([selfConsult, back]), new Set(["boss", "builder", "reviewer"]), "boss");
+  assert.equal(fixedQuick.error, undefined);
+  assert.equal(fixedQuick.plan?.steps[0].assigneeWorkerId, "builder");
+  // 單人部門無人可改派：維持原錯誤（這才是真的不可修）。
+  const solo = parseMissionPlan(plan([{ ...selfConsult }, back]), new Set(["boss"]), "boss");
+  assert.match(solo.error ?? "", /必須指派給另一位部門 NPC/);
+  // 多步驟計畫：Review 與 Execute 同人 → 改派另一位成員。
+  const sameReviewer = plan([execute, { ...review, assigneeWorkerId: "builder" }]);
+  const fixedReview = parseMissionPlan(sameReviewer, new Set(["builder", "reviewer"]));
+  assert.equal(fixedReview.error, undefined);
+  assert.equal(fixedReview.plan?.steps[1].assigneeWorkerId, "reviewer");
+  // 研究模式：最後的 Execute 沒排給主管 → 收回主管；Consult 排給主管 → 改派專家。
+  const answer = { ...execute, title: "Answer owner", assigneeWorkerId: "reviewer" };
+  const bossConsult = { title: "Check", objective: "Evidence", kind: "consult", assigneeWorkerId: "boss", acceptanceCriteria: ["cite"] };
+  const fixedResearch = parseMissionPlan(plan([bossConsult, answer]), new Set(["boss", "reviewer"]), "boss", new Set(), "research");
+  assert.equal(fixedResearch.error, undefined);
+  assert.equal(fixedResearch.plan?.steps[0].assigneeWorkerId, "reviewer");
+  assert.equal(fixedResearch.plan?.steps[1].assigneeWorkerId, "boss");
+});
+
+test("format repair prompt names the rejection reason so the retry can fix it", () => {
+  const withProblem = missionFormatRepairPrompt("plan", "some output", "快速協作的 Consult／Review 必須指派給另一位部門 NPC");
+  assert.match(withProblem, /上次輸出被拒絕的原因：快速協作的 Consult／Review 必須指派給另一位部門 NPC/);
+  const without = missionFormatRepairPrompt("plan", "some output");
+  assert.ok(!without.includes("上次輸出被拒絕的原因"));
 });
 
 test("research plans are one lead answer or one consult plus the lead answer", () => {
@@ -104,6 +141,25 @@ test("keeps a Mission turn open across an async Agent intermediate turn_end", ()
   const final = applyMissionActivityEvent(activity, { type: "turn_end" });
   assert.equal(final.shouldFinish, true);
   assert.deepEqual(final.activity.openAgentIds, []);
+});
+
+test("closes a background Agent on subagent_done instead of waiting for the timeout", () => {
+  let activity = createMissionActivity();
+  ({ activity } = applyMissionActivityEvent(activity, { type: "tool_call_start", id: "agent-1", name: "Agent" }));
+  ({ activity } = applyMissionActivityEvent(activity, {
+    type: "tool_call_result",
+    id: "agent-1",
+    output: "Async agent launched successfully\nagentId: abc123",
+    isError: false,
+  }));
+  ({ activity } = applyMissionActivityEvent(activity, { type: "turn_end" }));
+  assert.deepEqual(activity.openAgentIds, ["agent-1"]);
+  // 不相干的 id（例如一般 Bash 的 task_notification）不影響。
+  ({ activity } = applyMissionActivityEvent(activity, { type: "subagent_done", id: "toolu_bash" }));
+  assert.deepEqual(activity.openAgentIds, ["agent-1"]);
+  ({ activity } = applyMissionActivityEvent(activity, { type: "subagent_done", id: "agent-1" }));
+  assert.deepEqual(activity.openAgentIds, []);
+  assert.equal(activity.openedAt, null);
 });
 
 test("stamps openedAt once an async Agent call opens and clears it once closed", () => {
@@ -248,4 +304,33 @@ test("routes Mission phases to exactly one active worker and finds correction ta
   assert.equal(missionLocksWorkspace(mission), true);
   mission.status = "completed";
   assert.equal(missionLocksWorkspace(mission), false);
+});
+
+test("boss Missions lift an off member to safe only on the Mission runner", () => {
+  assert.equal(missionRunnerApproveMode("off", "boss"), "safe");
+  // 成員自己設的模式（含更寬的 full／無敵）照舊，部門自己開的 Mission 也不升級。
+  assert.equal(missionRunnerApproveMode("safe", "boss"), "safe");
+  assert.equal(missionRunnerApproveMode("full", "boss"), "full");
+  assert.equal(missionRunnerApproveMode("invincible", "boss"), "invincible");
+  assert.equal(missionRunnerApproveMode("off", "department"), "off");
+  assert.equal(missionRunnerApproveMode("off", undefined), "off");
+});
+
+test("a boss task never rewrites a member's own approval mode", () => {
+  // 以前派工時直接把成員的 autoApproveMode 從 off 改成 safe，turn_end 就持久化、沒人改回來，
+  // 交辦結束後成員的直接對話也一路自動放行。升級只能留在 Mission runner 的 getter 裡。
+  const source = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(source, /member\.autoApproveMode\s*=\s*"safe"/);
+  const runnerFactory = source.slice(source.indexOf("function missionRunnerFor("), source.indexOf("function sendMissionRunner("));
+  assert.doesNotMatch(runnerFactory, /\(\) => worker\.autoApproveMode,/);
+  assert.equal(runnerFactory.match(/missionRunnerApproveMode\(worker\.autoApproveMode, mission\.origin\)/g)?.length, 2);
+});
+
+test("the prepare API reports the correction budget missions actually get", () => {
+  // launchDepartmentMission 早已改成 0（依老闆指示不做自動修正回合），prepare API 卻還回 2 並寫著
+  // 「最多自動退回修正兩輪」——兩邊都要讀同一個常數，警語也要跟著它講。
+  const source = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(source, /maxCorrections: \d/);
+  assert.equal(source.match(/maxCorrections: MISSION_MAX_CORRECTIONS,/g)?.length, 2);
+  if (MISSION_MAX_CORRECTIONS === 0) assert.doesNotMatch(source, /退回修正兩輪/);
 });

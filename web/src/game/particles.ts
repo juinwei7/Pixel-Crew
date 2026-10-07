@@ -34,7 +34,8 @@ export class ParticleSystem {
         vx: Math.cos(angle) * sp,
         vy: Math.sin(angle) * sp - speed * 0.4,
         maxLife: 500 + Math.random() * 400,
-        size: 1 + Math.random(),
+        // Whole pixels only: a fractional size blurs into a smudge at camera zoom.
+        size: Math.random() < 0.35 ? 2 : 1,
         color,
         gravity: 0.00008,
       });
@@ -70,7 +71,8 @@ export class ParticleSystem {
       p.y += p.vy * dtMs;
       const a = Math.min(1, p.life / p.maxLife) * 0.9;
       // Square pixels for the pixel-art look
-      g.rect(Math.round(p.x), Math.round(p.y), p.size, p.size).fill({ color: p.color, alpha: a });
+      const size = Math.max(1, Math.round(p.size));
+      g.rect(Math.round(p.x), Math.round(p.y), size, size).fill({ color: p.color, alpha: a });
     }
   }
 }

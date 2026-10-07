@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, RunnerEvent, UpdateInfo, WorkerState } from "../types";
+import type { AccountLoginState, AccountWithAuth, ApprovalDecision, AutoApproveMode, BossAssignmentResponse, BossTask, CapabilityState, ClaudeLoginState, CodexAccountLoginMode, CollaborationMode, CollaborationTask, CommandSubmission, Department, DepartmentMission, DepartmentThreadPayload, GlobalMemoryNoteDto, HandoffProgress, McpLoginResult, Persona, PreparedCollaboration, PreparedHandoff, PreparedMission, ProviderAuthState, ProviderId, ProviderInstallState, ProviderUsageState, QueuedCommandDto, RunnerEvent, UpdateInfo, WorkerState } from "../types";
 import { applyRunnerEvent, emptyWorker } from "../workerState";
+import { clearAdvisorErrors, resumeAdvisorRuns } from "../advisorStore";
 import { apiRequest } from "../api";
 import { t } from "../i18n";
 import { runtimeWsOrigin } from "../runtimeOrigin";
+import { createFrameBatcher } from "./frameBatch";
 
 const browserOrigin = typeof window !== "undefined" ? window.location.origin : "http://localhost:8787";
 const WS_URL = runtimeWsOrigin(browserOrigin);
@@ -45,6 +47,7 @@ type ServerMessage =
         name: string;
         model: string | null;
         busy: boolean;
+        backgroundOnly?: boolean;
         colorIndex: number;
         avatarId: string | null;
         avatarKind: "preset" | "custom";
@@ -58,7 +61,9 @@ type ServerMessage =
         handoff: HandoffProgress | null;
         resumeCandidate?: WorkerState["resumeCandidate"];
         ephemeralKind?: WorkerState["ephemeralKind"];
+        autopilot?: WorkerState["autopilot"];
         events: RunnerEvent[];
+        queue?: QueuedCommandDto[];
       }>;
     }
   | { type: "event"; workerId: string; event: RunnerEvent }
@@ -67,6 +72,8 @@ type ServerMessage =
   | { type: "worker_updated"; worker: WorkerSummary; reset?: boolean }
   | { type: "workers_reordered"; order: string[] }
   | { type: "worker_status"; workerId: string; busy: boolean }
+  | { type: "brain_swapped"; workerId: string; learned: boolean; lesson: string | null }
+  | { type: "queue_updated"; workerId: string; queue: QueuedCommandDto[] }
   | { type: "collaboration_created" | "collaboration_updated"; collaboration: CollaborationTask }
   | { type: "mission_created" | "mission_updated"; mission: DepartmentMission }
   | { type: "boss_task_created" | "boss_task_updated"; bossTask: BossTask }
@@ -89,6 +96,7 @@ type ServerMessage =
   | { type: "claude_default_login_result"; ok: boolean; status: ClaudeLoginState["status"]; message: string | null }
   | { type: "claude_default_login_url"; loginUrl: string | null; status: ClaudeLoginState["status"] }
   | { type: "global_memory_updated"; notes: GlobalMemoryNoteDto[] }
+  | { type: "autopilot"; workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt?: number | null; autoResolve?: boolean }
   | { type: "terminal_mux_layout"; layout: string; version: number };
 
 type WorkerSummary = {
@@ -96,6 +104,7 @@ type WorkerSummary = {
   name: string;
   model: string | null;
   busy: boolean;
+  backgroundOnly?: boolean;
   colorIndex: number;
   avatarId: string | null;
   avatarKind: "preset" | "custom";
@@ -109,6 +118,7 @@ type WorkerSummary = {
   handoff: HandoffProgress | null;
   resumeCandidate?: WorkerState["resumeCandidate"];
   ephemeralKind?: WorkerState["ephemeralKind"];
+  autopilot?: WorkerState["autopilot"];
 };
 
 function defaultAuth(
@@ -137,6 +147,8 @@ export function useWorkers() {
   const [mcpLoginResult, setMcpLoginResult] = useState<(McpLoginResult & { seq: number }) | null>(null);
   const [globalMemoryEvent, setGlobalMemoryEvent] = useState<{ notes: GlobalMemoryNoteDto[]; seq: number } | null>(null);
   const [muxLayoutEvent, setMuxLayoutEvent] = useState<{ layout: string; version: number; seq: number } | null>(null);
+  // 換腦事件（complete_swap 發出）：learned 只在心法真的落盤時為 true；seq 讓 UI 認得出同一顆重複換腦。
+  const [brainSwapEvent, setBrainSwapEvent] = useState<{ workerId: string; learned: boolean; lesson: string | null; seq: number } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [targetRepoPath, setTargetRepoPath] = useState("");
   const [system, setSystem] = useState<SystemStatus | null>(null);
@@ -145,6 +157,8 @@ export function useWorkers() {
     totalCostUsd: 0,
   });
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  // 老闆交辦自動循環：伺服器每次開關/步數變動都廣播最新狀態（含正規化後的 workspace key）。
+  const [lastAutopilot, setLastAutopilot] = useState<{ workspacePath: string; enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve: boolean } | null>(null);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
   const [wsReady, setWsReady] = useState(false);
   const emptyCapabilities = (): CapabilityState => ({
@@ -195,6 +209,11 @@ export function useWorkers() {
     let retry: ReturnType<typeof setTimeout> | null = null;
     let connectedOnce = false;
     const pendingApprovals = new Map<string, number>();
+    // 同一個 frame 收到的訊息攢起來一次套用：React 會把一個 callback 裡的所有 setState
+    // 合併成一次 render，串流時從「每則訊息一次 render」降到「每 frame 一次」。順序不變。
+    const batcher = createFrameBatcher<ServerMessage>((messages) => {
+      for (const message of messages) handleMessage(message);
+    });
 
     function connect() {
       socket = new WebSocket(`${WS_URL}/ws`);
@@ -202,14 +221,20 @@ export function useWorkers() {
         if (connectedOnce) void apiRequest("/api/diagnostics/events", { method: "POST", body: { kind: "websocket_reconnect", value: 1 } }).catch(() => {});
         connectedOnce = true;
         setWsReady(true);
+        // The socket being open proves the server is reachable again. Transparently
+        // re-run any advisor generation that a disconnect interrupted, and drop any
+        // stale "無法連線" advisor error left over from a blip that has since healed.
+        resumeAdvisorRuns();
+        clearAdvisorErrors();
       };
       socket.onclose = () => {
+        batcher.flush();
         setWsReady(false);
         if (!closed) retry = setTimeout(connect, 1000);
       };
       socket.onmessage = (msg) => {
         const data: ServerMessage = JSON.parse(msg.data);
-        handleMessage(data);
+        batcher.push(data);
       };
     }
 
@@ -260,10 +285,13 @@ export function useWorkers() {
               });
             }
             state.busy = w.busy;
+            state.backgroundOnly = w.backgroundOnly ?? false;
             state.departmentId = w.departmentId ?? null;
             state.accountId = w.accountId ?? null;
             state.resumeCandidate = w.resumeCandidate ?? null;
             state.ephemeralKind = w.ephemeralKind ?? null;
+            state.autopilot = w.autopilot ?? null;
+            state.queue = w.queue ?? [];
             record[w.id] = state;
             ids.push(w.id);
           }
@@ -305,7 +333,9 @@ export function useWorkers() {
               data.worker.avatarPresetId,
               data.worker.handoff ?? null,
               data.worker.autoApproveMode,
-            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null },
+            // emptyWorker 沒有這幾個欄位的參數位，必須跟 snapshot 分支一樣手動回填——漏掉 ephemeralKind
+            // 會讓作戰室成員坐不上會議桌、專屬部隊被當常駐工排進主辦公室（直到重連拿 snapshot 才修正）。
+            ), departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null },
           }));
           setWorkspacePaths((current) =>
             current.includes(data.worker.workspacePath)
@@ -355,7 +385,9 @@ export function useWorkers() {
                   data.worker.handoff ?? null,
                   data.worker.autoApproveMode,
                 );
-            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null };
+            // reset/換 provider 走 emptyWorker 重建時，跟 worker_added 一樣要回填 ephemeralKind 與
+            // resumeCandidate——否則 dedicated/warroom NPC 收到 reset 會瞬移回主辦公室、resume 卡片消失。
+            const updated = { ...updatedBase, departmentId: data.worker.departmentId ?? null, accountId: data.worker.accountId ?? null, ephemeralKind: data.worker.ephemeralKind ?? null, resumeCandidate: data.worker.resumeCandidate ?? null, autopilot: data.worker.autopilot ?? null, backgroundOnly: data.worker.backgroundOnly ?? false };
             return { ...prev, [data.worker.id]: updated };
           });
           setWorkspacePaths((current) =>
@@ -369,7 +401,15 @@ export function useWorkers() {
           setWorkers((prev) => {
             const w = prev[data.workerId];
             if (!w || w.busy === data.busy) return prev;
-            return { ...prev, [data.workerId]: { ...w, busy: data.busy } };
+            return { ...prev, [data.workerId]: { ...w, busy: data.busy, ...(data.busy ? { backgroundOnly: false } : {}) } };
+          });
+          break;
+        }
+        case "queue_updated": {
+          setWorkers((prev) => {
+            const w = prev[data.workerId];
+            if (!w) return prev;
+            return { ...prev, [data.workerId]: { ...w, queue: data.queue } };
           });
           break;
         }
@@ -428,6 +468,10 @@ export function useWorkers() {
           setGlobalMemoryEvent((prev) => ({ notes: data.notes, seq: (prev?.seq ?? 0) + 1 }));
           break;
         }
+        case "brain_swapped": {
+          setBrainSwapEvent((prev) => ({ workerId: data.workerId, learned: data.learned, lesson: data.lesson, seq: (prev?.seq ?? 0) + 1 }));
+          break;
+        }
         case "terminal_mux_layout": {
           setMuxLayoutEvent((prev) => ({ layout: data.layout, version: data.version, seq: (prev?.seq ?? 0) + 1 }));
           break;
@@ -471,6 +515,10 @@ export function useWorkers() {
         }
         case "update_info": {
           setUpdateInfo(data.updateInfo);
+          break;
+        }
+        case "autopilot": {
+          setLastAutopilot({ workspacePath: String(data.workspacePath ?? ""), enabled: Boolean(data.enabled), stepsRemaining: Number(data.stepsRemaining ?? 0), deadlineAt: data.deadlineAt == null ? null : Number(data.deadlineAt), autoResolve: Boolean(data.autoResolve) });
           break;
         }
         case "account_login_result": {
@@ -539,6 +587,7 @@ export function useWorkers() {
     connect();
     return () => {
       closed = true;
+      batcher.cancel();
       if (retry) clearTimeout(retry);
       socket?.close();
     };
@@ -715,9 +764,9 @@ export function useWorkers() {
     }
   }, []);
 
-  const setWorkerAccount = useCallback(async (workerId: string, accountId: string | null): Promise<string | null> => {
+  const setWorkerAccount = useCallback(async (workerId: string, accountId: string | null, force = false): Promise<string | null> => {
     try {
-      await apiRequest(`/api/workers/${workerId}/account`, { method: "PATCH", body: { accountId } });
+      await apiRequest(`/api/workers/${workerId}/account`, { method: "PATCH", body: force ? { accountId, force: true } : { accountId } });
       return null;
     } catch (error) {
       return (error as Error).message;
@@ -957,6 +1006,7 @@ export function useWorkers() {
     documents?: CommandSubmission["documents"];
     clientMessageId?: string;
     idempotencyKey?: string;
+    dedicatedDepartment?: boolean;
   }): Promise<{ data?: BossTask; error?: string }> => {
     try {
       const data = await apiRequest<{ bossTask: BossTask }>("/api/boss-tasks", {
@@ -1026,6 +1076,30 @@ export function useWorkers() {
       return { data };
     } catch (error) {
       return { error: (error as Error).message };
+    }
+  }, []);
+
+  // 一鍵中止整張 Boss 交辦：停掉所有進行中的部門 Mission、任務轉 cancelled、臨時團隊解散。
+  const cancelBossTask = useCallback(async (id: string): Promise<string | null> => {
+    try {
+      const data = await apiRequest<{ bossTask?: BossTask }>(`/api/boss-tasks/${id}/cancel`, { method: "POST", timeoutMs: 60_000 });
+      if (data.bossTask) setBossTasks((current) => ({ ...current, [data.bossTask!.id]: data.bossTask! }));
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  // 已結束的 Mission 在初始 snapshot 裡不帶 executionEvents（server 的 missionForSnapshot
+  // 為了不把 snapshot 撐爆而拿掉），所以要看它的活動流就得單筆補抓一次。少了這一步，
+  // 「部門討論與執行」那個區塊在重新整理後會永遠是空的。
+  const loadMissionActivity = useCallback(async (id: string): Promise<void> => {
+    try {
+      const data = await apiRequest<{ mission?: DepartmentMission }>(`/api/missions/${id}`);
+      const mission = data?.mission;
+      if (mission) setMissions((prev) => ({ ...prev, [mission.id]: mission }));
+    } catch {
+      // 補抓失敗就維持原狀（活動流空著），不影響其他操作。
     }
   }, []);
 
@@ -1152,6 +1226,31 @@ export function useWorkers() {
     } catch (error) {
       return (error as Error).message;
     }
+  }, []);
+
+  // 跨裝置排隊：排隊改 POST 到 server 佇列（不再存瀏覽器）。畫面上的佇列由 server 的
+  // queue_updated 廣播回填，所以這裡不用手動 setWorkers。
+  const enqueueCommand = useCallback(async (id: string, command: CommandSubmission): Promise<string | null> => {
+    try {
+      await apiRequest<{ ok: boolean }>(`/api/workers/${id}/queue`, {
+        method: "POST",
+        body: { message: command.text, images: command.images, documents: command.documents },
+        timeoutMs: 30000,
+      });
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, []);
+
+  const removeQueued = useCallback(async (id: string, queueId: string): Promise<string | null> => {
+    try { await apiRequest(`/api/workers/${id}/queue/${queueId}`, { method: "DELETE" }); return null; }
+    catch (error) { return (error as Error).message; }
+  }, []);
+
+  const reorderQueued = useCallback(async (id: string, order: string[]): Promise<string | null> => {
+    try { await apiRequest(`/api/workers/${id}/queue`, { method: "PATCH", body: { order } }); return null; }
+    catch (error) { return (error as Error).message; }
   }, []);
 
   const askMission = useCallback(async (missionId: string, question: string): Promise<string | null> => {
@@ -1319,12 +1418,14 @@ export function useWorkers() {
     mcpLoginResult,
     globalMemoryEvent,
     muxLayoutEvent,
+    brainSwapEvent,
     activeId,
     setActiveId,
     targetRepoPath,
     system,
     stats,
     updateInfo,
+    lastAutopilot,
     workspacePaths,
     wsReady,
     capabilitiesByWorkspace,
@@ -1371,10 +1472,12 @@ export function useWorkers() {
     updateBossTask,
     deleteBossTask,
     restartBossTask,
+    cancelBossTask,
     cancelMission: (id: string) => missionAction(id, "cancel"),
     retryMissionReview: (id: string) => missionAction(id, "retry-review"),
     approveMissionPlan: (id: string) => missionAction(id, "approve-plan"),
     resolveMission,
+    loadMissionActivity,
     switchWorkspace,
     closeWorker,
     renameWorker,
@@ -1384,6 +1487,9 @@ export function useWorkers() {
     selectAvatarPreset,
     activateCustomAvatar,
     send,
+    enqueueCommand,
+    removeQueued,
+    reorderQueued,
     askMission,
     setModel,
     setModelFresh,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { t } from "../i18n";
 
@@ -15,6 +15,10 @@ import { t } from "../i18n";
 // hideClose：關閉鈕不是右上角浮動樣式（例如卡在 header 裡排版），或這個狀態下本來就
 // 不該有關閉鈕（例如強制設定流程），改由呼叫端自己在 children 裡放關閉鈕/不放。
 // 需要「忙碌中不准關」的 modal，把守門邏輯包進傳入的 onClose（Esc 和 × 走同一條路）。
+// 關閉動畫：Esc 與 × 走 requestClose——先把 data-closing 設上、播 120ms 的退場
+// （styles/responsive.css），再真的呼叫 onClose。呼叫端自己在 children 裡放的
+// 關閉鈕直接卸載，不經過這裡，行為跟以前一樣。onClose 若被守門擋下（忙碌中
+// 不准關），退場結束後把 closing 還原，卡片會重新出現而不是卡在半透明。
 // variant 只影響手機：
 //   sheet（預設）＝ 貼底抽屜，適合絕大多數設定/表單類視窗
 //   full         ＝ 整頁佔滿（本來在桌面就接近全螢幕的工作台，例如指令中心）
@@ -34,6 +38,9 @@ type Props = {
   onClose(): void;
   children: ReactNode;
 };
+
+// 與 styles/responsive.css 的 .ui-modal[data-closing] 退場時長（var(--dur-1)）一致。
+const MODAL_EXIT_MS = 120;
 
 // 純函式，方便測試直接驗證 variant 對應到哪個 class。
 export function modalShellClass(variant: ModalVariant = "sheet"): string {
@@ -55,17 +62,33 @@ export function Modal({
 }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef);
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const requestClose = useCallback(() => {
+    if (closeTimerRef.current !== null) return;
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setClosing(false);
+      onCloseRef.current();
+    }, MODAL_EXIT_MS);
+  }, []);
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") requestClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [requestClose]);
   return (
-    <div className={`${modalShellClass(variant)} ${overlayClassName}`} role="dialog" aria-modal="true" aria-label={label}>
+    <div className={`${modalShellClass(variant)} ${overlayClassName}`} role="dialog" aria-modal="true" aria-label={label} data-closing={closing ? "true" : undefined}>
       <div className={`ui-modal__card ${cardClassName}`} ref={dialogRef}>
-        {!hideClose && <button type="button" className={`ui-modal__close ${closeClassName}`} onClick={onClose} aria-label={closeLabel ?? t("關閉視窗")}>×</button>}
+        {!hideClose && <button type="button" className={`ui-modal__close ${closeClassName}`} onClick={requestClose} aria-label={closeLabel ?? t("關閉視窗")}>×</button>}
         {(eyebrow || title) && <header>{eyebrow && <span>{eyebrow}</span>}{title && <h2>{title}</h2>}</header>}
         {children}
       </div>

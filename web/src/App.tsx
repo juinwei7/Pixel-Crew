@@ -1,12 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useWorkers } from "./hooks/useWorkers";
 import { topDismissibleLayer, useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { useUiPreferences, clampTaskLogWidth, clampTaskLogHeight, isTaskLogVisible, shouldAutoCollapseTaskLog } from "./uiPreferences";
-import { GameCanvas } from "./components/GameCanvas";
-import { QuestLog } from "./components/QuestLog";
+import { useUiPreferences, type CrewFilter, clampTaskLogWidth, clampTaskLogHeight, isTaskLogVisible, shouldAutoCollapseTaskLog } from "./uiPreferences";
+import { QuestLog, type QuestLogAttention, type TurnDeliverable } from "./components/QuestLog";
+import { MissionActivityFeed } from "./components/MissionActivityFeed";
 import { WorkerTabs } from "./components/WorkerTabs";
 import { TopBar } from "./components/TopBar";
-import { TaskComposer } from "./components/TaskComposer";
+import { roomName } from "./workspace";
+import { TaskComposer, type ComposerInject, type ComposerLaunch } from "./components/TaskComposer";
+import { CommandPalette, type PaletteEntry, type PaletteStatus } from "./components/CommandPalette";
+import { emitFx, onFx } from "./fxBus";
+import { deliverableHref, useDeliverableWatch, type NewDeliverable } from "./hooks/useDeliverableWatch";
+import { LONG_PRESS_MS, useNpcLongPress } from "./hooks/useNpcLongPress";
 import { ToastRegion, type Toast } from "./components/ToastRegion";
 import { ConfirmDialog, type ConfirmTone } from "./components/ConfirmDialog";
 import { CrewChips } from "./components/CrewChips";
@@ -23,22 +28,35 @@ import { Modal } from "./components/Modal";
 import { useIsPhone } from "./hooks/useIsPhone";
 import { hasSeenTour } from "./onboardingState";
 import { RichText } from "./components/RichText";
-import { WarroomVerdictBody, type WarRoomResult } from "./components/WarroomVerdictBody";
+import { WarroomVerdictBody, warroomActionDelegationText, type WarRoomAction, type WarRoomResult } from "./components/WarroomVerdictBody";
 import { requiresAutoApproveConfirmation } from "./autoApproveSafety";
 import { parseMcpToolName } from "./mcpToolName";
 import { discussionSubmission, toggleDiscussionMode, type DiscussionMode } from "./discussionMode";
 import { roundtablePrompt } from "./roundtablePrompt";
+import { RoundtableFollowUp } from "./components/RoundtableFollowUp";
 import { apiRequest } from "./api";
+import { followWarroomTicket, type WarroomTicketView } from "./warroomQueue";
 import { t } from "./i18n";
-import type { ApprovalDecision, WorkerState } from "./types";
+import type { ApprovalDecision, DepartmentMission, WorkerState } from "./types";
 
-import { diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
+import { diffNeedsYouNotifications, diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
+import { latestTaskTurn } from "./workerState";
+import { nextNeedsYou, type NeedsYouItem, type NeedsYouKind } from "./needsYou";
+import { useNeedsYou } from "./hooks/useNeedsYou";
+import { useEventCallbacks, useStableBy } from "./hooks/useStable";
 import { latestReadableTurnKey, workerAttention, workerFocusStatus, workerHasUnread } from "./crew";
 import { buildFocusStudios, focusStudioWorkers, studioWorkerId } from "./focusStudios";
 import { addPane, createFocusPanes, MAX_FOCUS_PANES, removePane, setPaneWorker, type FocusPane } from "./focusPanes";
 import type { AutoApproveMode, ProviderId } from "./types";
 import { Icon } from "./components/Icon";
+import { ConnectionBanner } from "./components/ConnectionBanner";
+import { celebrateWorker, flashArrival } from "./interactionFx";
+import { ElapsedSeconds } from "./components/ConnectionBanner";
+import { PanelSkeleton } from "./components/BuildMoment";
 
+// 像素辦公室（GameCanvas → game/scene → Pixi）不放進入口 chunk：介面殼層先出來可操作，
+// 場景隨後補上。fallback 只是一塊同色底，不閃白。
+const GameCanvas = lazy(() => import("./components/GameCanvas").then((module) => ({ default: module.GameCanvas })));
 const CommandCenter = lazy(() => import("./components/CommandCenter").then((module) => ({
   default: module.CommandCenter,
 })));
@@ -63,19 +81,34 @@ const OutboxModal = lazy(() => import("./components/OutboxModal").then((module) 
 const ShortcutsHelp = lazy(() => import("./components/ShortcutsHelp").then((module) => ({ default: module.ShortcutsHelp })));
 const OnboardingTour = lazy(() => import("./components/OnboardingTour").then((module) => ({ default: module.OnboardingTour })));
 
-const CLAUDE_MODEL_OPTIONS = [
-  { id: "opus", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: t("Haiku（最快）") },
-  { id: "fable", label: "Fable" },
+// description 是選單裡「適合什麼情況用」的備註；server 探到的模型通常沒有
+// description，合併時保留這裡的備註，不讓它被覆蓋掉。
+const CLAUDE_MODEL_OPTIONS: Array<{ id: string; label: string; description?: string }> = [
+  { id: "opus", label: "Opus", description: t("主力推薦：寫程式、長任務、大多數工作") },
+  { id: "sonnet", label: "Sonnet", description: t("快又聰明：日常對話、一般任務、省額度") },
+  { id: "haiku", label: "Haiku", description: t("最快最省：簡單查詢、分類、大量小事") },
+  { id: "fable", label: "Fable", description: t("最強推理：高難度推理、長程規劃（較慢較貴）") },
 ];
 
 function mergeModelOptions(fallback: typeof CLAUDE_MODEL_OPTIONS, discovered: typeof CLAUDE_MODEL_OPTIONS, activeModel?: string | null) {
   const models = new Map<string, { id: string; label: string; description?: string }>();
   for (const model of fallback) models.set(model.id, model);
-  for (const model of discovered) models.set(model.id, model);
+  for (const model of discovered) models.set(model.id, { ...model, description: model.description ?? models.get(model.id)?.description });
   if (activeModel && !models.has(activeModel)) models.set(activeModel, { id: activeModel, label: activeModel });
-  return [{ id: "", label: t("預設模型") }, ...models.values()];
+  return [{ id: "", label: t("預設模型"), description: t("跟隨本機 Claude 設定") }, ...models.values()];
+}
+
+
+const NEEDS_YOU_TONE: Record<NeedsYouKind, QuestLogAttention["tone"]> = {
+  approval: "approval",
+  decision: "question",
+  question: "question",
+  failed: "error",
+  stuck: "review",
+};
+
+function needsYouKindLabel(kind: NeedsYouKind): string {
+  return { approval: t("等待核准"), decision: t("等你拍板"), question: t("在問你"), failed: t("執行失敗"), stuck: t("久無進展") }[kind];
 }
 
 const EMPTY_CAPABILITIES = {
@@ -85,11 +118,11 @@ const EMPTY_CAPABILITIES = {
 
 export function App() {
   const {
-    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, workspacePaths, wsReady,
+    workers, bossTasks, collaborations, missions, departments, order, mcpLoginResult, globalMemoryEvent, muxLayoutEvent, brainSwapEvent, activeId, setActiveId, targetRepoPath, system, stats, updateInfo, lastAutopilot, workspacePaths, wsReady,
     capabilitiesByWorkspace, workflowRevisions, auth, providerUsage, accountUsage, providerInstalls, accounts, accountLogins, defaultCodexLogin, defaultClaudeLogin, createAccount, deleteAccount, refreshAccount, startAccountLogin, submitAccountLoginCode, cancelAccountLogin, startDefaultCodexLogin, cancelDefaultCodexLogin, startDefaultClaudeLogin, submitDefaultClaudeLoginCode, cancelDefaultClaudeLogin, setWorkerAccount, createWorker, pickWorkspace,
     switchWorkspace, closeWorker, renameWorker, reorderWorkers, saveAvatar, resetAvatar, selectAvatarPreset, activateCustomAvatar, prepareHandoff, startHandoff, switchProviderFresh,
-    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission,
-    send, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
+    prepareMission, startMission, loadDepartmentThread, messageDepartment, resetDepartmentSessions, renameDepartment, createBossTask, messageBossTask, updateBossTask, deleteBossTask, restartBossTask, cancelBossTask, cancelMission, retryMissionReview, approveMissionPlan, resolveMission, loadMissionActivity,
+    send, enqueueCommand, removeQueued, reorderQueued, askMission, setModel, setModelFresh, setPersona, setAutoApproveMode, interrupt, resolveApproval, resolveMissionApproval, refreshAuth, refreshUsage, installProvider,
   } = useWorkers();
   const { preferences, updatePreferences, resetPreferences } = useUiPreferences();
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -97,7 +130,13 @@ export function App() {
   const [newWorkerProvider, setNewWorkerProvider] = useState<ProviderId>("claude");
   const [newWorkerAccountId, setNewWorkerAccountId] = useState<string | null>(null);
   const [commandCenterOpen, setCommandCenterOpen] = useState(false);
+  // commandPaletteOpen 是輸入框裡的斜線指令清單；quickPaletteOpen 是 Ctrl/⌘ K 的全域指令面板。
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [quickPaletteOpen, setQuickPaletteOpen] = useState(false);
+  // 外部要求預填輸入框（拖到 NPC 身上、指令面板「對某人下指令」）。只填不送。
+  const [composerInject, setComposerInject] = useState<ComposerInject | null>(null);
+  const [topMenuRequest, setTopMenuRequest] = useState<{ menu: "npc" | "platform"; seq: number } | null>(null);
+  const officeRef = useRef<HTMLDivElement>(null);
   // 快速圓桌＝目前 NPC 單回合模擬多視角；作戰室＝2–4 個跟隨目前 provider 的短命同儕真的辯論。
   // 兩者刻意分成不同入口，讓時間、Provider 與用量預期不會混在一起。
   const [discussionMode, setDiscussionMode] = useState<DiscussionMode>(null);
@@ -109,7 +148,14 @@ export function App() {
   // 作戰室使用短命 NPC；結束後由後端自動拆除，不污染常駐 NPC。
   const roundtableTempIdRef = useRef<string | null>(null);
   const [warroomResult, setWarroomResult] = useState<WarRoomResult | null>(null);
+  // 這場裁決的召集人與主題：結果卡的「交給召集人」把行動項排進它的佇列。
+  const warroomOriginRef = useRef<{ hostId: string; topic: string } | null>(null);
   const [warroomRunning, setWarroomRunning] = useState(false);
+  // 作戰室開議時間：等待提示顯示「已進行 N 秒」。
+  const [warroomStartedAt, setWarroomStartedAt] = useState(0);
+  // 臨時席位不足時後端把這場排進佇列：記住票號與前面還有幾場（null＝沒在排隊）。
+  const [warroomQueued, setWarroomQueued] = useState<{ ticketId: string; ahead: number } | null>(null);
+  const warroomCancelledTicketRef = useRef<string | null>(null);
   // 作戰室歷史面板：列出 .warroom/ 的過往裁決報告，可回看/刪除（null＝面板關閉）。
   const [warroomHistory, setWarroomHistory] = useState<Array<{ file: string; topic: string; difficulty: string }> | null>(null);
   const [warroomHistoryContent, setWarroomHistoryContent] = useState<{ file: string; content: string; report?: { topic?: string; difficulty?: string; result?: WarRoomResult } | null } | null>(null);
@@ -171,6 +217,145 @@ export function App() {
       setWarroomHistoryContent(null);
     } catch (error) {
       notify(error instanceof Error ? error.message : t("讀取歷史失敗"), "error");
+    }
+  }
+
+  // 召集圓桌智囊團辯論一個主題（3 方兩輪→主持人裁決→裁決貼回 host NPC 接手執行）。
+  // 抽成共用函式：命令列的作戰室模式與「顧問方向送圓桌討論」都走這裡。
+  async function launchWarroom(topic: string): Promise<void> {
+    const text = topic.trim();
+    if (!text) return;
+    if (!activeId) { notify(t("請先選一個 NPC 當召集人"), "error"); return; }
+    if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return; }
+    const hostId = activeId;
+    setWarroomRunning(true);
+    setWarroomStartedAt(Date.now());
+    // 讓召集人頭上冒「討論中」泡泡（roundtableWorkerIds 的清理 effect 會在它忙過又閒置後自動移除）。
+    setRoundtableWorkerIds((current) => (current.includes(hostId) ? current : [...current, hostId]));
+    notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
+    // 開議失敗／取消：召集人可能從未 busy，清理 effect 等不到「忙過又閒置」，這裡直接摘掉泡泡。
+    const dropHostBubble = () => {
+      setRoundtableWorkerIds((current) => current.filter((id) => id !== hostId));
+      roundtableSeenBusy.current.delete(hostId);
+    };
+    try {
+      const resp = await apiRequest<{ ok: boolean; result?: WarRoomResult; queued?: boolean; ticketId?: string; ahead?: number }>("/api/warroom", {
+        method: "POST",
+        // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
+        body: { topic: text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
+        timeoutMs: 13 * 60_000,
+      });
+      if (resp.queued && resp.ticketId) {
+        // 臨時席位不足：後端已排隊，不佔席位；席位釋出時自動開場，這裡輪詢名次與結果。
+        const ticketId = resp.ticketId;
+        warroomCancelledTicketRef.current = null;
+        setWarroomQueued({ ticketId, ahead: resp.ahead ?? 0 });
+        notify(t("臨時席位不足，作戰室已排隊；席位釋出後自動開場"), "info");
+        const outcome = await followWarroomTicket<WarRoomResult>(
+          () => apiRequest<WarroomTicketView<WarRoomResult>>(`/api/warroom/queue/${encodeURIComponent(ticketId)}`),
+          {
+            onQueued: (ahead) => setWarroomQueued({ ticketId, ahead }),
+            onRunning: () => {
+              setWarroomQueued(null);
+              setWarroomStartedAt(Date.now());
+              notify(t("輪到這場了：作戰室開議"), "info");
+            },
+            isCancelled: () => warroomCancelledTicketRef.current === ticketId,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            now: () => Date.now(),
+            timeoutMessage: t("作戰室等候逾時，請到歷史查看是否已產出裁決"),
+          },
+        );
+        if (outcome.kind === "done") {
+          warroomOriginRef.current = { hostId, topic: text };
+          setWarroomResult(outcome.result);
+        } else {
+          notify(outcome.kind === "cancelled" ? t("已取消排隊") : (outcome.error || t("作戰室失敗")), outcome.kind === "cancelled" ? "info" : "error");
+          dropHostBubble();
+        }
+        return;
+      }
+      if (!resp.result) throw new Error(t("作戰室失敗"));
+      warroomOriginRef.current = { hostId, topic: text };
+      setWarroomResult(resp.result);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
+      dropHostBubble();
+    } finally {
+      setWarroomQueued(null);
+      setWarroomRunning(false);
+    }
+  }
+  // 取消排隊：只有還在排的能取消；已開場的後端會回 409，照常跑完。
+  async function cancelWarroomQueue(ticketId: string): Promise<void> {
+    try {
+      await apiRequest(`/api/warroom/queue/${encodeURIComponent(ticketId)}`, { method: "DELETE" });
+      warroomCancelledTicketRef.current = ticketId;
+      setWarroomQueued(null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("取消排隊失敗"), "error");
+    }
+  }
+  // 結果卡「交給召集人」：走佇列而不是直接送——召集人此刻多半正在消化裁決回報，
+  // 直接送會撞 409；佇列在它閒下來時自動接手。
+  async function delegateWarroomAction(hostId: string | null, topic: string, action: WarRoomAction): Promise<boolean> {
+    if (!hostId || !workers[hostId]) { notify(t("召集的 NPC 已不在，無法交辦"), "error"); return false; }
+    const error = await enqueueCommand(hostId, { text: warroomActionDelegationText(topic, action), images: [], documents: [] });
+    if (error) { notify(error, "error"); return false; }
+    notify(t("已排進 {name} 的佇列", { name: workers[hostId].name }));
+    return true;
+  }
+  // 自動循環（單一 NPC）：開＝彈設定框選步數／時間再啟動；關＝一鍵直接關（server 端 workerAutopilot）。
+  const [workerAutopilotConfigOpen, setWorkerAutopilotConfigOpen] = useState(false);
+  const [workerAutopilotStepInput, setWorkerAutopilotStepInput] = useState("5");
+  const [workerAutopilotMinutesInput, setWorkerAutopilotMinutesInput] = useState("");
+  // 主動模式預設開：開循環的本意就是「教練持續思考下一步發展」；取消勾選才是「只收尾當前線」。
+  const [workerAutopilotProactiveInput, setWorkerAutopilotProactiveInput] = useState(true);
+  // 鎖定目標：留空＝server 用老闆最近一則真指示。
+  const [workerAutopilotGoalInput, setWorkerAutopilotGoalInput] = useState("");
+  // 循環進行中改目標：null＝沒在編輯。
+  const [workerAutopilotGoalDraft, setWorkerAutopilotGoalDraft] = useState<string | null>(null);
+  const [workerAutopilotGoalSaving, setWorkerAutopilotGoalSaving] = useState(false);
+  useEffect(() => { setWorkerAutopilotGoalDraft(null); }, [activeId]);
+  async function saveWorkerAutopilotGoal(): Promise<void> {
+    if (!activeId || workerAutopilotGoalDraft == null) return;
+    const goal = workerAutopilotGoalDraft.trim();
+    if (!goal) { notify(t("目標不能空白"), "error"); return; }
+    setWorkerAutopilotGoalSaving(true);
+    try {
+      await apiRequest(`/api/workers/${activeId}/autopilot/goal`, { method: "POST", body: { goal } });
+      setWorkerAutopilotGoalDraft(null);
+      notify(t("已更新自動循環目標"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("更新目標失敗"), "error");
+    } finally {
+      setWorkerAutopilotGoalSaving(false);
+    }
+  }
+  async function setWorkerAutopilotEnabled(enabled: boolean): Promise<void> {
+    if (!activeId) return;
+    const body: Record<string, unknown> = { enabled };
+    let steps = 5;
+    if (enabled) {
+      const rawSteps = Math.floor(Number(workerAutopilotStepInput));
+      if (Number.isFinite(rawSteps) && rawSteps > 0) { steps = Math.min(20, rawSteps); body.maxSteps = steps; }
+      const minutes = Math.floor(Number(workerAutopilotMinutesInput));
+      if (Number.isFinite(minutes) && minutes > 0) body.maxMinutes = minutes;
+      body.proactive = workerAutopilotProactiveInput;
+      const goal = workerAutopilotGoalInput.trim().slice(0, 800);
+      if (goal) body.goal = goal;
+    }
+    try {
+      await apiRequest(`/api/workers/${activeId}/autopilot`, { method: "POST", body });
+      setWorkerAutopilotConfigOpen(false);
+      if (enabled) setWorkerAutopilotGoalInput("");
+      notify(enabled
+        ? (workerAutopilotProactiveInput
+          ? t("自動循環已開啟（主動）：教練會持續推進目標、一般選擇自己分析後選最佳；只有花錢/不可逆/對外送出才暫停等你，最多 {n} 步", { n: steps })
+          : t("自動循環已開啟（收尾）：把當前工作做完收尾就停，最多 {n} 步", { n: steps }))
+        : t("自動循環已關閉"), "info");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("自動循環切換失敗"), "error");
     }
   }
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
@@ -252,6 +437,54 @@ export function App() {
   // 都以為資料變了，就重跑 visualWorkers() 並呼叫 pixi setWorkers()，造成畫面持續無謂重算。改用 useMemo
   // 讓「內容沒變時陣列參照就不變」，這些效果只在真的有變動時才觸發。
   const workerList = useMemo(() => order.map((id) => workers[id]).filter(Boolean), [order, workers]);
+  // 主管唯讀回答（部門對話）走伺服器的背景回合，不會把主管標成忙碌；等回應期間在場景裡
+  // 讓主管做思考動作，否則畫面上看不出有人在回答。只影響場景，不改其他地方的狀態。
+  const [answeringLeadIds, setAnsweringLeadIds] = useState<ReadonlySet<string>>(() => new Set());
+  const sceneWorkerList = useMemo(() => {
+    if (answeringLeadIds.size === 0) return workerList;
+    return workerList.map((worker) => (
+      answeringLeadIds.has(worker.id) && !worker.busy && worker.character.activity === "idle"
+        ? { ...worker, character: { ...worker.character, activity: "thinking" as const } }
+        : worker
+    ));
+  }, [workerList, answeringLeadIds]);
+  const messageDepartmentWithLead = useCallback(async (...args: Parameters<typeof messageDepartment>) => {
+    const leadId = departments[args[0]]?.leadWorkerId;
+    if (!leadId) return messageDepartment(...args);
+    setAnsweringLeadIds((current) => new Set(current).add(leadId));
+    try {
+      return await messageDepartment(...args);
+    } finally {
+      setAnsweringLeadIds((current) => {
+        const next = new Set(current);
+        next.delete(leadId);
+        return next;
+      });
+    }
+  }, [departments, messageDepartment]);
+  // 全域「執行中」計數：不分工作區（workerList 是所有 NPC），頂欄燈號用——讓你在聊天／
+  // 別的工作區時，也能一眼看到背景到底有幾個 NPC 正在跑。
+  const runningCount = useMemo(() => workerList.filter((worker) => Boolean(worker?.busy)).length, [workerList]);
+  // 正在背景執行、還沒回報的 NPC 清單（名字＋所在「子城市」/工作區），供頂欄「在跑」燈號點開查看。
+  // 也一併帶出「NPC 內部再拆出去、還在跑的子代理」：從該 NPC 最新回合的工具呼叫裡，找 name==="Task"
+  // 且 status==="running"（Task 就是 Claude 開子代理的工具，尚無結果＝子代理還在跑）。
+  const runningWorkers = useMemo(
+    () => workerList
+      .filter((worker) => Boolean(worker?.busy))
+      .map((worker) => {
+        const lastTurn = worker.turns[worker.turns.length - 1];
+        const subAgents = (lastTurn?.items ?? []).flatMap((item) => {
+          // 子代理工具在新版叫 "Agent"（舊版 "Task"），兩個都認，否則 busy 期間列不出「哪些子代理在跑」。
+          if (item.kind !== "tool_call" || !/(^|__)(agent|task)$/i.test(item.name) || item.status !== "running") return [];
+          const input = (item.input ?? {}) as { subagent_type?: string; description?: string };
+          const type = input.subagent_type?.trim();
+          const desc = input.description?.trim();
+          return [{ id: item.id, label: type && desc ? `${type}·${desc}` : desc || type || t("子代理") }];
+        });
+        return { id: worker.id, name: worker.name, room: roomName(worker.workspacePath), subAgents };
+      }),
+    [workerList],
+  );
   const collaborationList = useMemo(() => Object.values(collaborations), [collaborations]);
   const missionList = useMemo(() => Object.values(missions), [missions]);
   const departmentList = useMemo(() => Object.values(departments), [departments]);
@@ -272,6 +505,28 @@ export function App() {
   const roundtableIdSet = useMemo(() => new Set(roundtableWorkerIds), [roundtableWorkerIds]);
   const active = activeId ? workers[activeId] : undefined;
   const selectedDepartment = selectedDepartmentId ? departments[selectedDepartmentId] : undefined;
+  // 點交辦房門牌會開部門面板並關掉 BOSS 頁——若選中的正是交辦部門，像素場景必須留在
+  // 交辦房，不然人會被莫名丟回主辦公室（成員任一位是 dedicated 短命工＝交辦部門）。
+  const selectedDepartmentIsBossCrew = useMemo(
+    () => selectedDepartmentId != null && workerList.some((worker) => worker.departmentId === selectedDepartmentId && worker.ephemeralKind === "dedicated"),
+    [selectedDepartmentId, workerList],
+  );
+  // 進行中交辦實際在跑（或待跑）的部門 id：像素場景的「交辦房」用它顯示「正在做這張交辦的
+  // 那群人」——不論交辦是開了專屬部隊，還是被路由給既有部門，一開 BOSS 都切到這些部門。
+  // 交辦一結束（stage 完成/失敗/取消）就移出集合，交辦房沒人時 bossRoomFilter 退回主辦公室。
+  const bossTaskDepartmentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of Object.values(bossTasks)) {
+      if (["completed", "failed", "cancelled"].includes(task.status)) continue;
+      for (const stage of task.stages) {
+        if (["completed", "failed", "cancelled"].includes(stage.status)) continue;
+        if (stage.departmentId) ids.add(stage.departmentId);
+      }
+    }
+    return ids;
+  }, [bossTasks]);
+  // 場景用：交辦 completed 時參與部門的 NPC 播「最終完成」（穩定參照，避免串流時每個 token 重算場景訊號）。
+  const bossTaskList = useMemo(() => Object.values(bossTasks), [bossTasks]);
   const selectedDepartmentLead = selectedDepartment
     ? workers[selectedDepartment.leadWorkerId] ?? selectedDepartment.memberWorkerIds.map((id) => workers[id]).find(Boolean)
     : undefined;
@@ -344,8 +599,59 @@ export function App() {
       ...turn,
       key: `${worker.id}:${turn.key}`,
       command: `${worker.name} · ${turn.command}`,
+      // 跨 NPC 檢視：記住這筆屬於誰，一鍵回答才會發回發問的那位 NPC（而非當前選取的）。
+      workerId: worker.id,
     })));
   }, [active?.turns, taskSearch, taskSearchScope, workerList]);
+  // 老闆交辦/部門任務裡，NPC 是被「任務」調去幹活的，執行過程掛在任務上，本來只在
+  // 老闆任務日誌看得到、點 NPC 本人卻是空的。這裡找出目前這個 NPC 正在參與的進行中任務，
+  // 讓它自己的活動頁也看得到（濾出屬於它的事件），並提供一鍵跳到完整任務。
+  const activeWorkerMission = useMemo<DepartmentMission | undefined>(() => {
+    const wid = active?.id;
+    if (!wid || taskSearch.trim()) return undefined;
+    const isActive = (status: string) => ["planning", "executing", "reviewing", "needs_attention"].includes(status);
+    return Object.values(missions)
+      .filter((mission) => isActive(mission.status) && (
+        mission.bossWorkerId === wid
+        || mission.steps.some((step) => step.assigneeWorkerId === wid)
+        || (mission.executionEvents ?? []).some((event) => event.workerId === wid)
+        // planning 階段 steps/events 都還沒有這個成員——用部門歸屬兜底，
+        // 點交辦房裡任何隊員都能看到任務卡，而不是一片空白。
+        || (active?.departmentId != null && mission.departmentId === active.departmentId)
+      ))
+      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+  }, [active?.id, active?.departmentId, missions, taskSearch]);
+  const openWorkerMission = useCallback((mission: DepartmentMission) => {
+    if (mission.origin === "boss" || !mission.departmentId) {
+      setBossAssignmentOpen(true);
+      setSelectedDepartmentId(null);
+    } else {
+      setBossAssignmentOpen(false);
+      setSelectedDepartmentId(mission.departmentId);
+    }
+    setBossMissionDetailId(mission.id);
+    updatePreferences({ taskLogOpen: true });
+  }, [updatePreferences]);
+  const workerMissionActivity = useMemo(() => {
+    if (!activeWorkerMission || !active) return undefined;
+    const wid = active.id;
+    const events = (activeWorkerMission.executionEvents ?? []).filter((event) => event.workerId === wid);
+    const statusLabel = activeWorkerMission.status === "planning" ? t("規劃中")
+      : activeWorkerMission.status === "executing" ? t("執行中")
+      : activeWorkerMission.status === "reviewing" ? t("審查中")
+      : t("需要處理");
+    return <div className="worker-mission-activity">
+      <div className="worker-mission-activity__head">
+        <span className="worker-mission-activity__badge">{t("正在執行部門任務")}</span>
+        <span className={`worker-mission-activity__status worker-mission-activity__status--${activeWorkerMission.status}`}>{statusLabel}</span>
+        <button type="button" className="worker-mission-activity__jump" onClick={() => openWorkerMission(activeWorkerMission)}>{t("查看完整任務 →")}</button>
+      </div>
+      <p className="worker-mission-activity__objective">{activeWorkerMission.objective}</p>
+      {events.length > 0
+        ? <MissionActivityFeed events={events} workers={workerList} />
+        : <p className="worker-mission-activity__empty">{t("任務剛開始，這位 NPC 還沒有動作。稍等或點上方查看完整任務。")}</p>}
+    </div>;
+  }, [activeWorkerMission, active, workerList, openWorkerMission]);
   const focusStudios = useMemo(() => buildFocusStudios(workspacePaths, workerList.map((worker) => {
     const attention = workerAttention(worker);
     return {
@@ -374,6 +680,80 @@ export function App() {
   const notify = useCallback((message: string, tone: Toast["tone"] = "ok") => {
     setToasts((current) => [...current.slice(-3), { id: `${Date.now()}-${Math.random()}`, message, tone }]);
   }, []);
+
+  // 老闆交辦自動循環開關（狀態屬於目前工作區；重啟後伺服器預設關）。
+  const [autopilotEnabled, setAutopilotEnabled] = useState(false);
+  const [autopilotSteps, setAutopilotSteps] = useState(0);
+  const [autopilotDeadline, setAutopilotDeadline] = useState<number | null>(null);
+  const [autopilotBusy, setAutopilotBusy] = useState(false);
+  // 開之前的設定框：讓使用者指定步數與（選填）時間上限，任一達到就自動停。
+  const [autopilotConfigOpen, setAutopilotConfigOpen] = useState(false);
+  const [autopilotStepInput, setAutopilotStepInput] = useState("15");
+  const [autopilotMinutesInput, setAutopilotMinutesInput] = useState("");
+  // 卡住時自動接手：讓決策模型先嘗試解卡（重試／帶指示重跑／接受風險），解不了才停下等人。
+  const [autopilotAutoResolve, setAutopilotAutoResolve] = useState(false);
+  const [autopilotAutoResolveInput, setAutopilotAutoResolveInput] = useState(false);
+  // 開 Boss Desk 或切工作區時，向伺服器要一次權威狀態。
+  useEffect(() => {
+    if (!bossAssignmentOpen || !activeWorkspace) return;
+    let cancelled = false;
+    void apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve?: boolean }>(`/api/autopilot?workspacePath=${encodeURIComponent(activeWorkspace)}`)
+      .then((state) => { if (!cancelled) { setAutopilotEnabled(state.enabled); setAutopilotSteps(state.stepsRemaining); setAutopilotDeadline(state.deadlineAt ?? null); setAutopilotAutoResolve(Boolean(state.autoResolve)); } })
+      .catch(() => { /* 拿不到就維持現狀 */ });
+    return () => { cancelled = true; };
+  }, [bossAssignmentOpen, activeWorkspace]);
+  // 伺服器每次開關/步數變動（含自動熄火）都廣播，套用到目前工作區。
+  useEffect(() => {
+    if (!lastAutopilot) return;
+    const norm = (value: string) => value.toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (norm(lastAutopilot.workspacePath) !== norm(activeWorkspace)) return;
+    setAutopilotEnabled(lastAutopilot.enabled);
+    setAutopilotSteps(lastAutopilot.stepsRemaining);
+    setAutopilotDeadline(lastAutopilot.deadlineAt ?? null);
+    setAutopilotAutoResolve(lastAutopilot.autoResolve);
+  }, [lastAutopilot, activeWorkspace]);
+  const toggleAutopilot = useCallback(async (enabled: boolean, opts?: { maxSteps?: number; maxMinutes?: number; autoResolve?: boolean }) => {
+    setAutopilotBusy(true);
+    try {
+      const state = await apiRequest<{ enabled: boolean; stepsRemaining: number; deadlineAt: number | null; autoResolve?: boolean }>("/api/autopilot", {
+        method: "POST",
+        body: { workspacePath: activeWorkspace, enabled, maxSteps: opts?.maxSteps, maxMinutes: opts?.maxMinutes, autoResolve: opts?.autoResolve },
+      });
+      setAutopilotEnabled(state.enabled);
+      setAutopilotSteps(state.stepsRemaining);
+      setAutopilotDeadline(state.deadlineAt ?? null);
+      setAutopilotAutoResolve(Boolean(state.autoResolve));
+      const mins = state.deadlineAt ? Math.max(1, Math.round((state.deadlineAt - Date.now()) / 60_000)) : 0;
+      notify(enabled
+        ? mins
+          ? t("已開啟自動循環：最多 {n} 步、或約 {m} 分鐘後自動停，隨時可關。", { n: state.stepsRemaining, m: mins })
+          : t("已開啟自動循環：交辦完成後會自己接著往下走（最多 {n} 步），隨時可關。", { n: state.stepsRemaining })
+        : t("已關閉自動循環。"), "ok");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("切換自動循環失敗"), "error");
+    } finally {
+      setAutopilotBusy(false);
+    }
+  }, [activeWorkspace, notify]);
+  // 從設定框按「開始」：解析輸入（步數 clamp 1–50、分鐘選填），送出後關框。
+  const startAutopilotFromConfig = useCallback(() => {
+    const steps = Math.min(50, Math.max(1, Math.round(Number(autopilotStepInput) || 15)));
+    const minutesRaw = Number(autopilotMinutesInput);
+    const maxMinutes = autopilotMinutesInput.trim() && Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.round(minutesRaw) : undefined;
+    setAutopilotConfigOpen(false);
+    void toggleAutopilot(true, { maxSteps: steps, maxMinutes, autoResolve: autopilotAutoResolveInput });
+  }, [autopilotStepInput, autopilotMinutesInput, autopilotAutoResolveInput, toggleAutopilot]);
+  // 開 Boss Desk 狀態變動時關掉設定框，避免殘留。
+  useEffect(() => { if (!bossAssignmentOpen) setAutopilotConfigOpen(false); }, [bossAssignmentOpen]);
+  // 顯示用的剩餘分鐘（每 30 秒重算一次，粗略顯示）。沒有計時器的話 Date.now() 不會觸發重算，
+  // 只要沒有新交辦完成，「剩 X 分」會凍結在開啟當下的值。
+  const [autopilotClock, setAutopilotClock] = useState(0);
+  useEffect(() => {
+    if (!autopilotDeadline) return;
+    const timer = setInterval(() => setAutopilotClock((tick) => tick + 1), 30_000);
+    return () => clearInterval(timer);
+  }, [autopilotDeadline]);
+  const autopilotMinutesLeft = useMemo(() => (autopilotDeadline ? Math.max(0, Math.round((autopilotDeadline - Date.now()) / 60_000)) : null), [autopilotDeadline, autopilotSteps, autopilotClock]);
   // In-app stand-in for window.confirm: renders a ConfirmDialog and resolves
   // once the user picks confirm/cancel (or presses Esc, which counts as cancel).
   const confirm = useCallback((message: string, tone: ConfirmTone = "default") => {
@@ -413,6 +793,14 @@ export function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [notify, restartPending]);
 
+  // 「循環問你」一鍵回答：把選到的字母當成一句話直接發回給目前這位 NPC（等同你親口回覆）。
+  // 用 useCallback 穩住參考，才不會每次 render 都生新函式而打穿 TurnCard 的 memo（會造成串流卡頓）。
+  const answerAutopilot = useCallback((text: string, workerId?: string) => {
+    const target = workerId ?? activeId;
+    if (!target) return;
+    void send(target, { text, images: [], documents: [] });
+  }, [activeId, send]);
+
   const activateNpc = useCallback((id: string) => {
     const worker = workers[id];
     const remembered = worker ? { ...preferences.focusStudioLastWorkerIds, [worker.workspacePath]: id } : preferences.focusStudioLastWorkerIds;
@@ -427,6 +815,17 @@ export function App() {
     setComposerFocusRequest((request) => request + 1);
   }, [preferences.focusStudioLastWorkerIds, setActiveId, updatePreferences, workers]);
 
+  // 鏡頭滑到 NPC：只在使用者「在介面別處」主動點名時（左欄、手機頭像列、頂欄「需要你」）。
+  // 在畫布上直接點 NPC 不動鏡頭——他本來就在眼前。
+  const [cameraFocus, setCameraFocus] = useState<{ id: string; seq: number } | null>(null);
+  const requestCameraFocus = useCallback((id: string) => {
+    setCameraFocus((current) => ({ id, seq: (current?.seq ?? 0) + 1 }));
+  }, []);
+  const activateNpcWithCamera = useCallback((id: string) => {
+    activateNpc(id);
+    requestCameraFocus(id);
+  }, [activateNpc, requestCameraFocus]);
+
   // Assigning a worker to a pane always focuses that pane too — picking an
   // NPC for pane 2 should let you type to it immediately, without a second
   // click. With a single pane this degenerates to today's plain "select NPC".
@@ -434,6 +833,73 @@ export function App() {
     setFocusWorkbench((current) => ({ panes: setPaneWorker(current.panes, paneId, workerId), focusedPaneId: paneId }));
     activateNpc(workerId);
   }, [activateNpc]);
+
+  // 「切到某位 NPC」的單一入口：專業模式要換進目前的分割窗，像素模式就是點他。
+  const goToWorker = useCallback((workerId: string) => {
+    if (taskFocusMode) assignWorkerToPane(focusedPaneId, workerId);
+    else activateNpc(workerId);
+  }, [activateNpc, assignWorkerToPane, focusedPaneId, taskFocusMode]);
+
+  // 「等你核准」：頂欄的琥珀色提示。點了＝跳到第一位等你的 NPC，等批准卡畫出來
+  // 後平滑捲到眼前、亮一圈，隊員列也跟著亮——眼睛不用自己找。
+  // 「需要你」：全 App 共用 needsYou.ts 的同一份排序清單（頂欄徽章、隊員列、通知、接下一件）。
+  // 正在看的 NPC（日誌開著或專業模式）最新回合算已看——失敗／提問看過就不再提醒。
+  const needsYou = useNeedsYou(workerList, activeId, preferences.taskLogOpen || taskFocusMode);
+  // 輸入框的忙碌只看「本人在跑回合」：只剩背景子代理在跑時中止打不到東西、訊息也能直接送。
+  const activeTurnBusy = Boolean(active?.busy && !active.backgroundOnly);
+  // 輸入框狀態列的「需要你」：目前這位 NPC 有待你處理的事（卡住不算——那不是等你動手）。
+  const activeNeedsYou = useMemo(
+    () => needsYou.items.some((item) => item.workerId === activeId && item.kind !== "stuck"),
+    [activeId, needsYou.items],
+  );
+  // 接下一件：從目前這位往後找下一件（循環）；沒有待辦時才輪到「卡住」的提醒。
+  const goToNeedsYouItem = useCallback((target: Pick<NeedsYouItem, "workerId" | "kind">) => {
+    goToWorker(target.workerId);
+    requestCameraFocus(target.workerId);
+    updatePreferences({ taskLogOpen: true });
+    if (target.kind === "approval") flashArrival(".approval-card--pending");
+    flashArrival(`[data-crew-id="${CSS.escape(target.workerId)}"]`);
+  }, [goToWorker, requestCameraFocus, updatePreferences]);
+  const jumpToNeedsYou = useCallback(() => {
+    const actionable = needsYou.items.filter((item) => item.kind !== "stuck");
+    const target = nextNeedsYou(actionable.length ? actionable : needsYou.items, activeId);
+    if (target) goToNeedsYouItem(target);
+  }, [activeId, goToNeedsYouItem, needsYou.items]);
+  // 任務日誌頂端的「下一件需要你」：只提示「別人」的事——眼前這位的核准卡、問題本來就在日誌裡。
+  const questLogNextItem = useMemo(() => {
+    const others = needsYou.items.filter((item) => item.workerId !== activeId && item.kind !== "stuck");
+    return nextNeedsYou(others, activeId);
+  }, [activeId, needsYou.items]);
+  const questLogNextAttention = useStableBy<QuestLogAttention | null>(
+    useMemo(() => questLogNextItem ? {
+      id: questLogNextItem.key,
+      label: `${questLogNextItem.workerName} · ${needsYouKindLabel(questLogNextItem.kind)}`,
+      detail: questLogNextItem.detail || undefined,
+      tone: NEEDS_YOU_TONE[questLogNextItem.kind],
+      workerId: questLogNextItem.workerId,
+    } : null, [questLogNextItem]),
+    questLogNextItem ? `${questLogNextItem.key}|${questLogNextItem.detail}` : "none",
+  );
+  const openQuestLogAttention = useCallback((attention: QuestLogAttention) => {
+    const item = needsYou.items.find((candidate) => candidate.key === attention.id);
+    if (item) goToNeedsYouItem(item);
+    else if (attention.workerId) goToWorker(attention.workerId);
+  }, [goToNeedsYouItem, goToWorker, needsYou.items]);
+  const topBarNeedsYou = useStableBy(
+    useMemo(() => needsYou.summary.count && needsYou.summary.first
+      ? { count: needsYou.summary.count, name: needsYou.summary.first.workerName, kinds: needsYou.summary.kinds }
+      : null, [needsYou.summary]),
+    `${needsYou.summary.count}|${needsYou.summary.first?.workerName ?? ""}|${needsYou.summary.kinds.join(",")}`,
+  );
+
+  // 預填某位 NPC 的輸入框：先切過去，再把文字／檔案交給 TaskComposer——它會等
+  // 草稿切到那位 NPC 的那一份才填。絕不自動送出，送不送由使用者自己按。
+  const prefillComposerFor = useCallback((workerId: string, text: string, files: File[] = []) => {
+    const worker = workers[workerId];
+    if (!worker) return;
+    goToWorker(workerId);
+    setComposerInject({ seq: Date.now(), sessionKey: `${workerId}:${worker.provider}:${worker.workspacePath || targetRepoPath}`, text, files });
+  }, [goToWorker, targetRepoPath, workers]);
 
   const focusPane = useCallback((paneId: string) => {
     setFocusWorkbench((current) => (current.focusedPaneId === paneId ? current : { ...current, focusedPaneId: paneId }));
@@ -483,11 +949,78 @@ export function App() {
     return true;
   }, [assignWorkerToPane, focusStudios, focusedPaneId, preferences.focusStudioLastWorkerIds]);
 
+  // 場景 → 介面：拖東西到 NPC 身上＝切過去並預填；點舉手的 NPC＝打開他的批准介面
+  // （跟 ⌘/Ctrl ⇧ A 同一條路：切到他、展開任務日誌，批准卡就在日誌最上面）。
+  const fxHandlersRef = useRef({ prefillComposerFor, goToWorker });
+  fxHandlersRef.current = { prefillComposerFor, goToWorker };
+  useEffect(() => onFx((event) => {
+    if (event.type === "drop-dispatch") fxHandlersRef.current.prefillComposerFor(event.workerId, event.text, event.files);
+    else if (event.type === "open-approval") {
+      fxHandlersRef.current.goToWorker(event.workerId);
+      flashArrival(".approval-card--pending");
+    }
+  }), []);
+
+  // 送出成功（TaskComposer 的真實送出路徑，或示範模式）→ 通知場景放紙飛機。
+  const handleComposerLaunch = useCallback((launch: ComposerLaunch) => {
+    emitFx({ type: "dispatch", workerId: launch.workerId, from: launch.from, text: launch.text });
+  }, []);
+
+  // 成品匣未讀：新成品出現時累加、頂欄成品匣按鈕顯示數字並播一次「落袋」；打開成品匣就歸零。
+  const [outboxUnread, setOutboxUnread] = useState(0);
+  const [outboxDropSeq, setOutboxDropSeq] = useState(0);
+  const openOutbox = useCallback(() => {
+    setOutboxUnread(0);
+    setOutboxOpen(true);
+  }, []);
+  // 成品匣出現新檔 → 通知場景，並給一個不打擾的提示。
+  // 本回合成品：新成品記在「剛做完的那位」當下最新的回合上，任務日誌把它掛在那張卡底下。
+  const [deliverablesByWorker, setDeliverablesByWorker] = useState<Record<string, TurnDeliverable[]>>({});
+  const workersForDeliverablesRef = useRef(workers);
+  workersForDeliverablesRef.current = workers;
+  const handleNewDeliverables = useCallback((items: NewDeliverable[], owners: string[] = []) => {
+    setOutboxUnread((count) => count + items.length);
+    setOutboxDropSeq((seq) => seq + 1);
+    setDeliverablesByWorker((current) => {
+      const next = { ...current };
+      items.forEach((item, index) => {
+        if (!item.workerId) return;
+        const worker = workersForDeliverablesRef.current[item.workerId];
+        const turnKey = worker?.turns[worker.turns.length - 1]?.key;
+        const owner = owners[index] ?? item.workerId;
+        const entry: TurnDeliverable = { id: `${owner}/${item.name}`, label: item.name, kind: /\.(png|jpe?g|gif|webp|svg)$/i.test(item.name) ? "image" : "file", href: deliverableHref(owner, item.name), turnKey };
+        const list = next[item.workerId] ?? [];
+        // 同名檔覆寫時只留最新一筆（會掛到最新的回合）。
+        next[item.workerId] = [...list.filter((existing) => existing.id !== entry.id), entry].slice(-40);
+      });
+      return next;
+    });
+    for (const item of items.slice(0, 3)) emitFx({ type: "deliverable", workerId: item.workerId, name: item.name });
+    notify(items.length > 1
+      ? t("成品匣新增 {count} 份：{name} 等", { count: items.length, name: items[0].name })
+      : t("成品匣新增：{name}", { name: items[0].name }), "ok");
+  }, [notify]);
+  useDeliverableWatch(workerList, handleNewDeliverables);
+
+  // 觸控長按 NPC＝右鍵選單（手機沒有右鍵）。專業／黑窗模式下辦公室是 inert，不收。
+  const longPressRing = useNpcLongPress(officeRef, !taskFocusMode && !blackWindowMode);
+
+
   const notifySnapshots = useRef(new Map<string, WorkerSnapshot>());
+  const notifyNeedsKeys = useRef<Set<string> | null>(null);
   useEffect(() => {
     const prev = notifySnapshots.current;
-    const events = diffNotifications(prev, workerList);
+    const needsEvents = diffNeedsYouNotifications(notifyNeedsKeys.current, needsYou.items);
+    notifyNeedsKeys.current = new Set(needsYou.items.map((item) => item.key));
+    const events = [...diffNotifications(prev, workerList), ...needsEvents];
     notifySnapshots.current = new Map(workerList.map((worker) => [worker.id, snapshotWorker(worker)]));
+    // 任務順利完成：從那位 NPC 的隊員列噴一小撮彩帶（純視覺，跟桌面通知開關無關）。
+    for (const event of events) {
+      const [kind, workerId] = event.tag.split(":");
+      if (kind !== "turn" || !workerId) continue;
+      const worker = workerList.find((item) => item.id === workerId);
+      if (worker && latestTaskTurn(worker.turns)?.status === "done") celebrateWorker(workerId);
+    }
     if (!preferences.notificationsEnabled || !events.length) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;
     for (const event of events) {
@@ -498,7 +1031,7 @@ export function App() {
         // Some browsers require a ServiceWorker for constructor Notifications.
       }
     }
-  }, [workerList, preferences.notificationsEnabled]);
+  }, [workerList, needsYou.items, preferences.notificationsEnabled]);
 
   const toggleNotifications = useCallback(() => {
     if (preferences.notificationsEnabled) {
@@ -512,6 +1045,7 @@ export function App() {
     void Notification.requestPermission().then((permission) => {
       if (permission === "granted") {
         updatePreferences({ notificationsEnabled: true });
+        emitFx({ type: "system", kind: "notify-on" });
         notify(t("桌面通知已開啟：任務完成或等待核准時通知（分頁在背景才會跳）"));
       } else {
         notify(t("瀏覽器未授權通知，請在網址列旁的權限設定允許"), "error");
@@ -573,9 +1107,8 @@ export function App() {
     updatePreferences({ taskLogOpen: true });
   }, [departments, updatePreferences]);
 
-  const approvalWorker = useMemo(() => workerList.find((worker) => worker.turns.some((turn) =>
-    turn.items.some((item) => item.kind === "approval" && item.status === "pending")
-  )), [workerList]);
+  const firstApprovalId = needsYou.items.find((item) => item.kind === "approval")?.workerId;
+  const approvalWorker = firstApprovalId ? workers[firstApprovalId] : undefined;
 
   const enterTaskFocusMode = useCallback(() => {
     focusReturnRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -600,8 +1133,9 @@ export function App() {
   }, [updatePreferences]);
 
   const shortcuts = useMemo(() => ({
-    onCommandPalette: () => setCommandPaletteOpen(true),
+    onCommandPalette: () => setQuickPaletteOpen(true),
     onShortcutsHelp: () => setShortcutsHelpOpen((open) => !open),
+    onNextAttention: jumpToNeedsYou,
     onStudioShortcut: (index: number) => taskFocusMode ? selectFocusStudio(focusStudios[index]?.workspacePath ?? "") : false,
     onPaneCycle: (direction: 1 | -1) => taskFocusMode && cycleFocusPane(direction),
     onToggleTaskLog: () => taskFocusMode
@@ -619,6 +1153,7 @@ export function App() {
       setSelectedDepartmentId(null);
       setBossMissionDetailId(null);
       updatePreferences({ taskLogOpen: true });
+      flashArrival(".approval-card--pending");
     },
     onEscape: () => {
       // The roundtable overflow and its two child surfaces live beside the
@@ -667,7 +1202,7 @@ export function App() {
       setCommandPaletteOpen(false);
       setTaskSearchOpen(false);
     },
-  }), [approvalWorker, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, blackWindowMode, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, dayReportOpen, departmentCreatorOpen, exitBlackWindowMode, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, kanbanModalOpen, mcpModalOpen, opsModalOpen, outboxOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, remoteModalOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, tourOpen, updatePreferences, warroomHistory, workspaceOpen]);
+  }), [approvalWorker, jumpToNeedsYou, assignWorkerToPane, avatarWorkerId, backupModalOpen, accountsModalOpen, blackWindowMode, codexCommandsModalOpen, commandCenterOpen, commandPaletteOpen, cycleFocusPane, dayReportOpen, departmentCreatorOpen, exitBlackWindowMode, exitTaskFocusMode, focusStudios, focusedPaneId, globalMemoryModalOpen, handoffTarget, kanbanModalOpen, mcpModalOpen, opsModalOpen, outboxOpen, pendingAutoApproveMode, personaWorkerId, preferences.taskLogOpen, remoteModalOpen, roundtableMenuOpen, selectFocusStudio, setActiveId, shortcutsHelpOpen, stancesOpen, taskFocusMode, taskSearchOpen, tourOpen, updatePreferences, warroomHistory, workspaceOpen]);
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
@@ -863,11 +1398,18 @@ export function App() {
     void closeWorker(id).then((error) => error ? notify(error, "error") : notify(t("人員與工位拆除中"), "info"));
   }
 
-  function handleSetWorkerAccount(workerId: string, accountId: string | null) {
-    // TopBar already hard-disables this control once the NPC has any conversation
-    // history (switching mid-session can't resume the old thread under the new
-    // account anyway) — this is just the plain follow-through for a fresh NPC.
-    void setWorkerAccount(workerId, accountId).then((error) => { if (error) notify(error, "error"); });
+  async function handleSetWorkerAccount(workerId: string, accountId: string | null) {
+    // Switching an account can't resume the old thread under the new account's
+    // home, so it resets the NPC's conversation. For a fresh NPC that's a no-op;
+    // once it has history we fold the clear into the switch behind one explicit
+    // confirm (force) instead of making the owner clear the session as a
+    // separate manual step first.
+    const hasHistory = (workers[workerId]?.turns.length ?? 0) > 0;
+    if (hasHistory) {
+      if (!(await confirm(t("切換帳號會清空這位 NPC 的對話記憶（換帳號後無法沿用原本的對話）。確定要切換嗎？"), "danger"))) return;
+    }
+    const error = await setWorkerAccount(workerId, accountId, hasHistory);
+    if (error) notify(error, "error");
   }
 
   function handleModelChange(model: string) {
@@ -952,6 +1494,129 @@ export function App() {
     }
   }
 
+  // ── 傳給 memo 化的 TopBar／WorkerTabs 的 props：handler 包成參照不變的版本、
+  //    清單類以內容簽章穩定參照，其他 NPC 串流時這兩塊不必跟著重渲染。 ──
+  const accountList = useMemo(() => Object.values(accounts), [accounts]);
+  const topBarActive = useStableBy(active, active
+    ? [active.id, active.name, active.model ?? "", active.provider, active.autoApproveMode, active.accountId ?? "", active.busy ? 1 : 0, active.turns.length > 0 ? 1 : 0].join("|")
+    : "none");
+  const runningWorkersStable = useStableBy(runningWorkers, JSON.stringify(runningWorkers));
+  const modelOptionsStable = useStableBy(modelOptions, JSON.stringify(modelOptions));
+  const topBarEnergyHud = useMemo(
+    () => (!taskFocusMode ? <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={accountList} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} /> : null),
+    [accountList, accountUsage, providerUsage, refreshUsage, stats.totalCostUsd, taskFocusMode],
+  );
+  const closeOutbox = useCallback(() => setOutboxOpen(false), []);
+  // 跨 NPC 搜尋時回合 key 被加了前綴，對不上成品的 turnKey——那時不掛成品。
+  const questLogDeliverables = taskSearchScope === "all" && taskSearch.trim() ? undefined : activeId ? deliverablesByWorker[activeId] : undefined;
+  const topBarHandlers = useEventCallbacks({
+    onSelectRunning: activateNpc,
+    onNeedsYou: jumpToNeedsYou,
+    onSetWorkerAccount: (workerId: string, accountId: string | null) => { void handleSetWorkerAccount(workerId, accountId); },
+    onRoom: () => (active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)),
+    onBossAssignment: openBossDesk,
+    onOpenMcp: () => setMcpModalOpen(true),
+    onOpenGlobalMemory: () => setGlobalMemoryModalOpen(true),
+    onOpenCodexCommands: () => setCodexCommandsModalOpen(true),
+    onOpenAccounts: () => { setAccountsModalProvider(activeProvider); setAccountsModalOpen(true); },
+    onOpenBackup: () => setBackupModalOpen(true),
+    onOpenOps: () => setOpsModalOpen(true),
+    onOpenKanban: () => setKanbanModalOpen(true),
+    onOpenDayReport: () => setDayReportOpen(true),
+    onOpenOutbox: openOutbox,
+    onOpenTour: openTour,
+    onOpenRemote: () => setRemoteModalOpen(true),
+    onRestart: () => void requestServerRestart(),
+    onShutdown: () => void requestServerShutdown(),
+    onProvider: (provider: ProviderId) => void changeProvider(provider),
+    onModel: handleModelChange,
+    onAutoApprove: handleAutoApproveChange,
+    onRefreshAuth: () => void refreshAuth(activeProvider),
+    onResetUi: () => { resetPreferences(); notify(t("介面配置已重設"), "info"); },
+    onNotificationsToggle: toggleNotifications,
+    onApplyUpdate: () => void requestAppUpdate(),
+    onProfessionalModeChange: (enabled: boolean) => (enabled ? enterTaskFocusMode() : exitTaskFocusMode()),
+    onBlackWindowModeChange: (enabled: boolean) => (enabled ? enterBlackWindowMode() : exitBlackWindowMode()),
+  });
+  const workerTabsHandlers = useEventCallbacks({
+    onFilter: (crewFilter: CrewFilter) => updatePreferences({ crewFilter }),
+    onCollapsed: (crewRailCollapsed: boolean) => updatePreferences({ crewRailCollapsed }),
+    onSelect: activateNpcWithCamera,
+    onSelectDepartment: selectDepartment,
+    onReorder: (ids: string[]) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); },
+    onCreate: () => openWorkspaceForCreate(activeProvider),
+    onCreateDepartment: () => setDepartmentCreatorOpen(true),
+    onClose: (id: string) => { void handleRemoveWorker(id); },
+    onRename: handleRename,
+    onAvatar: setAvatarWorkerId,
+    onPersona: setPersonaWorkerId,
+    onRoom: (id: string) => { setActiveId(id); openWorkspaceForMove(); },
+  });
+
+  // Ctrl/⌘ K 指令面板的內容：全部是現有的 handler（切 NPC、開既有面板），不新增
+  // 任何會改設定或送請求的動作——重啟、關服務、改模型／自動核准刻意不放進來。
+  const paletteStatus = (worker: WorkerState): PaletteStatus => {
+    const attention = workerAttention(worker);
+    return attention === "approval" ? "approval" : attention === "error" ? "error" : attention === "working" ? "busy" : "idle";
+  };
+  const paletteWorkers = useMemo(() => quickPaletteOpen
+    ? workerList.filter((worker) => !worker.ephemeralKind).map((worker) => ({ id: worker.id, name: worker.name, detail: worker.persona?.role || roomName(worker.workspacePath), status: paletteStatus(worker) }))
+    : [], [quickPaletteOpen, workerList]);
+  const paletteEntries = useMemo<PaletteEntry[]>(() => {
+    if (!quickPaletteOpen) return [];
+    const people = t("人員");
+    const rooms = t("房間");
+    const views = t("視圖");
+    const tools = t("面板與工具");
+    const open = (action: () => void) => action;
+    return [
+      ...workerList.filter((worker) => !worker.ephemeralKind).map((worker): PaletteEntry => ({
+        id: `worker:${worker.id}`,
+        group: people,
+        label: worker.name,
+        detail: [worker.persona?.role, roomName(worker.workspacePath)].filter(Boolean).join(" · "),
+        meta: worker.id === activeId ? t("目前") : workerFocusStatus(worker),
+        status: paletteStatus(worker),
+        icon: "user",
+        keywords: `${worker.provider} ${worker.model ?? ""}`,
+        run: () => goToWorker(worker.id),
+      })),
+      ...focusStudios.filter((studio) => studio.workspacePath !== activeWorkspace).map((studio): PaletteEntry => ({
+        id: `room:${studio.workspacePath}`,
+        group: rooms,
+        label: t("前往 {room}", { room: studio.name }),
+        detail: studio.workspacePath,
+        icon: "building",
+        run: () => { selectFocusStudio(studio.workspacePath); },
+      })),
+      { id: "view:pixel", group: views, label: t("像素辦公室"), icon: "layout", keywords: "pixel office", run: () => { exitBlackWindowMode(); exitTaskFocusMode(); } },
+      { id: "view:pro", group: views, label: t("專業模式"), icon: "layout", keywords: "professional focus", run: () => { exitBlackWindowMode(); requestAnimationFrame(enterTaskFocusMode); } },
+      { id: "view:black", group: views, label: t("黑窗模式"), icon: "code", keywords: "terminal cli black window", run: enterBlackWindowMode },
+      { id: "view:log", group: views, label: preferences.taskLogOpen ? t("收合任務日誌") : t("展開任務日誌"), meta: "⌘J", icon: "board", run: () => updatePreferences({ taskLogOpen: !preferences.taskLogOpen }) },
+      { id: "view:summary", group: views, label: t("日誌：摘要"), icon: "file", run: () => updatePreferences({ taskLogView: "summary", taskLogOpen: true }) },
+      { id: "view:activity", group: views, label: t("日誌：活動"), icon: "running", run: () => updatePreferences({ taskLogView: "activity", taskLogOpen: true }) },
+      { id: "tool:boss", group: tools, label: t("老闆交辦"), icon: "briefcase", keywords: "boss", run: openBossDesk },
+      { id: "tool:npc-settings", group: tools, label: t("NPC 設定"), detail: active?.name, icon: "user", run: () => setTopMenuRequest({ menu: "npc", seq: Date.now() }) },
+      { id: "tool:platform", group: tools, label: t("平台設定"), icon: "gear", run: () => setTopMenuRequest({ menu: "platform", seq: Date.now() }) },
+      { id: "tool:slash", group: tools, label: t("斜線指令與技能"), detail: activeProvider === "claude" ? "Claude" : "Codex", icon: "code", keywords: "slash commands skills /", run: () => requestAnimationFrame(() => setCommandPaletteOpen(true)) },
+      { id: "tool:outbox", group: tools, label: t("成品匣"), icon: "box", keywords: "outbox", run: open(openOutbox) },
+      { id: "tool:kanban", group: tools, label: t("任務看板"), icon: "board", keywords: "kanban", run: open(() => setKanbanModalOpen(true)) },
+      { id: "tool:day-report", group: tools, label: t("今日報告"), icon: "chart", run: open(() => setDayReportOpen(true)) },
+      { id: "tool:mcp", group: tools, label: t("MCP 能力"), icon: "wrench", keywords: "mcp", run: open(() => setMcpModalOpen(true)) },
+      { id: "tool:memory", group: tools, label: t("全域記憶"), icon: "brain", keywords: "memory", run: open(() => setGlobalMemoryModalOpen(true)) },
+      { id: "tool:accounts", group: tools, label: t("帳號管理"), icon: "key", keywords: "account login", run: open(() => { setAccountsModalProvider(activeProvider); setAccountsModalOpen(true); }) },
+      { id: "tool:command-center", group: tools, label: t("指令中心"), icon: "code", keywords: "workflow command center", run: open(() => setCommandCenterOpen(true)) },
+      { id: "tool:new-npc", group: tools, label: t("新增 NPC"), icon: "user", keywords: "create add", run: open(() => openWorkspaceForCreate(activeProvider)) },
+      { id: "tool:new-department", group: tools, label: t("建立部門"), icon: "building", keywords: "department", run: open(() => setDepartmentCreatorOpen(true)) },
+      { id: "tool:remote", group: tools, label: t("遠端存取"), icon: "phone", keywords: "remote phone", run: open(() => setRemoteModalOpen(true)) },
+      { id: "tool:backup", group: tools, label: t("備份與還原"), icon: "archive", keywords: "backup", run: open(() => setBackupModalOpen(true)) },
+      { id: "tool:shortcuts", group: tools, label: t("快捷鍵說明"), meta: "?", icon: "help", keywords: "shortcuts keys", run: open(() => setShortcutsHelpOpen(true)) },
+      { id: "tool:tour", group: tools, label: t("新手導覽"), icon: "flag", keywords: "tour onboarding", run: openTour },
+    ];
+    // openBossDesk / openTour 等是每次 render 重建的區域函式；面板開著時內容跟著 render 走即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickPaletteOpen, workerList, activeId, focusStudios, activeWorkspace, activeProvider, preferences.taskLogOpen, active?.name]);
+
   // 專業模式的標題列在手機只留「對象 + 搜尋 + 管理」一排。工作對象切換與
   // 用量本來各佔一排（加起來 88px，報告只剩四成畫面），改成收進管理面板。
   const focusKindSwitch = <div className="focus-context-switch__kind" aria-label={t("專業模式工作對象")}>
@@ -966,16 +1631,24 @@ export function App() {
       "--log-panel-width": `${preferences.taskLogWidth}px`,
       "--log-panel-height": `${preferences.taskLogHeight}vh`,
     } as CSSProperties}>
-      <div className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
+      <div ref={officeRef} className="office-background" aria-hidden={taskFocusMode || blackWindowMode || undefined} inert={taskFocusMode || blackWindowMode ? "" : undefined}>
+      <Suspense fallback={<div className="game-canvas-pending" aria-hidden="true" />}>
       <GameCanvas
-        workers={workerList}
+        workers={sceneWorkerList}
         activeId={activeId}
         completedTurns={stats.completedTurns}
         collaborations={collaborationList}
         missions={missionList}
         departments={departmentList}
         roundtableIds={roundtableIdSet}
+        bossRoom={bossAssignmentOpen || active?.ephemeralKind === "dedicated" || selectedDepartmentIsBossCrew}
+        bossTaskDepartmentIds={bossTaskDepartmentIds}
+        bossTasks={bossTaskList}
+        needsYouItems={needsYou.items}
+        onNeedsYou={goToNeedsYouItem}
         swapThresholdTokens={system?.brainSwapThresholdTokens}
+        brainSwapEvent={brainSwapEvent}
+        onOpenOutbox={openOutbox}
         onMeetingTableClick={() => {
           setDiscussionMode("warroom");
           setComposerFocusRequest((request) => request + 1);
@@ -993,12 +1666,15 @@ export function App() {
         onRoomSwitch={(id) => { setActiveId(id); openWorkspaceForMove(); }}
         onRemove={handleRemoveWorker}
         onResolveApproval={resolveApproval}
+        focusRequest={cameraFocus}
       />
+      </Suspense>
       </div>
       {!blackWindowMode && <TopBar
+        {...topBarHandlers}
         topBarRef={topBarRef}
         professionalModeButtonRef={professionalModeButtonRef}
-        active={active}
+        active={topBarActive}
         activeWorkspace={activeWorkspace}
         platform={system?.platform}
         capabilities={activeCapabilities}
@@ -1006,41 +1682,22 @@ export function App() {
         wsReady={wsReady}
         modelOptions={modelOptions}
         workerCount={workerList.length}
+        runningCount={runningCount}
+        runningWorkers={runningWorkersStable}
+        needsYou={topBarNeedsYou}
+        outboxUnread={outboxUnread}
+        outboxDropSeq={outboxDropSeq}
         providerChanging={providerChanging}
-        accounts={Object.values(accounts)}
-        onSetWorkerAccount={handleSetWorkerAccount}
-        onRoom={() => active ? openWorkspaceForMove() : openWorkspaceForCreate(activeProvider)}
-        onBossAssignment={openBossDesk}
-        onOpenMcp={() => setMcpModalOpen(true)}
-        onOpenGlobalMemory={() => setGlobalMemoryModalOpen(true)}
-        onOpenCodexCommands={() => setCodexCommandsModalOpen(true)}
-        onOpenAccounts={() => { setAccountsModalProvider(activeProvider); setAccountsModalOpen(true); }}
-        onOpenBackup={() => setBackupModalOpen(true)}
-        onOpenOps={() => setOpsModalOpen(true)}
-        onOpenKanban={() => setKanbanModalOpen(true)}
-        onOpenDayReport={() => setDayReportOpen(true)}
-        onOpenOutbox={() => setOutboxOpen(true)}
-        onOpenTour={openTour}
-        onOpenRemote={() => setRemoteModalOpen(true)}
-        onRestart={() => void requestServerRestart()}
-        onShutdown={() => void requestServerShutdown()}
+        accounts={accountList}
         restartPending={restartPending}
-        onProvider={(provider) => void changeProvider(provider)}
-        onModel={handleModelChange}
-        onAutoApprove={handleAutoApproveChange}
-        onRefreshAuth={() => void refreshAuth(activeProvider)}
-        onResetUi={() => { resetPreferences(); notify(t("介面配置已重設"), "info"); }}
         notificationsEnabled={preferences.notificationsEnabled}
-        onNotificationsToggle={toggleNotifications}
         updateInfo={updateInfo}
-        onApplyUpdate={() => void requestAppUpdate()}
         updateApplying={updateApplying}
         professionalMode={taskFocusMode}
-        onProfessionalModeChange={(enabled) => enabled ? enterTaskFocusMode() : exitTaskFocusMode()}
         blackWindowMode={blackWindowMode}
-        onBlackWindowModeChange={(enabled) => enabled ? enterBlackWindowMode() : exitBlackWindowMode()}
+        menuRequest={topMenuRequest}
       >
-        {!taskFocusMode && <EnergyHud usage={providerUsage} accountUsage={accountUsage} accounts={Object.values(accounts)} onRefresh={refreshUsage} totalCostUsd={stats.totalCostUsd} />}
+        {topBarEnergyHud}
       </TopBar>}
 
       {blackWindowMode && <Suspense fallback={<div className="system-banner" role="status">{t("正在載入黑窗工作台…")}</div>}><BlackWindowWorkspace
@@ -1059,11 +1716,12 @@ export function App() {
         notify={notify}
       /></Suspense>}
 
-      {!wsReady && <div className="system-banner system-banner--error" role="alert"><i />{t("本機服務重新連線中，現有畫面會保留。")}</div>}
+      <ConnectionBanner ready={wsReady} reason={updateApplying ? "update" : restartPending ? "restart" : "blip"} />
       {wsReady && activeProvider === "codex" && system?.codexWindowsBestEffort && <div className="system-banner" role="status"><i />{t("Windows 10 可使用 Codex，但原生沙箱屬上游 best-effort；Windows 11 會更穩定。")}</div>}
 
       <button
         className={`panel-toggle ${preferences.taskLogOpen ? "panel-toggle--open" : ""}`}
+        data-shortcut-hint="toggle_task_log"
         aria-hidden={taskFocusMode || blackWindowMode || undefined}
         inert={taskFocusMode || blackWindowMode ? "" : undefined}
         // Capture the pointer so a tap OR a swipe off the button both toggle: on a
@@ -1104,6 +1762,48 @@ export function App() {
         }} />}
         <div className="holo-panel__title">
           <div className="holo-panel__heading"><span className="holo-panel__eyebrow">{bossAssignmentOpen ? taskFocusMode ? "PROFESSIONAL BOSS DESK" : "BOSS DESK" : taskFocusMode ? selectedDepartment ? "PROFESSIONAL DEPARTMENT" : "PROFESSIONAL WORKBENCH" : selectedDepartment ? "DEPARTMENT WORK" : "WORKSTREAM"}</span><strong>{bossAssignmentOpen ? t("老闆交辦") : taskFocusMode ? selectedDepartment ? t("專業部門") : t("專業工作台") : selectedDepartment ? selectedDepartment.name : t("任務日誌")}</strong></div>
+          {bossAssignmentOpen && <div className="autopilot-control">
+            <button
+              type="button"
+              className={`autopilot-toggle${autopilotEnabled ? " is-on" : ""}`}
+              role="switch"
+              aria-checked={autopilotEnabled}
+              disabled={autopilotBusy}
+              // 開＝彈設定框選步數/時間；關＝一鍵直接關。
+              onClick={() => { if (autopilotEnabled) void toggleAutopilot(false); else setAutopilotConfigOpen((open) => !open); }}
+              title={t("自動循環：交辦完成後，讓決策模型自己決定下一步並繼續，直到你關掉或撞上步數／時間上限")}
+            >
+              <span className="autopilot-toggle__track"><span className="autopilot-toggle__thumb" /></span>
+              <span className="autopilot-toggle__label">{autopilotEnabled
+                ? autopilotMinutesLeft != null
+                  ? t("自動循環中 · 剩 {n} 步 · {m} 分", { n: autopilotSteps, m: autopilotMinutesLeft })
+                  : autopilotAutoResolve
+                    ? t("自動循環中 · 剩 {n} 步 · 會自動接手", { n: autopilotSteps })
+                    : t("自動循環中 · 剩 {n} 步", { n: autopilotSteps })
+                : t("自動循環")}</span>
+            </button>
+            {autopilotConfigOpen && !autopilotEnabled && <div className="autopilot-config" role="dialog" aria-label={t("自動循環設定")}>
+              <div className="autopilot-config__row">
+                <label>{t("步數上限")}<input type="number" min={1} max={50} value={autopilotStepInput}
+                  onChange={(event) => setAutopilotStepInput(event.target.value)} /></label>
+                <small>{t("做完一張交辦算一步，1–50")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={autopilotMinutesInput}
+                  onChange={(event) => setAutopilotMinutesInput(event.target.value)} /></label>
+                <small>{t("選填；到點會在下一張交辦收工時停")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label className="autopilot-config__check"><input type="checkbox" checked={autopilotAutoResolveInput}
+                  onChange={(event) => setAutopilotAutoResolveInput(event.target.checked)} />{t("卡住時自動接手")}</label>
+                <small>{t("交辦卡住或被問問題時，先讓決策模型嘗試解卡／用安全假設代答（每張最多 5 次，代答會標示可修正）；需要你本人的資料、權限或不可逆決定仍會停下等你")}</small>
+              </div>
+              <div className="autopilot-config__actions">
+                <button type="button" className="autopilot-config__cancel" onClick={() => setAutopilotConfigOpen(false)}>{t("取消")}</button>
+                <button type="button" className="autopilot-config__start" disabled={autopilotBusy} onClick={startAutopilotFromConfig}>{t("開始")}</button>
+              </div>
+            </div>}
+          </div>}
           {taskFocusMode ? <div className="focus-context-switch">
             {!focusPhone && focusKindSwitch}
             {/* 手機換成跟像素模式同一排 chip：<select> 看不出「現在有誰、誰在等你」，
@@ -1163,6 +1863,7 @@ export function App() {
           workspacePath={activeWorkspace}
           tasks={Object.values(bossTasks)}
           missions={missionList}
+          onLoadActivity={loadMissionActivity}
           workers={workerList}
           decisionModels={decisionModelOptions}
           onCreate={createBossTask}
@@ -1170,6 +1871,13 @@ export function App() {
           onUpdate={updateBossTask}
           onDelete={deleteBossTask}
           onRestart={restartBossTask}
+          onCancelTask={cancelBossTask}
+          onCreateDepartment={() => setDepartmentCreatorOpen(true)}
+          onDebateDirection={(topic) => {
+            // 關掉交辦視窗，讓使用者看得到 3 個 NPC 走上會議桌辯論這個方向。
+            setBossAssignmentOpen(false);
+            void launchWarroom(topic);
+          }}
           onOpenMission={(missionId) => {
             const mission = missions[missionId];
             if (!mission?.departmentId) return;
@@ -1216,7 +1924,7 @@ export function App() {
           onAddPane={addFocusPane}
           onRemovePane={removeFocusPane}
           onApprove={resolveTaskApproval}
-        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} />)}
+        /> : <QuestLog key={`${activeSessionKey}:${taskSearchScope}`} readerKey={activeSessionKey} turns={taskLogTurns} view={preferences.taskLogView} searchQuery={taskSearch} focusMode={taskFocusMode} studioRail={taskFocusMode ? <FocusStudios studios={focusStudios} activeWorkspace={activeWorkspace} collapsed={preferences.focusStudiosCollapsed} onCollapsedChange={(collapsed) => updatePreferences({ focusStudiosCollapsed: collapsed })} onSelect={selectFocusStudio} onCreateNpc={() => openWorkspaceForCreate(activeProvider)} /> : undefined} studioRailCollapsed={preferences.focusStudiosCollapsed} onApprove={resolveTaskApproval} onAnswerAutopilot={answerAutopilot} missionActivity={workerMissionActivity} nextAttention={questLogNextAttention} onOpenAttention={openQuestLogAttention} turnDeliverables={questLogDeliverables} />)}
         {!bossAssignmentOpen && selectedDepartment && selectedDepartmentLead && <DepartmentMissionDialog
           embedded
           focusMode={taskFocusMode}
@@ -1225,12 +1933,13 @@ export function App() {
           boss={selectedDepartmentLead}
           workers={workerList}
           missions={missionList}
+          onLoadActivity={loadMissionActivity}
           legacyTasks={collaborationList}
           departmentRecord={selectedDepartment}
           onPrepare={prepareMission}
           onStart={startMission}
           onLoadThread={loadDepartmentThread}
-          onMessageDepartment={messageDepartment}
+          onMessageDepartment={messageDepartmentWithLead}
           onResetSessions={resetDepartmentSessions}
           onCancel={cancelMission}
           onRetryReview={retryMissionReview}
@@ -1247,18 +1956,36 @@ export function App() {
       <div ref={setComposerHostRef} className="unified-composer-host">
       {!bossAssignmentOpen && !selectedDepartment && <TaskComposer
         draftKey={activeSessionKey}
-        placeholder={active?.busy ? t("{name} 執勤中·可排隊", { name: active.name }) : t("對 {name} 下指令（{tip}）", { name: active?.name ?? "…", tip: composerTips[tipIndex] })}
+        placeholder={activeTurnBusy && active ? t("{name} 執勤中·可排隊", { name: active.name }) : t("對 {name} 下指令（{tip}）", { name: active?.name ?? "…", tip: composerTips[tipIndex] })}
         submitLabel={t("執行")}
         disabled={!active || activeAuth.status !== "authenticated"}
+        needsAttention={activeNeedsYou}
         layout="dock"
         focusMode={taskFocusMode}
         focusRequest={composerFocusRequest}
-        busy={Boolean(active?.busy)}
+        busy={activeTurnBusy}
         queueEnabled
+        serverQueue={active?.queue ?? []}
+        onEnqueue={active ? ((submission) => {
+          // NPC 忙碌時的送出走佇列，討論模式也要跟著走，否則題目會被當成一般工作指示排隊：快速圓桌是
+          // 同一位 NPC 的單一回合，包成圓桌 prompt 照樣排；作戰室是另開的多人會議、不是它的回合，
+          // 不經佇列——擋下並保留草稿，等它空下來再開。
+          const submissionMode = discussionSubmission(discussionMode, submission.text);
+          if (submissionMode === "roundtable") return enqueueCommand(active.id, { ...submission, text: roundtablePrompt(submission.text) });
+          if (submissionMode === "warroom") return Promise.resolve(t("作戰室不經過佇列：等 {name} 這回合結束再開，或先關掉作戰室改排一般指示", { name: active.name }));
+          return enqueueCommand(active.id, submission);
+        }) : undefined}
+        onRemoveQueued={active ? ((id) => { void removeQueued(active.id, id); }) : undefined}
+        onReorderQueued={active ? ((ids) => { void reorderQueued(active.id, ids); }) : undefined}
         persistExtras
         voiceEnabled
         globalDrop={activeAuth.status === "authenticated" && !workspaceOpen && !commandCenterOpen && !avatarWorkerId && !handoffTarget && !personaWorkerId && !mcpModalOpen && !codexCommandsModalOpen && !accountsModalOpen}
         dropTargetLabel={active?.name}
+        launchTarget={active ? { id: active.id, name: active.name } : null}
+        onLaunch={handleComposerLaunch}
+        onReceiptOpen={goToWorker}
+        inject={composerInject}
+        onInjectApplied={(seq) => setComposerInject((current) => current?.seq === seq ? null : current)}
         palette={{
           workspacePath: activeWorkspace,
           provider: activeProvider,
@@ -1297,6 +2024,74 @@ export function App() {
               <button type="button" role="menuitem" onClick={() => { setRoundtableMenuOpen(false); void openWarroomHistory(); }}>{t("歷史")}</button>
             </div>}
           </div>
+          <div className="worker-autopilot-control">
+            <button
+              type="button"
+              className={`composer-roundtable-toggle composer-roundtable-toggle--autopilot${active?.autopilot ? " is-active" : ""}`}
+              aria-pressed={Boolean(active?.autopilot)}
+              disabled={Boolean(active?.ephemeralKind)}
+              title={t("自動循環：這位 NPC 做完一回合後，由教練持續思考下一步發展、自己接著做；只有需要你拍板/花錢/不可逆的決定才停下來問你。再點一下關閉。")}
+              onClick={() => { if (active?.autopilot) void setWorkerAutopilotEnabled(false); else setWorkerAutopilotConfigOpen((open) => !open); }}
+            >{active?.autopilot?.paused
+              ? t("自動循環・暫停等你回覆")
+              : <>{t("自動循環")}{active?.autopilot ? t("・剩 {n} 步", { n: active.autopilot.stepsRemaining }) : ""}{active?.autopilot?.proactive ? t("・主動") : ""}</>}</button>
+            {active?.autopilot && <div className="worker-autopilot-goal">
+              {active.autopilot.paused
+                ? <span className="worker-autopilot-goal__paused" title={active.autopilot.paused.question}>{t("循環暫停中：回覆後會自動接著跑")}</span>
+                : workerAutopilotGoalDraft != null
+                  ? <>
+                    <input
+                      type="text"
+                      className="worker-autopilot-goal__input"
+                      maxLength={800}
+                      autoFocus
+                      value={workerAutopilotGoalDraft}
+                      aria-label={t("自動循環目標")}
+                      onChange={(event) => setWorkerAutopilotGoalDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void saveWorkerAutopilotGoal(); }
+                        else if (event.key === "Escape") { event.preventDefault(); setWorkerAutopilotGoalDraft(null); }
+                      }}
+                    />
+                    <button type="button" className="worker-autopilot-goal__btn" disabled={workerAutopilotGoalSaving} onClick={() => void saveWorkerAutopilotGoal()}>{t("儲存")}</button>
+                    <button type="button" className="worker-autopilot-goal__btn" disabled={workerAutopilotGoalSaving} onClick={() => setWorkerAutopilotGoalDraft(null)}>{t("取消")}</button>
+                  </>
+                  : <>
+                    <span className="worker-autopilot-goal__text" title={active.autopilot.goal?.trim() || undefined}>
+                      {active.autopilot.goal?.trim()
+                        ? t("目標：{goal}", { goal: active.autopilot.goal.trim() })
+                        : t("目標：（自動取最近一則指示）")}
+                    </span>
+                    <button type="button" className="worker-autopilot-goal__btn" title={t("修改自動循環目標")} onClick={() => setWorkerAutopilotGoalDraft(active.autopilot?.goal?.trim() ?? "")}>{t("改")}</button>
+                  </>}
+            </div>}
+            {workerAutopilotConfigOpen && !active?.autopilot && <div className="autopilot-config autopilot-config--up" role="dialog" aria-label={t("自動循環設定")}>
+              <div className="autopilot-config__row autopilot-config__row--goal">
+                <label htmlFor="worker-autopilot-goal-input">{t("目標")}</label>
+                <textarea id="worker-autopilot-goal-input" rows={2} maxLength={800} placeholder={t("留空＝用你最近一則指示")} value={workerAutopilotGoalInput}
+                  onChange={(event) => setWorkerAutopilotGoalInput(event.target.value)} />
+              </div>
+              <div className="autopilot-config__row">
+                <label>{t("步數上限")}<input type="number" min={1} max={20} value={workerAutopilotStepInput}
+                  onChange={(event) => setWorkerAutopilotStepInput(event.target.value)} /></label>
+                <small>{t("做完一回合算一步，1–20")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label>{t("時間上限（分鐘）")}<input type="number" min={1} placeholder={t("不限")} value={workerAutopilotMinutesInput}
+                  onChange={(event) => setWorkerAutopilotMinutesInput(event.target.value)} /></label>
+                <small>{t("選填；到點會在該回合收工時停")}</small>
+              </div>
+              <div className="autopilot-config__row">
+                <label className="autopilot-config__check" title={t("勾選＝教練持續思考下一步發展（預設）；取消＝只把當前工作收尾就停")}><input type="checkbox" checked={workerAutopilotProactiveInput}
+                  onChange={(event) => setWorkerAutopilotProactiveInput(event.target.checked)} />{t("主動模式（持續想下一步發展）")}</label>
+                <small>{t("原任務收尾後不停：自己找優化點、驗證品質、延伸研究、預作準備，步數用完才停；需要你本人的資料、權限或不可逆決定仍會停下")}</small>
+              </div>
+              <div className="autopilot-config__actions">
+                <button type="button" className="autopilot-config__cancel" onClick={() => setWorkerAutopilotConfigOpen(false)}>{t("取消")}</button>
+                <button type="button" className="autopilot-config__start" onClick={() => void setWorkerAutopilotEnabled(true)}>{t("開始")}</button>
+              </div>
+            </div>}
+          </div>
           {stancesOpen && <div className="warroom-stances-panel">
             <header><strong>{t("自訂作戰室角色")}</strong><button type="button" onClick={() => setStancesOpen(false)} aria-label={t("關閉")}>×</button></header>
             <textarea
@@ -1307,6 +2102,14 @@ export function App() {
             />
             <small>{parseCustomStances(stancesText).length > 0 ? t("將使用自訂 {count} 位角色（上限 4）", { count: String(parseCustomStances(stancesText).length) }) : t("目前使用預設角色")}</small>
           </div>}
+          {/* 快速圓桌剛出結論時的一鍵下一步；其他浮卡開著時讓位，避免疊在一起。 */}
+          {active && !stancesOpen && !roundtableMenuOpen && !workerAutopilotConfigOpen && <RoundtableFollowUp
+            turns={active.turns}
+            busy={Boolean(active.busy)}
+            warroomRunning={warroomRunning}
+            onSend={(text) => { void send(active.id, { text, images: [], documents: [] }).then((error) => { if (error) notify(error, "error"); }); }}
+            onEscalate={(topic) => { void launchWarroom(topic); }}
+          />}
         </>}
         onSubmit={async (command) => {
           if (!activeId) return t("沒有可用的人員");
@@ -1317,22 +2120,10 @@ export function App() {
           if (submissionMode !== "warroom") return send(activeId, command);
           // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個短命角色 NPC（ephemeralKind: "warroom"）走到會議桌，兩輪辯論（表態→反駁）、
           // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
-          if (warroomRunning) { notify(t("作戰室討論中，請等這場結束…"), "info"); return null; }
-          setWarroomRunning(true);
-          notify(t("作戰室開議：成員正走向會議桌辯論，約需幾分鐘…"), "info");
-          try {
-            const resp = await apiRequest<{ ok: boolean; result: WarRoomResult }>("/api/warroom", {
-              method: "POST",
-              body: { topic: command.text, difficulty: "auto", workspacePath: activeWorkspace, hostWorkerId: activeId, stances: parseCustomStances(stancesText) },
-              // 後端整場會議封頂 12 分鐘；多留 1 分鐘讓它完成清理並回傳 HTTP 結果。
-              timeoutMs: 13 * 60_000,
-            });
-            setWarroomResult(resp.result);
-          } catch (error) {
-            notify(error instanceof Error ? error.message : t("作戰室失敗"), "error");
-          } finally {
-            setWarroomRunning(false);
-          }
+          // 不 await：開會（席位不足還要排隊）可能等上幾十分鐘，輸入框在 onSubmit 回來前會擋下所有 NPC
+          // 的送出。進度由 warroomRunning／warroomQueued 的狀態列另外追；已有一場在跑就把草稿退回。
+          if (warroomRunning) return t("作戰室討論中，請等這場結束…");
+          void launchWarroom(command.text);
           return null;
         }}
         onInterrupt={() => {
@@ -1344,6 +2135,7 @@ export function App() {
       </div>
 
       <WorkerTabs
+        {...workerTabsHandlers}
         inert={taskFocusMode || blackWindowMode}
         workers={workerList}
         activeId={activeId}
@@ -1353,18 +2145,8 @@ export function App() {
         currentRoom={activeWorkspace}
         filter={preferences.crewFilter}
         collapsed={preferences.crewRailCollapsed}
-        onFilter={(crewFilter) => updatePreferences({ crewFilter })}
-        onCollapsed={(crewRailCollapsed) => updatePreferences({ crewRailCollapsed })}
-        onSelect={activateNpc}
-        onSelectDepartment={selectDepartment}
-        onReorder={(ids) => { void reorderWorkers(ids).then((error) => { if (error) notify(error, "error"); }); }}
-        onCreate={() => openWorkspaceForCreate(activeProvider)}
-        onCreateDepartment={() => setDepartmentCreatorOpen(true)}
-        onClose={handleRemoveWorker}
-        onRename={handleRename}
-        onAvatar={setAvatarWorkerId}
-        onPersona={setPersonaWorkerId}
-        onRoom={(id) => { setActiveId(id); openWorkspaceForMove(); }}
+        needsYou={needsYou.byWorker}
+        stuck={needsYou.stuck}
       />
 
       {commandCenterOpen && activeWorkspace && <Suspense fallback={<div className="command-center command-center--loading"><div className="ui-skeleton"><i /><i /><i /></div></div>}><CommandCenter workspacePath={activeWorkspace} provider={activeProvider} workers={workerList} activeWorkerId={activeId} revisions={{ claude: workflowRevisions[`claude\0${activeWorkspace}`] ?? 0, codex: workflowRevisions[`codex\0${activeWorkspace}`] ?? 0 }} onRun={async (workerId, message) => { const runError = await send(workerId, { text: message, images: [], documents: [] }); if (!runError) setActiveId(workerId); return runError; }} onClose={() => setCommandCenterOpen(false)} confirm={confirm} /></Suspense>}
@@ -1413,7 +2195,9 @@ export function App() {
         return error;
       }} />}
 
-      <Suspense fallback={null}>
+      {/* 視窗的程式碼還在下載（第一次打開、慢網路）：先給一張骨架卡，不讓按了沒反應。
+          骨架卡延遲 160ms 才出現，載得快的時候根本看不到。 */}
+      <Suspense fallback={<PanelSkeleton />}>
       {avatarWorkerId && workers[avatarWorkerId] && <AvatarWorkshop worker={workers[avatarWorkerId]} onSave={async (id, data, mime) => { const error = await saveAvatar(id, data, mime); if (!error) notify(t("自訂角色已套用")); return error; }} onPreset={async (id, presetId) => { const error = await selectAvatarPreset(id, presetId); if (!error) notify(t("官方角色已套用")); return error; }} onActivateCustom={async (id) => { const error = await activateCustomAvatar(id); if (!error) notify(t("已切回自訂角色")); return error; }} onReset={async (id) => { const error = await resetAvatar(id); if (!error) notify(t("已刪除自訂角色並恢復經典隊員")); return error; }} onClose={() => setAvatarWorkerId(null)} />}
 
       {handoffTarget && active && <ProviderHandoffDialog key={`${active.id}:${handoffTarget}`} worker={active} toProvider={handoffTarget} onPrepare={prepareHandoff} onStart={startHandoff} onDirectSwitch={switchProviderFresh} onClose={() => setHandoffTarget(null)} />}
@@ -1464,7 +2248,7 @@ export function App() {
       {remoteModalOpen && <RemoteAccessModal notify={notify} onClose={() => setRemoteModalOpen(false)} />}
       {kanbanModalOpen && <KanbanModal workers={workerList} onOpenBoss={openBossDesk} onClose={() => setKanbanModalOpen(false)} />}
       {dayReportOpen && <DayReportModal notify={notify} onClose={() => setDayReportOpen(false)} />}
-      {outboxOpen && <OutboxModal onClose={() => setOutboxOpen(false)} />}
+      {outboxOpen && <OutboxModal onClose={closeOutbox} />}
       {shortcutsHelpOpen && <ShortcutsHelp onClose={() => setShortcutsHelpOpen(false)} />}
       {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
       </Suspense>
@@ -1493,9 +2277,18 @@ export function App() {
         </div>
       </Modal>}
 
-      {warroomRunning && <div className="warroom-running" role="status" aria-live="polite">
+      {warroomRunning && warroomQueued && <div className="warroom-running warroom-running--queued" role="status" aria-live="polite">
+        <span className="warroom-running__dot" aria-hidden="true" />
+        {warroomQueued.ahead > 0
+          ? t("作戰室已排隊，前面還有 {n} 場；席位釋出後自動開場", { n: String(warroomQueued.ahead) })
+          : t("作戰室已排隊，下一場就輪到這場；席位釋出後自動開場")}
+        <button type="button" className="warroom-running__cancel" onClick={() => { void cancelWarroomQueue(warroomQueued.ticketId); }}>{t("取消排隊")}</button>
+      </div>}
+      {warroomRunning && !warroomQueued && <div className="warroom-running" role="status" aria-live="polite">
         <span className="warroom-running__dot" aria-hidden="true" />
         {t("作戰室辯論進行中…成員正在會議桌交鋒，結果會自動送回")}
+        {warroomStartedAt > 0 && <span className="warroom-running__elapsed">· {t("已進行")} <ElapsedSeconds since={warroomStartedAt} /> {t("秒")}</span>}
+        <span className="pc-indeterminate" aria-hidden="true" />
       </div>}
 
       {warroomResult && <Modal
@@ -1505,7 +2298,7 @@ export function App() {
         closeLabel={t("關閉")}
         onClose={() => setWarroomResult(null)}
       >
-        <WarroomVerdictBody result={warroomResult} />
+        <WarroomVerdictBody result={warroomResult} onDelegate={(action) => delegateWarroomAction(warroomOriginRef.current?.hostId ?? null, warroomOriginRef.current?.topic ?? "", action)} />
       </Modal>}
 
       {warroomHistory && <Modal
@@ -1521,7 +2314,13 @@ export function App() {
                 {warroomHistoryContent.report?.result
                   ? <>
                       {warroomHistoryContent.report.topic && <p className="warroom-history__topic">{t("主題：")}{warroomHistoryContent.report.topic}{warroomHistoryContent.report.difficulty ? ` · ${warroomHistoryContent.report.difficulty}` : ""}</p>}
-                      <WarroomVerdictBody result={warroomHistoryContent.report.result} />
+                      {/* 回看舊裁決也能把行動項交給目前選中的 NPC 接手 */}
+                      <WarroomVerdictBody
+                        key={warroomHistoryContent.file}
+                        result={warroomHistoryContent.report.result}
+                        onDelegate={active ? (action) => delegateWarroomAction(active.id, warroomHistoryContent.report?.topic ?? "", action) : undefined}
+                        delegateLabel={active ? t("交給 {name}", { name: active.name }) : undefined}
+                      />
                     </>
                   : <div className="warroom-history__content">
                       {/* 完整 Markdown 渲染（RichText 已在主包）：巢狀清單/表格/粗體都吃得下，
@@ -1549,6 +2348,15 @@ export function App() {
                   </li>
                 ))}</ul>}
       </Modal>}
+
+      {quickPaletteOpen && <CommandPalette
+        entries={paletteEntries}
+        workers={paletteWorkers}
+        activeWorker={active ? { id: active.id, name: active.name } : null}
+        onComposeTo={(workerId, text) => prefillComposerFor(workerId, text)}
+        onClose={() => setQuickPaletteOpen(false)}
+      />}
+      {longPressRing && <span key={longPressRing.key} className="pc-longpress" style={{ left: longPressRing.x, top: longPressRing.y, "--longpress-ms": `${LONG_PRESS_MS - 120}ms` } as CSSProperties} aria-hidden="true" />}
 
       <footer className="app-copyright" aria-label={t("版權資訊")} aria-hidden={blackWindowMode || undefined} inert={blackWindowMode ? "" : undefined}>© 2026 weiwei</footer>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />

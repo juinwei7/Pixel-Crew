@@ -6,20 +6,32 @@ const files = readdirSync(assetsDir).filter((file) => file.endsWith(".js"));
 if (!files.length) throw new Error("No web build assets found. Run `npm run build -w web` first.");
 
 const budgets = [
-  { name: "application entry", match: /^index-[\w-]+\.js$/, max: 360 * 1024 },
+  // 1ad9b3b 起 entry 只剩開機殼層（ErrorBoundary、ensureLanguage、動態 import App），
+  // 現況 ~12 KiB。上限壓在 64 KiB：任何東西被同步拉回 entry 都會立刻被擋下。
+  { name: "application entry", match: /^index-[\w-]+\.js$/, max: 64 * 1024 },
+  // 原本住在 entry 的 app 程式碼（v2.5.2 時 ~376 KiB）整塊搬進 App chunk，開機後
+  // 第一時間就載。現況 ~296 KiB + 餘裕 = 320 KiB，繼續擋住 vendor 意外洩進來。
+  { name: "application shell", match: /^App-[\w-]+\.js$/, max: 320 * 1024 },
   { name: "Pixi vendor", match: /^pixi-[\w-]+\.js$/, max: 620 * 1024 },
   { name: "rich text vendor", match: /^rich-text-[\w-]+\.js$/, max: 380 * 1024 },
-  // 英文字典補完（2026-09，從 ~100 KiB 到 ~114 KiB）之後調高。這個 chunk 是
-  // 靜態 import，所以中文使用者也會下載到——真正的解法是等 lang 決定後才
-  // 動態載入字典，但那會讓 i18n 模組變成 async，牽動所有 importer 的初始化
-  // 順序，不適合在發版前動。先把上限訂在「補完後 + 一點餘裕」，繼續擋住意外膨脹。
-  { name: "i18n catalog", match: /^i18n-[\w-]+\.js$/, max: 120 * 1024 },
+  // i18n 模組本體（語言偵測 + 查表）很小，跟在 entry 旁邊載入。
+  { name: "i18n runtime", match: /^i18n-(?!en-)[\w-]+\.js$/, max: 16 * 1024 },
+  // 英文字典在 lang 決定為英文後才動態載入，中文使用者不會下載。1ad9b3b 補譯
+  // 後現況 ~144 KiB + 餘裕 = 160 KiB。
+  { name: "English catalog", match: /^i18n-en-[\w-]+\.js$/, max: 160 * 1024 },
   // three.js is only pulled in by QrTree's remote-access QR animation; it's
   // isolated into its own vendor chunk (see vite.config.ts manualChunks) so
   // RemoteAccessModal's own feature code stays under the generic lazy cap
   // below instead of smuggling ~420 KiB of vendor library through it.
   { name: "three.js vendor", match: /^three-vendor-[\w-]+\.js$/, max: 460 * 1024 },
   { name: "xterm vendor", match: /^xterm-vendor-[\w-]+\.js$/, max: 400 * 1024 },
+  // 像素辦公室場景（web/src/game：Pixi 精靈、動畫特效、桌位版面、NPC 行為）由
+  // GameCanvas 動態載入，不進 entry。它是一整塊功能而非單一面板，體積遠大於一般
+  // lazy modal，所以給它自己的上限。fce23d2 動畫互動大改版、1ad9b3b 作戰室場景後
+  // 現況 ~180 KiB + 餘裕 = 200 KiB，而不是套用下方 80 KiB 的通用 lazy 上限。Pixi
+  // 本體仍在自己的 vendor chunk。UI 需要的少量場景資料（crewLook / furnitureDefs /
+  // nameplateLod 等）刻意保持輕量、留在 App chunk。
+  { name: "office scene", match: /^scene-[\w-]+\.js$/, max: 200 * 1024 },
 ];
 
 const errors = [];

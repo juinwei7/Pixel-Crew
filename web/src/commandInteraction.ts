@@ -75,3 +75,73 @@ export function composerEnterAction(
   if (!paletteOpen) return "submit";
   return !libraryLoading && itemCount > 0 ? "choose" : "ignore";
 }
+
+/** 送出的來源：鍵盤 Enter、按鈕（含點「中止」）、或程式自動送出（影片解析完）。 */
+export type ComposerSubmitSource = "enter" | "button" | "auto";
+
+/**
+ * NPC 忙碌中、輸入框空白時的送出要不要變成「中止任務」。
+ * 只有明確按下「中止」鈕才中止：空白 Enter（常見的連按兩下、或只是想換行）
+ * 與自動送出一律忽略；按鈕在剛送出後 guardMs 內也忽略，避免連點誤砍任務。
+ */
+export function emptySubmitAction(source: ComposerSubmitSource, msSinceLastSubmit: number, guardMs = 1000): "interrupt" | "ignore" {
+  if (source !== "button") return "ignore";
+  return msSinceLastSubmit < guardMs ? "ignore" : "interrupt";
+}
+
+/**
+ * 影片還在解析時按下送出：記下是哪位 NPC（owner＝輸入框的 session）要「解析完自動送出」。
+ * failed＝等待期間他的影片解析失敗——不能把文字單獨送出（影片會漏掉），草稿與錯誤留給使用者決定。
+ */
+export type PendingVideoSend = { owner: string; failed: boolean };
+
+/** 影片解析中按送出要不要先記下、等解析完再送。例外是 NPC 忙碌、輸入框空白時按的「中止」鈕：那是要中止任務，不能被吞掉。 */
+export function deferSubmitForVideo(processing: boolean, source: ComposerSubmitSource, canInterrupt: boolean): boolean {
+  return processing && !(source === "button" && canInterrupt);
+}
+
+/**
+ * 等著的自動送出現在該怎麼辦（owner＝輸入框目前對應的 NPC，processing＝他的影片還在解析）：
+ * 已切到別的 NPC、或影片解析失敗就取消（輸入框只有一個，送出去的會是別人的草稿／只有文字）；
+ * 還在解析就繼續等；都解析完才送。
+ */
+export function videoAutoSendAction(pending: PendingVideoSend | null, owner: string, processing: boolean): "none" | "wait" | "send" | "cancel" {
+  if (!pending) return "none";
+  if (pending.owner !== owner || pending.failed) return "cancel";
+  return processing ? "wait" : "send";
+}
+
+/**
+ * 送出失敗時把原文放回輸入框。使用者在等待回應期間又打了新字時，不能用
+ * 失敗的原文蓋掉、也不能丟掉原文：原文放前面、新打的接在後面。
+ */
+export function restoreFailedDraft(current: string, failed: string): string {
+  if (!failed.trim()) return current;
+  if (!current.trim()) return failed;
+  if (current.includes(failed)) return current;
+  return `${failed.replace(/\s+$/, "")}\n${current.replace(/^\s+/, "")}`;
+}
+
+type MatchMediaLike = (query: string) => { matches: boolean };
+
+/**
+ * 觸控為主的裝置（手機、平板）不要自動聚焦輸入框：一聚焦就彈出螢幕鍵盤，
+ * 蓋掉半個畫面。桌機（或沒有 matchMedia 的環境，例如伺服器端渲染）照常聚焦。
+ */
+export function shouldAutoFocusComposer(matchMedia: MatchMediaLike | undefined = typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia.bind(window) : undefined): boolean {
+  if (!matchMedia) return true;
+  try {
+    return !matchMedia("(hover: none) and (pointer: coarse)").matches;
+  } catch {
+    return true;
+  }
+}
+
+export type ComposerStatus = "attention" | "working" | "idle";
+
+/** 輸入框旁狀態列：需要你 > 工作中 > 待命。 */
+export function composerStatus(state: { busy?: boolean; working?: boolean; needsAttention?: boolean }): ComposerStatus {
+  if (state.needsAttention) return "attention";
+  if (state.busy || state.working) return "working";
+  return "idle";
+}

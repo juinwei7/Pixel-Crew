@@ -244,8 +244,9 @@ macOS 版與 Windows 版功能相同：在 Pixel Crew 介面開啟「手機連�
 設定實現，開關都在同一個面板，下次登入起生效。
 
 首次啟動轉接站時，需在**這台 Mac 本機**開啟設定精靈設定主通行碼；遠端
-一律要求登入，通行碼與密鑰存在安裝目錄的 `_tsproxy.secret.json`，不會進
-版本控制。
+一律要求登入，通行碼與密鑰存在 `_tsproxy.secret.json`，不會進版本控制：
+.app 安裝版放在 `~/Library/Application Support/Pixel Crew`（更新 app 不會洗掉，
+手機不必重新登入），從原始碼執行則放在專案目錄。
 
 ## 移除
 

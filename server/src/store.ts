@@ -11,9 +11,11 @@ import type { CollaborationTask } from "./collaboration.js";
 import type { DepartmentMission } from "./mission.js";
 import type { BossTask, BossTaskStatus } from "./bossTask.js";
 import { legacyDepartmentName, type Department } from "./department.js";
+import type { EphemeralWorkerKind } from "./warroom.js";
 import type { AttachmentRecord } from "./attachmentRepository.js";
 import type { DepartmentMessage, DepartmentThread } from "./departmentThread.js";
 import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProtection.js";
+import { workspaceIdentity } from "./platform/paths.js";
 import { t } from "./i18n.js";
 import { createMigrationSnapshot, DatabaseMigrationRunner } from "./databaseMigrations.js";
 import { storeMigrations } from "./storeMigrations.js";
@@ -95,11 +97,18 @@ function missionFromRow(row: Record<string, unknown>): DepartmentMission {
   };
 }
 
-function bossTaskFromRow(row: Record<string, unknown>): BossTask {
-  const task = jsonValue<BossTask>(row.payload_json, null as unknown as BossTask);
+function bossTaskFromRow(row: Record<string, unknown>): BossTask | null {
+  // payload_json 損毀（斷電截斷、手動改庫、備份還原到一半）時回 null 讓呼叫端跳過這一列——
+  // 以前 fallback 是 null 卻立刻解參考 task.title，一筆壞列就讓啟動時的 listBossTasks 上拋、整台開不了機。
+  const task = jsonValue<BossTask | null>(row.payload_json, null);
+  if (!task || typeof task !== "object") {
+    console.error(`[store] boss_tasks 列 ${String(row.id ?? "?")} 的 payload_json 損毀，已跳過`);
+    return null;
+  }
+  const objective = typeof task.objective === "string" ? task.objective : "";
   return {
     ...task,
-    title: typeof task.title === "string" && task.title.trim() ? task.title.trim().slice(0, 120) : task.objective.slice(0, 120),
+    title: typeof task.title === "string" && task.title.trim() ? task.title.trim().slice(0, 120) : objective.slice(0, 120),
     archivedAt: typeof task.archivedAt === "string"
       ? task.archivedAt
       : row.archived_at == null ? null : String(row.archived_at),
@@ -149,6 +158,20 @@ function attachmentFromRow(row: Record<string, unknown>): AttachmentRecord {
   };
 }
 
+// 以工作區路徑當 key 的資料表（department_missions／boss_tasks／provider_checkpoints）一律
+// 存這個正規化形式，查詢也用同一個函式轉換。寫入端存真實大小寫、查詢端轉小寫（win32）就是
+// 「部門任務日誌整片空白」的成因：exact-match 永遠撈不到。函式本身 idempotent，所以呼叫端
+// 傳原始路徑或已正規化的路徑都對。
+function workspacePathKey(value: string): string {
+  return workspaceIdentity(value);
+}
+
+const EPHEMERAL_WORKER_KINDS = new Set<string>(["warroom", "research", "dedicated"]);
+
+function parseEphemeralKind(value: unknown): EphemeralWorkerKind | null {
+  return typeof value === "string" && EPHEMERAL_WORKER_KINDS.has(value) ? (value as EphemeralWorkerKind) : null;
+}
+
 export type PersistedWorker = {
   id: string;
   name: string;
@@ -167,6 +190,8 @@ export type PersistedWorker = {
   departmentId: string | null;
   accountId: string | null;
   claudeHomeMode?: "legacy" | "managed";
+  /** 短命 worker 的種類；一般 NPC 為 null。見 storeMigrations 的 version 9。 */
+  ephemeralKind?: EphemeralWorkerKind | null;
 };
 
 export type ProviderAccount = {
@@ -297,6 +322,21 @@ export class LocalStore {
         last_run_day TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      -- 跨裝置排隊佇列：排隊改存 server（原本只在瀏覽器 IndexedDB，手機/電腦各自為政、
+      -- 背景 NPC 也不會自動跑）。搬到這裡後：手機排的隊電腦看得到，且任何 NPC 一空下來
+      -- server 自己就把它的下一則送出，不用切回那個 NPC。
+      CREATE TABLE IF NOT EXISTS worker_queue (
+        id TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        images_json TEXT NOT NULL DEFAULT '[]',
+        documents_json TEXT NOT NULL DEFAULT '[]',
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_worker_queue_worker
+        ON worker_queue(worker_id, position);
 
       CREATE TABLE IF NOT EXISTS slash_command_seed (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -574,7 +614,7 @@ export class LocalStore {
 
   loadWorkers(maxHistory: number): PersistedWorker[] {
     const rows = this.db.prepare(`
-      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode
+      SELECT id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode, ephemeral_kind
       FROM workers ORDER BY sort_order, created_at, rowid
     `).all() as Array<Record<string, unknown>>;
     const eventQuery = this.db.prepare(`
@@ -608,16 +648,29 @@ export class LocalStore {
         departmentId: row.department_id == null ? null : String(row.department_id),
         accountId: row.account_id == null ? null : String(row.account_id),
         claudeHomeMode: row.claude_home_mode === "legacy" ? "legacy" : "managed",
+        ephemeralKind: parseEphemeralKind(row.ephemeral_kind),
       };
     });
+  }
+
+  /**
+   * 有幾筆部門 Mission 把這個 worker 當 boss。department_missions.boss_worker_id 是
+   * ON DELETE CASCADE，所以刪掉還被引用的 worker 會連帶銷毀那些 Mission 紀錄——
+   * 解散短命部門前必須先問這件事。
+   */
+  countMissionsByBossWorker(workerId: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM department_missions WHERE boss_worker_id = ?")
+      .get(workerId) as { n?: unknown } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   saveWorker(worker: Omit<PersistedWorker, "events">): boolean {
     return this.safeWrite("save worker", () => {
       this.db.prepare(`
         INSERT INTO workers (
-          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
+          id, name, model, color_index, avatar_id, avatar_kind, avatar_preset_id, provider, workspace_path, claude_session_id, completed_turns, persona, auto_approve_mode, department_id, account_id, claude_home_mode, ephemeral_kind, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workers))
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           model = excluded.model,
@@ -634,6 +687,7 @@ export class LocalStore {
           department_id = excluded.department_id,
           account_id = excluded.account_id,
           claude_home_mode = excluded.claude_home_mode,
+          ephemeral_kind = excluded.ephemeral_kind,
           updated_at = CURRENT_TIMESTAMP
       `).run(
         worker.id,
@@ -652,6 +706,7 @@ export class LocalStore {
         worker.departmentId ?? null,
         worker.accountId ?? null,
         worker.claudeHomeMode === "legacy" ? "legacy" : "managed",
+        worker.ephemeralKind ?? null,
       );
     });
   }
@@ -975,6 +1030,7 @@ export class LocalStore {
     this.flushEvents();
     this.safeWrite("delete worker", () => {
       this.db.prepare("DELETE FROM workers WHERE id = ?").run(id);
+      this.db.prepare("DELETE FROM worker_queue WHERE worker_id = ?").run(id);
     });
   }
 
@@ -1054,10 +1110,10 @@ export class LocalStore {
     return events;
   }
 
-  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null }> {
+  listSchedules(): Array<{ id: string; workerId: string; time: string; prompt: string; enabled: boolean; lastRunDay: string | null; intervalMinutes: number | null; lastRunAt: string | null }> {
     const rows = this.db.prepare(
-      "SELECT id, worker_id, time, prompt, enabled, last_run_day FROM schedules ORDER BY time ASC",
-    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null }>;
+      "SELECT id, worker_id, time, prompt, enabled, last_run_day, interval_minutes, last_run_at FROM schedules ORDER BY time ASC",
+    ).all() as Array<{ id: string; worker_id: string; time: string; prompt: string; enabled: number; last_run_day: string | null; interval_minutes: number | null; last_run_at: string | null }>;
     return rows.map((row) => ({
       id: row.id,
       workerId: row.worker_id,
@@ -1065,27 +1121,86 @@ export class LocalStore {
       prompt: row.prompt,
       enabled: Boolean(row.enabled),
       lastRunDay: row.last_run_day,
+      // interval_minutes 為 null＝每日 HH:MM 一次；有值＝每 N 分鐘重複。
+      intervalMinutes: row.interval_minutes,
+      lastRunAt: row.last_run_at,
     }));
   }
 
-  addSchedule(id: string, workerId: string, time: string, prompt: string): void {
+  addSchedule(id: string, workerId: string, time: string, prompt: string, intervalMinutes: number | null = null): void {
     this.db.prepare(
-      "INSERT INTO schedules (id, worker_id, time, prompt, enabled) VALUES (?, ?, ?, ?, 1)",
-    ).run(id, workerId, time, prompt);
+      "INSERT INTO schedules (id, worker_id, time, prompt, enabled, interval_minutes) VALUES (?, ?, ?, ?, 1, ?)",
+    ).run(id, workerId, time, prompt, intervalMinutes);
   }
 
-  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean }): void {
+  updateSchedule(id: string, fields: { time?: string; prompt?: string; enabled?: boolean; intervalMinutes?: number | null }): void {
     if (fields.time !== undefined) this.db.prepare("UPDATE schedules SET time = ? WHERE id = ?").run(fields.time, id);
     if (fields.prompt !== undefined) this.db.prepare("UPDATE schedules SET prompt = ? WHERE id = ?").run(fields.prompt, id);
     if (fields.enabled !== undefined) this.db.prepare("UPDATE schedules SET enabled = ? WHERE id = ?").run(fields.enabled ? 1 : 0, id);
+    if (fields.intervalMinutes !== undefined) this.db.prepare("UPDATE schedules SET interval_minutes = ? WHERE id = ?").run(fields.intervalMinutes, id);
   }
 
   deleteSchedule(id: string): void {
     this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
   }
 
-  markScheduleRun(id: string, day: string): void {
-    this.db.prepare("UPDATE schedules SET last_run_day = ? WHERE id = ?").run(day, id);
+  markScheduleRun(id: string, day: string, at: string = new Date().toISOString()): void {
+    this.db.prepare("UPDATE schedules SET last_run_day = ?, last_run_at = ? WHERE id = ?").run(day, at, id);
+  }
+
+  // ── 跨裝置排隊佇列 ─────────────────────────────────────────────────────────
+  // 排隊改存 server（原本只在瀏覽器 IndexedDB）：手機排的隊電腦看得到，且任何 NPC
+  // 一空下來 server 自己就 drain 下一則（見 index.ts 的 turn_end drain 掛點）。
+  private static parseJsonArray(value: string): unknown[] {
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  }
+
+  enqueueCommand(id: string, workerId: string, message: string, images: unknown[], documents: unknown[]): void {
+    const row = this.db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM worker_queue WHERE worker_id = ?").get(workerId) as { next: number };
+    this.db.prepare(
+      "INSERT INTO worker_queue (id, worker_id, message, images_json, documents_json, position) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(id, workerId, message, JSON.stringify(images ?? []), JSON.stringify(documents ?? []), row.next);
+  }
+
+  listQueue(workerId: string): Array<{ id: string; workerId: string; message: string; images: unknown[]; documents: unknown[]; createdAt: string }> {
+    const rows = this.db.prepare(
+      "SELECT id, worker_id, message, images_json, documents_json, created_at FROM worker_queue WHERE worker_id = ? ORDER BY position ASC, rowid ASC",
+    ).all(workerId) as Array<{ id: string; worker_id: string; message: string; images_json: string; documents_json: string; created_at: string }>;
+    return rows.map((row) => ({
+      id: row.id,
+      workerId: row.worker_id,
+      message: row.message,
+      images: LocalStore.parseJsonArray(row.images_json),
+      documents: LocalStore.parseJsonArray(row.documents_json),
+      createdAt: row.created_at,
+    }));
+  }
+
+  // 取出並刪除某 worker 佇列最前面一筆（drain 用）；空的回 null。
+  /**
+   * 看佇列最前面一則，但**不移除**。移除是呼叫端在送出成功之後用 removeQueueItem 做的：
+   * 送出可能因為附件暫存失敗、CLI 不見等原因丟例外，先刪再送的話使用者排的訊息連附件
+   * 會永久消失。
+   */
+  peekFirstQueued(workerId: string): { id: string; message: string; images: unknown[]; documents: unknown[] } | null {
+    const row = this.db.prepare(
+      "SELECT id, message, images_json, documents_json FROM worker_queue WHERE worker_id = ? ORDER BY position ASC, rowid ASC LIMIT 1",
+    ).get(workerId) as { id: string; message: string; images_json: string; documents_json: string } | undefined;
+    if (!row) return null;
+    return { id: row.id, message: row.message, images: LocalStore.parseJsonArray(row.images_json), documents: LocalStore.parseJsonArray(row.documents_json) };
+  }
+
+  removeQueueItem(workerId: string, id: string): void {
+    this.db.prepare("DELETE FROM worker_queue WHERE id = ? AND worker_id = ?").run(id, workerId);
+  }
+
+  reorderQueue(workerId: string, orderedIds: string[]): void {
+    const update = this.db.prepare("UPDATE worker_queue SET position = ? WHERE id = ? AND worker_id = ?");
+    orderedIds.forEach((id, index) => update.run(index, id, workerId));
+  }
+
+  clearWorkerQueue(workerId: string): void {
+    this.db.prepare("DELETE FROM worker_queue WHERE worker_id = ?").run(workerId);
   }
 
   loadCapabilities(repoPath: string): CapabilityState | null {
@@ -1393,7 +1508,7 @@ export class LocalStore {
           , max_plan_steps = excluded.max_plan_steps
           , member_worker_ids_json = excluded.member_worker_ids_json
       `).run(
-        mission.id, mission.departmentId ?? null, mission.workspacePath, mission.bossWorkerId, mission.objective,
+        mission.id, mission.departmentId ?? null, workspacePathKey(mission.workspacePath), mission.bossWorkerId, mission.objective,
         JSON.stringify(mission.acceptanceCriteria), mission.status, mission.planSummary,
         JSON.stringify(mission.steps), mission.currentStepIndex, mission.correctionCount,
         mission.maxCorrections, mission.error, mission.createdAt, mission.startedAt, mission.completedAt,
@@ -1430,8 +1545,11 @@ export class LocalStore {
 
   listDepartmentMissions(workspacePath?: string, limit = 100): DepartmentMission[] {
     const bounded = Math.max(1, Math.min(200, limit));
+    // workspace_path 存的是 workspacePathKey() 正規化後（win32 小寫）的路徑，查詢也走同一個
+    // 函式，所以呼叫端傳原始路徑或已正規化的路徑都撈得到。兩端用不同形式就會 exact-match
+    // 撈到 0 筆 → 任務日誌重整後整片空白。
     const rows = workspacePath
-      ? this.db.prepare("SELECT * FROM department_missions WHERE workspace_path = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(workspacePath, bounded)
+      ? this.db.prepare("SELECT * FROM department_missions WHERE workspace_path = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(workspacePathKey(workspacePath), bounded)
       : this.db.prepare("SELECT * FROM department_missions ORDER BY created_at DESC, rowid DESC LIMIT ?").all(bounded);
     return (rows as Record<string, unknown>[]).map(missionFromRow);
   }
@@ -1457,7 +1575,7 @@ export class LocalStore {
           archived_at = excluded.archived_at,
           payload_json = excluded.payload_json,
           updated_at = excluded.updated_at
-      `).run(task.id, task.workspacePath, task.status, task.title, task.archivedAt, JSON.stringify(task), task.createdAt, task.updatedAt);
+      `).run(task.id, workspacePathKey(task.workspacePath), task.status, task.title, task.archivedAt, JSON.stringify(task), task.createdAt, task.updatedAt);
     });
   }
 
@@ -1474,16 +1592,17 @@ export class LocalStore {
 
   listBossTasks(workspacePath?: string, limit = 200): BossTask[] {
     const bounded = Math.max(1, Math.min(200, limit));
+    // 同 listDepartmentMissions：兩端都走 workspacePathKey()，呼叫端傳哪種形式都撈得到。
     const rows = workspacePath
-      ? this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks WHERE workspace_path = ? ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(workspacePath, bounded)
+      ? this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks WHERE workspace_path = ? ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(workspacePathKey(workspacePath), bounded)
       : this.db.prepare("SELECT payload_json, archived_at FROM boss_tasks ORDER BY archived_at IS NOT NULL, updated_at DESC LIMIT ?").all(bounded);
-    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow).filter((task): task is BossTask => task !== null);
   }
 
   listBossTasksByStatus(statuses: BossTaskStatus[]): BossTask[] {
     const placeholders = statuses.map(() => "?").join(", ");
     const rows = this.db.prepare(`SELECT payload_json FROM boss_tasks WHERE status IN (${placeholders})`).all(...statuses);
-    return (rows as Record<string, unknown>[]).map(bossTaskFromRow);
+    return (rows as Record<string, unknown>[]).map(bossTaskFromRow).filter((task): task is BossTask => task !== null);
   }
 
   listRunningBossTasks(): BossTask[] {
@@ -1519,7 +1638,7 @@ export class LocalStore {
           session_id = excluded.session_id,
           completed_turns = excluded.completed_turns,
           updated_at = CURRENT_TIMESTAMP
-      `).run(workerId, provider, workspacePath, model, state.sessionId, state.completedTurns);
+      `).run(workerId, provider, workspacePathKey(workspacePath), model, state.sessionId, state.completedTurns);
     });
   }
 
@@ -1527,7 +1646,7 @@ export class LocalStore {
     const row = this.db.prepare(`
       SELECT model, session_id, completed_turns FROM provider_checkpoints
       WHERE worker_id = ? AND provider = ? AND workspace_path = ?
-    `).get(workerId, provider, workspacePath) as Record<string, unknown> | undefined;
+    `).get(workerId, provider, workspacePathKey(workspacePath)) as Record<string, unknown> | undefined;
     return row ? {
       model: row.model == null ? null : String(row.model),
       sessionId: String(row.session_id),

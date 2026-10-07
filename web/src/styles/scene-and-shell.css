@@ -316,6 +316,135 @@ body {
   box-shadow: 0 0 16px rgba(168, 85, 255, 0.12);
 }
 
+/* 彙總分流條：畫面左下角（縮放鈕上方，穩定落在 canvas 區、不撞頁首/側欄）常駐
+   「幾個工作中／需要你／待命」，需要你可點一鍵跳。 */
+.npc-aggbar {
+  position: absolute;
+  bottom: 60px;
+  left: 16px;
+  z-index: 40;
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.npc-aggbar__seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(8, 14, 24, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cdd9e8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.npc-aggbar__seg svg { color: #8fb6ff; }
+.npc-aggbar__seg--idle { opacity: 0.72; }
+.npc-aggbar__seg--idle svg { color: #7d8ea3; }
+.npc-aggbar__seg--need {
+  pointer-events: auto;
+  cursor: pointer;
+  color: #ffe0b0;
+  border-color: rgba(255, 180, 90, 0.5);
+  background: rgba(58, 40, 14, 0.85);
+  animation: aggNeedPulse 1.6s ease-in-out infinite;
+}
+.npc-aggbar__seg--need svg { color: #ffb454; }
+@keyframes aggNeedPulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+  50%      { box-shadow: 0 2px 14px rgba(255, 180, 84, 0.42); }
+}
+
+/* 跟拍中：分流條尾端一顆安靜的提示（點它、Esc 或拖曳畫面都會結束）。 */
+.npc-aggbar__seg--follow {
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
+  color: #c8eef6;
+  border-color: rgba(0, 229, 255, 0.24);
+  animation: npc-quiet-in 0.2s ease-out both;
+}
+.npc-aggbar__follow-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); }
+.npc-aggbar__seg--follow:hover, .npc-aggbar__seg--follow:focus-visible { border-color: rgba(0, 229, 255, 0.5); }
+
+/* 鏡頭滑到 NPC 之後，腳下的選取環亮一下（等平移 300ms 走完才亮，只亮一次）。 */
+.npc-focus-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  width: var(--ring-w, 40px);
+  height: calc(var(--ring-w, 40px) * 0.38);
+  border: 2px solid var(--cyan);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  animation: npc-focus-ring 0.7s ease-out 0.28s both;
+}
+@keyframes npc-focus-ring {
+  0% { opacity: 0; scale: 0.6; }
+  35% { opacity: 0.85; scale: 1; }
+  100% { opacity: 0; scale: 1.22; }
+}
+
+/* 畫面外等你核准的 NPC：邊緣一顆琥珀小箭頭＋名字縮寫，只淡入一次、不閃。點了鏡頭移過去。 */
+.npc-edge-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  animation: npc-quiet-in 0.24s ease-out both;
+}
+.npc-edge-marker__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 180, 84, 0.62);
+  border-radius: 50%;
+  background: rgba(22, 16, 7, 0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: #ffd9a6;
+  font: 700 10px/1 var(--mono);
+}
+.npc-edge-marker__arrow {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--edge-angle, 0rad));
+  pointer-events: none;
+}
+.npc-edge-marker__arrow::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -7px;
+  margin-top: -4px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid #ffb454;
+}
+.npc-edge-marker:hover .npc-edge-marker__face,
+.npc-edge-marker:focus-visible .npc-edge-marker__face { border-color: #ffb454; }
+.npc-edge-marker:focus-visible { outline: none; }
+@keyframes npc-quiet-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .npc-focus-ring { animation: npc-focus-ring-calm 0.6s linear both; }
+  .npc-edge-marker, .npc-aggbar__seg--follow { animation: none; }
+}
+@keyframes npc-focus-ring-calm {
+  0%, 100% { opacity: 0; }
+  30%, 60% { opacity: 0.8; }
+}
+
 .npc-nameplate {
   position: absolute;
   top: 0;
@@ -341,12 +470,82 @@ body {
   white-space: nowrap;
   will-change: transform;
 }
-.npc-nameplate__name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.npc-nameplate__role { overflow: hidden; flex: 0 1 auto; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
+/* 名字優先完整，職稱先縮（不會再出現「策.」配一整串職稱）；跟鄰座名牌相撞時職稱整個讓位（--tight，GameCanvas 判定） */
+.npc-nameplate__name { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
+.npc-nameplate__role { overflow: hidden; flex: 0 1 auto; min-width: 0; color: #ffcf8a; font-size: 8px; font-weight: 700; text-overflow: ellipsis; }
+.npc-nameplate--tight:not(.npc-nameplate--active) .npc-nameplate__role,
+.npc-nameplate--carded .npc-nameplate__role { display: none; }
+/* 閒置名牌第二行：「12 分前・寫完 README」灰色小字。跟職稱一樣，跟鄰座相撞（--tight）或身分卡開著時收起。 */
+.npc-nameplate:has(.npc-nameplate__done) { flex-wrap: wrap; row-gap: 1px; }
+.npc-nameplate__done { flex: 0 0 100%; order: 5; min-width: 0; overflow: hidden; color: #7d8ba0; font-size: 8px; font-weight: 400; text-overflow: ellipsis; }
+.npc-nameplate--tight:not(.npc-nameplate--active) .npc-nameplate__done,
+.npc-nameplate--carded .npc-nameplate__done { display: none; }
 .npc-nameplate__elapsed { flex: 0 0 auto; margin-left: auto; color: var(--cyan); font-size: 8px; font-weight: 400; opacity: 0.85; }
 .npc-nameplate:has(.npc-nameplate__collaboration) { flex-wrap: wrap; max-width: 184px; }
+/* 「一眼看出在幹嘛」活動徽章：跟名字同一行（名字・圖示＋短動詞・秒數），圖示吃站點色做色彩編碼。
+   不再自成一行——疊成多行的名牌會蓋到下一排鄰座的名牌。忙碌時職稱讓位（滑鼠停留的身分卡看得到）。 */
+.npc-nameplate__activity {
+  flex: 0 1 auto; min-width: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0 4px; border-radius: 3px;
+  background: color-mix(in srgb, var(--act, #8fb6ff) 13%, transparent);
+  color: #d6e4f6; font-size: 8px; font-weight: 700; letter-spacing: 0.2px;
+  animation: npc-chip-in 0.28s ease-out;
+}
+.npc-nameplate__activity-ico { flex: 0 0 auto; color: var(--act, #8fb6ff); }
+.npc-nameplate__activity-label { overflow: hidden; text-overflow: ellipsis; }
+.npc-nameplate:has(.npc-nameplate__activity) { align-items: center; max-width: 176px; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__role { display: none; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__activity { order: 1; }
+.npc-nameplate:has(.npc-nameplate__activity) .npc-nameplate__elapsed { order: 2; }
+.npc-nameplate:has(.npc-nameplate__activity)::after { order: 3; }
+@keyframes npc-chip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
+/* 脈絡公事包：名牌內的手提箱，內嵌一條直立填充條＝token 負載（填充高度=ctx%）。
+   逼近換腦門檻才浮現並轉暖→紅；換腦（context 驟降）瞬間播一次「瘦身」脈動，把獨有的換腦機制變成一眼看懂的畫面。 */
+.npc-nameplate__case { flex: 0 0 auto; display: inline-flex; align-items: flex-end; gap: 2px; margin-left: 4px; }
+.npc-nameplate__case-ico { color: var(--case, #8fb6ff); opacity: 0.9; }
+.npc-nameplate__case-track {
+  display: inline-flex; align-items: flex-end;
+  width: 4px; height: 10px; border-radius: 2px;
+  background: rgba(143, 184, 232, 0.18); overflow: hidden;
+}
+.npc-nameplate__case-fill { display: block; width: 100%; background: var(--case, #00e5ff); border-radius: 2px; transition: height .4s ease, background .3s ease; }
+.npc-nameplate__case--ok { --case: #00e5ff; }
+.npc-nameplate__case--warn { --case: #ffb000; }
+.npc-nameplate__case--danger { --case: #ff3355; }
+.npc-nameplate__case--danger .npc-nameplate__case-ico { opacity: 1; filter: drop-shadow(0 0 3px rgba(255, 51, 85, 0.6)); }
+.npc-nameplate__case--swap { --case: #7cf0c8; animation: npc-case-swap 1.4s ease; }
+/* 瘦身脈動：箱子先亮一下放大、填充掉到低點，象徵 context 被壓縮、底盤重置後接手 */
+@keyframes npc-case-swap {
+  0%   { transform: scale(1); filter: none; }
+  18%  { transform: scale(1.35); filter: drop-shadow(0 0 6px rgba(124, 240, 200, 0.85)); }
+  100% { transform: scale(1); filter: none; }
+}
+
+/* 「＋1 心法」誠實閃現：換腦真的蒸餾出一條心法並落盤時，名牌內自成一行亮一下綠徽章再淡出。
+   A 的靈魂賣點——換腦不只是活下來，而且學到了東西。整合進名牌實體，非頭上飄浮卡。 */
+.npc-nameplate__learned {
+  flex: 1 0 100%;
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 2px;
+  color: #8ff0cf; font-size: 8px; font-weight: 700; letter-spacing: 0.2px;
+  animation: npc-learned-flash 4.2s ease forwards;
+}
+.npc-nameplate__learned-ico { flex: 0 0 auto; color: #7cf0c8; }
+.npc-nameplate__learned-label { overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 6px rgba(124, 240, 200, 0.6); }
+.npc-nameplate:has(.npc-nameplate__learned) { flex-wrap: wrap; max-width: 152px; }
+@keyframes npc-learned-flash {
+  0%   { opacity: 0; transform: translateY(2px) scale(0.92); }
+  12%  { opacity: 1; transform: translateY(0) scale(1); }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 選取中的名牌疊在鄰座名牌之上、底色不透，不再被旁人名字穿透 */
 .npc-nameplate--active {
+  z-index: 8;
+  background: rgba(5, 10, 20, 0.97);
   color: #ffffff;
   opacity: 1;
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.34);
@@ -364,26 +563,53 @@ body {
   animation: hudPulse 1.2s ease-in-out infinite;
 }
 
+/* 合一的 NPC 卡（滑鼠停留時在身旁長出）：頭＝名字＋狀態燈＋用時，身＝職稱、即時工作畫面、模型／部門、統計。
+   外框吃站點強調色（--ww-accent），換站點時平滑過渡；從靠 NPC 那一側長出來。 */
 .npc-identity-card {
   position: absolute;
   z-index: 12;
   top: 0;
   left: 0;
-  min-width: 168px;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 3px 9px;
-  padding: 9px 10px;
-  border: 1px solid rgba(0, 229, 255, 0.2);
-  border-radius: 9px;
-  background: rgba(7, 13, 26, 0.94);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  width: 236px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--ww-accent, #00e5ff) 38%, transparent);
+  border-radius: 10px;
+  background: rgba(7, 13, 26, 0.96);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.45),
+    0 0 18px color-mix(in srgb, var(--ww-accent, #00e5ff) 10%, transparent);
   color: #c7d6e7;
   pointer-events: none;
+  will-change: transform;
+  transition: border-color .4s ease, box-shadow .4s ease;
 }
-.npc-identity-card strong { font-size: 11px; }
-.npc-identity-card span { color: var(--cyan); font: 8px var(--mono); }
-.npc-identity-card small { grid-column: 1 / -1; color: #6e819c; font: 8px/1.4 var(--mono); }
+/* 長出來：子層依序滑入（外層 transform 每幀被場景改寫，不能拿來做動畫），從靠 NPC 的那一側出來 */
+.npc-identity-card > * { animation: npc-card-in .26s cubic-bezier(.2, .9, .3, 1.2) both; }
+.npc-identity-card[data-side="left"] > * { animation-name: npc-card-in-left; }
+.npc-identity-card > :nth-child(2) { animation-delay: .03s; }
+.npc-identity-card > :nth-child(3) { animation-delay: .06s; }
+.npc-identity-card > :nth-child(n+4) { animation-delay: .09s; }
+@keyframes npc-card-in { from { opacity: 0; transform: translateX(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes npc-card-in-left { from { opacity: 0; transform: translateX(6px) scale(.97); } to { opacity: 1; transform: none; } }
+.npc-identity-card--error { border-color: rgba(224, 87, 74, .7); }
+.npc-identity-card--success { border-color: rgba(57, 217, 107, .7); }
+.npc-identity-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.npc-identity-card strong { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npc-identity-card__status { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: #9fb2cc; font: 700 8px var(--mono); }
+.npc-identity-card__elapsed { color: #7f93ad; font-weight: 400; }
+/* 狀態燈：執行中快閃、思考中慢呼吸、待命靜止 */
+.npc-identity-card__dot { width: 6px; height: 6px; border-radius: 50%; background: #5d6f88; }
+.npc-identity-card--working .npc-identity-card__dot { background: var(--ww-accent, #00e5ff); box-shadow: 0 0 6px var(--ww-accent, #00e5ff); animation: ww-live .9s ease-in-out infinite; }
+.npc-identity-card--thinking .npc-identity-card__dot { background: #9db4d8; box-shadow: 0 0 6px #9db4d8; animation: ww-breathe 2.4s ease-in-out infinite; }
+.npc-identity-card--error .npc-identity-card__dot { background: #e0574a; box-shadow: 0 0 6px #e0574a; animation: none; }
+.npc-identity-card--success .npc-identity-card__dot { background: #39d96b; box-shadow: 0 0 6px #39d96b; animation: none; }
+.npc-identity-card small { color: #6e819c; font: 8px/1.4 var(--mono); }
+@media (prefers-reduced-motion: reduce) {
+  .npc-identity-card > *, .npc-identity-card__dot { animation: none !important; }
+}
 .npc-identity-card__role { color: #ffcf8a !important; font-weight: 700; letter-spacing: .02em; }
 .npc-identity-card__stats {
   grid-column: 1 / -1;
@@ -417,31 +643,44 @@ body {
 .npc-identity-card__ctx--danger .npc-identity-card__ctx-fill { background: #ff3355; box-shadow: 0 0 6px rgba(255, 51, 85, 0.6); }
 .npc-identity-card__ctx--danger .npc-identity-card__ctx-pct { color: #ffb59d !important; }
 
+/* 工作站 tooltip：名稱＋主題色點、一行用途、即時狀態（閒置／使用中＋誰在用什麼）。
+   與 NPC 卡同一套深底面板；主題色只出現在小點、狀態與左側細線，不做發光。 */
 .station-tooltip {
+  --station-accent: #8fb6ff;
   position: absolute;
   z-index: 12;
   top: 0;
   left: 0;
-  min-width: 96px;
+  min-width: 176px;
+  max-width: 264px;
   display: grid;
-  gap: 3px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 183, 94, 0.22);
-  border-radius: 9px;
-  background: rgba(7, 13, 26, 0.94);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border: 1px solid rgba(143, 184, 232, 0.18);
+  border-radius: 8px;
+  background: rgba(7, 13, 26, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
   color: #c7d6e7;
   pointer-events: none;
 }
-.station-tooltip strong { color: #ffcf8a; font-size: 10px; letter-spacing: .04em; }
-.station-tooltip small { color: #9db0c8; font: 9px/1.5 var(--mono); }
-.station-tooltip__desc { display: block; margin: 2px 0 4px; color: #7d93ab; font: italic 9px/1.4 var(--mono); }
-.station-tooltip__occupant { display: block; width: 100%; margin: 2px 0; padding: 3px 6px; border: 1px solid rgba(0, 229, 255,.16); border-radius: 6px; background: rgba(0, 229, 255,.05); color: #bfe9f7; cursor: pointer; text-align: left; font: 9.5px var(--mono); transition: background .12s ease, border-color .12s ease; }
-.station-tooltip__occupant:hover { background: rgba(0, 229, 255,.14); border-color: rgba(0, 229, 255,.4); }
-.station-tooltip__occupant span { color: #8fd48f; }
+/* 釘選（點工作站）時才可互動：名字按鈕可開工作日誌。 */
+.station-tooltip--pinned { pointer-events: auto; border-color: color-mix(in srgb, var(--station-accent) 34%, rgba(143, 184, 232, 0.18)); }
+.station-tooltip__head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.station-tooltip__dot { flex: none; width: 6px; height: 6px; background: var(--station-accent); }
+.station-tooltip strong { flex: 1; min-width: 0; color: #e6eef8; font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.station-tooltip__status { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid rgba(143, 184, 232, 0.16); border-radius: 4px; color: #7f93ad; font: 600 9px/1.5 var(--mono); letter-spacing: .06em; }
+.station-tooltip--busy .station-tooltip__status { border-color: color-mix(in srgb, var(--station-accent) 40%, transparent); color: var(--station-accent); }
+.station-tooltip__status b { color: #e6eef8; font-weight: 700; }
+.station-tooltip__desc { margin: 0; color: #a2b4c9; font-size: 11.5px; line-height: 1.5; }
+.station-tooltip__list { display: grid; gap: 3px; margin-top: 1px; padding-top: 6px; border-top: 1px solid rgba(143, 184, 232, 0.1); }
+.station-tooltip__occupant { display: grid; gap: 1px; width: 100%; padding: 3px 7px; border: 0; border-left: 2px solid var(--station-accent); border-radius: 0 4px 4px 0; background: rgba(143, 184, 232, 0.05); color: #d6e2f0; cursor: pointer; text-align: left; font: inherit; transition: background .12s ease; }
+.station-tooltip__occupant:hover, .station-tooltip__occupant:focus-visible { background: rgba(143, 184, 232, 0.12); }
+.station-tooltip__who { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.station-tooltip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.station-tooltip__tool { flex: none; color: #8ea3bc; font: 9.5px/1.4 var(--mono); }
 /* 「正在查什麼」細節列：搜尋關鍵字/網址/指令，等寬字、暗色、單行截斷 */
-.station-tooltip__detail { display: block; margin-top: 2px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f8bab; font: italic 8.5px/1.4 var(--mono); }
-.station-tooltip__hint { display: block; margin-top: 3px; color: #5f7089; }
+.station-tooltip__detail { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f86a3; font: normal 9px/1.4 var(--mono); }
+.station-tooltip__hint { display: block; color: #5f7089; font: 9px/1.5 var(--mono); }
 
 .npc-menu-anchor {
   position: absolute;
@@ -1860,6 +2099,179 @@ body {
   letter-spacing: 0.08em;
 }
 
+/* 老闆交辦頁的「自動循環」開關（在標題列，交辦執行中也看得到、可隨時關）。 */
+.autopilot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid rgba(120, 150, 180, 0.28);
+  border-radius: 999px;
+  background: rgba(10, 20, 36, 0.5);
+  color: #8aa0b8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+}
+.autopilot-toggle:disabled { opacity: 0.55; cursor: progress; }
+.autopilot-toggle__track {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(120, 150, 180, 0.3);
+  transition: background 0.18s ease;
+  flex: 0 0 auto;
+}
+.autopilot-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #cdd8e6;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.autopilot-toggle.is-on {
+  border-color: rgba(70, 220, 160, 0.55);
+  color: #7fe9c0;
+  background: rgba(40, 200, 140, 0.1);
+}
+.autopilot-toggle.is-on .autopilot-toggle__track {
+  background: linear-gradient(90deg, #35d59b, #46b0ff);
+}
+.autopilot-toggle.is-on .autopilot-toggle__thumb {
+  transform: translateX(14px);
+  background: #ffffff;
+}
+.autopilot-toggle.is-on .autopilot-toggle__label { animation: autopilot-live 1.8s ease-in-out infinite; }
+@keyframes autopilot-live { 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .autopilot-toggle.is-on .autopilot-toggle__label { animation: none; } }
+
+/* 包住開關 + 設定框：讓開關保持靠右，設定框相對它絕對定位彈出。 */
+.autopilot-control { position: relative; margin-left: auto; display: inline-flex; }
+.autopilot-control .autopilot-toggle { margin-left: 0; }
+.autopilot-config {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(70, 176, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(10, 20, 36, 0.97);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.autopilot-config__row { display: flex; flex-direction: column; gap: 4px; }
+.autopilot-config__row label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #cdd8e6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.autopilot-config__row input {
+  width: 84px;
+  padding: 4px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 8px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font-size: 12px;
+  text-align: right;
+}
+.autopilot-config__row small { color: #7c8ea3; font-size: 9.5px; }
+.autopilot-config__row label.autopilot-config__check { justify-content: flex-start; cursor: pointer; }
+.autopilot-config__row label.autopilot-config__check input { width: auto; accent-color: #35d59b; }
+.autopilot-config__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.autopilot-config__actions button {
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid rgba(120, 150, 180, 0.3);
+  background: transparent;
+  color: #9fb2c6;
+}
+.autopilot-config__start {
+  border-color: rgba(70, 220, 160, 0.55) !important;
+  background: linear-gradient(90deg, rgba(53, 213, 155, 0.9), rgba(70, 176, 255, 0.9)) !important;
+  color: #06121a !important;
+}
+.autopilot-config__start:disabled { opacity: 0.55; cursor: progress; }
+
+/* 工具列「自動循環」（單一 NPC）：composer 在畫面底部，設定框改成從按鈕往上彈。 */
+.worker-autopilot-control { position: relative; display: inline-flex; }
+.autopilot-config--up { top: auto; bottom: calc(100% + 6px); }
+.worker-autopilot-control { align-items: center; gap: 6px; min-width: 0; }
+.autopilot-config__row--goal textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 4px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 8px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.autopilot-config__row--goal textarea::placeholder { color: #66788c; }
+/* 循環中的目標一行：省略號截斷，完整內容放 title。 */
+.worker-autopilot-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 260px;
+  font-size: 10.5px;
+  color: #9fb2c6;
+}
+.worker-autopilot-goal__text,
+.worker-autopilot-goal__paused {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worker-autopilot-goal__paused { color: #e6c26e; }
+.worker-autopilot-goal__input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  padding: 2px 6px;
+  border: 1px solid rgba(120, 150, 180, 0.35);
+  border-radius: 6px;
+  background: rgba(6, 14, 26, 0.8);
+  color: #eaf2fb;
+  font-size: 11px;
+}
+.worker-autopilot-goal__btn {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid rgba(120, 150, 180, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: #9fb2c6;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.worker-autopilot-goal__btn:hover:not(:disabled) { color: #eaf2fb; border-color: rgba(70, 176, 255, 0.5); }
+.worker-autopilot-goal__btn:disabled { opacity: 0.55; cursor: progress; }
+
 .holo-panel__eyebrow {
   color: rgba(0, 229, 255, 0.68);
   font-family: var(--mono);
@@ -2709,4 +3121,43 @@ body {
 
 .worker-tab__avatar-button--custom {
   text-shadow: 0 0 8px rgba(0, 229, 255, 0.7);
+}
+
+/* 桌上便利貼小卡：點排隊便利貼浮出，列前三則指令。安靜、紙色，不搶畫面。 */
+.queue-notes-card {
+  position: absolute;
+  z-index: 32;
+  max-width: 260px;
+  padding: 8px 10px 9px;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: #f3ecd2;
+  color: #2b2618;
+  border: 1px solid rgba(43, 38, 24, 0.28);
+  border-radius: 3px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  line-height: 1.45;
+  animation: npc-quiet-in 0.18s ease-out both;
+}
+.queue-notes-card strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #5a4f2e;
+}
+.queue-notes-card ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+.queue-notes-card li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-notes-card small {
+  display: block;
+  margin-top: 4px;
+  color: #7a6d47;
 }

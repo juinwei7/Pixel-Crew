@@ -18,7 +18,7 @@ type Props = {
 };
 
 export function VoiceInputButton({ onTranscript, disabled = false, placement = "composer", label, showLabel = false }: Props) {
-  const voice = useVoiceInput();
+  const voice = useVoiceInput(onTranscript);
   if (!voice.supported) return null;
 
   async function handleMicClick() {

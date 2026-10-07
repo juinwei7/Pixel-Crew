@@ -11,6 +11,8 @@ import { ensurePrivateDirectorySync, protectFileSync } from "./platform/fileProt
 import { spawnCli, terminateProcessTree } from "./platform/processes.js";
 import { claudeChildEnv } from "./claudeEnv.js";
 import { evaluateAutoApproval, type AutoApproveMode } from "./dangerousCommand.js";
+import { pathEscapesWorkspace } from "./safeLocalPath.js";
+import { bashRedirectsOutsideWorkspace } from "./bashWriteFence.js";
 import { queryToolPolicy, readOnlyBuiltinToolNames } from "./toolPolicy.js";
 import { t } from "./i18n.js";
 import {
@@ -89,6 +91,7 @@ export class ClaudeSession implements AgentSession {
   private model: string | undefined;
   private executionProfile: ExecutionProfile = "normal";
   private queryAllowedTools = new Set<string>();
+  private queryAllowSafeShell = false;
   private mcpReloadPending = false;
   private promptRefreshPending = false;
   private spawnedProfile: ExecutionProfile | null = null;
@@ -103,6 +106,11 @@ export class ClaudeSession implements AgentSession {
   }>();
   busy = false;
   name = "";
+  // 後端重啟／session 輪替後，--resume 指向的對話可能已不存在（Claude 回
+  // "No conversation found"），原本會直接把整回合判失敗。記住這回合是否為 resume
+  // 與它的輸入，好在偵測到對話遺失時自動清成全新 session、重跑一次，使用者無感。
+  private resumedThisSpawn = false;
+  private lastUserSend: { text: string; images: MessageImage[]; documents: MessageDocument[]; options: SendOptions } | null = null;
 
   constructor(
     private readonly onEvent: (event: RunnerEvent) => void,
@@ -189,13 +197,18 @@ export class ClaudeSession implements AgentSession {
     }
     const nextProfile = options.executionProfile ?? "normal";
     const nextQueryAllowedTools = new Set(options.queryAllowedTools ?? []);
+    const nextQueryAllowSafeShell = options.queryAllowSafeShell === true;
     const queryToolsChanged = nextProfile === "read_only_query" && (
       this.queryAllowedTools.size !== nextQueryAllowedTools.size
       || [...nextQueryAllowedTools].some((tool) => !this.queryAllowedTools.has(tool))
+      || this.queryAllowSafeShell !== nextQueryAllowSafeShell
     );
     if (this.child && (this.spawnedProfile !== nextProfile || queryToolsChanged)) this.stop();
     this.executionProfile = nextProfile;
     this.queryAllowedTools = nextQueryAllowedTools;
+    this.queryAllowSafeShell = nextQueryAllowSafeShell;
+    // 保留原始輸入，供「resume 對話遺失時自動重跑一次」使用（見 ensureChild 的 fail）。
+    this.lastUserSend = { text, images, documents, options };
     const files = this.stageInputDocuments(documents);
     try {
       this.busy = true;
@@ -248,11 +261,13 @@ export class ClaudeSession implements AgentSession {
     const originalInput = detail.input ?? detail.tool_input ?? {};
     const permissionUpdates = sessionPermissionUpdates(detail.permission_suggestions ?? detail.suggestions, toolName);
     const input = boundedValue(originalInput);
-    const command = toolName === "Bash" && originalInput && typeof originalInput === "object"
-      ? truncateCommand((originalInput as Record<string, unknown>).command)
+    // fullCommand 給所有檢查用，command（截斷）只給卡片顯示——先截再檢查，危險片段藏在截斷點後就漏看。
+    const fullCommand = toolName === "Bash" && originalInput && typeof originalInput === "object"
+      ? String((originalInput as Record<string, unknown>).command ?? "")
       : undefined;
+    const command = fullCommand === undefined ? undefined : truncateCommand(fullCommand);
     if (this.executionProfile === "read_only_query") {
-      const policy = queryToolPolicy(toolName, this.queryAllowedTools);
+      const policy = queryToolPolicy(toolName, this.queryAllowedTools, { allowSafeShell: this.queryAllowSafeShell, command: fullCommand });
       const id = randomUUID();
       this.onEvent({ type: "approval_requested", request: {
         id, activityId: null,
@@ -281,13 +296,61 @@ export class ClaudeSession implements AgentSession {
         reason: t("唯讀 NPC 協作不允許需要額外權限的操作"),
         decisions: [],
         toolName,
-        riskReason: riskReasonFor(command),
+        riskReason: riskReasonFor(fullCommand),
       } });
       this.onEvent({ type: "approval_resolved", id, decision: "deny" });
       return Promise.resolve({ behavior: "deny", message: t("唯讀 NPC 協作不允許需要額外權限的操作") });
     }
+    // 通道 E 圍欄：結構化寫檔工具（Write/Edit/NotebookEdit）若目標落在 workspace 外，一律拒絕
+    // ——不論核准模式（含 full 自動核准）。重用 pathEscapesWorkspace（邊界語意同 assertSafeLocalPath）。
+    // 涵蓋邊界：Bash 寫檔（cp/重導向）無結構化路徑、invincible 繞過整個橋，兩者不在此圍欄，
+    // 屬防禦縱深而非圍牆（見外傳風險盤點 §八）。outbox 在 workspace 內，不受影響。
+    const writeTarget = ["Write", "Edit", "NotebookEdit"].includes(toolName) && originalInput && typeof originalInput === "object"
+      ? (originalInput as Record<string, unknown>)[toolName === "NotebookEdit" ? "notebook_path" : "file_path"]
+      : undefined;
+    if (typeof writeTarget === "string" && writeTarget && pathEscapesWorkspace(this.workspacePath, writeTarget)) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "file_change",
+        title: t("已擋下寫入工作資料夾外的路徑"),
+        input, command, cwd: this.workspacePath,
+        reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
+    }
+    // 通道 E 的 Bash 對稱補強：Bash 沒有結構化路徑，退而擋「寫入型重導向」字面逃逸目標
+    // （echo x > 外部路徑 / >> ../out）。刻意只認字面重導向、不做完整 shell 解析——變數、
+    // 子殼、直譯器、cp/mv/tee 認不出即不擋，屬防禦縱深非圍牆（見外傳風險盤點 §九）。不論核准模式。
+    if (toolName === "Bash" && typeof fullCommand === "string" && bashRedirectsOutsideWorkspace(this.workspacePath, fullCommand)) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "command",
+        title: t("已擋下寫入工作資料夾外的路徑"),
+        input, command, cwd: this.workspacePath,
+        reason: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩"),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("寫檔目標超出工作資料夾，已阻擋以防資料外洩") });
+    }
     const mode = this.getAutoApproveMode();
-    const autoApproval = evaluateAutoApproval(mode, toolName, command);
+    // 完全自動核准下的 AskUserQuestion：不停下等人（無人值守管線會就此卡死），也不盲目放行
+    // （headless 沒有 UI 能收答案）——改成引導式拒絕，請 NPC 依任務目標自行決定並繼續。
+    if (toolName === "AskUserQuestion" && (mode === "full" || mode === "invincible")) {
+      const id = randomUUID();
+      this.onEvent({ type: "approval_requested", request: {
+        id, activityId: null, category: "tool",
+        title: t("AskUserQuestion 已自動改為自主決定"),
+        input, command, cwd: this.workspacePath,
+        reason: t("完全自動核准模式：沒有人值守回答提問，已請 NPC 依任務目標自行做最合理的決定並繼續"),
+        decisions: [], toolName, riskReason: riskReasonFor(fullCommand),
+      } });
+      this.onEvent({ type: "approval_resolved", id, decision: "deny" });
+      return Promise.resolve({ behavior: "deny", message: t("（自動核准）目前沒有人值守回答提問。請依任務目標與現有資訊，自行做出最合理的決定並直接繼續執行；把你的抉擇與理由寫進交付內容即可。") });
+    }
+    const autoApproval = evaluateAutoApproval(mode, toolName, fullCommand);
 
     if (autoApproval.allowed) {
       // Still surface it in the task log as an already-resolved item, so the
@@ -306,7 +369,7 @@ export class ClaudeSession implements AgentSession {
           reason: autoApproveEnabledReason(mode),
           decisions: [],
           toolName,
-          riskReason: riskReasonFor(command),
+          riskReason: riskReasonFor(fullCommand),
         },
       });
       this.onEvent({ type: "approval_resolved", id, decision: "auto_allow" });
@@ -329,7 +392,7 @@ export class ClaudeSession implements AgentSession {
           : t("Claude Code 需要額外權限才能繼續目前回合"),
       decisions: permissionUpdates.length ? ["allow_once", "allow_session", "deny"] : ["allow_once", "deny"],
       toolName,
-      riskReason: riskReasonFor(command),
+      riskReason: riskReasonFor(fullCommand),
     };
     const pending = new Promise((resolve) => this.pendingApprovals.set(id, { input: originalInput, permissionUpdates, resolve }));
     this.onEvent({ type: "approval_requested", request });
@@ -374,11 +437,13 @@ export class ClaudeSession implements AgentSession {
     args.push("--add-dir", this.documentDirectory);
     if (this.completedTurns > 0) {
       args.push("--resume", this.claudeSessionId);
+      this.resumedThisSpawn = true;
     } else {
       // A killed process may have claimed the old id without completing a
       // turn, so start unused sessions on a fresh id.
       this.claudeSessionId = randomUUID();
       args.push("--session-id", this.claudeSessionId);
+      this.resumedThisSpawn = false;
     }
     if (this.model) args.push("--model", this.model);
     const personaPrompt = this.getPersonaPrompt().trim();
@@ -387,6 +452,11 @@ export class ClaudeSession implements AgentSession {
       const allowed = [
         ...(this.executionProfile === "read_only_query"
           ? [...readOnlyBuiltinToolNames(), ...this.queryAllowedTools]
+          // 一般檔位刻意不把唯讀內建工具（Read/Glob/Grep/WebSearch/WebFetch）放進 --allowedTools：
+          // 列在這裡的工具 CLI 直接執行、完全不呼叫核准橋。實測（CLI 2.1.285）workspace 內的讀取
+          // 本來就不會問核准；會問的只有讀 workspace 外（~/.ssh…）與 WebFetch/WebSearch——預先放行
+          // 等於讓被 prompt injection 的回合不經任何卡片就讀機密再送出去。交給核准橋才會照
+          // autoApproveMode 即時判定（off 跳卡；safe/full 自動放行並留紀錄）。
           : this.getAllowedTools()),
         "mcp__pixel_crew_approval__approval_prompt",
       ];
@@ -411,15 +481,26 @@ export class ClaudeSession implements AgentSession {
     // cache，多步回合會累加到數百萬），不能當 context 佔用量。真正的佔用要看
     // 最後一則 assistant 訊息那「單次」呼叫的 usage。
     let lastContextTokens: number | undefined;
+    // Claude CLI 對 --resume 一個不存在的對話，會印一行純文字 "No conversation
+    // found with session ID: ..." 然後非零退出（不是 JSON），可能落在 stdout 或
+    // stderr。任一處看到就記下，讓 fail() 判斷是否要自動改開新對話重跑。
+    // 這個標記（和 stderrBuf）活的是「整個 spawn」，但「清成新對話重跑」只有在
+    // resume 之後還沒跑完任何一回合時才成立：resume 成功後又跑了幾回合，晚一點
+    // 因為無關原因（斷網、CLI crash）失敗時若還吃這條路徑，會把整段對話靜默丟掉。
+    // 所以記下 spawn 當下的回合數當閘門——任何一回合完成都會讓它前進。
+    let sawMissingConversation = false;
+    const turnsAtSpawn = this.completedTurns;
     rl.on("line", (line) => {
       if (gen !== this.generation || !line.trim()) return;
       let parsed: any;
       try {
         parsed = JSON.parse(line);
       } catch {
+        if (line.includes("No conversation found")) sawMissingConversation = true;
         return;
       }
-      if (parsed.type === "assistant") {
+      // 子代理（Agent 工具）內部訊息帶 parent_tool_use_id：那是子代理自己的 context，不能蓋掉主對話的佔用量。
+      if (parsed.type === "assistant" && !isSubagentMessage(parsed)) {
         const usage = parsed.message?.usage;
         if (usage) {
           const total =
@@ -431,6 +512,14 @@ export class ClaudeSession implements AgentSession {
         }
       }
       if (parsed.type === "result") {
+        // 實測（CLI 2.1.285）：resume 不存在的對話時，CLI 先在 stdout 吐一行 is_error 的 result
+        //（errors 帶 "No conversation found"），約一秒後才非零退出。這行不是真的跑完一回合——若照常
+        // 累加回合數、清 busy，close 時 fail() 的自動重跑閘門永遠不成立，下次還會 resume 同一個死 id。
+        // 所以在同一個閘門內（這次 spawn 還沒跑完任何回合）直接略過，交給 close 的 fail() 改開新對話重跑。
+        if (this.resumedThisSpawn && this.completedTurns === turnsAtSpawn && isMissingConversationResult(parsed)) {
+          sawMissingConversation = true;
+          return;
+        }
         this.completedTurns++;
         this.busy = false;
         this.cleanupInputDocuments();
@@ -451,7 +540,9 @@ export class ClaudeSession implements AgentSession {
 
     let stderrBuf = "";
     child.stderr.on("data", (chunk) => {
-      stderrBuf += chunk.toString();
+      const text = chunk.toString();
+      stderrBuf += text;
+      if (text.includes("No conversation found")) sawMissingConversation = true;
     });
 
     const fail = (message: string) => {
@@ -459,6 +550,38 @@ export class ClaudeSession implements AgentSession {
       this.child = null;
       this.cancelApprovals();
       rmSync(this.approvalConfigPath, { force: true });
+      // 後端重啟／session 輪替後，--resume 的對話可能已不存在。若這回合是 resume 且
+      // Claude 回報「找不到對話」，別把整回合判失敗——清成全新 session、把同一則輸入
+      // 重跑一次，使用者無感。fresh 重試不是 resume（resumedThisSpawn=false），故絕不
+      // 會無限循環。這正是「任何重啟都可能讓機器人集體 error_during_execution」的根治。
+      if (
+        this.busy &&
+        this.resumedThisSpawn &&
+        this.completedTurns === turnsAtSpawn &&
+        this.lastUserSend &&
+        (sawMissingConversation || message.includes("No conversation found"))
+      ) {
+        const retry = this.lastUserSend;
+        console.error("[claudeRunner] --resume 對話已不存在，自動改開新對話重跑一次");
+        this.completedTurns = 0;          // 下次 ensureChild 走 --session-id 全新對話
+        this.claudeSessionId = randomUUID();
+        this.busy = false;                // send() 會自行重設 busy 並重新暫存輸入
+        this.cleanupInputDocuments();
+        // send() 失敗會 rethrow（暫存附件失敗、claude binary 不見導致 spawn 失敗…），
+        // 而 fail() 只從 child 的 error/close handler 進來，例外逃出去就是
+        // uncaughtException，會拖垮所有 worker 而不只這一個（同上面 stdin EPIPE 的
+        // 理由）。所以重試自己失敗時退回正常的「這回合失敗」路徑。
+        try {
+          this.send(retry.text, retry.images, retry.documents, retry.options);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.error(`[claudeRunner] 自動重開新對話失敗：${reason}`);
+          this.busy = false;
+          this.cleanupInputDocuments();
+          this.onEvent({ type: "error", message: reason });
+        }
+        return;
+      }
       if (this.busy) {
         this.busy = false;
         this.cleanupInputDocuments();
@@ -524,7 +647,21 @@ export function claudeMessageContent(text: string, images: MessageImage[]): Arra
   return content;
 }
 
-function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
+function isMissingConversationResult(parsed: any): boolean {
+  if (!parsed?.is_error) return false;
+  const errors: unknown[] = Array.isArray(parsed.errors) ? parsed.errors : [];
+  return [...errors, parsed.result].some((value) => typeof value === "string" && value.includes("No conversation found"));
+}
+
+function isSubagentMessage(parsed: any): boolean {
+  return typeof parsed?.parent_tool_use_id === "string" && parsed.parent_tool_use_id.length > 0;
+}
+
+export function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastContextTokens?: number): void {
+  // 子代理內部的工具呼叫不是主 NPC 的動作：背景子代理在主回合 turn_end 之後還會持續吐這些訊息，
+  // 若照常轉成 tool_call_start/result，前端會把已結束的回合「復活」成 running，
+  // 下次 snapshot 又被當中止回合關掉，連帶把會議桌上還在跑的子代理清空。子代理靠 Agent 工具本身＋task_notification 追蹤。
+  if ((parsed?.type === "assistant" || parsed?.type === "user") && isSubagentMessage(parsed)) return;
   switch (parsed.type) {
     case "system": {
       if (parsed.subtype === "init") {
@@ -543,6 +680,8 @@ function handleLine(parsed: any, onEvent: (event: RunnerEvent) => void, lastCont
             ? parsed.tools.filter((tool: unknown): tool is string => typeof tool === "string")
             : [],
         });
+      } else if (parsed.subtype === "task_notification" && typeof parsed.tool_use_id === "string" && parsed.tool_use_id) {
+        onEvent({ type: "subagent_done", id: parsed.tool_use_id });
       }
       break;
     }

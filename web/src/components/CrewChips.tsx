@@ -1,4 +1,4 @@
-import { SHIRT_COLORS } from "../game/person";
+import { SHIRT_COLORS } from "../game/crewLook";
 import { workerAttention } from "../crew";
 import { t } from "../i18n";
 import type { WorkerState } from "../types";
@@ -40,6 +40,7 @@ export function CrewChips({ workers, activeId, onSelect, label, unread }: Props)
             key={worker.id}
             type="button"
             role="tab"
+            data-crew-id={worker.id}
             aria-selected={worker.id === activeId}
             className={`crew-strip__chip${worker.id === activeId ? " crew-strip__chip--active" : ""}${hasUnread ? " crew-strip__chip--unread" : ""}`}
             title={`${worker.name} · ${roomName(worker.workspacePath)}`}

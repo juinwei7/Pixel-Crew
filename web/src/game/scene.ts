@@ -8,18 +8,40 @@ import "pixi.js/unsafe-eval";
 import { Application, Container, Graphics, Text } from "pixi.js";
 import type { CharacterState } from "../types";
 import type { StationKey } from "../stations";
-import { Room, ART_W, ART_H } from "./room";
+import { Room, ART_W, ART_H, WALL_H, ROOM_SPOTS, type RoomSpot } from "./room";
 import { FurnitureLayer, FURNITURE_DEFS } from "./furniture";
 import { Person } from "./person";
 import type { EmoteKind } from "./person";
 import { ParticleSystem } from "./particles";
+import { DiscoParty, OfficeFx, OfficePower, SystemCues, type Lamp, type LinkSpec, type PortalHandle, type Pt, type Rect, type SystemCueKind } from "./officeFx";
+import { FloorRipples, Hotspots, type Hotspot } from "./officeInteract";
+import { hashId, officeNow, onKonami, seasonal, sessionFlag, setSessionFlag, traitFor } from "./officeLife";
+import { ACCESSORIES } from "./person";
+import { talkLine } from "./smallTalk";
+import { t } from "../i18n";
+import {
+  COFFEE_ERRAND_COOLDOWN_MS, PACE_SPEED, WATER_COOLDOWN_MS, WATER_SPEED, mayFetchWater, mayPace, nearestTo, newToolWait,
+  pacePlan, screensaverOn, stepToolWait, type ToolWaitTrack,
+} from "./npcHabits";
+import { missionCheers } from "./missionCheer";
+import {
+  completionTier, finalTrigger, handoffBatons, heldStation, missionBatons,
+  type BatonPass, type SceneHandoffStage, type SceneMissionStep, type ScenePlan, type StationHold,
+} from "./sceneSignals";
+import { emitFx, onFx } from "../fxBus";
+import { dragContainsFiles } from "../composerDrag";
 import { PersonalDeskLayer } from "./personalDesks";
-import type { DepartmentPhase, DepartmentSeat } from "./personalDesks";
-import { OfficeDecor } from "./officeDecor";
+import type { DepartmentPhase, DepartmentSeat, DepartmentZone } from "./personalDesks";
+import { DECOR_SPOTS, OfficeDecor, OutboxShelf, type DecorSpot } from "./officeDecor";
 import { Cat } from "./cat";
+import { meetingSeat } from "./meetingSeats";
+import { isWallStation, wallStandSpot } from "./furnitureDefs";
 import { apiAssetUrl } from "../api";
 import { nightFactor } from "../dayNight";
-import { responsiveOfficeFitScale } from "./camera";
+import { officeMinScale, responsiveOfficeFitScale } from "./camera";
+import { CameraDirector, centerPanOn, type SceneCameraControls } from "./cameraFocus";
+import { targetFps } from "./framePacing";
+import type { QueueNotesTap } from "./personalDesks";
 
 const GREEN = 0x37d6a3;
 const RED = 0xff5c7a;
@@ -37,20 +59,18 @@ const SPOT_OFFSETS: Array<[number, number]> = [
   [0, 22],
   [-28, 22],
   [28, 22],
+  // Big crews: a second ring further out so a busy station doesn't stack people.
+  [-38, 14],
+  [38, 14],
+  [-7, 30],
+  [7, 30],
+  [-21, 32],
+  [21, 32],
+  [-35, 30],
+  [35, 30],
 ];
 
-/** 會議桌專屬座位：讓 NPC 分坐在長桌上下兩側、沿桌長分散，像真的圍桌開會，而不是擠在同一側。
- *  位移相對於 meeting 站點 (standX, standY)；oy 負得多＝桌子上方（後排），接近 0＝桌子下方（前排）。 */
-const MEETING_SEATS: Array<[number, number]> = [
-  [-45, 0],
-  [-27, 0],
-  [-9, 0],
-  [9, 0],
-  [27, 0],
-  [45, 0],
-  [-18, 9],
-  [18, 9],
-];
+// 會議桌座位（前後兩排交錯）見 ./meetingSeats。
 
 export type WorkerSceneState = {
   id: string;
@@ -63,6 +83,10 @@ export type WorkerSceneState = {
   avatarPresetId: string;
   selectId: string;
   temporary: boolean;
+  /** 老闆交辦臨時部門成員——desk 層據此把整個部門圈進獨立房間。 */
+  ephemeral?: boolean;
+  /** 部門任務當前步驟的負責人——desk 層畫值勤指標。 */
+  onDuty?: boolean;
   /** True while a tool-call approval is waiting on the user. */
   waiting: boolean;
   workspacePath: string;
@@ -71,9 +95,44 @@ export type WorkerSceneState = {
   collaborationPhase: DepartmentPhase;
   collaborationRole: "source" | "target" | null;
   missionProgress?: { completed: number; total: number } | null;
+  /** The other end of a running collaboration (source <-> target), for the link beam. */
+  collaborationPartnerId?: string | null;
+  /** Sub-agents: the worker that summoned them (portal + summon beam start there). */
+  parentId?: string;
+  /** Context usage 0–100 of the brain-swap budget (ctxGauge); high = tired NPC. */
+  ctxPct?: number | null;
+  // ── 第二輪場景訊號（語意見 notes/A1.md；型別見 ./sceneSignals）──
+  /** 上一回合失敗、使用者還沒看過這位 NPC：桌上螢幕維持紅色錯誤畫面。 */
+  failedUnseen?: boolean;
+  /** 正在串流文字回覆（不是工具、不是思考）：坐在螢幕前打字。 */
+  replying?: boolean;
+  /** 等 owner 決策／核准（非工具核准的提問、計畫核准等）：舉起「?」卡。 */
+  asking?: boolean;
+  /** 協作交接分段：outbound 交出、working 握棒工作、inbound 交回。 */
+  handoffStage?: SceneHandoffStage | null;
+  /** TodoWrite 計畫進度：桌上待辦紙。 */
+  plan?: ScenePlan | null;
+  /** 所屬進行中部門任務的當前步驟：負責人換手時交棒。 */
+  missionStep?: SceneMissionStep | null;
+  /**
+   * 最終完成事件的 nonce（例：turn:<key>、mission:<id>、boss:<id>）。出現沒看過的 nonce＝
+   * 剛剛最終完成 → 播大招一次；第一次看到時全部當基準不播（重整／重連不重播）。
+   */
+  finalNonces?: readonly string[];
 };
 
-export type PersonScreenPos = { id: string; x: number; y: number; scale: number; opacity: number };
+export type PersonScreenPos = {
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  /**
+   * Seated behind furniture (war-room back row): a tag below the feet would land
+   * on the table top and the front row's heads, so it belongs above the head.
+   */
+  tagAbove?: boolean;
+};
 export type FurnitureScreenPos = { key: StationKey; x: number; y: number };
 
 export type SceneView = { scale: number; minScale: number; maxScale: number; isDefault: boolean };
@@ -88,8 +147,16 @@ export type SceneHandle = {
   resetView(): void;
   /** Office growth decorations (0–3), from all-time completed turns. */
   setMilestone(level: number): void;
+  /** Context reset (brain swap / compaction) just happened for this worker — halo flash. */
+  brainReset(workerId: string): void;
+  /** Queued commands for one worker — sticky notes on their desk. */
+  setQueue(id: string, items: readonly string[]): void;
+  /** Today's finished jobs — the whiteboard tally. */
+  setTodayDone(count: number): void;
+  /** Today's failed jobs per worker — paper balls in each desk's bin. */
+  setTodayFailures(byWorker: ReadonlyMap<string, number>): void;
   destroy(): void;
-};
+} & SceneCameraControls;
 
 type SceneCallbacks = {
   onPositions(list: PersonScreenPos[]): void;
@@ -107,8 +174,12 @@ type SceneCallbacks = {
   onContextMenu?(id: string): void;
   /** A genuine tap on empty floor (not on an NPC/desk, and not a pan). */
   onEmptyTap?(): void;
+  /** Tap on the OUT shelf (bottom-right) — App opens the 成品匣. */
+  onOutboxClick?(): void;
   /** Fired whenever the camera (zoom/pan/fit) changes, incl. on resize. */
   onViewChange?(view: SceneView): void;
+  /** Tap on a desk's queued-command sticky notes — the UI floats a card listing them. */
+  onQueueNotes?(tap: QueueNotesTap): void;
 };
 
 type PersonEntry = {
@@ -125,14 +196,104 @@ type PersonEntry = {
   targetX: number;
   targetY: number;
   waiting: boolean;
-  paceT: number;
-  paceDir: number;
-  /** True while this NPC is off on a social stroll — home re-targeting pauses. */
+  selectId: string;
+  /** Countdown to the next "pick me" hop while waiting on an approval. */
+  hopIn: number;
+  /** True while this NPC is off on a social stroll or a delivery — home re-targeting pauses. */
   strolling: boolean;
+  /** performance.now() of the last successful turn — picks the courier for unattributed deliverables. */
+  lastSuccessAt: number;
+  lastHaloAt: number;
+  ctxPct: number | null;
+  parentId: string | null;
+  /** Sub-agent portal while walking in/out of it. */
+  portal: PortalHandle | null;
+  shrinkAt: number | null;
+  /** Leaving the crew for real: wave, "BYE", poof — instead of walking off. */
+  farewell: boolean;
+  /** Power back on: when this NPC gets up (scene clock), once their ceiling light is lit. */
+  wakeAt: number | null;
+  /** Glancing at something (a system cue, a floor tap) until this time (scene clock)… */
+  glanceUntil: number;
+  /** …at this world x. */
+  glanceX: number;
+  /** Recent pokes (scene clock) — rapid repeats escalate the reaction. */
+  pokes: number[];
+  /** All pokes this session (20 → sunglasses). */
+  pokeTotal: number;
+  /** Scene clock when the current stretch of work began (null while idle). */
+  busySince: number | null;
+  /** Scene-clock times of recent failed turns (repeats escalate the reaction). */
+  errors: number[];
+  /** Tool stations visited in a row without going idle ("COMBO xN"). */
+  chain: number;
+  /** Scene clock when the current approval wait began (null when not waiting). */
+  waitingSince: number | null;
+  /** Lean-back hysteresis for a long-running tool call (npcHabits.stepToolWait). */
+  toolWait: ToolWaitTrack;
+  /** ms spent thinking in a row (not waiting) — long enough and they get up and pace. */
+  thinkMs: number;
+  /** ms not working / thinking in a row — the screensaver, and when a turn has really ended. */
+  idleRunMs: number;
+  /** Busy ms in the current stretch of work (short idle gaps, e.g. text output, don't reset it; used up by the water-break roll). */
+  streakBusyMs: number;
+  /** Streaming a text reply (WorkerSceneState.replying). */
+  replying: boolean;
+  /** Holding up the "?" card for an owner decision (WorkerSceneState.asking). */
+  asking: boolean;
+  /** Last turn failed, not looked at yet — no screensaver over the red screen. */
+  failedUnseen: boolean;
+  /** Workstation stickiness: stay at this tool station until `until` (scene clock). */
+  hold: StationHold;
+  /** The character exactly as the app sent it (entry.last may carry a held station instead). */
+  rawChar: CharacterState | null;
+  /** Final-completion nonces already seen (null until the first update = baseline, never replayed). */
+  finalSeen: Set<string> | null;
+  /** A final completion arrived with this update: the turn-end (stage) celebration stands down for it. */
+  finalePending: boolean;
+  /** Scene-clock time to start the queued finale (a small per-NPC stagger for a whole department). */
+  finaleAt: number | null;
 };
 
+/**
+ * Ceiling lights for the power-cut reboot, one per zone, listed in the order
+ * they come on: the tool stations along the back wall, then each department
+ * (top row first), then the meeting table and the outbox corner.
+ */
+function officeLamps(departments: DepartmentZone[]): Lamp[] {
+  const lamps: Lamp[] = [
+    { x: 64, y: 70, rx: 78, ry: 40 },
+    { x: 190, y: 70, rx: 78, ry: 40 },
+    { x: 316, y: 70, rx: 78, ry: 40 },
+    { x: 412, y: 74, rx: 52, ry: 40 },
+  ];
+  const segments = departments.flatMap((d) => d.segments)
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+  for (const s of segments) {
+    lamps.push({ x: (s.left + s.right) / 2, y: (s.top + s.bottom) / 2, rx: (s.right - s.left) / 2 + 22, ry: (s.bottom - s.top) / 2 + 20 });
+  }
+  lamps.push({ x: 120, y: 302, rx: 86, ry: 46 }, { x: 410, y: 300, rx: 50, ry: 44 });
+  return lamps;
+}
+
 const PERSON_ENTER_MS = 1_350;
+const REDUCE_MOTION_SCENE =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PERSON_EXIT_MS = 780;
+/** A new worker only beams in once the crew list has been stable this long (not on load / reconnect). */
+const CREW_SETTLE_MS = 4_000;
+/** More newcomers/leavers than this in one update is a re-snapshot, not people joining or leaving. */
+const MAX_ARRIVALS = 3;
+const MAX_DEPARTURES = 2;
+/** Office plants (drawn by OfficeDecor) and where to stand to water them. */
+const PLANTS: Array<{ x: number; y: number; dir: 1 | -1 }> = [
+  { x: 27, y: 84, dir: -1 },
+  { x: ART_W - 19, y: 84, dir: 1 },
+];
+/** Where system cues pop up: on the back wall, centre. */
+const CUE_AT: Pt = { x: ART_W / 2, y: 38 };
 
 export async function createScene(
   host: HTMLDivElement,
@@ -169,7 +330,11 @@ export async function createScene(
   // A tap that lands on the stage itself (no interactive sprite caught it) and
   // isn't a pan is an "empty floor" tap — used to dismiss the task log/tooltip.
   app.stage.on("pointerup", (e) => {
-    if (!pointerDragged && e.target === app.stage) callbacks.onEmptyTap?.();
+    if (!pointerDragged && e.target === app.stage) {
+      callbacks.onEmptyTap?.();
+      const p = world.toLocal(e.global);
+      floorTap(p.x, p.y);
+    }
   });
 
   const room = new Room();
@@ -187,12 +352,79 @@ export async function createScene(
     callbacks.onDepartmentRename,
     isDragging,
   );
+  personalDesks.onQueueNotesTap = (tap) => callbacks.onQueueNotes?.(tap);
   const officeDecor = new OfficeDecor();
   const cat = new Cat();
+  const fx = new OfficeFx(world);
+  const shelf = new OutboxShelf();
 
   room.container.zIndex = -1000;
   particles.g.zIndex = 10000;
-  world.addChild(room.container, personalDesks.container, officeDecor.container, particles.g, cat.container);
+  // （試過用大橢圓光暈做室內燈光——pixi Graphics 沒有漸層，實機上看起來是幾個
+  //   突兀的「奇怪圓圈」，已拿掉。要做燈光得用貼圖或濾鏡，之後再議。）
+  // Power cut dimmer (+ the "z z" of the dozing crew) and the system-cue icons.
+  const power = new OfficePower({ x: 0, y: 0, w: ART_W, h: ART_H }, { x: ART_W / 2, y: 40 }, { x: 248, y: 6, w: 88, h: 38 });
+  const cues = new SystemCues();
+  // Konami-code dance party.
+  const party = new DiscoParty({ x: 0, y: 0, w: ART_W, h: ART_H }, { x: ART_W / 2, y: 0 });
+  world.addChild(room.container, personalDesks.container, officeDecor.container, officeDecor.meetingTable, shelf.container, particles.g, cat.container, fx.air, power.view, cues.g, party.view);
+
+  // Clickable decor: purely visual reactions, hover shows corner brackets.
+  // A tap on decor still counts as "tapped the room" for the UI (closes the log).
+  const ripples = new FloorRipples();
+  world.addChild(ripples.g);
+  const decorSpots: Hotspot[] = [
+    ...(Object.keys(ROOM_SPOTS) as RoomSpot[]).map((key): Hotspot => ({
+      key, rect: ROOM_SPOTS[key], z: -500, poke: () => room.poke(key),
+    })),
+    ...(Object.keys(DECOR_SPOTS) as DecorSpot[]).map((key): Hotspot => ({
+      key,
+      rect: DECOR_SPOTS[key],
+      z: key === "neon" ? -400 : DECOR_SPOTS[key].y + DECOR_SPOTS[key].h,
+      poke: () => {
+        officeDecor.poke(key);
+        if (key === "coffee") {
+          for (let i = 0; i < 3; i++) particles.rise(396, 68, 0xdfe9f8, 4);
+          orderCoffee();
+        }
+      },
+      enabled: key === "neon" ? () => officeDecor.neonShown
+        : key === "tree" ? () => officeDecor.seasonNow.xmas
+        : key === "pizza" ? () => officeDecor.seasonNow.pizza
+        : undefined,
+    })),
+  ];
+  const hotspots = new Hotspots(world, decorSpots, {
+    isDragging: () => isDragging(),
+    onHover: (key) => { overInteractive = key !== null; },
+    onTap: () => callbacks.onEmptyTap?.(),
+  });
+  // The OUT shelf opens the 成品匣 (same tap-not-pan rule as the cat).
+  shelf.container.eventMode = "static";
+  shelf.container.cursor = "pointer";
+  shelf.container.hitArea = { contains: (x: number, y: number) => x >= -13 && x <= 13 && y >= -27 && y <= 2 };
+  {
+    let shelfPid = -1;
+    shelf.container.on("pointerdown", (e) => { shelfPid = e.pointerId; });
+    shelf.container.on("pointerup", (e) => {
+      if (e.pointerId !== shelfPid) return;
+      shelfPid = -1;
+      if (!isDragging()) callbacks.onOutboxClick?.();
+    });
+  }
+  // The cat answers clicks too (meow, hop, purr).
+  cat.container.eventMode = "static";
+  cat.container.cursor = "pointer";
+  cat.container.hitArea = { contains: (x: number, y: number) => x >= -6 && x <= 6 && y >= -9 && y <= 2 };
+  {
+    let catPid = -1;
+    cat.container.on("pointerdown", (e) => { catPid = e.pointerId; });
+    cat.container.on("pointerup", (e) => {
+      if (e.pointerId !== catPid) return;
+      catPid = -1;
+      if (!isDragging()) cat.poke();
+    });
+  }
 
   // 日夜循環只作用在窗外：天空顏色照真實時間依關鍵影格連續漸變（白天亮藍、
   // 黃昏燒橘、入夜深藍），星星/太陽/月亮跟著切。室內不蓋色紗，場景維持原色。
@@ -229,11 +461,15 @@ export async function createScene(
   }
 
   function applyDaylight(): void {
-    const now = new Date();
+    const now = officeNow();
     const hourFloat = now.getHours() + now.getMinutes() / 60;
+    officeDecor.setSeasonal(seasonal(now));
     room.setSky(daylightSky(hourFloat));
-    room.setNight(nightFactor(hourFloat) >= 0.5);
+    const night = nightFactor(hourFloat) >= 0.5;
+    room.setNight(night);
     room.setClock(now);
+    personalDesks.setNight(night);
+    personalDesks.setClock(now);
   }
   applyDaylight();
   for (const child of [...furniture.container.children]) {
@@ -269,16 +505,38 @@ export async function createScene(
   let panX = 0;
   let panY = 0;
 
+  // Big crews make the floor taller than the main office (annex). The camera
+  // then fits the whole floor when it can, may zoom out below 2x, and starts
+  // at the top when even that doesn't fit; small crews get exactly the old view.
+  let floorH = ART_H;
+  function minScale(): number {
+    return officeMinScale(floorH, ART_H);
+  }
+  function autoScale(): number {
+    if (floorH <= ART_H) return fitScale;
+    // Fit the whole floor when it fits at a readable size; otherwise start at
+    // 1.5x from the top (pan / zoom out to 1x for the full overview).
+    return Math.max(Math.min(1.5, fitScale), minScale(), Math.min(fitScale, (app.screen.height - 16) / floorH));
+  }
+  function baseOffset(s: number): Pt {
+    const w = app.screen.width;
+    const h = app.screen.height;
+    const tall = floorH * s > h;
+    return {
+      x: Math.floor((w - ART_W * s) / 2),
+      y: floorH <= ART_H || !tall ? Math.floor((h - floorH * s) / 2) : 8,
+    };
+  }
+
   function applyView(): void {
     const w = app.screen.width;
     const h = app.screen.height;
-    scale = Math.max(2, Math.min(userScale ?? fitScale, fitScale + 4));
+    scale = Math.max(minScale(), Math.min(userScale ?? autoScale(), fitScale + 4));
     world.scale.set(scale);
-    const baseX = Math.floor((w - ART_W * scale) / 2);
-    const baseY = Math.floor((h - ART_H * scale) / 2);
+    const { x: baseX, y: baseY } = baseOffset(scale);
     const keep = 140;
     panX = Math.min(w - keep - baseX, Math.max(keep - (baseX + ART_W * scale), panX));
-    panY = Math.min(h - keep - baseY, Math.max(keep - (baseY + ART_H * scale), panY));
+    panY = Math.min(h - keep - baseY, Math.max(keep - (baseY + floorH * scale), panY));
     world.position.set(Math.round(baseX + panX), Math.round(baseY + panY));
     for (const { def, text } of labels) {
       text.position.set(
@@ -293,7 +551,7 @@ export async function createScene(
     })));
     callbacks.onViewChange?.({
       scale,
-      minScale: 2,
+      minScale: minScale(),
       maxScale: fitScale + 4,
       isDefault: userScale === null && panX === 0 && panY === 0,
     });
@@ -314,6 +572,30 @@ export async function createScene(
   // the cursor), double-click the floor to reset. Sprite/furniture handlers
   // keep working — a drag only starts panning past a small threshold, so
   // ordinary clicks are unaffected.
+  // Camera guidance (cameraFocus): focusOn glides to an NPC the user picked,
+  // follow tracks one slowly. Stepped once per frame in the ticker below.
+  const director = new CameraDirector();
+  function panToCenter(id: string, anchor: Pt | null): Pt | null {
+    const entry = entries.get(id);
+    if (!entry || entry.transition === "removing") return null;
+    const base = baseOffset(scale);
+    return centerPanOn({
+      worldX: entry.person.x,
+      worldY: entry.person.y - 17,
+      scale,
+      screenW: app.screen.width,
+      screenH: app.screen.height,
+      baseX: base.x,
+      baseY: base.y,
+      contentW: ART_W,
+      contentH: floorH,
+      anchor,
+    });
+  }
+  // Frame pacing (framePacing): 30fps when the office is idle, 60 when anyone works or the user is touching it.
+  let lastInputAt = performance.now();
+  let anyBusy = false;
+
   let overInteractive = false;
   let dragId: number | null = null;
   let dragStartX = 0;
@@ -339,6 +621,7 @@ export async function createScene(
   };
 
   const onPointerDown = (event: PointerEvent) => {
+    lastInputAt = performance.now();
     if (event.pointerType === "mouse" && event.button !== 0) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size >= 2) {
@@ -364,6 +647,7 @@ export async function createScene(
     }
     if (dragId !== event.pointerId) return;
     if (!dragPanning && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
+    if (!dragPanning) director.stopFollow(); // the user grabbed the camera: hand control back
     dragPanning = true;
     panX += event.clientX - dragLastX;
     panY += event.clientY - dragLastY;
@@ -387,13 +671,13 @@ export async function createScene(
   // Continuous, not stepped to integers — smooth zoom in/out at any size,
   // only clamped at the min/max bounds.
   function zoomAnchored(next: number, cx: number, cy: number): void {
-    const clamped = Math.max(2, Math.min(fitScale + 4, next));
+    const clamped = Math.max(minScale(), Math.min(fitScale + 4, next));
     if (clamped === scale) return;
     const wx = (cx - world.position.x) / scale;
     const wy = (cy - world.position.y) / scale;
     userScale = clamped;
     panX = cx - wx * clamped - Math.floor((app.screen.width - ART_W * clamped) / 2);
-    panY = cy - wy * clamped - Math.floor((app.screen.height - ART_H * clamped) / 2);
+    panY = cy - wy * clamped - baseOffset(clamped).y;
     applyView();
   }
 
@@ -406,11 +690,13 @@ export async function createScene(
   const WHEEL_ZOOM_SENSITIVITY = 0.0018;
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
+    lastInputAt = performance.now();
     const rect = app.canvas.getBoundingClientRect();
     const factor = Math.exp(-event.deltaY * WHEEL_ZOOM_SENSITIVITY);
     zoomAnchored(scale * factor, event.clientX - rect.left, event.clientY - rect.top);
   };
   function resetView(): void {
+    director.stopFollow();
     userScale = null;
     panX = 0;
     panY = 0;
@@ -432,6 +718,10 @@ export async function createScene(
   // Seats depend on the whole crew's department packing, not the worker's
   // index alone — refreshed from the desk layout on every setWorkers.
   let homeSeats = new Map<string, DepartmentSeat>();
+  // Every permanent worker id the scene has ever shown, and when the first
+  // crew list arrived — the gate that keeps beam-ins for real newcomers.
+  const knownIds = new Set<string>();
+  let crewBaselineAt: number | null = null;
   let elapsed = 0;
   let daylightAccum = 0;
   let idleEmoteAccum = 0;
@@ -442,6 +732,8 @@ export async function createScene(
   // either participant gets real work.
   type Social = {
     stage: "walking" | "chatting" | "returning";
+    /** chat: alternating speech dots · highfive: quick slap · coffee: both stroll to the machine. */
+    mode: "chat" | "highfive" | "coffee" | "handshake";
     visitor: PersonEntry;
     host: PersonEntry;
     chatMs: number;
@@ -449,17 +741,31 @@ export async function createScene(
   let social: Social | null = null;
   let socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
 
+  /**
+   * Engaged with the owner even though not "working": an approval wait, a "?" card held up,
+   * or a reply being typed. Idle life (strolls, errands, chats, pacing) leaves them alone.
+   */
+  function occupied(entry: PersonEntry): boolean {
+    return entry.waiting || entry.asking || entry.replying;
+  }
+
   function socialEligible(entry: PersonEntry): boolean {
-    return entry.transition === "ready" && !entry.temporary && !entry.waiting &&
+    return entry.transition === "ready" && !entry.temporary && !occupied(entry) && delivery?.entry !== entry &&
       entry.last?.station === "home" && entry.last.activity !== "working" && entry.last.activity !== "thinking";
   }
 
   function endSocial(): void {
     if (!social) return;
-    social.visitor.person.emote("coffee", 0);
-    social.host.person.emote("chat", 0);
+    for (const entry of [social.visitor, social.host]) {
+      entry.person.emote("chat", 0);
+      entry.person.emote("coffee", 0);
+    }
     social.visitor.strolling = false;
     social.visitor.person.setTarget(social.visitor.targetX, social.visitor.targetY);
+    if (social.mode === "coffee") {
+      social.host.strolling = false;
+      social.host.person.setTarget(social.host.targetX, social.host.targetY);
+    }
     social = null;
     socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
   }
@@ -472,22 +778,54 @@ export async function createScene(
         return;
       }
       if (social.stage === "walking") {
-        if (!visitor.person.isMoving) {
+        if (!visitor.person.isMoving && !host.person.isMoving) {
           social.stage = "chatting";
-          social.chatMs = 4_000;
+          social.chatMs = social.mode === "highfive" ? 1_300 : social.mode === "handshake" ? 2_600 : social.mode === "coffee" ? 5_000 : 4_400;
+          if (social.mode === "highfive" || social.mode === "handshake") {
+            const dir = visitor.person.x < host.person.x ? 1 : -1;
+            visitor.person.highFive(dir as 1 | -1);
+            host.person.highFive(-dir as 1 | -1);
+          }
         }
       } else if (social.stage === "chatting") {
-        visitor.person.emote("coffee", 600);
-        host.person.emote("chat", 600);
+        const before = social.chatMs;
         social.chatMs -= dt;
+        if (social.mode === "highfive") {
+          // The slap: a little star burst between the raised hands.
+          if (before > 900 && social.chatMs <= 900) {
+            particles.burst((visitor.person.x + host.person.x) / 2, visitor.person.y - 17, GOLD, 8, 0.03);
+          }
+        } else if (social.mode === "handshake") {
+          // Old collaborators' secret handshake: high five → hop together → a twirl each → hearts.
+          const mid = (visitor.person.x + host.person.x) / 2;
+          if (before > 2_000 && social.chatMs <= 2_000) particles.burst(mid, visitor.person.y - 17, GOLD, 6, 0.03);
+          if (before > 1_500 && social.chatMs <= 1_500) { visitor.person.hop(); host.person.hop(); }
+          if (before > 1_100 && social.chatMs <= 1_100) { visitor.person.microAct("spin"); host.person.microAct("spin"); }
+          if (before > 300 && social.chatMs <= 300) {
+            visitor.person.emote("heart", 1_200);
+            host.person.emote("heart", 1_200);
+            particles.burst(mid, visitor.person.y - 12, 0xff8fc8, 8, 0.03);
+          }
+        } else {
+          // Taking turns talking: the speech dots hop from one to the other.
+          const talker = Math.floor(social.chatMs / 1_100) % 2 === 0 ? visitor : host;
+          const listener = talker === visitor ? host : visitor;
+          talker.person.emote("chat", 600);
+          if (social.mode === "coffee") listener.person.emote("coffee", 600);
+          else if (listener.person.emoting === "chat") listener.person.emote("chat", 0);
+        }
         if (social.chatMs <= 0) {
           social.stage = "returning";
-          visitor.person.emote("coffee", 0);
-          host.person.emote("chat", 0);
+          for (const entry of [visitor, host]) {
+            entry.person.emote("chat", 0);
+            entry.person.emote("coffee", 0);
+          }
           visitor.person.setTarget(visitor.targetX, visitor.targetY);
+          if (social.mode === "coffee") host.person.setTarget(host.targetX, host.targetY);
         }
-      } else if (!visitor.person.isMoving) {
+      } else if (!visitor.person.isMoving && !host.person.isMoving) {
         visitor.strolling = false;
+        host.strolling = social.mode === "coffee" ? false : host.strolling;
         social = null;
         socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
       }
@@ -496,23 +834,206 @@ export async function createScene(
     socialCooldown -= dt;
     if (socialCooldown > 0) return;
     socialCooldown = 25_000 + Math.floor(Math.random() * 20_000);
-    const idle = [...entries.values()].filter(socialEligible);
+    const idle = [...entries.values()].filter((entry) => socialEligible(entry) && !entry.strolling && entry.person.acting === null);
     if (idle.length < 2) return;
-    const visitor = idle[Math.floor(Math.random() * idle.length)];
+    // Social butterflies start conversations more often.
+    const social1 = idle.filter((entry) => entry.person.trait === "social");
+    const visitor = social1.length && Math.random() < 0.6 ? social1[Math.floor(Math.random() * social1.length)] : idle[Math.floor(Math.random() * idle.length)];
     const others = idle.filter((entry) => entry !== visitor);
     const host = others[Math.floor(Math.random() * others.length)];
+    // Old collaborators get their own handshake.
+    const buddy = others.find((other) => areFriends(idOf(visitor), idOf(other)));
+    if (buddy && Math.random() < 0.7) {
+      startSocial("handshake", visitor, buddy);
+      return;
+    }
+    const roll = Math.random();
+    startSocial(roll < 0.45 ? "chat" : roll < 0.75 ? "highfive" : "coffee", visitor, host);
+  }
+
+  function startSocial(mode: Social["mode"], visitor: PersonEntry, host: PersonEntry): void {
+    if (social) endSocial();
     visitor.strolling = true;
-    const side = visitor.person.x <= host.person.x ? -1 : 1;
-    visitor.person.setTarget(
-      Math.max(8, Math.min(ART_W - 8, host.person.x + side * 12)),
-      Math.max(52, Math.min(ART_H - 6, host.person.y + 2)),
-    );
-    social = { stage: "walking", visitor, host, chatMs: 0 };
+    if (mode === "coffee") {
+      // Both wander over to the coffee machine.
+      host.strolling = true;
+      visitor.person.setTarget(392, 96);
+      host.person.setTarget(411, 96);
+    } else {
+      const side = visitor.person.x <= host.person.x ? -1 : 1;
+      visitor.person.setTarget(
+        Math.max(8, Math.min(ART_W - 8, host.person.x + side * (mode === "highfive" || mode === "handshake" ? 9 : 12))),
+        Math.max(52, Math.min(floorH - 6, host.person.y)),
+      );
+    }
+    social = { stage: "walking", mode, visitor, host, chatMs: 0 };
   }
 
   function idOf(entry: PersonEntry): string {
     for (const [id, candidate] of entries) if (candidate === entry) return id;
     return "";
+  }
+
+  // --- 15. Quiet habits (npcHabits): pacing while thinking hard, a slow walk to the
+  // water cooler after a long stretch of work, and the coffee errand when the
+  // machine is clicked. One at a time each, aborted the moment real work arrives.
+  type Pace = { entry: PersonEntry; plan: number[]; step: number; pauseMs: number; homeX: number; homeY: number };
+  const pacers: Pace[] = [];
+  let paceScanAccum = 0;
+
+  function atSeat(entry: PersonEntry): boolean {
+    return !entry.person.isMoving && Math.abs(entry.person.x - entry.targetX) < 0.5 && Math.abs(entry.person.y - entry.targetY) < 0.5;
+  }
+
+  function endPace(pace: Pace): void {
+    const { entry } = pace;
+    entry.strolling = false;
+    entry.person.walkSpeedMul = 1;
+    if (entry.transition === "ready") entry.person.setTarget(entry.targetX, entry.targetY); // leaving: keep the exit walk
+    pacers.splice(pacers.indexOf(pace), 1);
+  }
+
+  function updatePacing(dt: number): void {
+    for (const pace of [...pacers]) {
+      const { entry } = pace;
+      const still = entries.get(idOf(entry)) === entry && entry.transition === "ready" && !occupied(entry) &&
+        !entry.person.asleep && entry.last?.activity === "thinking" && entry.last.station === "home" &&
+        entry.targetX === pace.homeX && entry.targetY === pace.homeY;
+      if (!still) {
+        endPace(pace); // output started / new work / moved seats: sit straight back down
+        continue;
+      }
+      if (entry.person.isMoving || pace.step >= pace.plan.length) continue;
+      pace.pauseMs -= dt;
+      if (pace.pauseMs > 0) continue;
+      entry.person.setTarget(pace.homeX + pace.plan[pace.step], pace.homeY);
+      pace.step += 1;
+      pace.pauseMs = 1_400 + Math.random() * 900;
+    }
+    paceScanAccum += dt;
+    if (paceScanAccum < 1_000 || REDUCE_MOTION_SCENE) return;
+    paceScanAccum = 0;
+    for (const entry of entries.values()) {
+      if (entry.temporary || entry.transition !== "ready" || entry.strolling || entry.person.asleep || !entry.last) continue;
+      if (pacers.some((pace) => pace.entry === entry)) continue;
+      if (!mayPace({
+        thinkingMs: entry.thinkMs,
+        station: entry.last.station,
+        atSeat: atSeat(entry),
+        waiting: occupied(entry),
+        busy: delivery?.entry === entry || social?.visitor === entry || social?.host === entry || chore?.entry === entry,
+      }, pacers.length)) continue;
+      entry.strolling = true;
+      entry.person.walkSpeedMul = PACE_SPEED;
+      pacers.push({ entry, plan: pacePlan(Math.random()), step: 0, pauseMs: 0, homeX: entry.targetX, homeY: entry.targetY });
+    }
+  }
+
+  /** Where to stand at the water cooler (DECOR_SPOTS.cooler) and the coffee machine. */
+  const COOLER_SPOT: Pt = { x: 376, y: 97 };
+  const COFFEE_SPOT: Pt = { x: 396, y: 96 };
+  type Errand = { kind: "water" | "coffee"; entry: PersonEntry; stage: "going" | "doing" | "back"; t: number };
+  let waterRun: Errand | null = null;
+  let waterCooldown = 60_000;
+  let coffeeRun: Errand | null = null;
+  let coffeeReadyAt = 0;
+
+  function endErrand(run: Errand): void {
+    const { entry } = run;
+    entry.strolling = false;
+    entry.person.walkSpeedMul = 1;
+    if (run.kind === "coffee" && entry.person.walkProp === "cup") entry.person.walkProp = null;
+    if (entry.transition === "ready") entry.person.setTarget(entry.targetX, entry.targetY); // leaving: keep the exit walk
+    if (run.kind === "water") {
+      waterRun = null;
+      waterCooldown = WATER_COOLDOWN_MS;
+    } else {
+      coffeeRun = null;
+    }
+  }
+
+  /** Called once a stretch of work has really ended (idle for a few seconds). */
+  function afterWork(entry: PersonEntry): void {
+    if (REDUCE_MOTION_SCENE || !lifeEligible(entry) || pendingDeliveries.has(idOf(entry))) return;
+    if (!mayFetchWater(entry.streakBusyMs, waterCooldown, waterRun !== null || coffeeRun?.entry === entry, Math.random())) return;
+    entry.strolling = true;
+    entry.person.walkSpeedMul = WATER_SPEED;
+    entry.person.setTarget(COOLER_SPOT.x, COOLER_SPOT.y);
+    waterRun = { kind: "water", entry, stage: "going", t: 0 };
+  }
+
+  /** Someone clicked the coffee machine: the nearest free NPC calls "I'll go!" and fetches a cup. */
+  function orderCoffee(): void {
+    if (coffeeRun || elapsed < coffeeReadyAt) return;
+    const idle = [...entries.values()].filter(lifeEligible);
+    const pick = nearestTo(idle.map((entry) => ({ entry, x: entry.person.x, y: entry.person.y })), COFFEE_SPOT);
+    if (!pick) return;
+    coffeeReadyAt = elapsed + COFFEE_ERRAND_COOLDOWN_MS;
+    const { entry } = pick;
+    trySay(entry, t("我去！"), true);
+    entry.strolling = true;
+    entry.person.setTarget(COFFEE_SPOT.x, COFFEE_SPOT.y);
+    coffeeRun = { kind: "coffee", entry, stage: "going", t: 0 };
+  }
+
+  function stepErrand(run: Errand, dt: number): void {
+    const { entry } = run;
+    if (entries.get(idOf(entry)) !== entry || !socialEligible(entry) || entry.person.asleep) {
+      endErrand(run); // new work (or gone): drop it and head straight back
+      return;
+    }
+    run.t += dt;
+    if (run.stage === "going") {
+      if (entry.person.isMoving) {
+        if (run.t > 30_000) endErrand(run);
+        return;
+      }
+      run.stage = "doing";
+      run.t = 0;
+      entry.person.microAct(run.kind === "water" ? "drink" : "brew");
+    } else if (run.stage === "doing") {
+      if (run.t < (run.kind === "water" ? 2_600 : 2_100)) return;
+      run.stage = "back";
+      run.t = 0;
+      if (run.kind === "coffee") entry.person.walkProp = "cup";
+      entry.person.setTarget(entry.targetX, entry.targetY);
+    } else if (!entry.person.isMoving) {
+      if (run.kind === "coffee") entry.person.emote("coffee", 2_200);
+      endErrand(run);
+    }
+  }
+
+  function updateErrands(dt: number): void {
+    if (waterCooldown > 0) waterCooldown -= dt;
+    if (waterRun) stepErrand(waterRun, dt);
+    if (coffeeRun) stepErrand(coffeeRun, dt);
+  }
+
+  /** Per-frame bookkeeping for the habits above (cheap counters only). */
+  function trackHabits(entry: PersonEntry, dt: number): void {
+    const state = entry.last;
+    const busy = state?.activity === "working" || state?.activity === "thinking";
+    entry.thinkMs = state?.activity === "thinking" && !entry.waiting ? entry.thinkMs + dt : 0;
+    if (busy) {
+      entry.streakBusyMs += dt;
+      entry.idleRunMs = 0;
+    } else {
+      entry.idleRunMs += dt;
+      // A turn streams its text as "idle" (mood neutral); the turn has ended once the mood is
+      // set. One roll per stretch of work, once they're back and settled at the desk.
+      if (entry.streakBusyMs > 0 && entry.idleRunMs >= 8_000 && state?.mood !== "neutral" && lifeEligible(entry)) {
+        afterWork(entry);
+        entry.streakBusyMs = 0;
+      } else if (entry.idleRunMs >= 60_000) {
+        entry.streakBusyMs = 0;
+      }
+    }
+    // Long tool call: lean back after ~20 s; sit up only when that call's result arrives.
+    const toolKey = state?.activity === "working" && !entry.waiting ? `${state.station}:${state.bump}` : null;
+    entry.toolWait = stepToolWait(entry.toolWait, toolKey, elapsed);
+    entry.person.longWait = entry.toolWait.leaning && !entry.temporary;
+    entry.person.screensaver = !entry.temporary && state?.activity === "idle" && state.station === "home" && !occupied(entry) && !entry.failedUnseen &&
+      screensaverOn(entry.idleRunMs) && atSeat(entry);
   }
 
   function standSpot(station: StationKey, index: number, id?: string): { x: number; y: number } {
@@ -521,8 +1042,14 @@ export async function createScene(
       return seat ? { x: seat.x, y: seat.y } : { x: ART_W / 2, y: ART_H - 30 };
     }
     const def = furniture.def(station);
-    const seats = station === "meeting" ? MEETING_SEATS : SPOT_OFFSETS;
-    const [ox, oy] = seats[index % seats.length];
+    // 牆邊工作站：index 是「這一站」的排隊序號，沿檯面左右排開、腳都踩同一條線。
+    if (isWallStation(def)) {
+      const spot = wallStandSpot(def, index);
+      return { x: Math.max(8, Math.min(ART_W - 8, spot.x)), y: spot.y };
+    }
+    const [ox, oy] = station === "meeting"
+      ? [meetingSeat(index).ox, meetingSeat(index).oy]
+      : SPOT_OFFSETS[index % SPOT_OFFSETS.length];
     return {
       x: Math.max(8, Math.min(ART_W - 8, def.standX + ox)),
       y: Math.max(52, Math.min(ART_H - 6, def.standY + oy)),
@@ -532,36 +1059,808 @@ export async function createScene(
   function applyCharacter(entry: PersonEntry, next: CharacterState, id: string): void {
     const prev = entry.last;
     entry.last = next;
-    const { person, index } = entry;
+    const { person } = entry;
 
     if ((!prev || prev.station !== next.station) && entry.transition === "ready") {
-      const spot = standSpot(next.station, index, id);
-      person.setTarget(spot.x, spot.y);
+      // setWorkers 已把這一站的排位算進 targetX/Y（含同站排隊序號），直接用它。
+      person.setTarget(entry.targetX, entry.targetY);
+      // Off to a tool station: grab the laptop (screens) or a stack of papers (reading, board, tools).
+      if (next.station !== "home" && next.station !== "meeting") {
+        person.walkProp = next.station === "books" || next.station === "board" || next.station === "desk" ? "papers" : "laptop";
+      }
     }
     person.activity = next.activity;
+    person.station = next.station;
+    // Hopping from tool to tool without a break: "COMBO xN".
+    // A tool result (idle at the station) is a gap inside the chain, not its end.
+    if (next.activity === "idle" && (next.station === "home" || next.outcome === "turn")) entry.chain = 0;
+    else if (prev && prev.station !== next.station && next.activity === "working" && next.station !== "home" && next.station !== "meeting") {
+      entry.chain += 1;
+      if (entry.chain >= 3) person.combo(entry.chain);
+    }
 
-    if (prev && next.bump !== prev.bump && next.mood !== "neutral") {
-      const success = next.mood === "success";
-      person.flash(success ? GREEN : RED, success);
-      particles.burst(person.x, person.y - 8, success ? GREEN : RED, success ? 14 : 18, 0.045);
+    // While the lights are out / just coming back, a re-snapshot can carry
+    // turns that finished meanwhile — no checkmark-and-confetti burst for those.
+    const quiet = power.dark || performance.now() - linkUpAt < 2_500;
+    // Layered: one tool call coming back is a small tick / red dot only; the whole
+    // turn ending gets the full celebration; a failed turn gets its reaction, never a party.
+    const tier = quiet ? "none" : completionTier(prev, next);
+    if (tier === "tool-ok" || tier === "tool-fail") {
+      person.toolTick(tier === "tool-ok");
+    } else if (tier === "turn-ok" && entry.finalePending) {
+      // This turn is the final completion: the finale plays instead (queued by setWorkers).
+      entry.lastSuccessAt = performance.now();
+    } else if (prev && tier !== "none") {
+      const success = tier === "turn-ok";
+      // Stage tier: a turn finished but the job isn't done yet — a small celebration
+      // (jump / fist pump / little dance). The fireworks belong to the final tier only.
+      person.flash(success ? GREEN : RED, false);
       if (success) {
+        const kinds = ["jump", "fistpump", "dance"] as const;
+        person.celebrate(kinds[Math.floor(Math.random() * kinds.length)]);
+      }
+      // The monitor where the turn ended shows the verdict: a check, or red glitch + smoke.
+      person.showResult(success, false);
+      // Kept small: a turn ending is routine, the monitor verdict and the pose already say it.
+      particles.burst(person.x, person.y - 8, success ? GREEN : RED, 6, 0.032);
+      if (success) {
+        entry.lastSuccessAt = performance.now();
         // A lingering "✓" spark makes a finished turn as readable as the
         // "cloud" that marks a failed one, not just a single-frame flash.
         person.emote("spark", 2_600);
-        // Nearby colleagues turn and applaud.
-        for (const other of entries.values()) {
-          if (other === entry || other.temporary || other.transition !== "ready") continue;
-          if (Math.hypot(other.person.x - person.x, other.person.y - person.y) <= 60) other.person.cheer();
-        }
+        // The nearest free teammate gives a thumbs up (a big win gets up to three close by
+        // cheering). Someone heads-down at work or mid-walk doesn't drop everything for it.
+        const near = [...entries.values()]
+          .filter((other) => other !== entry && !other.temporary && other.transition === "ready" && !other.person.asleep &&
+            !other.person.isMoving && other.last?.activity !== "working")
+          .map((other) => ({ other, d: Math.hypot(other.person.x - person.x, other.person.y - person.y) }))
+          .filter(({ d }) => d <= 60)
+          .sort((a, b) => a.d - b.d);
+        near.slice(0, 1).forEach(({ other }) => other.person.thumbsUp());
+        if (Math.random() < 0.35) trySay(entry, talkLine({ kind: "success" }));
       } else {
-        person.emote("cloud", 4_000);
+        // Facepalm / desk kick / scratch; failing again soon after earns a glare.
+        entry.errors = entry.errors.filter((t) => elapsed - t < 120_000);
+        entry.errors.push(elapsed);
+        trySay(entry, person.reactError(entry.errors.length));
       }
     }
   }
 
+  /**
+   * The character the scene shows for this worker: the app's own, except that a
+   * quick trip "home" between tool calls is held at the tool station for a moment
+   * (sceneSignals.heldStation). Hands back the same object while nothing changed,
+   * so applyCharacter doesn't rerun on every update.
+   */
+  function sceneCharacter(entry: PersonEntry | undefined, raw: CharacterState): CharacterState {
+    if (!entry) return raw;
+    const prevRaw = entry.rawChar;
+    entry.rawChar = raw;
+    if (entry.temporary || entry.transition !== "ready") {
+      entry.hold = null;
+      return raw;
+    }
+    const held = heldStation(entry.last?.station ?? null, raw, entry.hold, elapsed);
+    entry.hold = held.hold;
+    if (held.station === raw.station) return raw;
+    if (prevRaw === raw && entry.last && entry.last.station === held.station) return entry.last;
+    return { ...raw, station: held.station };
+  }
+
+  /** The station hold ran out with no new tool: now walk back to the desk. */
+  function releaseHold(id: string, entry: PersonEntry): void {
+    entry.hold = null;
+    const raw = entry.rawChar;
+    if (!raw || entry.last === raw) return;
+    if (raw.station === "home") {
+      const spot = standSpot("home", entry.index, id);
+      entry.targetX = spot.x;
+      entry.targetY = spot.y;
+    }
+    entry.person.meetingRow = null;
+    applyCharacter(entry, raw, id);
+  }
+
+  // Final completion: the big moment (Person.finale) plus the faintest camera shake.
+  let shakeMs = 0;
+  function playFinale(entry: PersonEntry): void {
+    if (entry.transition !== "ready" || entry.person.asleep) return;
+    entry.lastSuccessAt = performance.now();
+    entry.person.emote("spark", 0);
+    entry.person.finale();
+    if (!REDUCE_MOTION_SCENE) shakeMs = Math.max(shakeMs, 320);
+  }
+  function updateShake(dt: number): void {
+    if (shakeMs <= 0) return;
+    shakeMs -= dt;
+    // One art pixel at most, alternating every couple of frames; back to rest when done.
+    const k = shakeMs > 0 ? (Math.floor(shakeMs / 45) % 2 === 0 ? 1 : -1) : 0;
+    app.stage.position.set(k, shakeMs > 0 && Math.floor(shakeMs / 90) % 2 === 0 ? 1 : 0);
+  }
+
+  // Hand-offs: collaboration stages (source>target) and mission steps changing hands.
+  let handoffSeen = new Map<string, SceneHandoffStage>();
+  let missionStepSeen = new Map<string, string>();
+  function passBaton(pass: BatonPass): void {
+    const from = entries.get(pass.from);
+    const to = entries.get(pass.to);
+    if (!from || !to || from === to || from.transition !== "ready" || to.transition !== "ready") return;
+    if (from.person.asleep || to.person.asleep) return;
+    if (REDUCE_MOTION_SCENE) {
+      // No flight, no hops: just a quiet acknowledgement on the receiving end.
+      to.person.emote("thumb", 1_200);
+      return;
+    }
+    from.person.highFive(to.person.x >= from.person.x ? 1 : -1);
+    to.person.reachFor(700);
+    fx.baton(chestOf(pass.from), chestOf(pass.to), () => entries.get(pass.to)?.person.hop());
+  }
+
+  // ───────────────────────── Interaction effects ─────────────────────────
+  // Everything below is visual only. Real triggers arrive on the fxBus
+  // (dispatch / deliverable from the UI) or are derived from worker state
+  // (approvals, collaborations, sub-agents, context usage).
+
+  const GOLD = 0xffd166;
+
+  function clientToWorld(clientX: number, clientY: number): Pt {
+    const rect = app.canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - world.position.x) / scale,
+      y: (clientY - rect.top - world.position.y) / scale,
+    };
+  }
+
+  /** Keep a launch point on screen: a plane "from" a button outside the canvas enters at the nearest edge. */
+  function clampToView(p: Pt): Pt {
+    const left = -world.position.x / scale + 4;
+    const top = -world.position.y / scale + 4;
+    const right = (app.screen.width - world.position.x) / scale - 4;
+    const bottom = (app.screen.height - world.position.y) / scale - 4;
+    return { x: Math.max(left, Math.min(right, p.x)), y: Math.max(top, Math.min(bottom, p.y)) };
+  }
+
+  /** Chest-height point of a live NPC, or null once they're gone. */
+  function chestOf(id: string): () => Pt | null {
+    return () => {
+      const entry = entries.get(id);
+      if (!entry || entry.transition === "removing") return null;
+      return { x: entry.person.x, y: entry.person.y - 10 };
+    };
+  }
+
+  // --- 1. Paper-plane dispatch: the task flies from the submit button to the NPC.
+  function playDispatch(id: string, from: Pt): void {
+    const entry = entries.get(id);
+    if (!entry || entry.temporary || entry.transition === "removing") return;
+    fx.plane(
+      clampToView(from),
+      chestOf(id),
+      (at) => {
+        entry.person.catchIt();
+        entry.person.rush(4_000); // off to work at a little run
+        particles.burst(at.x, at.y, 0xdfe9f8, 6, 0.03);
+      },
+      () => entry.person.reachFor(450),
+    );
+  }
+
+  // --- 3. Deliverables: the NPC carries a box to the outbox shelf. One courier
+  // at a time keeps it calm; others queue until they're free (a deliverable
+  // written mid-turn waits for the turn to end instead of abandoning work).
+  type Delivery = { entry: PersonEntry; id: string; stage: "toShelf" | "drop"; t: number; dropped: boolean };
+  let delivery: Delivery | null = null;
+  const pendingDeliveries = new Map<string, number>(); // id -> queued at
+  const DELIVERY_TTL_MS = 120_000;
+
+  function queueDelivery(workerId: string | null): void {
+    let id = workerId && entries.get(workerId) && !entries.get(workerId)!.temporary ? workerId : null;
+    if (!id) {
+      // Unattributed: whoever finished a turn most recently carries it.
+      let best = 0;
+      for (const [candidate, entry] of entries) {
+        if (!entry.temporary && entry.lastSuccessAt > best) {
+          best = entry.lastSuccessAt;
+          id = candidate;
+        }
+      }
+    }
+    if (id && !pendingDeliveries.has(id)) pendingDeliveries.set(id, performance.now());
+  }
+
+  function deliveryEligible(entry: PersonEntry): boolean {
+    return entry.transition === "ready" && !entry.temporary && !occupied(entry) && !entry.strolling &&
+      entry.last !== null && entry.last.activity !== "working" && entry.last.activity !== "thinking";
+  }
+
+  function endDelivery(requeue: boolean): void {
+    if (!delivery) return;
+    const { entry, id } = delivery;
+    entry.person.carrying = false;
+    entry.strolling = false;
+    entry.person.setTarget(entry.targetX, entry.targetY);
+    if (requeue) pendingDeliveries.set(id, performance.now());
+    delivery = null;
+  }
+
+  function updateDeliveries(dt: number): void {
+    if (delivery) {
+      const { entry, id } = delivery;
+      if (entries.get(id) !== entry || entry.transition !== "ready" || occupied(entry) ||
+        entry.last?.activity === "working" || entry.last?.activity === "thinking") {
+        endDelivery(!delivery.dropped);
+        return;
+      }
+      const spot = shelf.standSpot;
+      if (delivery.stage === "toShelf") {
+        if (entry.person.isMoving) return;
+        if (Math.hypot(entry.person.x - spot.x, entry.person.y - spot.y) > 2) {
+          entry.person.setTarget(spot.x, spot.y); // something re-routed them; carry on
+          return;
+        }
+        delivery.stage = "drop";
+        delivery.t = 0;
+        return;
+      }
+      delivery.t += dt;
+      if (!delivery.dropped && delivery.t >= 260) {
+        delivery.dropped = true;
+        entry.person.carrying = false;
+        shelf.receive();
+        const drop = shelf.dropPoint;
+        particles.burst(drop.x, drop.y, GOLD, 10, 0.035);
+        for (let i = 0; i < 4; i++) particles.rise(drop.x, drop.y - 2, GOLD, 10);
+        entry.person.emote("spark", 1_400);
+      }
+      if (delivery.t >= 1_000) endDelivery(false); // walk back to the desk
+      return;
+    }
+    if (pendingDeliveries.size === 0) return;
+    const now = performance.now();
+    for (const [id, at] of pendingDeliveries) {
+      const entry = entries.get(id);
+      if (!entry || now - at > DELIVERY_TTL_MS) {
+        pendingDeliveries.delete(id);
+        continue;
+      }
+      if (!deliveryEligible(entry)) continue;
+      pendingDeliveries.delete(id);
+      entry.strolling = true;
+      entry.person.carrying = true;
+      const spot = shelf.standSpot;
+      entry.person.setTarget(spot.x, spot.y);
+      delivery = { entry, id, stage: "toShelf", t: 0, dropped: false };
+      return;
+    }
+  }
+
+  // --- 6. Fatigue and brain reset.
+  let fatigueAccum = 0;
+  let fatigueNext = 7_000 + Math.random() * 6_000;
+  function updateFatigue(dt: number): void {
+    fatigueAccum += dt;
+    if (fatigueAccum < fatigueNext) return;
+    fatigueAccum = 0;
+    fatigueNext = 8_000 + Math.random() * 8_000;
+    const tired = [...entries.values()].filter((entry) =>
+      entry.transition === "ready" && !entry.temporary && !occupied(entry) && !entry.strolling &&
+      (entry.ctxPct ?? 0) >= 70 && !entry.person.isMoving && entry.person.emoting === null,
+    );
+    if (tired.length === 0) return;
+    const pick = tired[Math.floor(Math.random() * tired.length)];
+    // At the desk (back to camera) they just reach for the mug; facing us, a proper yawn first.
+    if (pick.last?.activity === "working") pick.person.emote("coffee", 2_400);
+    else pick.person.yawn();
+  }
+
+  function brainReset(id: string): void {
+    const entry = entries.get(id);
+    if (!entry || entry.temporary || entry.transition === "removing") return;
+    const now = performance.now();
+    if (now - entry.lastHaloAt < 4_000) return; // drop-detection and the swap event can both fire
+    entry.lastHaloAt = now;
+    entry.person.brainReset();
+    for (let i = 0; i < 3; i++) particles.rise(entry.person.x, entry.person.y - 18, 0x9ff3ff, 10);
+  }
+
+  // --- 8. More idle life: now and then someone waters a plant, or calls the
+  // office cat over for a pat. Low frequency, one at a time, aborted the
+  // moment the NPC gets real work (same rules as the coffee chat).
+  function lifeEligible(entry: PersonEntry): boolean {
+    return socialEligible(entry) && !entry.strolling && !entry.person.isMoving && !entry.person.asleep &&
+      social?.visitor !== entry && social?.host !== entry;
+  }
+  type Chore = { kind: "water" | "pet"; entry: PersonEntry; stage: "going" | "doing" | "back"; t: number; dir: 1 | -1; spot: Pt };
+  let chore: Chore | null = null;
+  let choreCooldown = 40_000 + Math.random() * 40_000;
+
+  function startChore(kind: "water" | "pet", entry: PersonEntry): boolean {
+    if (chore || !lifeEligible(entry)) return false;
+    if (kind === "water") {
+      const plant = PLANTS[entry.person.x < ART_W / 2 ? 0 : 1];
+      entry.strolling = true;
+      entry.person.setTarget(plant.x, plant.y);
+      chore = { kind, entry, stage: "going", t: 0, dir: plant.dir, spot: { x: plant.x, y: plant.y } };
+      return true;
+    }
+    // The cat trots over and sits beside them.
+    const dir: 1 | -1 = cat.pos.x < entry.person.x ? -1 : 1;
+    const spot = { x: Math.max(8, Math.min(ART_W - 8, entry.person.x + dir * 8)), y: entry.person.y + 1 };
+    if (!cat.visit(spot.x, spot.y)) return false;
+    chore = { kind, entry, stage: "going", t: 0, dir, spot };
+    return true;
+  }
+
+  function endChore(): void {
+    if (!chore) return;
+    if (chore.kind === "water") {
+      chore.entry.strolling = false;
+      chore.entry.person.setTarget(chore.entry.targetX, chore.entry.targetY);
+    }
+    chore = null;
+    choreCooldown = 40_000 + Math.random() * 40_000;
+  }
+
+  function updateChores(dt: number): void {
+    if (!chore) {
+      choreCooldown -= dt;
+      if (choreCooldown > 0 || REDUCE_MOTION_SCENE) return;
+      choreCooldown = 40_000 + Math.random() * 40_000;
+      const idle = [...entries.values()].filter(lifeEligible);
+      if (idle.length === 0) return;
+      startChore(Math.random() < 0.5 ? "water" : "pet", idle[Math.floor(Math.random() * idle.length)]);
+      return;
+    }
+    const { entry } = chore;
+    const stillOurs = entries.has(idOf(entry)) && socialEligible(entry) && !entry.person.asleep;
+    if (!stillOurs && chore.stage !== "back") {
+      endChore();
+      return;
+    }
+    chore.t += dt;
+    if (chore.stage === "going") {
+      const arrived = chore.kind === "water"
+        ? !entry.person.isMoving
+        : cat.settled && Math.hypot(cat.pos.x - chore.spot.x, cat.pos.y - chore.spot.y) < 2;
+      if (arrived) {
+        chore.stage = "doing";
+        chore.t = 0;
+        entry.person.microAct(chore.kind, chore.dir);
+      } else if (chore.t > 14_000) {
+        endChore(); // the cat wandered off / got stuck — never mind
+      }
+    } else if (chore.stage === "doing") {
+      if (chore.kind === "water" && chore.t > 900 && Math.random() < 0.08) {
+        particles.rise(chore.spot.x + chore.dir * 11, chore.spot.y - 14, GREEN, 6);
+      }
+      if (chore.t >= 2_800) {
+        if (chore.kind === "water") {
+          chore.stage = "back";
+          entry.person.emote("spark", 1_200);
+          entry.person.setTarget(entry.targetX, entry.targetY);
+        } else {
+          endChore();
+        }
+      }
+    } else if (!entry.person.isMoving || !entries.has(idOf(entry))) {
+      endChore();
+    }
+  }
+
+  // --- 11. Poking NPCs and tapping the floor (visual only).
+  function pokeEntry(entry: PersonEntry): void {
+    if (entry.transition !== "ready" || entry.temporary) return;
+    entry.pokes = entry.pokes.filter((t) => elapsed - t < 2_500);
+    entry.pokes.push(elapsed);
+    const level = entry.pokes.length;
+    entry.pokeTotal += 1;
+    if (entry.pokeTotal === 20 && !entry.person.sunglasses) {
+      // Easter egg: poke someone twenty times and they put on shades (for the session).
+      entry.person.sunglasses = true;
+      setSessionFlag(`shades:${idOf(entry)}`);
+      entry.person.emote("spark", 1_600);
+      particles.burst(entry.person.x, entry.person.y - 12, GOLD, 10, 0.03);
+      entry.pokes = [];
+      return;
+    }
+    entry.person.poke(level);
+    if (level >= 5) entry.pokes = []; // dizzy resets the count
+  }
+
+  function floorTap(x: number, y: number): void {
+    if (y < WALL_H + 2 || y > floorH || x < 0 || x > ART_W) return;
+    ripples.add(x, y);
+    // Anyone idle nearby glances at the spot.
+    for (const entry of entries.values()) {
+      if (entry.temporary || entry.transition !== "ready") continue;
+      if (Math.hypot(entry.person.x - x, entry.person.y - y) > 80) continue;
+      entry.glanceUntil = elapsed + 1_300;
+      entry.glanceX = x;
+    }
+  }
+
+  // --- 12. Easter eggs: Konami dance party, rare UFO / mouse chase.
+  function startParty(): void {
+    if (power.isDown) return; // no dancing in the dark (fine while the lights are coming back)
+    party.start(8_000);
+    for (const entry of entries.values()) {
+      if (entry.transition === "ready") entry.person.dance(7_600);
+    }
+  }
+  const offKonami = onKonami(startParty);
+
+  let rareAccum = 0;
+  function updateRare(dt: number): void {
+    rareAccum += dt;
+    if (rareAccum < 20_000) return;
+    rareAccum = 0;
+    if (Math.random() >= 0.01 || power.dark) return;
+    if (Math.random() < 0.5) room.ufo();
+    else cat.chaseMouse();
+  }
+
+  // --- 13. Small talk: short context lines, rare, never more than one every few seconds.
+  let lastTalkAt = -Infinity;
+  let talkAccum = 0;
+  const TALK_GAP_MS = 6_000;
+  function trySay(entry: PersonEntry, line: string | null, force = false): void {
+    if (!line) return;
+    if (!force && elapsed - lastTalkAt < TALK_GAP_MS) return;
+    lastTalkAt = elapsed;
+    entry.person.say(line, 2_000);
+  }
+
+  function updateTalk(dt: number): void {
+    talkAccum += dt;
+    if (talkAccum < 4_500) return;
+    talkAccum = 0;
+    if (elapsed - lastTalkAt < TALK_GAP_MS || Math.random() > 0.35 || power.dark) return;
+    // Someone on screen, not selected (the UI's speech bubble lives there), not mid-emote.
+    const candidates = [...entries.values()].filter((entry) =>
+      entry.transition === "ready" && !entry.temporary && entry.person.container.visible && !entry.person.active &&
+      entry.person.emoting === null && !entry.person.asleep && !entry.person.isMoving,
+    );
+    if (candidates.length === 0) return;
+    const entry = candidates[Math.floor(Math.random() * candidates.length)];
+    const state = entry.last;
+    trySay(entry, talkLine({
+      kind: entry.waiting ? "waiting" : state?.activity === "working" ? "working" : state?.activity === "thinking" ? "thinking" : "idle",
+      station: state?.station,
+      impatient: entry.person.impatient,
+      tired: entry.person.tired,
+      lateNight: seasonal(officeNow()).lateNight,
+      trait: entry.person.trait,
+    }));
+  }
+
+  // --- 14. Relationships: pairs who keep collaborating become friends
+  // (remembered in localStorage); friends greet when one walks past, and
+  // get a special handshake when they hang out.
+  const FRIENDS_KEY = "pixel-crew:friends";
+  const collabCounts: Record<string, number> = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(FRIENDS_KEY) ?? "{}") as Record<string, number>;
+    } catch {
+      return {};
+    }
+  })();
+  function pairKey(a: string, b: string): string {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }
+  function noteCollab(key: string): void {
+    collabCounts[key] = (collabCounts[key] ?? 0) + 1;
+    try {
+      localStorage.setItem(FRIENDS_KEY, JSON.stringify(collabCounts));
+    } catch {
+      // Storage full / disabled: friendships just won't survive a reload.
+    }
+  }
+  function areFriends(a: string, b: string): boolean {
+    return (collabCounts[pairKey(a, b)] ?? 0) >= 2;
+  }
+
+  const greetedAt = new Map<string, number>();
+  let greetAccum = 0;
+  function updateGreetings(dt: number): void {
+    greetAccum += dt;
+    if (greetAccum < 400) return;
+    greetAccum = 0;
+    for (const [walkerId, walker] of entries) {
+      if (!walker.person.isMoving || walker.temporary || walker.transition !== "ready") continue;
+      for (const [otherId, other] of entries) {
+        if (other === walker || other.temporary || other.person.isMoving || other.transition !== "ready") continue;
+        if (Math.abs(other.person.x - walker.person.x) > 14 || Math.abs(other.person.y - walker.person.y) > 10) continue;
+        if (!areFriends(walkerId, otherId)) continue;
+        const key = pairKey(walkerId, otherId);
+        if (elapsed - (greetedAt.get(key) ?? -Infinity) < 60_000) continue;
+        greetedAt.set(key, elapsed);
+        // In passing: the one at their desk waves "HI", the walker answers with a heart.
+        other.person.wave();
+        other.person.emote("hi", 1_400);
+        walker.person.emote("heart", 1_200);
+      }
+    }
+  }
+
+  // --- 9. Link to the server dropped / back (fxBus "connection").
+  let linkUpAt = -Infinity; // performance.now() of the last reconnect
+  /** Completed-step count per department mission last seen (missionCheer). */
+  let missionSeen = new Map<string, number>();
+  function setConnection(state: "down" | "up"): void {
+    if (state === "down") {
+      power.setDown();
+      return;
+    }
+    linkUpAt = performance.now();
+    if (!power.isDown) return;
+    power.setUp();
+    // Everyone wakes in the order the lights come back on, not all at once.
+    for (const entry of entries.values()) entry.wakeAt = null;
+  }
+
+  function updatePower(): void {
+    power.monitors.length = 0;
+    power.sleepers.length = 0;
+    if (!power.dark) return;
+    for (const seat of homeSeats.values()) {
+      power.monitors.push({ x: seat.x - 6, y: seat.deskBottom - 17, w: 12, h: 6 } satisfies Rect);
+    }
+    for (const entry of entries.values()) {
+      if (entry.person.asleep && entry.transition !== "removing") power.sleepers.push({ x: entry.person.x, y: entry.person.y - 16 });
+    }
+  }
+
+  // --- 10. Settings echoes (fxBus "system"): an icon pops on the back wall and the idle crew glances at it.
+  function playSystem(kind: SystemCueKind): void {
+    cues.play(kind, CUE_AT);
+    const idlers: PersonEntry[] = [];
+    for (const entry of entries.values()) {
+      if (entry.temporary || entry.transition !== "ready" || entry.person.asleep) continue;
+      entry.glanceUntil = elapsed + 1_700;
+      entry.glanceX = CUE_AT.x;
+      if (entry.last?.activity === "idle" && !entry.person.isMoving) idlers.push(entry);
+    }
+    // A couple of them react a bit more.
+    for (const entry of idlers.sort(() => Math.random() - 0.5).slice(0, 2)) {
+      if (kind === "remote-on" || kind === "notify-on") entry.person.hop();
+      if (kind === "notify-on") entry.person.emote("bang", 900);
+    }
+  }
+
+  // --- 4. Drag and drop onto an NPC. The scene only highlights and reports;
+  // the UI decides what to do with the drop (fxBus "drop-dispatch").
+  let dragEntry: PersonEntry | null = null;
+  let dragSeenAt = 0;
+  const acceptsDrag = (dt: DataTransfer | null) => {
+    const types = Array.from(dt?.types ?? []);
+    return types.includes("Files") || types.includes("text/plain") || types.includes("text/uri-list");
+  };
+  function hitEntry(clientX: number, clientY: number): { id: string; entry: PersonEntry } | null {
+    const p = clientToWorld(clientX, clientY);
+    let best: { id: string; entry: PersonEntry } | null = null;
+    let bestD = Infinity;
+    for (const [id, entry] of entries) {
+      if (entry.temporary || entry.transition !== "ready") continue;
+      const dx = p.x - entry.person.x;
+      const dy = p.y - entry.person.y;
+      if (Math.abs(dx) > 9 || dy < -21 || dy > 4) continue;
+      const d = Math.hypot(dx, dy + 9);
+      if (d < bestD) {
+        bestD = d;
+        best = { id, entry };
+      }
+    }
+    return best;
+  }
+  /**
+   * Point the drag at an NPC (or nothing). While an NPC is targeted the canvas
+   * claims file drags via data-file-drop-owner, so the app-wide "drop anywhere
+   * to attach" handler steps aside; a synthetic dragenter lets that handler
+   * re-read ownership and hide/show its full-screen overlay accordingly.
+   */
+  function setDragEntry(next: PersonEntry | null, event: DragEvent | null): void {
+    if (next === dragEntry) return;
+    if (dragEntry) dragEntry.person.reaching = false;
+    dragEntry = next;
+    if (next) next.person.reaching = true;
+    if (next) app.canvas.dataset.fileDropOwner = "office-npc";
+    else delete app.canvas.dataset.fileDropOwner;
+    if (event?.dataTransfer && dragContainsFiles(event.dataTransfer)) {
+      app.canvas.dispatchEvent(new DragEvent("dragenter", { bubbles: true, dataTransfer: event.dataTransfer }));
+    }
+  }
+  const onDragEnter = (event: DragEvent) => {
+    if (!event.isTrusted || !acceptsDrag(event.dataTransfer)) return;
+    if (hitEntry(event.clientX, event.clientY)) event.preventDefault();
+  };
+  const onDragOver = (event: DragEvent) => {
+    if (!acceptsDrag(event.dataTransfer)) return;
+    const hit = hitEntry(event.clientX, event.clientY);
+    dragSeenAt = performance.now();
+    setDragEntry(hit?.entry ?? null, event);
+    if (hit) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    }
+  };
+  const onDragLeave = (event: DragEvent) => {
+    if (!event.isTrusted) return;
+    if (event.relatedTarget instanceof Node && app.canvas.contains(event.relatedTarget)) return;
+    setDragEntry(null, event);
+  };
+  const onDrop = (event: DragEvent) => {
+    const hit = acceptsDrag(event.dataTransfer) ? hitEntry(event.clientX, event.clientY) : null;
+    if (!hit || !event.dataTransfer) {
+      setDragEntry(null, null);
+      return;
+    }
+    event.preventDefault();
+    const dt = event.dataTransfer;
+    const text = dt.getData("text/plain") || dt.getData("text/uri-list") || "";
+    const files = Array.from(dt.files ?? []);
+    // Release the drop-owner flag only after the window-level handler has seen
+    // (and skipped) this same drop event — otherwise it would attach it too.
+    if (dragEntry) dragEntry.person.reaching = false;
+    dragEntry = null;
+    setTimeout(() => {
+      if (!dragEntry) delete app.canvas.dataset.fileDropOwner;
+    }, 0);
+    hit.entry.person.catchIt();
+    particles.burst(hit.entry.person.x, hit.entry.person.y - 10, CYAN, 8, 0.03);
+    if (text || files.length > 0) emitFx({ type: "drop-dispatch", workerId: hit.entry.selectId, text, files });
+  };
+  app.canvas.addEventListener("dragenter", onDragEnter);
+  app.canvas.addEventListener("dragover", onDragOver);
+  app.canvas.addEventListener("dragleave", onDragLeave);
+  app.canvas.addEventListener("drop", onDrop);
+  function updateDragTimeout(): void {
+    // An aborted drag (Esc, left the window) may never send dragleave to us.
+    if (dragEntry && performance.now() - dragSeenAt > 500) setDragEntry(null, null);
+  }
+
+  // --- 7. Idle NPCs glance toward a nearby mouse cursor (mouse only).
+  let cursor: Pt | null = null;
+  const onCanvasPointerMove = (event: PointerEvent) => {
+    lastInputAt = performance.now();
+    cursor = event.pointerType === "mouse" ? clientToWorld(event.clientX, event.clientY) : null;
+  };
+  const onCanvasPointerLeave = () => {
+    cursor = null;
+  };
+  app.canvas.addEventListener("pointermove", onCanvasPointerMove);
+  app.canvas.addEventListener("pointerleave", onCanvasPointerLeave);
+  function gazeFor(entry: PersonEntry): -1 | 0 | 1 {
+    if (entry.glanceUntil > elapsed) {
+      const dx = entry.glanceX - entry.person.x;
+      return Math.abs(dx) < 4 ? 0 : dx < 0 ? -1 : 1;
+    }
+    if (!cursor || entry.temporary) return 0;
+    const dx = cursor.x - entry.person.x;
+    const dy = cursor.y - (entry.person.y - 12);
+    if (Math.abs(dx) > 70 || Math.abs(dy) > 50 || Math.abs(dx) < 3) return 0;
+    return dx < 0 ? -1 : 1;
+  }
+
+  // --- 5. Collaboration links + sub-agent summon beams.
+  function parentOf(w: WorkerSceneState): string | null {
+    if (w.parentId) return w.parentId;
+    const cut = w.id.indexOf(":subagent:");
+    return cut > 0 ? w.id.slice(0, cut) : null;
+  }
+
+  // Collaborators now and then fling a document across to each other.
+  let collabPairs: Array<[string, string]> = [];
+  let docAccum = 0;
+  function updateCollabDocs(dt: number): void {
+    if (collabPairs.length === 0 || REDUCE_MOTION_SCENE) return;
+    docAccum += dt;
+    if (docAccum < 7_000) return;
+    docAccum = 0;
+    const [a, b] = collabPairs[Math.floor(Math.random() * collabPairs.length)];
+    const [from, to] = Math.random() < 0.5 ? [a, b] : [b, a];
+    const src = chestOf(from)();
+    if (!src) return;
+    fx.plane(src, chestOf(to), () => entries.get(to)?.person.catchIt());
+  }
+
+  function syncLinks(list: WorkerSceneState[]): void {
+    const links: LinkSpec[] = [];
+    const before = new Set(collabPairs.map(([a, b]) => pairKey(a, b)));
+    collabPairs = list
+      .filter((w) => w.collaborationRole === "source" && w.collaborationPartnerId && entries.has(w.collaborationPartnerId))
+      .map((w) => [w.id, w.collaborationPartnerId!] as [string, string]);
+    // Every new collaboration between the same two adds to their friendship.
+    for (const [a, b] of collabPairs) {
+      const key = pairKey(a, b);
+      if (!before.has(key)) noteCollab(key);
+    }
+    for (const w of list) {
+      if (w.collaborationRole === "source" && w.collaborationPartnerId && entries.has(w.collaborationPartnerId)) {
+        const returning = w.collaborationPhase === "returning";
+        links.push({
+          key: `${w.id}>${w.collaborationPartnerId}`,
+          // Work goes out to the collaborator; results come back when returning.
+          from: chestOf(returning ? w.collaborationPartnerId : w.id),
+          to: chestOf(returning ? w.id : w.collaborationPartnerId),
+          color: returning ? GREEN : CYAN,
+        });
+      }
+      const parent = w.temporary ? parentOf(w) : null;
+      if (parent && entries.has(parent) && links.length < 12) {
+        links.push({ key: `${parent}~${w.id}`, from: chestOf(parent), to: chestOf(w.id), color: 0xb59cff });
+      }
+    }
+    fx.setLinks(links);
+  }
+
+  // --- Sub-agent portals: step out of one on arrival, walk back into one on exit.
+  const SUMMON_MS = 950;
+  function portalSpot(near: Pt, side: number): Pt {
+    return {
+      x: Math.max(10, Math.min(ART_W - 10, near.x + side * 11)),
+      y: Math.max(56, Math.min(floorH - 6, near.y + 3)),
+    };
+  }
+
+  function updateSummon(entry: PersonEntry): void {
+    const t = entry.transitionMs;
+    const c = entry.person.container;
+    const k = Math.max(0, Math.min(1, (t - 200) / 300));
+    c.scale.set(0.3 + 0.7 * k);
+    c.alpha = entry.baseAlpha * k;
+    if (t >= 420 && entry.shrinkAt === null) {
+      entry.shrinkAt = -1; // marker: the walk-out has started
+      entry.person.setTarget(entry.targetX, entry.targetY);
+    }
+    if (t >= SUMMON_MS) {
+      // Reporting for duty: the sub-agent waves at whoever summoned it, who acknowledges.
+      entry.person.wave();
+      if (entry.parentId) entries.get(entry.parentId)?.person.emote("bang", 700);
+      entry.portal?.close();
+      entry.portal = null;
+      entry.shrinkAt = null;
+      c.scale.set(1);
+      c.alpha = entry.baseAlpha;
+      entry.transition = "ready";
+    }
+  }
+
+  /** Returns true once the sub-agent has vanished and can be destroyed. */
+  function updateDismiss(entry: PersonEntry): boolean {
+    const c = entry.person.container;
+    if (entry.shrinkAt === null) {
+      if (entry.person.isMoving && entry.transitionMs < 1_400) return false;
+      entry.shrinkAt = entry.transitionMs;
+    }
+    const k = Math.min(1, (entry.transitionMs - entry.shrinkAt) / 320);
+    c.scale.set(1 - 0.75 * k);
+    c.alpha = entry.baseAlpha * (1 - k);
+    if (k < 1) return false;
+    entry.portal?.close();
+    entry.portal = null;
+    return true;
+  }
+
+  const offFx = onFx((event) => {
+    if (event.type === "dispatch") playDispatch(event.workerId, clientToWorld(event.from.x, event.from.y));
+    else if (event.type === "deliverable") queueDelivery(event.workerId);
+    else if (event.type === "connection") setConnection(event.state);
+    else if (event.type === "system") playSystem(event.kind);
+  });
+
   app.ticker.add((ticker) => {
     const dt = ticker.deltaMS;
     elapsed += dt;
+
+    const fps = targetFps({ anyBusy, cameraMoving: director.active, sinceInputMs: performance.now() - lastInputAt });
+    if (ticker.maxFPS !== fps) ticker.maxFPS = fps;
+    const glide = director.step(dt, { x: panX, y: panY }, panToCenter);
+    if (glide) {
+      panX = glide.x;
+      panY = glide.y;
+      applyView();
+    }
 
     room.update(elapsed);
     furniture.update(elapsed);
@@ -569,6 +1868,26 @@ export async function createScene(
     particles.update(dt);
     updateSocial(dt);
     cat.update(elapsed, dt);
+    officeDecor.update(dt);
+    hotspots.update();
+    ripples.update(dt);
+    fx.update(dt);
+    shelf.update(dt);
+    updateDeliveries(dt);
+    updateFatigue(dt);
+    updateDragTimeout();
+    updateChores(dt);
+    updatePacing(dt);
+    updateErrands(dt);
+    updateRare(dt);
+    updateTalk(dt);
+    updateGreetings(dt);
+    updateCollabDocs(dt);
+    updateShake(dt);
+    party.update(dt);
+    updatePower();
+    power.update(dt);
+    cues.update(dt);
 
     // 日夜循環：每 30 秒對一次真實時間（跨過清晨/黃昏的分界時色調就會換）。
     daylightAccum += dt;
@@ -585,13 +1904,15 @@ export async function createScene(
       idleEmoteAccum = 0;
       idleEmoteNext = 9_000 + Math.random() * 9_000;
       const idlers = [...entries.values()].filter((entry) =>
-        entry.transition === "ready" && !entry.temporary && !entry.waiting &&
+        entry.transition === "ready" && !entry.temporary && !occupied(entry) &&
         entry.last !== null && entry.last.activity !== "working" && entry.last.activity !== "thinking" &&
-        entry.person.emoting === null,
+        entry.person.emoting === null && entry.person.acting === null && !entry.person.asleep,
       );
       if (idlers.length > 0) {
         const pick = idlers[Math.floor(Math.random() * idlers.length)];
-        const kind: EmoteKind = Math.random() < 0.15 ? "spark" : (Math.random() < 0.5 ? "coffee" : "chat");
+        // After 23:00 someone may hint it's bedtime.
+        const late = seasonal(officeNow()).lateNight && Math.random() < 0.35;
+        const kind: EmoteKind = late ? "moon" : Math.random() < 0.15 ? "spark" : (Math.random() < 0.5 ? "coffee" : "chat");
         pick.person.emote(kind, 2_400);
       }
     }
@@ -599,7 +1920,15 @@ export async function createScene(
     const positions: PersonScreenPos[] = [];
     for (const [id, entry] of entries) {
       entry.transitionMs += dt;
-      if (entry.transition === "entering") {
+      if (entry.transition === "entering" && entry.temporary) {
+        updateSummon(entry);
+      } else if (entry.transition === "removing" && entry.temporary) {
+        if (updateDismiss(entry)) {
+          entry.person.destroy();
+          entries.delete(id);
+          continue;
+        }
+      } else if (entry.transition === "entering") {
         const progress = Math.min(1, entry.transitionMs / PERSON_ENTER_MS);
         // Let the desk finish assembling before its owner walks in. The late
         // fade only softens the doorway edge; movement remains the main cue.
@@ -608,6 +1937,14 @@ export async function createScene(
         if (progress >= 1) {
           entry.transition = "ready";
           entry.person.container.alpha = entry.baseAlpha;
+        }
+      } else if (entry.transition === "removing" && entry.farewell) {
+        // Waves goodbye at their desk, then vanishes in a puff of smoke.
+        if (entry.person.farewellDone || entry.transitionMs > 3_000) {
+          particles.burst(entry.person.x, entry.person.y - 8, 0xc4ccdc, 10, 0.03);
+          entry.person.destroy();
+          entries.delete(id);
+          continue;
         }
       } else if (entry.transition === "removing") {
         const progress = Math.min(1, entry.transitionMs / PERSON_EXIT_MS);
@@ -620,22 +1957,58 @@ export async function createScene(
           continue;
         }
       }
-      if (entry.waiting && entry.transition === "ready" && !entry.temporary) {
-        // Keep the "?" bubble alive and pace nervously around the spot until
-        // the user resolves the approval.
-        entry.person.emote("question", 1_500);
-        entry.paceT += dt;
-        if (entry.paceT >= 1_400 && !entry.person.isMoving) {
-          entry.paceT = 0;
-          entry.paceDir = -entry.paceDir;
-          entry.person.setTarget(
-            Math.max(8, Math.min(ART_W - 8, entry.targetX + entry.paceDir * 6)),
-            entry.targetY,
-          );
-        }
-      } else if (entry.paceT !== 0) {
-        entry.paceT = 0;
+      if (entry.hold && elapsed >= entry.hold.until && entry.transition === "ready") releaseHold(id, entry);
+      if (entry.finaleAt !== null && elapsed >= entry.finaleAt) {
+        entry.finaleAt = null;
+        playFinale(entry);
       }
+      // Approval wait: hand up with "!" and hops. Owner decision ("?" card): the same raised
+      // hand holding a card, calmly — no hops, no alert, no impatience.
+      const asking = entry.asking && !entry.waiting && entry.transition === "ready" && !entry.temporary;
+      const raising = entry.waiting && entry.transition === "ready" && !entry.temporary;
+      entry.person.handRaised = raising || asking;
+      // Waiting on the owner for over a minute: foot tapping, watch checking.
+      if (!raising) entry.waitingSince = null;
+      else if (entry.waitingSince === null) entry.waitingSince = elapsed;
+      entry.person.impatient = raising && elapsed - (entry.waitingSince ?? elapsed) > 60_000;
+      // Heavy context use shows: droopy, eye bags, slower steps.
+      entry.person.tired = (entry.ctxPct ?? 0) >= 85;
+      if (raising) {
+        // Hand up, a pulsing amber "!", and a little "pick me" hop every
+        // couple of seconds until the user resolves the approval.
+        entry.person.emote("alert", 1_500);
+        entry.hopIn -= dt;
+        if (entry.hopIn <= 0 && !entry.person.isMoving) {
+          entry.hopIn = 1_800;
+          entry.person.hop();
+        }
+      } else {
+        entry.hopIn = 600;
+      }
+      // Level of detail: NPCs outside the viewport aren't drawn (they still move and tick).
+      const sx = world.position.x + entry.person.x * scale;
+      const sy = world.position.y + entry.person.y * scale;
+      const margin = 60 * scale;
+      entry.person.container.visible = sx > -margin && sx < app.screen.width + margin && sy > -margin && sy < app.screen.height + margin * 0.6;
+      entry.person.gaze = gazeFor(entry);
+      // Power cut: everybody nods off; they wake once the light over them is back on.
+      entry.person.snoreVisible = !power.dark;
+      if (power.isDown) {
+        if (entry.transition !== "removing") entry.person.asleep = true;
+      } else if (entry.person.asleep && power.lit(entry.person.x, entry.person.y)) {
+        if (entry.wakeAt === null) entry.wakeAt = elapsed + Math.random() * 450;
+        else if (elapsed >= entry.wakeAt) {
+          entry.wakeAt = null;
+          entry.person.wake();
+        }
+      }
+
+      // Long stretches of work: headphones on (after ~3 minutes).
+      const busy = entry.last?.activity === "working" || entry.last?.activity === "thinking";
+      if (!busy) entry.busySince = null;
+      else if (entry.busySince === null) entry.busySince = elapsed;
+      entry.person.deepFocus = busy && elapsed - (entry.busySince ?? elapsed) > 180_000;
+      trackHabits(entry, dt);
 
       entry.person.update(elapsed, dt);
 
@@ -660,6 +2033,7 @@ export async function createScene(
         y: world.position.y + (entry.person.y - 17) * scale,
         scale,
         opacity: entry.person.container.alpha,
+        ...(entry.person.meetingRow === "back" && !entry.person.isMoving ? { tagAbove: true } : {}),
       });
     }
     callbacks.onPositions(positions);
@@ -667,20 +2041,88 @@ export async function createScene(
 
   return {
     setWorkers(list: WorkerSceneState[]) {
+      anyBusy = list.some((worker) => worker.character.activity === "working" || worker.character.activity === "thinking");
       const permanentWorkers = list.filter((worker) => !worker.temporary);
-      homeSeats = personalDesks.setWorkers(permanentWorkers).seats;
+      const deskLayout = personalDesks.setWorkers(permanentWorkers);
+      homeSeats = deskLayout.seats;
+      power.lamps = officeLamps(deskLayout.departments);
+      if (deskLayout.floorHeight !== floorH) {
+        floorH = deskLayout.floorHeight;
+        room.setFloorHeight(floorH);
+        power.setArea({ x: 0, y: 0, w: ART_W, h: floorH });
+        party.setArea({ x: 0, y: 0, w: ART_W, h: floorH });
+        applyView();
+      }
       // 圓桌進行時（有 NPC 站到 meeting 會議桌），強制顯示會議桌，即使目前人數 >4。
-      officeDecor.setWorkerCount(permanentWorkers.length, list.some((w) => w.character.station === "meeting"));
+      const warRoomInSession = list.some((w) => w.character.station === "meeting");
+      officeDecor.setWorkerCount(permanentWorkers.length, warRoomInSession);
+      // 開會中：桌邊坐滿人，「作戰室」站名牌（文字＋底板）會跟名牌疊在一起——收起來，散會再放回。
+      furniture.setLabelHidden("meeting", warRoomInSession);
+      for (const label of labels) if (label.def.key === "meeting") label.text.visible = !warRoomInSession;
+      // Department mission step done → the team thumbs up; last step → everyone cheers.
+      const missionDiff = missionCheers(missionSeen, list);
+      missionSeen = missionDiff.seen;
+      if (!power.dark && performance.now() - linkUpAt >= 2_500) {
+        for (const cheer of missionDiff.cheers) {
+          for (const id of cheer.ids) {
+            const member = entries.get(id);
+            if (!member || member.transition !== "ready" || member.person.asleep) continue;
+            // Stage tier: a step (even the last one) is a thumbs up; the mission turning
+            // "completed" is the final tier and plays the finale (finalNonces) instead.
+            if (member.person.inFinale) continue;
+            if (REDUCE_MOTION_SCENE) member.person.emote(cheer.kind === "done" ? "spark" : "thumb", 1_500);
+            else {
+              member.person.thumbsUp();
+              if (cheer.kind === "done") member.person.emote("spark", 1_800);
+            }
+          }
+        }
+      }
+      // Crew diff. Only a worker that is genuinely new — the list has been
+      // stable for a few seconds, the link isn't down / just back, and it's
+      // one or two people rather than a whole re-snapshot — beams in; same
+      // gate for a farewell. Everything else keeps the quiet walk in / out.
+      const crewNow = performance.now();
+      if (crewBaselineAt === null && permanentWorkers.length > 0) crewBaselineAt = crewNow;
+      const crewSettled = crewBaselineAt !== null && crewNow - crewBaselineAt >= CREW_SETTLE_MS &&
+        !power.dark && crewNow - linkUpAt >= CREW_SETTLE_MS;
+      const unseen = permanentWorkers.filter((w) => !knownIds.has(w.id));
+      const arrivals = crewSettled && unseen.length <= MAX_ARRIVALS ? new Set(unseen.map((w) => w.id)) : new Set<string>();
+      for (const w of permanentWorkers) knownIds.add(w.id);
+      const listed = new Set(list.map((w) => w.id));
+      let leaving = 0;
+      for (const [id, entry] of entries) if (!entry.temporary && entry.transition !== "removing" && !listed.has(id)) leaving++;
+      const farewells = crewSettled && leaving <= MAX_DEPARTURES && permanentWorkers.length > 0;
+
       const seen = new Set<string>();
       let permanentIndex = 0;
       let temporaryIndex = 0;
+      // 會議桌座位要跨「常駐（作戰室成員）／臨時（子代理）」兩類共用一條序號——兩類各自從 0
+      // 起算的話，兩邊的 0 號都會坐到 MEETING_SEATS[0]，精靈完全疊在同一格。
+      let meetingIndex = 0;
+      // 工作站同理：用「在這一站的第幾位」排位，不用全隊序號——否則單獨一人也可能被推到標籤牌上。
+      const stationRank = new Map<StationKey, number>();
       for (const w of list) {
         const workerIndex = w.temporary ? temporaryIndex++ : permanentIndex++;
-        seen.add(w.id);
         let entry = entries.get(w.id);
-        const desiredSpot = standSpot(w.character.station, workerIndex, w.id);
+        // Workstation stickiness: a short trip "home" between tools is held at the station.
+        const shown = sceneCharacter(entry, w.character);
+        const station = shown.station;
+        let spotIndex = workerIndex;
+        if (station === "meeting") spotIndex = meetingIndex++;
+        else if (station !== "home") {
+          spotIndex = stationRank.get(station) ?? 0;
+          stationRank.set(station, spotIndex + 1);
+        }
+        seen.add(w.id);
+        const desiredSpot = standSpot(station, spotIndex, w.id);
         if (!entry) {
           const person = new Person(w.colorIndex);
+          person.trait = traitFor(w.id);
+          const look = hashId(w.id);
+          person.accessory = ACCESSORIES[(look >>> 8) % ACCESSORIES.length];
+          person.accessoryColor = [0xff5d73, 0x4de3ff, 0xffd166, 0x37d6a3, 0x9b7bff, 0xf29e4c, 0xff8fc8][(look >>> 16) % 7];
+          person.sunglasses = sessionFlag(`shades:${w.id}`);
           person.container.eventMode = "static";
           person.container.cursor = "pointer";
           person.container.hitArea = {
@@ -694,7 +2136,15 @@ export async function createScene(
           person.container.on("pointerup", (event) => {
             if (event.pointerId !== ppid) return;
             ppid = -1;
-            if (!isDragging()) callbacks.onSelect(w.selectId);
+            if (isDragging()) return;
+            const poked = entries.get(w.id);
+            if (poked) pokeEntry(poked);
+            // Alt+click is a poke only (no selection); a plain click selects as before and gets a reaction too.
+            if (event.altKey) return;
+            callbacks.onSelect(w.selectId);
+            // A hand-raising NPC also opens its pending approval (UI decides how).
+            const current = entries.get(w.id);
+            if (current?.waiting) emitFx({ type: "open-approval", workerId: w.selectId });
           });
           person.container.on("pointertap", (event) => {
             if (event.detail >= 2) callbacks.onOpen(w.selectId);
@@ -705,18 +2155,36 @@ export async function createScene(
           });
           person.container.on("pointerover", (event) => {
             overInteractive = true;
+            if (event.pointerType !== "touch") person.hovered = true;
             // Touch has no hover: a finger panning past an NPC — even one sitting
             // behind the task-log sheet, reached via the canvas's implicit pointer
             // capture — fired its card mid-swipe. Mouse hovers show the card; touch
             // users tap (pointertap above) to open the NPC instead.
             if (event.pointerType !== "touch") callbacks.onHover(w.temporary ? null : w.id);
+            // An idle NPC waves back at the mouse (rate-limited inside Person).
+            const current = entries.get(w.id);
+            if (event.pointerType === "mouse" && current && !current.temporary && !occupied(current) &&
+              current.transition === "ready" && current.last?.activity === "idle" && !current.person.isMoving) {
+              current.person.wave();
+            }
           });
           person.container.on("pointerout", (event) => {
             overInteractive = false;
+            person.hovered = false;
             if (event.pointerType !== "touch") callbacks.onHover(null);
           });
           world.addChild(person.container);
-          const entering = !w.temporary;
+          // A genuinely new teammate beams straight in at their seat.
+          const beamIn = arrivals.has(w.id);
+          const entering = !w.temporary && !beamIn;
+          // Sub-agents step out of a portal beside whoever summoned them.
+          const parentEntry = w.temporary ? entries.get(parentOf(w) ?? "") : undefined;
+          const summonFrom = parentEntry ?? null;
+          const summon = w.temporary && !REDUCE_MOTION_SCENE;
+          const spawn = summon
+            ? portalSpot(summonFrom ? { x: summonFrom.person.x, y: summonFrom.person.y } : desiredSpot,
+              (summonFrom ? summonFrom.person.x : desiredSpot.x) < ART_W / 2 ? 1 : -1)
+            : null;
           entry = {
             person,
             last: null,
@@ -725,25 +2193,77 @@ export async function createScene(
             avatarKind: "preset",
             avatarPresetId: "classic",
             temporary: w.temporary,
-            transition: entering ? "entering" : "ready",
+            transition: entering || summon ? "entering" : "ready",
             transitionMs: 0,
             baseAlpha: w.temporary ? 0.88 : 1,
             targetX: desiredSpot.x,
             targetY: desiredSpot.y,
             waiting: false,
-            paceT: 0,
-            paceDir: 1,
+            selectId: w.selectId,
+            hopIn: 600,
             strolling: false,
+            lastSuccessAt: 0,
+            lastHaloAt: 0,
+            ctxPct: null,
+            parentId: parentOf(w),
+            portal: null,
+            shrinkAt: null,
+            farewell: false,
+            wakeAt: null,
+            glanceUntil: 0,
+            glanceX: 0,
+            pokes: [],
+            pokeTotal: 0,
+            busySince: null,
+            errors: [],
+            chain: 0,
+            waitingSince: null,
+            toolWait: newToolWait(),
+            thinkMs: 0,
+            idleRunMs: 0,
+            streakBusyMs: 0,
+            replying: false,
+            asking: false,
+            failedUnseen: false,
+            hold: null,
+            rawChar: null,
+            finalSeen: null,
+            finalePending: false,
+            finaleAt: null,
           };
           entries.set(w.id, entry);
-          person.x = desiredSpot.x;
-          person.y = entering ? ART_H + 8 : desiredSpot.y;
+          if (beamIn) {
+            person.arrive();
+            for (let i = 0; i < 6; i++) particles.rise(desiredSpot.x, desiredSpot.y - 4, CYAN, 12);
+          }
+          person.x = spawn ? spawn.x : desiredSpot.x;
+          person.y = spawn ? spawn.y : entering ? floorH + 8 : desiredSpot.y;
           person.setTarget(person.x, person.y);
-          person.container.alpha = entering ? 0 : entry.baseAlpha;
+          person.container.alpha = entering || spawn ? 0 : entry.baseAlpha;
+          if (spawn) {
+            entry.portal = fx.openPortal(spawn.x, spawn.y);
+            person.container.scale.set(0.3);
+            if (summonFrom) fx.beam(chestOf(parentOf(w)!), () => ({ x: spawn.x, y: spawn.y - 9 }));
+          }
         } else if (entry.transition === "removing") {
           entry.transition = w.temporary ? "ready" : "entering";
           entry.transitionMs = 0;
           entry.person.container.eventMode = "static";
+          if (entry.farewell) {
+            // Changed their mind mid-goodbye: beam right back in.
+            entry.farewell = false;
+            entry.transition = "ready";
+            entry.person.arrive();
+          }
+          if (w.temporary) {
+            // Called back before vanishing: step out of the portal again.
+            entry.portal?.close();
+            entry.portal = null;
+            entry.shrinkAt = null;
+            entry.person.container.scale.set(1);
+            entry.person.container.alpha = entry.baseAlpha;
+            entry.person.setTarget(desiredSpot.x, desiredSpot.y);
+          }
         }
         entry.index = workerIndex;
         entry.targetX = desiredSpot.x;
@@ -761,12 +2281,35 @@ export async function createScene(
         }
         entry.person.active = w.active;
         entry.waiting = w.waiting;
-        if (!w.waiting && entry.person.emoting === "question") entry.person.emote("question", 0);
-        if (entry.last !== w.character) applyCharacter(entry, w.character, w.id);
+        entry.ctxPct = w.ctxPct ?? null;
+        if (entry.rawChar === null) entry.rawChar = w.character;
+        // 第二輪訊號：回覆中打字、舉「?」卡、未讀失敗（螢幕紅、不開螢幕保護）、協作握棒。
+        const asking = Boolean(w.asking) && !w.temporary;
+        if (asking && !entry.asking && entry.transition === "ready" && performance.now() - linkUpAt >= 2_500) {
+          trySay(entry, t("想請你決定一件事"));
+        }
+        entry.asking = asking;
+        entry.replying = Boolean(w.replying) && !w.temporary;
+        entry.failedUnseen = Boolean(w.failedUnseen);
+        entry.person.replying = entry.replying;
+        // A tool approval and a question at once: the approval ("!") is the one to answer first.
+        entry.person.asking = asking && !w.waiting;
+        entry.person.holdingBaton = w.handoffStage === "working" && w.collaborationRole === "target";
+        if (!w.waiting && entry.person.emoting === "alert") entry.person.emote("alert", 0);
+        // Final completion: a nonce we haven't seen before (the first update is the baseline).
+        const finals = finalTrigger(entry.finalSeen, w.temporary ? [] : w.finalNonces);
+        entry.finalSeen = finals.seen;
+        const finaleNow = finals.fresh && !power.dark && performance.now() - linkUpAt >= 2_500;
+        entry.finalePending = finaleNow;
+        if (finaleNow && entry.finaleAt === null) entry.finaleAt = elapsed + Math.random() * 260;
+        if (entry.last !== shown) applyCharacter(entry, shown, w.id);
+        entry.finalePending = false;
+        // 作戰室座位分前後排：前排背對鏡頭坐在桌前，後排坐在桌後面向鏡頭（person.ts 據此換姿勢）。
+        entry.person.meetingRow = station === "meeting" ? meetingSeat(spotIndex).row : null;
         // home 會持續回座位；meeting（作戰室圍桌）也要持續把 NPC 拉到會議桌邊——否則非 home 站點
         // 只有在「station 剛改變且已 ready」那一瞬間才會移動，剛建立的 NPC 還在 entering、錯過那瞬間
         // 就永遠不會走過去（這就是先前「沒有過去」的原因）。
-        if (entry.transition === "ready" && !entry.strolling && (w.character.station === "home" || w.character.station === "meeting")) {
+        if (entry.transition === "ready" && !entry.strolling && (station === "home" || station === "meeting")) {
           entry.person.setTarget(desiredSpot.x, desiredSpot.y);
         }
       }
@@ -778,7 +2321,23 @@ export async function createScene(
             entry.person.active = false;
             entry.person.container.eventMode = "none";
             callbacks.onHover(null);
-            entry.person.setTarget(entry.person.x, ART_H + 8);
+            if (entry.temporary && !REDUCE_MOTION_SCENE) {
+              // Walk back into a portal that opens right beside them.
+              const side = entry.person.x < ART_W / 2 ? -1 : 1;
+              const spot = portalSpot({ x: entry.person.x, y: entry.person.y - 3 }, side);
+              entry.portal?.close();
+              entry.portal = fx.openPortal(spot.x, spot.y);
+              entry.shrinkAt = null;
+              entry.person.setTarget(spot.x, spot.y);
+            } else if (entry.temporary) {
+              entry.shrinkAt = 0;
+            } else if (farewells && !entry.person.isMoving) {
+              entry.farewell = true;
+              entry.person.farewell();
+            } else {
+              entry.person.setTarget(entry.person.x, floorH + 8);
+            }
+            if (delivery?.entry === entry) endDelivery(false);
           }
         }
       }
@@ -788,6 +2347,14 @@ export async function createScene(
         if (!w.temporary && w.character.activity === "working") activeStations.add(w.character.station);
       }
       furniture.setActive(activeStations);
+      syncLinks(list);
+      // Baton passes: always track the stages, only play them once the crew has settled
+      // (not on load / reconnect, when old hand-offs would all replay at once).
+      const collabBatons = handoffBatons(handoffSeen, list);
+      handoffSeen = collabBatons.seen;
+      const stepBatons = missionBatons(missionStepSeen, list);
+      missionStepSeen = stepBatons.seen;
+      if (crewSettled) for (const pass of [...collabBatons.passes, ...stepBatons.passes]) passBaton(pass);
     },
     resize() {
       app.renderer.resize(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
@@ -802,7 +2369,45 @@ export async function createScene(
     setMilestone(level: number) {
       officeDecor.setMilestone(level);
     },
+    brainReset,
+    setQueue(id: string, items: readonly string[]) {
+      personalDesks.setQueue(id, items);
+    },
+    setTodayDone(count: number) {
+      room.setTodayCount(count);
+    },
+    setTodayFailures(byWorker: ReadonlyMap<string, number>) {
+      for (const [id, count] of byWorker) personalDesks.setFailures(id, count);
+    },
+    focusOn(id: string, anchor?: Pt) {
+      lastInputAt = performance.now();
+      director.focusOn(id, anchor);
+    },
+    follow(id: string, anchor?: Pt) {
+      lastInputAt = performance.now();
+      director.follow(id, anchor);
+    },
+    stopFollow() {
+      director.stopFollow();
+    },
+    followingId() {
+      return director.followingId();
+    },
     destroy() {
+      offFx();
+      app.canvas.removeEventListener("dragenter", onDragEnter);
+      app.canvas.removeEventListener("dragover", onDragOver);
+      app.canvas.removeEventListener("dragleave", onDragLeave);
+      app.canvas.removeEventListener("drop", onDrop);
+      app.canvas.removeEventListener("pointermove", onCanvasPointerMove);
+      app.canvas.removeEventListener("pointerleave", onCanvasPointerLeave);
+      fx.destroy();
+      power.destroy();
+      cues.destroy();
+      hotspots.destroy();
+      offKonami();
+      party.destroy();
+      ripples.destroy();
       app.renderer.off("resize", layout);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);

@@ -100,6 +100,9 @@ export type RunnerEvent =
   | { type: "tool_call_start"; id: string; name: string; input: unknown; at?: number }
   | { type: "tool_call_output_delta"; id: string; delta: string; at?: number }
   | { type: "tool_call_result"; id: string; output: unknown; isError: boolean; at?: number }
+  // 背景子代理（run_in_background）真正跑完：CLI 在回合之間送 system/task_notification，
+  // id＝當初開它的 Agent tool_use id。前端靠它把會議桌座位上的子代理收走。
+  | { type: "subagent_done"; id: string; at?: number }
   | { type: "approval_requested"; request: ApprovalRequest; at?: number }
   | { type: "approval_resolved"; id: string; decision: ApprovalDecision; at?: number }
   | {
@@ -128,5 +131,10 @@ export type RunnerEvent =
       // servers finish connecting, so it typically excludes their tools.
       builtinTools: string[];
     }
-  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; at?: number }
+  // notice: 純系統通知（換腦冷卻、排程自動繼續…）——只是要顯示在對話裡，並沒有真的送進 runner，
+  // 不會有 turn_end 來收尾。伺服器的「未完成回合」判定與前端的 busy/running 翻轉都必須跳過它，
+  // 否則通知會被誤判成掛著的回合（誤標中止、重啟後被當成 resumeCandidate 的任務原文）。
+  // system:true＝系統自動產生、非真人也非教練指示的訊息（換腦/LLM 交接/用量續跑等）。仍照常
+  // 顯示與驅動回合，但自動循環的教練「近期回合」彙整必須跳過它——否則會把交接摘要誤當工作結果診斷。
+  | { type: "user_message"; text: string; departmentFollowUpMissionId?: string; notice?: boolean; system?: boolean; at?: number; autopilotAsk?: boolean; askOptions?: string[]; autopilot?: boolean }
   | { type: "error"; message: string; at?: number };
