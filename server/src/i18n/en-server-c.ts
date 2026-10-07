@@ -355,6 +355,7 @@ export const enServerC: Record<string, string> = {
   "臨時 NPC 不能開自動循環": "Temporary NPCs cannot use autopilot",
   "⛔ 自動循環已停止：上一回合發生錯誤；處理後可再打開開關。": "⛔ Autopilot stopped: the last turn ended with an error; fix it and switch it back on.",
   "⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。": "⏹ Autopilot stopped because you pressed Stop. Switch it back on to continue.",
+  "⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。": "⏹ Autopilot stopped: the workspace moved to {path}, and the previous goal and plan belong to the old location. Switch it back on to continue in the new workspace.",
   "⛔ 自動循環已停止：此 NPC 處於⚡無限制模式（跳過所有審批），不給自動循環無人看管地驅動。審批改為「完全信任」或「安全」後可再打開開關。": "⛔ Autopilot stopped: this NPC is in ⚡ unrestricted mode (all approvals bypassed), which autopilot does not drive unattended. Set approvals back to Full trust or Safe, then switch it back on.",
   "此 NPC 處於⚡無限制模式（跳過所有審批），不能開自動循環；審批改為「完全信任」或「安全」後再開。": "This NPC is in ⚡ unrestricted mode (all approvals bypassed), so autopilot can't be turned on. Set approvals back to Full trust or Safe first.",
   "✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。": "✅ Autopilot reached its step limit and stopped. Switch it back on to continue.",

@@ -47,3 +47,16 @@ test("unrestricted (invincible) mode is refused at enable time and disarms the l
   assert.match(sweep, /unattendedForbidden: worker \? workerAutopilotForbidden\(worker\) : false/);
   assert.match(sweep, /action === "disable_unattended"/);
 });
+
+test("switching workspace disarms the loop, drops the old repo's plan, and voids in-flight decisions", () => {
+  const route = block('app.patch("/api/workers/:id/workspace"');
+  const reset = route.indexOf("reset: true");
+  const disarm = route.indexOf("disarmWorkerAutopilot(worker,");
+  assert.ok(disarm >= 0, "切換工作位置要撤掉個人自動循環");
+  assert.ok(reset >= 0 && reset < disarm, "註記要在 reset 廣播之後貼，否則前端重建時會把它清掉");
+  assert.match(route, /delete workerAutopilotPlans\[worker\.id\]/);
+  const advance = indexSource.slice(indexSource.indexOf("async function advanceWorkerAutopilot("), indexSource.indexOf("function sweepWorkerAutopilot("));
+  assert.match(advance, /worker\.runner\.workspacePath !== decisionWorkspace/);
+  // 決策期間的每個檢查點都要看位置有沒有換，而不是只看循環還在不在（可能已被重新打開）。
+  assert.doesNotMatch(advance, /if \(!workerAutopilotByWorker\.has\(worker\.id\) \|\| !workers\.has\(worker\.id\)\) return;/);
+});

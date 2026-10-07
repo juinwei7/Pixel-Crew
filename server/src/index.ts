@@ -6483,6 +6483,10 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
 async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAutopilotState): Promise<void> {
   if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
   workerAutopilotAdvancing.add(worker.id);
+  // 決策要跑上分鐘：期間 owner 可能關掉循環、刪掉 NPC，或把它搬到別的工作位置——搬走後這步是
+  // 針對舊 repo 想的，即使循環又被重新打開也不能送進新位置的 runner。
+  const decisionWorkspace = worker.runner.workspacePath;
+  const decisionStale = () => !workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id) || worker.runner.workspacePath !== decisionWorkspace;
   try {
     const runtime = resolveWorkerDecisionRuntime(worker);
     if ("error" in runtime) {
@@ -6562,7 +6566,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
           const repaired = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotRepairPrompt(prompt, failure), 150_000, { kind: "no_tools" }, workerHome)).text;
           decision = parseWorkerAutopilotDecision(repaired);
           if (!decision) {
-            if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+            if (decisionStale()) return;
             disableWorkerAutopilotWithNote(worker, t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: explainWorkerAutopilotFailure(repaired) ?? failure }));
             return;
           }
@@ -6570,7 +6574,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
       } catch (error) {
         // 一次失敗不熄火（比照 boss 層拔「失敗即停」）：登記退避，15s 保底掃描依退避重試；
         // 用量受限期間掃描端先探測、不消耗次數。連續用盡才停，且明確通知，不靜默。
-        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        if (decisionStale()) return;
         const firstFailure = !workerAutopilotRetry.get(worker.id);
         workerAutopilotRetry.note(worker.id, null, Date.now());
         if (firstFailure) {
@@ -6585,7 +6589,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
         return;
       }
       // 生成期間開關可能被關掉、NPC 可能被刪除——都不再動任何東西。
-      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+      if (decisionStale()) return;
       // 活計畫（支柱 A）：把教練回傳的更新後計畫併回並落盤（探索輪與定稿輪都併，跨回合不歸零）。
       if (decision.planUpdate !== undefined) {
         plan = mergeWorkerAutopilotPlan(plan, decision.planUpdate, plan.updatedRound + 1).plan;
@@ -6612,10 +6616,10 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
         finding = { query: decision.query, summary: t("（探索失敗：{error}）", { error: (error as Error).message }), confidence: "low", sources: [] };
       }
       findingsThisStep.push(finding);
-      if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+      if (decisionStale()) return;
     }
     const live = workerAutopilotByWorker.get(worker.id);
-    if (!live || !workers.has(worker.id)) return;
+    if (!live || decisionStale()) return;
     // 進步護欄：跟最近幾步實質相同的指示一律轉成誠實停止（機制三），不燒 NPC 的步數。
     if (decision) decision = workerAutopilotProgressGuard(decision, turns);
     // 計畫感知護欄（支柱 A 結構面）：用完整 tried 清單抓長程繞圈——第 N 回合又提早已試過的做法即停。
@@ -6628,7 +6632,7 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
       appendRuntimeLog(config.dataDirectory, "autopilot auto-pick", { worker: worker.runner.name, gate: decision.gate ?? null });
       try {
         const pickedText = (await runDetachedTurn(runtime.provider, worker.runner.workspacePath, decisionModel, undefined, null, workerAutopilotAutoPickPrompt(lastPrompt, decision.reason), 150_000, { kind: "no_tools" }, workerHome)).text;
-        if (!workerAutopilotByWorker.has(worker.id) || !workers.has(worker.id)) return;
+        if (decisionStale()) return;
         const picked = parseWorkerAutopilotDecision(pickedText);
         if (picked && picked.action !== "explore") {
           if (picked.planUpdate !== undefined) {
@@ -7994,8 +7998,12 @@ app.patch("/api/workers/:id/workspace", (req, res) => {
     broadcast({ type: "department_created", department: newDepartment });
     if (provider === "claude") void claudeCapabilitiesFor(workspacePath).refresh();
     else void codexCapabilitiesFor(workspacePath).refresh();
+    broadcast({ type: "worker_updated", worker: workerSummary(worker), reset: true });
+    // 個人自動循環的目標與活計畫都以舊 repo 為錨：搬到新位置後不能接著驅動它（進行中的決策也會因
+    // 位置變了而作廢，見 advanceWorkerAutopilot）。過往教訓（retros）是通用心法，留著。
+    disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：工作位置換到 {path}，原本的目標與計畫屬於舊位置。要在新位置繼續就重新打開開關。", { path: workspacePath }));
+    if (workerAutopilotPlans[worker.id]) { delete workerAutopilotPlans[worker.id]; workerAutopilotPlanStore.save(workerAutopilotPlans); }
     const summary = workerSummary(worker);
-    broadcast({ type: "worker_updated", worker: summary, reset: true });
     res.json({ ...summary, conversationReset });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message || t("無法使用這個工作位置") });
