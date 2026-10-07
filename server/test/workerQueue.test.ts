@@ -21,15 +21,19 @@ test("enqueue keeps FIFO order per worker and isolates workers", () => {
   });
 });
 
-test("dequeueFirstQueued pops the front and removes it; empty returns null", () => {
+// 回歸守衛：peek 不可以移除項目——送出失敗時那一則必須還留在佇列裡，
+// 不然使用者排的訊息連附件會永久消失（見 drainWorkerQueue）。
+test("peekFirstQueued returns the front without removing it; empty returns null", () => {
   withStore((store) => {
     store.enqueueCommand("a1", "w1", "first", [], []);
     store.enqueueCommand("a2", "w1", "second", [], []);
-    const popped = store.dequeueFirstQueued("w1");
-    assert.equal(popped?.message, "first");
-    assert.deepEqual(store.listQueue("w1").map((q) => q.message), ["second"]);
-    store.dequeueFirstQueued("w1");
-    assert.equal(store.dequeueFirstQueued("w1"), null);
+    assert.equal(store.peekFirstQueued("w1")?.message, "first");
+    assert.equal(store.peekFirstQueued("w1")?.message, "first");
+    assert.deepEqual(store.listQueue("w1").map((q) => q.message), ["first", "second"]);
+    store.removeQueueItem("w1", store.peekFirstQueued("w1")!.id);
+    assert.equal(store.peekFirstQueued("w1")?.message, "second");
+    store.removeQueueItem("w1", store.peekFirstQueued("w1")!.id);
+    assert.equal(store.peekFirstQueued("w1"), null);
   });
 });
 
@@ -41,7 +45,7 @@ test("images and documents round-trip through the queue as parsed arrays", () =>
     const item = store.listQueue("w1")[0];
     assert.deepEqual(item.images, images);
     assert.deepEqual(item.documents, documents);
-    const popped = store.dequeueFirstQueued("w1");
+    const popped = store.peekFirstQueued("w1");
     assert.deepEqual(popped?.images, images);
   });
 });

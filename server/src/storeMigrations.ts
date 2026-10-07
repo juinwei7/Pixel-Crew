@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { DatabaseMigration } from "./databaseMigrations.js";
+import { workspaceIdentity } from "./platform/paths.js";
 
 function tableSql(db: DatabaseSync, table: string): string {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql?: string } | undefined;
@@ -195,6 +196,36 @@ export const storeMigrations: readonly DatabaseMigration[] = [
     up: (db) => {
       addColumnIfMissing(db, "schedules", "interval_minutes INTEGER");
       addColumnIfMissing(db, "schedules", "last_run_at TEXT");
+    },
+  },
+  {
+    // 短命 worker（作戰室／研究員／專屬部門）的身分要能撐過重啟。原本只活在記憶體，
+    // 所以「專屬部門」為了 department_missions.boss_worker_id 外鍵而把成員寫進 workers
+    // 表之後，重啟就認不出它們是短命的——只能靠部門名稱前綴猜，使用者一改名就失效。
+    // null＝一般 NPC；有值＝短命工，不還原成 NPC、也不佔滿編名額。
+    version: 9,
+    name: "add-worker-ephemeral-kind",
+    up: (db) => addColumnIfMissing(db, "workers", "ephemeral_kind TEXT"),
+  },
+  {
+    // 以工作區為 key 的資料表先前是「寫入存真實大小寫、查詢轉小寫（win32）」，於是在
+    // Windows 上 exact-match 永遠撈不到——光磁碟機代號 C: 對 c: 就不同——部門任務日誌、
+    // 交辦清單、Mission 清單全空。寫入端已改成一律存正規化形式，這裡把既有資料列轉過去。
+    // 在非 win32 上正規化幾乎是恆等變換（僅收掉尾端分隔符之類），重跑也安全。
+    version: 10,
+    name: "normalize-workspace-path-keys",
+    up: (db) => {
+      for (const table of ["department_missions", "boss_tasks", "provider_checkpoints"]) {
+        const rows = db
+          .prepare(`SELECT DISTINCT workspace_path FROM ${table} WHERE workspace_path IS NOT NULL AND workspace_path != ''`)
+          .all() as Array<{ workspace_path: unknown }>;
+        const update = db.prepare(`UPDATE ${table} SET workspace_path = ? WHERE workspace_path = ?`);
+        for (const row of rows) {
+          const raw = String(row.workspace_path);
+          const key = workspaceIdentity(raw);
+          if (key !== raw) update.run(key, raw);
+        }
+      }
     },
   },
 ];
