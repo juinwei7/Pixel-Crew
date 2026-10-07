@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { evaluateAutoApproval } from "../src/dangerousCommand.js";
 import {
   composeConsultAsk,
   composeConsultDigest,
@@ -100,4 +101,11 @@ test("composeConsultDigest assembles replies, fallback text, and the skipped ros
 test("composeConsultDigest omits the skipped line when nobody was skipped", () => {
   const digest = composeConsultDigest("Q", [{ name: "A", text: "答" }], []);
   assert.doesNotMatch(digest, /未參與/);
+});
+
+test("the silent consult curl instruction auto-approves in full mode (cleanup must not trip the rm -f rule)", () => {
+  const section = composeConsultSection({ workerId: "lead", port: 8787, department: dept, workerName });
+  const step = section.split("\n").find((line) => line.startsWith("② "));
+  assert.ok(step);
+  assert.equal(evaluateAutoApproval("full", "Bash", step.slice(2)).allowed, true);
 });
