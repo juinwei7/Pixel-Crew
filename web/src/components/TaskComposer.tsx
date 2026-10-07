@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { composerTextareaHeight, insertVoiceTranscript, newClientMessageIdentity, shouldSubmitComposerKey } from "../composerCore";
-import { composerEnterAction, composerStatus, emptySubmitAction, restoreFailedDraft, shouldAutoFocusComposer, type ComposerSubmitSource } from "../commandInteraction";
+import { composerEnterAction, composerStatus, deferSubmitForVideo, emptySubmitAction, restoreFailedDraft, shouldAutoFocusComposer, videoAutoSendAction, type ComposerSubmitSource, type PendingVideoSend } from "../commandInteraction";
 import { Icon } from "./Icon";
 import {
   documentBadge,
@@ -148,32 +148,25 @@ export function TaskComposer({
   const serverQueueItems = serverQueue ?? [];
   const [draftValue, setDraftValue] = useComposerDraft(draftKey);
   const [failedFiles, setFailedFiles] = useState<File[]>([]);
-  const [videoProcessing, setVideoProcessing] = useState(false);
-  // 使用者在影片還在解析時按了送出：先記住，等解析完(videoProcessing 轉 false)自動送出，
-  // 這樣文字＋影片(影格＋字幕)會「一起」送，不會漏掉影片。
-  const [awaitingVideoSend, setAwaitingVideoSend] = useState(false);
-  // 解析中的影片檔名：一放進來就先冒一個「解析中」佔位晶片(閃爍)，解析完換成正式影片晶片。
-  const [processingVideoNames, setProcessingVideoNames] = useState<string[]>([]);
-  // 影片解析可並行（先丟一支、解析中再丟第二支/貼連結）：用計數器管 videoProcessing、
-  // 晶片按名稱增減——否則先完成的那批 finally 會把旗標整個關掉＋清光所有晶片，
-  // awaitingVideoSend 的自動送出會在第二支還沒解析完時就開火，影格與字幕全漏。
-  const videoJobsRef = useRef(0);
-  const beginVideoJob = (names: string[]) => {
-    videoJobsRef.current += 1;
-    setVideoProcessing(true);
-    setProcessingVideoNames((current) => [...current, ...names]);
+  // 解析中的影片，依 owner（哪位 NPC 的輸入框）分開記：一放進來就先冒一個「解析中」佔位晶片(閃爍)，
+  // 解析完換成正式影片晶片。影片解析可並行（先丟一支、解析中再丟第二支/貼連結）：每批各算一個 job——
+  // 否則先完成的那批會把旗標整個關掉＋清光所有晶片，自動送出會在第二支還沒解析完時就開火，影格與字幕全漏。
+  // dock 輸入框只有一個、切 NPC 不重掛：只看／只等目前這位 NPC 自己的影片。
+  const [videoJobs, setVideoJobs] = useState<Array<{ id: number; owner: string; names: string[] }>>([]);
+  const videoJobSeqRef = useRef(0);
+  const videoProcessing = videoJobs.some((job) => job.owner === draftKey);
+  const processingVideoNames = videoJobs.filter((job) => job.owner === draftKey).flatMap((job) => job.names);
+  // 使用者在影片還在解析時按了送出：記下是哪位 NPC 的，等他的影片都解析完自動送出，
+  // 這樣文字＋影片(影格＋字幕)會「一起」送，不會漏掉影片。切走、按中止或解析失敗就取消（見 videoAutoSendAction）。
+  const [pendingVideoSend, setPendingVideoSend] = useState<PendingVideoSend | null>(null);
+  const beginVideoJob = (owner: string, names: string[]): number => {
+    const id = ++videoJobSeqRef.current;
+    setVideoJobs((jobs) => [...jobs, { id, owner, names }]);
+    return id;
   };
-  const endVideoJob = (names: string[]) => {
-    videoJobsRef.current = Math.max(0, videoJobsRef.current - 1);
-    if (videoJobsRef.current === 0) setVideoProcessing(false);
-    setProcessingVideoNames((current) => {
-      const remove = [...names];
-      return current.filter((name) => {
-        const index = remove.indexOf(name);
-        if (index >= 0) { remove.splice(index, 1); return false; }
-        return true;
-      });
-    });
+  const endVideoJob = (id: number, owner: string, failed: boolean) => {
+    setVideoJobs((jobs) => jobs.filter((job) => job.id !== id));
+    if (failed) setPendingVideoSend((pending) => pending?.owner === owner ? { ...pending, failed: true } : pending);
   };
   const {
     images, setImages, documents, setDocuments, queued, setQueued, error, setError,
@@ -371,14 +364,23 @@ export function TaskComposer({
     }
   }
 
+  // 影片解析失敗的錯誤顯示在它那位 NPC 的輸入框：使用者已切走就記進那位的快取，不灌進眼前這個。
+  function reportVideoError(owner: string, message: string) {
+    if (persistExtras && ownerRef.current !== owner) {
+      updateCachedSession(owner, (session) => ({ ...session, error: message }));
+      return;
+    }
+    setError(message);
+  }
+
   // 影片：Claude 不吃影片，交給 server 抽關鍵影格＋whisper 轉音訊字幕，回來的影格當圖片、
   // 字幕接進草稿。逐個處理、顯示「處理影片中…」。影格受圖片上限（MAX_IMAGES）截斷。
   async function processVideos(videoFiles: File[], owner: string) {
-    const jobNames = videoFiles.map((file) => file.name);
-    beginVideoJob(jobNames);
+    const job = beginVideoJob(owner, videoFiles.map((file) => file.name));
+    let failed = false;
     try {
     for (const file of videoFiles) {
-      if (file.size > MAX_VIDEO_BYTES) { setError(t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
+      if (file.size > MAX_VIDEO_BYTES) { failed = true; reportVideoError(owner, t("影片不可超過 {mb} MB", { mb: Math.round(MAX_VIDEO_BYTES / 1024 / 1024) })); continue; }
       try {
         const form = new FormData();
         form.append("video", file, file.name);
@@ -390,11 +392,12 @@ export function TaskComposer({
         const data = await response.json() as VideoAnalysisResult;
         await applyVideoResult(data, file.name, owner);
       } catch (videoError) {
-        setError(videoError instanceof Error ? videoError.message : t("影片處理失敗"));
+        failed = true;
+        reportVideoError(owner, videoError instanceof Error ? videoError.message : t("影片處理失敗"));
       }
     }
     } finally {
-      endVideoJob(jobNames);
+      endVideoJob(job, owner, failed);
     }
   }
 
@@ -403,7 +406,8 @@ export function TaskComposer({
   async function processVideoLink(url: string) {
     const owner = ownerRef.current;
     const label = t("連結影片");
-    beginVideoJob([label]);
+    const job = beginVideoJob(owner, [label]);
+    let failed = false;
     try {
       const response = await fetch("/api/video/from-link", {
         method: "POST",
@@ -417,9 +421,10 @@ export function TaskComposer({
       const data = await response.json() as VideoAnalysisResult;
       await applyVideoResult(data, label, owner);
     } catch (linkError) {
-      setError(linkError instanceof Error ? linkError.message : t("影片下載失敗"));
+      failed = true;
+      reportVideoError(owner, linkError instanceof Error ? linkError.message : t("影片下載失敗"));
     } finally {
-      endVideoJob([label]);
+      endVideoJob(job, owner, failed);
     }
   }
 
@@ -491,14 +496,20 @@ export function TaskComposer({
   async function submit(source: ComposerSubmitSource = "button") {
     if (disabled || switchingSession || submittingRef.current) return;
     if (palette?.open) return;
-    // 影片還在解析：不要現在送（會漏掉影格/字幕）。記下來，解析完由 effect 自動送出。
-    if (videoProcessing) { setAwaitingVideoSend(true); return; }
     const text = draftValue.trim();
+    const empty = !text && images.length === 0 && documents.length === 0;
+    // 影片還在解析：不要現在送（會漏掉影格/字幕）。記下是哪位 NPC 的，解析完由 effect 自動送出。
+    // NPC 忙碌、輸入框空白時按的「中止」鈕不在此列——照常往下走去中止。
+    if (deferSubmitForVideo(videoProcessing, source, queueEnabled && busy && empty)) { setPendingVideoSend({ owner: draftKey, failed: false }); return; }
     if (queueEnabled && busy) {
-      if (!text && images.length === 0 && documents.length === 0) {
+      if (empty) {
         // 空白送出＝中止任務，只認「中止」鈕：空白 Enter（太快連按兩下、或手指只是碰到
         // Enter）一律不動作，不會把正在跑的任務砍掉。按鈕剛送出後的短時間內也忽略。
-        if (emptySubmitAction(source, Date.now() - lastSubmitAtRef.current, INTERRUPT_GUARD_MS) === "interrupt") onInterrupt?.();
+        // 中止時一併取消等著影片解析完的自動送出。
+        if (emptySubmitAction(source, Date.now() - lastSubmitAtRef.current, INTERRUPT_GUARD_MS) === "interrupt") {
+          setPendingVideoSend(null);
+          onInterrupt?.();
+        }
         return;
       }
       const queueLength = useServerQueue ? serverQueueItems.length : queued.length;
@@ -540,7 +551,7 @@ export function TaskComposer({
       return;
     }
     if (working) return;
-    if (!text && images.length === 0 && documents.length === 0) return;
+    if (empty) return;
     submittingRef.current = true;
     lastSubmitAtRef.current = Date.now();
     const owner = ownerRef.current;
@@ -580,15 +591,19 @@ export function TaskComposer({
     setError(null);
   }
 
-  // 影片解析完成後，若使用者稍早按過送出（awaitingVideoSend），就用當前(已含影格/字幕)的
+  // 影片解析完成後，若使用者稍早按過送出（pendingVideoSend），就用當前(已含影格/字幕)的
   // 狀態自動送出。放在 effect 裡，才讀得到解析後最新的 images/documents（避免 stale closure）。
+  // 只送給按下送出的那位 NPC：已切到別人就取消；有影片解析失敗也取消——草稿與錯誤都留著，
+  // 不把文字單獨送出去、也不把錯誤洗掉。
+  const videoSendAction = videoAutoSendAction(pendingVideoSend, draftKey, videoProcessing);
+  const awaitingVideoSend = videoSendAction === "wait";
   useEffect(() => {
-    if (videoProcessing || !awaitingVideoSend) return;
-    setAwaitingVideoSend(false);
-    void submit("auto");
-    // submit 是每次 render 重建的函式；此處刻意只依賴這兩個狀態，觸發時會捕捉到最新 submit。
+    if (videoSendAction === "none" || videoSendAction === "wait") return;
+    setPendingVideoSend(null);
+    if (videoSendAction === "send") void submit("auto");
+    // submit 是每次 render 重建的函式；此處刻意只依賴決策結果，觸發時會捕捉到最新 submit。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoProcessing, awaitingVideoSend]);
+  }, [videoSendAction]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const isComposing = composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229;

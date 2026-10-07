@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { composerStatus, emptySubmitAction, restoreFailedDraft, shouldAutoFocusComposer } from "../src/commandInteraction";
+import { composerStatus, deferSubmitForVideo, emptySubmitAction, restoreFailedDraft, shouldAutoFocusComposer, videoAutoSendAction } from "../src/commandInteraction";
 import { mergeFailed, TaskComposer } from "../src/components/TaskComposer";
 import { groupDeliverables, QuestLog, RENDER_CHUNK, shouldLoadEarlier, type TurnDeliverable } from "../src/components/QuestLog";
 import { isRichTextReady, RichText, streamRenderDelay, STREAM_RENDER_INTERVAL_MS } from "../src/components/RichText";
@@ -15,6 +15,28 @@ test("an empty Enter never interrupts a running task; only the stop button does"
   assert.equal(emptySubmitAction("button", 60_000), "interrupt");
   // 剛送出就連點：按鈕也先忽略，避免誤砍剛派出的任務。
   assert.equal(emptySubmitAction("button", 200), "ignore");
+});
+
+// ── 1b. 影片解析中的送出 ─────────────────────────────────────────────────
+test("sending while a video is processing waits for it, but the stop button still stops", () => {
+  assert.equal(deferSubmitForVideo(true, "enter", false), true);
+  assert.equal(deferSubmitForVideo(true, "button", false), true);
+  // NPC 忙碌、輸入框空白：按鈕是「中止」，不能被吞成「解析完自動送出」。
+  assert.equal(deferSubmitForVideo(true, "button", true), false);
+  assert.equal(deferSubmitForVideo(true, "enter", true), true);
+  assert.equal(deferSubmitForVideo(false, "button", false), false);
+});
+
+test("the deferred video send only fires for the NPC it was requested for, and never after a failed video", () => {
+  assert.equal(videoAutoSendAction(null, "npc-a", false), "none");
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: false }, "npc-a", true), "wait");
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: false }, "npc-a", false), "send");
+  // 切到別的 NPC：輸入框只有一個，送出去會是別人的草稿——取消。
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: false }, "npc-b", false), "cancel");
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: false }, "npc-b", true), "cancel");
+  // 影片解析失敗：不把文字單獨送出，草稿與錯誤留著。
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: true }, "npc-a", false), "cancel");
+  assert.equal(videoAutoSendAction({ owner: "npc-a", failed: true }, "npc-a", true), "cancel");
 });
 
 // ── 2. 手機不自動聚焦 ────────────────────────────────────────────────────

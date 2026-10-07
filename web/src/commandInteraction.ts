@@ -90,6 +90,28 @@ export function emptySubmitAction(source: ComposerSubmitSource, msSinceLastSubmi
 }
 
 /**
+ * 影片還在解析時按下送出：記下是哪位 NPC（owner＝輸入框的 session）要「解析完自動送出」。
+ * failed＝等待期間他的影片解析失敗——不能把文字單獨送出（影片會漏掉），草稿與錯誤留給使用者決定。
+ */
+export type PendingVideoSend = { owner: string; failed: boolean };
+
+/** 影片解析中按送出要不要先記下、等解析完再送。例外是 NPC 忙碌、輸入框空白時按的「中止」鈕：那是要中止任務，不能被吞掉。 */
+export function deferSubmitForVideo(processing: boolean, source: ComposerSubmitSource, canInterrupt: boolean): boolean {
+  return processing && !(source === "button" && canInterrupt);
+}
+
+/**
+ * 等著的自動送出現在該怎麼辦（owner＝輸入框目前對應的 NPC，processing＝他的影片還在解析）：
+ * 已切到別的 NPC、或影片解析失敗就取消（輸入框只有一個，送出去的會是別人的草稿／只有文字）；
+ * 還在解析就繼續等；都解析完才送。
+ */
+export function videoAutoSendAction(pending: PendingVideoSend | null, owner: string, processing: boolean): "none" | "wait" | "send" | "cancel" {
+  if (!pending) return "none";
+  if (pending.owner !== owner || pending.failed) return "cancel";
+  return processing ? "wait" : "send";
+}
+
+/**
  * 送出失敗時把原文放回輸入框。使用者在等待回應期間又打了新字時，不能用
  * 失敗的原文蓋掉、也不能丟掉原文：原文放前面、新打的接在後面。
  */
