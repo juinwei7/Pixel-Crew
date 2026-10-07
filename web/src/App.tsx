@@ -40,6 +40,7 @@ import { t } from "./i18n";
 import type { ApprovalDecision, DepartmentMission, WorkerState } from "./types";
 
 import { diffNeedsYouNotifications, diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
+import { latestTaskTurn } from "./workerState";
 import { nextNeedsYou, type NeedsYouItem, type NeedsYouKind } from "./needsYou";
 import { useNeedsYou } from "./hooks/useNeedsYou";
 import { useEventCallbacks, useStableBy } from "./hooks/useStable";
@@ -1018,7 +1019,7 @@ export function App() {
       const [kind, workerId] = event.tag.split(":");
       if (kind !== "turn" || !workerId) continue;
       const worker = workerList.find((item) => item.id === workerId);
-      if (worker?.turns[worker.turns.length - 1]?.status === "done") celebrateWorker(workerId);
+      if (worker && latestTaskTurn(worker.turns)?.status === "done") celebrateWorker(workerId);
     }
     if (!preferences.notificationsEnabled || !events.length) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;

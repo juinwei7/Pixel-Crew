@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyRunnerEvent, emptyWorker } from "../src/workerState";
+import { applyRunnerEvent, emptyWorker, latestTaskTurn } from "../src/workerState";
 
 function startedWorker() {
   return applyRunnerEvent(
@@ -251,4 +251,39 @@ test("keeps department follow-up Mission metadata on the visible worker turn", (
   );
   assert.equal(worker.turns[0].departmentFollowUpMissionId, "mission-1");
   assert.equal(worker.turns[0].command, "部門追問：為什麼採用這個方案？");
+});
+
+test("a notice recorded mid-turn neither steals the turn's output nor leaves it running", () => {
+  // 自動循環：送出 🔁 這步後教練緊接著補一則 🪜 進度通知，NPC 的輸出才陸續回來。
+  let state = applyRunnerEvent(emptyWorker("w", "測試員", null, false, 0, "claude", "/repo"), { type: "user_message", text: "🔁（自動循環）補測試" });
+  state = applyRunnerEvent(state, { type: "user_message", text: "🪜 第 2 階：補測試", notice: true });
+  state = applyRunnerEvent(state, { type: "text_delta", text: "測試已補上" });
+  state = applyRunnerEvent(state, { type: "turn_end", resultText: "測試已補上", costUsd: 0, durationMs: 10, isError: false, permissionDenials: [] });
+
+  assert.deepEqual(state.turns.map((turn) => [turn.command, turn.status]), [["🪜 第 2 階：補測試", "done"], ["🔁（自動循環）補測試", "done"]]);
+  assert.equal(state.turns[0].notice, true);
+  assert.deepEqual(state.turns[0].items, [], "通知卡不會被接上輸出");
+  assert.deepEqual(state.turns[1].items.map((item) => item.kind === "assistant_text" ? item.text : item.kind), ["測試已補上"]);
+  assert.equal(state.busy, false);
+});
+
+test("a notice after a failed turn stays visible but is not the latest task", () => {
+  let state = applyRunnerEvent(startedWorker(), { type: "turn_end", resultText: "爆了", costUsd: 0, durationMs: 10, isError: true, permissionDenials: [] });
+  state = applyRunnerEvent(state, { type: "user_message", text: "⛔ 自動循環已停止：上一回合發生錯誤", notice: true });
+
+  assert.equal(state.turns.length, 2);
+  assert.equal(state.turns[1].command, "⛔ 自動循環已停止：上一回合發生錯誤");
+  assert.equal(state.turns[1].notice, true);
+  assert.equal(latestTaskTurn(state.turns)?.key, state.turns[0].key);
+  assert.equal(latestTaskTurn(state.turns)?.status, "error");
+});
+
+test("late output after a trailing notice resumes the task turn and keeps it last", () => {
+  let state = applyRunnerEvent(startedWorker(), { type: "turn_end", resultText: "", costUsd: 0, durationMs: 10, isError: false, permissionDenials: [] });
+  state = applyRunnerEvent(state, { type: "user_message", text: "🎯 自動循環目標已改為：上線", notice: true });
+  state = applyRunnerEvent(state, { type: "text_delta", text: "背景工作完成" });
+
+  assert.deepEqual(state.turns.map((turn) => [turn.command, turn.status]), [["🎯 自動循環目標已改為：上線", "done"], ["執行任務", "running"]]);
+  assert.deepEqual(state.turns[0].items, []);
+  assert.equal(state.busy, true);
 });

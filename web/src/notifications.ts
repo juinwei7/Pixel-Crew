@@ -1,6 +1,7 @@
 import { t } from "./i18n";
 import { pendingApproval, type NeedsYouItem } from "./needsYou";
 import type { WorkerState } from "./types";
+import { latestTaskTurn } from "./workerState";
 
 export type WorkerSnapshot = {
   busy: boolean;
@@ -39,7 +40,8 @@ export function diffNotifications(prev: Map<string, WorkerSnapshot>, workers: Wo
   for (const worker of workers) {
     const before = prev.get(worker.id);
     if (!before) continue; // first sight of this worker — establish baseline only
-    const last = worker.turns[worker.turns.length - 1];
+    // 跳過純通知回合：失敗回合後緊跟一則「循環已停止」之類的通知（status done）時，不能報成「完成任務」。
+    const last = latestTaskTurn(worker.turns);
 
     // 待核准的判斷跟頂欄／隊員列同一份（needsYou.pendingApproval）。
     const approval = pendingApproval(worker);

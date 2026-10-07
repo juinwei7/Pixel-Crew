@@ -103,6 +103,9 @@ export type Turn = {
   // askOptions 是從停止理由抽出的 A/B/C／甲乙丙丁 一鍵回答選項（可能為空＝只有敘述沒有選項）。
   autopilotAsk?: boolean;
   askOptions?: string[];
+  // notice:true＝純系統通知回合（循環進度、循環停止、撞到用量上限…）：只顯示，不是任務——
+  // 判斷「最近一件任務完成／失敗了沒」要跳過它（見 workerState.latestTaskTurn）。
+  notice?: boolean;
   // 跨 NPC 檢視（全部搜尋）才會帶：這筆回合屬於哪位 NPC。一鍵回答要發回「發問的那位」而不是
   // 當前選取的 NPC，否則在全部搜尋裡回答會誤送到別人。單一 NPC 日誌裡不帶＝沿用當前 NPC。
   workerId?: string;

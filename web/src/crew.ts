@@ -3,11 +3,12 @@ import type { CrewFilter } from "./uiPreferences";
 import { roomName } from "./workspace";
 import { t } from "./i18n";
 import { pendingApproval } from "./needsYou";
+import { latestTaskTurn } from "./workerState";
 
 export type WorkerAttention = "approval" | "error" | "working" | "done" | "idle";
 
 export function workerAttention(worker: WorkerState): WorkerAttention {
-  const last = worker.turns[worker.turns.length - 1];
+  const last = latestTaskTurn(worker.turns);
   if (pendingApproval(worker)) return "approval";
   if (last?.status === "error") return "error";
   if (worker.busy) return "working";

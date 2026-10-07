@@ -30,6 +30,7 @@ test("latestErrorTurnKey: last real turn failing, skipping system and autopilot-
   assert.equal(latestErrorTurnKey(worker({ turns: [turn("a", "error"), turn("b", "done")] })), null);
   assert.equal(latestErrorTurnKey(worker({ turns: [turn("a", "error"), turn("sys", "done", { system: true })] })), "a");
   assert.equal(latestErrorTurnKey(worker({ turns: [turn("a", "error"), turn("ask", "done", { autopilotAsk: true, items: [] })] })), "a");
+  assert.equal(latestErrorTurnKey(worker({ turns: [turn("a", "error"), turn("stop", "done", { notice: true, items: [] })] })), "a");
   // 重試中（最新回合在跑）就不算失敗。
   assert.equal(latestErrorTurnKey(worker({ turns: [turn("a", "error"), turn("b", "running")] })), null);
   assert.equal(latestErrorTurnKey(worker()), null);
