@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { followWarroomTicket, type WarroomTicketView } from "../src/warroomQueue";
 
@@ -69,4 +70,11 @@ test("gives up after the overall deadline", async () => {
   const outcome = await followWarroomTicket(h.fetchTicket, { ...h.options, deadlineMs: 10_000, intervalMs: 3_000 });
   assert.deepEqual(outcome, { kind: "failed", error: "timeout" });
   assert.ok(h.clock() >= 9_000);
+});
+
+test("the dock composer doesn't wait for a War Room (or its queue) before accepting the next send", () => {
+  // 輸入框在 onSubmit 回來前會擋下所有 NPC 的送出；作戰室開會／排隊可能等上幾十分鐘，只能丟到背景追。
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /await launchWarroom\(command\.text\)/);
+  assert.match(app, /if \(warroomRunning\) return t\("作戰室討論中，請等這場結束…"\);\s*void launchWarroom\(command\.text\);\s*return null;/);
 });
