@@ -2,7 +2,7 @@
 // 所以工作目錄不乾淨就不能自裝，放行時也要把檢查過的 HEAD 交給重建腳本複驗。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -77,6 +77,38 @@ test("a committed change to the trigger itself needs the owner", () => {
     git(repo, "commit", "-q", "-m", "touch the trigger");
     const result = triggerSelfInstall({ repo, dataDirectory, reason: "manual", log: silent, launch: () => assert.fail("must not launch") });
     assert.equal(result.outcome, "needs_owner");
+  });
+});
+
+test("files git treats as binary are still scanned — .gitattributes can't hide a brake change", () => {
+  withRepo((repo, dataDirectory) => {
+    // 屬性在更早的 commit 就放進來（不在這次範圍內），之後的改動只剩內容比對擋得住。
+    writeFileSync(join(repo, ".gitattributes"), "*.ts binary\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "attrs");
+    writeFileSync(join(repo, "notes.ts"), "export const n = () => evaluateAutoApproval;\n");
+    git(repo, "commit", "-q", "-am", "sneaky");
+    const result = triggerSelfInstall({ repo, dataDirectory, reason: "manual", log: silent, launch: () => assert.fail("must not launch") });
+    assert.equal(result.outcome, "needs_owner", JSON.stringify(result));
+    assert.match(result.detail ?? "", /核准/);
+  });
+});
+
+test("a UTF-16 source file or a symlink can't slip past the keyword scan", () => {
+  withRepo((repo, dataDirectory) => {
+    writeFileSync(join(repo, "wide.ts"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("export const x = 1;\n", "utf16le")]));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "wide");
+    const wide = triggerSelfInstall({ repo, dataDirectory, reason: "manual", log: silent, launch: () => assert.fail("must not launch") });
+    assert.equal(wide.outcome, "needs_owner", JSON.stringify(wide));
+  });
+  if (process.platform === "win32") return; // symlink 需要特權，Windows CI 不測這半
+  withRepo((repo, dataDirectory) => {
+    symlinkSync("/tmp/outside.ts", join(repo, "shim.ts"));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "link");
+    const link = triggerSelfInstall({ repo, dataDirectory, reason: "manual", log: silent, launch: () => assert.fail("must not launch") });
+    assert.equal(link.outcome, "needs_owner", JSON.stringify(link));
   });
 });
 

@@ -2,7 +2,7 @@
 // 「只動非安全部分＝可自裝」，且不變量保守（寧可多攔）。這是讓自部署不變自毀的命根。
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifySelfChange, describeSelfChangeBlock } from "../src/selfEvolveSafety.js";
+import { classifySelfChange, describeSelfChangeBlock, findUnscannableDiffFiles } from "../src/selfEvolveSafety.js";
 
 test("動到保護機制檔案 → critical（不看內容）", () => {
   for (const f of [
@@ -21,6 +21,9 @@ test("動到保護機制檔案 → critical（不看內容）", () => {
     "scripts/windows/pc-selfinstall.ps1",
     "server/src/localAccess.ts",
     "_tsproxy.mjs",
+    "windows/PixelCrewController/Program.cs",
+    ".gitattributes",
+    "server/.gitattributes",
   ]) {
     const r = classifySelfChange([f]);
     assert.equal(r.critical, true, `應 critical：${f}`);
@@ -86,4 +89,43 @@ test("describeSelfChangeBlock：critical 給一行理由、非 critical 空字�
 test("空輸入安全（不崩、非 critical）", () => {
   assert.equal(classifySelfChange([]).critical, false);
   assert.equal(classifySelfChange(["", "   "]).critical, false);
+});
+
+const section = (file: string, body: string, extraHeader = "") =>
+  `diff --git a/${file} b/${file}\n${extraHeader}--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n${body}`;
+
+test("內容行剛好長得像「+++ 」「--- 」標頭也照掃（++i／--i 開頭的程式行不能藏剎車改動）", () => {
+  assert.equal(classifySelfChange(["server/src/x.ts"], section("server/src/x.ts", "+++ i; evaluateAutoApproval = () => true;\n")).critical, true);
+  assert.equal(classifySelfChange(["server/src/x.ts"], section("server/src/x.ts", "--- n; // 回滾 guard removed\n")).critical, true);
+});
+
+test("改 build/test/package 指令（全綠才出貨的那道關）→ critical；只升級套件不擋", () => {
+  const scripts = section("server/package.json", '-    "test": "tsx --test test/**/*.test.ts",\n+    "test": "exit 0",\n');
+  assert.equal(classifySelfChange(["server/package.json"], scripts).critical, true);
+  const bump = section("server/package.json", '-    "express": "^4.21.0",\n+    "express": "^4.21.2",\n');
+  assert.equal(classifySelfChange(["server/package.json"], bump).critical, false);
+});
+
+test("拿掉只准綁 loopback 的檢查 → critical", () => {
+  assert.equal(classifySelfChange(["server/src/config.ts"], section("server/src/config.ts", "-if (!isLoopbackHost(configuredHost)) {\n")).critical, true);
+});
+
+test("比對不到內容的改動 → critical：UTF-16 程式檔、symlink、submodule；圖片等二進位資產不擋", () => {
+  const utf16 = section("server/src/x.ts", `+${Buffer.from("SelfInstall()", "utf16le").toString("latin1")}\n`);
+  assert.deepEqual(findUnscannableDiffFiles(utf16), ["server/src/x.ts"]);
+  assert.equal(classifySelfChange(["server/src/x.ts"], utf16).critical, true);
+
+  const png = section("assets/icons/a.png", "+\u0089PNG\u0000\u0000\u0000\rIHDR\n");
+  assert.deepEqual(findUnscannableDiffFiles(png), []);
+  assert.equal(classifySelfChange(["assets/icons/a.png"], png).critical, false);
+
+  const link = "diff --git a/server/src/shim.ts b/server/src/shim.ts\nnew file mode 120000\nindex 0000000..1234567\n--- /dev/null\n+++ b/server/src/shim.ts\n@@ -0,0 +1 @@\n+/tmp/outside.ts\n\\ No newline at end of file\n";
+  assert.deepEqual(findUnscannableDiffFiles(link), ["server/src/shim.ts"]);
+  const retarget = "diff --git a/server/src/shim.ts b/server/src/shim.ts\nindex 1234567..89abcde 120000\n--- a/server/src/shim.ts\n+++ b/server/src/shim.ts\n@@ -1 +1 @@\n-a.ts\n+/tmp/b.ts\n";
+  assert.deepEqual(findUnscannableDiffFiles(retarget), ["server/src/shim.ts"]);
+  const submodule = "diff --git a/vendor/x b/vendor/x\nnew file mode 160000\nindex 0000000..1234567\n--- /dev/null\n+++ b/vendor/x\n@@ -0,0 +1 @@\n+Subproject commit 1234567\n";
+  assert.equal(classifySelfChange(["vendor/x"], submodule).critical, true);
+
+  // 一般文字檔、一般權限變更不受影響
+  assert.deepEqual(findUnscannableDiffFiles(section("server/src/y.ts", "-a\n+b\n", "old mode 100644\nnew mode 100755\n")), []);
 });

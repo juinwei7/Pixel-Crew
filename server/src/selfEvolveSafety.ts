@@ -32,6 +32,10 @@ const SAFETY_CRITICAL_PATHS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /pc-selfinstall/i, reason: "自我安裝腳本（健康檢查＋自動回滾）" },
   { pattern: /(^|[\\/])localAccess\.ts$/i, reason: "本機存取白名單（loopback 安全邊界）" },
   { pattern: /(^|[\\/])_tsproxy\.mjs$/i, reason: "遠端存取轉接站（登入與分享權限）" },
+  // 單檔安裝器：新版換入與「回滾＝重跑上一版安裝器」都靠它，改壞了下一次回滾就救不回。
+  { pattern: /(^|[\\/])PixelCrewController[\\/]Program\.cs$/i, reason: "Windows 單檔安裝器（換入新版／回滾都靠它）" },
+  // git 屬性能把檔案標成二進位／-diff／改用別的 diff driver，讓下面的內容比對看不到改了什麼。
+  { pattern: /(^|[\\/])\.gitattributes$/i, reason: "git 屬性（可讓剎車比對看不到檔案內容）" },
 ];
 
 // 這些檔是進化引擎會合法演進的（例如循環邏輯、主程式），不整檔封鎖；但若 diff 觸及其中的
@@ -47,6 +51,10 @@ const SAFETY_RULE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /STOP only for what you genuinely cannot settle|money.{0,4}irreversible|不可逆/i, reason: "改動循環 STOP／花錢不可逆守則" },
   { pattern: /four[\s-]?件套|四件套|SWAPPED OK/i, reason: "改動冷安裝自驗四件套" },
   { pattern: /SelfInstall|self-install|SELF_REPO/, reason: "改動自裝觸發器／開機晉升接線" },
+  // package.json 的 build/test/package 指令就是 pc-selfrebuild「全綠才出貨」實際跑的東西，
+  // 改成什麼都不測也會全綠。
+  { pattern: /^[+-]\s*"(?:build|test|package)"\s*:/m, reason: "改動 build/test/package 指令（全綠才出貨的那道關）" },
+  { pattern: /isLoopbackHost/, reason: "改動只准綁 loopback 的限制（本機存取安全邊界）" },
 ];
 
 function norm(file: string): string {
@@ -56,13 +64,21 @@ function norm(file: string): string {
 // 只掃真正改動的行（+ 新增／- 刪除），不掃 unified diff 的上下文行：上下文是沒動的舊碼，
 // 例如某行舊註解剛好寫著「失敗回滾」，會讓純前端改動被誤判成動到剎車。刪掉剎車規則一定
 // 出現在 - 行、偷加一定出現在 + 行，所以這樣不會放過任何真的改動。
+// 「--- a/x」「+++ b/x」只在每段的標頭區（diff --git 到第一個 @@ 之間）才是檔名標頭；不能用
+// 前綴判斷——新增一行「++ i; evaluateAutoApproval()」在 diff 裡就長成「+++ i; …」，照前綴
+// 濾掉等於整行沒掃。
 // 不像 unified diff（沒有 diff --git／@@ 標頭）的輸入維持整段掃，寧可多攔。
 function changedDiffLines(diffText: string): string {
   const lines = diffText.split(/\r?\n/);
   if (!lines.some((line) => line.startsWith("@@") || line.startsWith("diff --git"))) return diffText;
-  return lines
-    .filter((line) => (line.startsWith("+") && !line.startsWith("+++ ")) || (line.startsWith("-") && !line.startsWith("--- ")))
-    .join("\n");
+  const kept: string[] = [];
+  let inHeader = true;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) { inHeader = true; continue; }
+    if (inHeader) { if (line.startsWith("@@")) inHeader = false; continue; }
+    if (line.startsWith("+") || line.startsWith("-")) kept.push(line);
+  }
+  return kept.join("\n");
 }
 
 // 純文件檔：diff 內容不參與剎車關鍵字比對（只看上面的檔名規則）。2026-10 實際誤擋：4135377 只改
@@ -122,6 +138,43 @@ export function stripDocOnlyDiffSections(diffText: string): string {
   return kept.join("\n");
 }
 
+// 二進位資產（圖片／字型／3D 模型／音訊…）用 diff --text 會吐出含 NUL 的原始位元組，屬正常；
+// 它們不會被當程式執行，不因 NUL 擋下。
+const BINARY_ASSET_EXT = /\.(png|jpe?g|gif|webp|avif|ico|icns|bmp|tiff?|glb|woff2?|ttf|otf|eot|mp3|wav|ogg|m4a|mp4|webm|mov|pdf|zip|gz|tgz)$/i;
+const LINK_MODE_LINE = /^(?:new file mode|new mode) 1[26]0000$|^index [0-9a-f]+\.\.[0-9a-f]+ 1[26]0000$/;
+
+/**
+ * 找出內容騙得過剎車關鍵字比對的改動檔（回傳路徑；認不出路徑時回 "(diff)"）：
+ * - 改動行含 NUL：UTF-16 之類的編碼把每個字拆開（S\0e\0l\0f\0…），關鍵字永遠比對不到，
+ *   tsc／PowerShell 卻照樣讀得懂。二進位資產除外。
+ * - 新增或改指向的 symlink（mode 120000）／submodule（160000）：diff 只看得到指向的路徑，
+ *   真正會被 build 進去的內容在 commit 之外，閘門看不到。
+ */
+export function findUnscannableDiffFiles(diffText: string): string[] {
+  const lines = diffText.split(/\r?\n/);
+  if (!lines.some((line) => line.startsWith("diff --git "))) return diffText.includes("\u0000") ? ["(diff)"] : [];
+  const found = new Set<string>();
+  let paths: string[] | null = null;
+  let file = "(diff)";
+  let inHeader = true;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      paths = diffHeaderPaths(line);
+      file = paths ? paths[1].replace(/^[^/]*\//, "") : "(diff)";
+      inHeader = true;
+      continue;
+    }
+    if (inHeader) {
+      if (line.startsWith("@@")) inHeader = false;
+      else if (LINK_MODE_LINE.test(line)) found.add(file);
+      continue;
+    }
+    if ((line.startsWith("+") || line.startsWith("-")) && line.includes("\u0000")
+      && !(paths && paths.every((p) => BINARY_ASSET_EXT.test(p)))) found.add(file);
+  }
+  return [...found];
+}
+
 /**
  * 判斷一組自改是否動到安全網。
  * - changedFiles：這次自改會動到的檔案路徑清單。
@@ -147,9 +200,13 @@ export function classifySelfChange(changedFiles: readonly string[], diffText?: s
   }
 
   if (typeof diffText === "string" && diffText) {
-    const scanned = changedDiffLines(stripDocOnlyDiffSections(diffText));
+    const withoutDocs = stripDocOnlyDiffSections(diffText);
+    const scanned = changedDiffLines(withoutDocs);
     for (const { pattern, reason } of SAFETY_RULE_PATTERNS) {
       if (pattern.test(scanned)) add("(diff)", reason);
+    }
+    for (const file of findUnscannableDiffFiles(withoutDocs)) {
+      add(file, "內容無法做剎車比對（NUL／UTF-16 編碼、symlink 或 submodule）");
     }
   }
 

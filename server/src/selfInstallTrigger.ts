@@ -57,11 +57,13 @@ function recordAttemptedCommit(dataDirectory: string, commit: string): void {
 
 // 單一 commit 對其第一個 parent 的改動（root commit 對空樹）。--no-renames：改名拆成刪＋增，舊檔名
 // (例如 toolPolicy.ts 被改名走)也會出現在清單裡被檔名規則看到。取不到 diff → null（呼叫端保守處理）。
+// --text／--no-textconv：.gitattributes 標成 binary／-diff 的檔，git 預設只印「Binary files differ」，
+// 使用者 git 設定裡的 textconv driver 也會把內容換掉——兩者都會讓剎車關鍵字比對看不到真正改了什麼。
 const SELF_INSTALL_MAX_COMMITS = 200;
 function readSelfInstallCommit(repo: string, commit: string): SelfChangeCommit | null {
   const parents = gitOut(repo, ["rev-list", "--parents", "-n", "1", commit]).trim().split(/\s+/).slice(1);
   const base = parents[0] || "4b825dc642cb6eb9a060e54bf8d69288fbee4904"; // git 空樹
-  const common = ["-c", "core.quotepath=false", "diff", "--no-renames", "--no-color", "--no-ext-diff"];
+  const common = ["-c", "core.quotepath=false", "diff", "--no-renames", "--no-color", "--no-ext-diff", "--text", "--no-textconv"];
   const changedFiles = gitOut(repo, [...common, "--name-only", base, commit]).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const diffText = gitOut(repo, [...common, base, commit]);
   if (changedFiles.length && !diffText) return null;
