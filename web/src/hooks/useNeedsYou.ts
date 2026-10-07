@@ -10,6 +10,7 @@ import {
   type ProgressMap,
 } from "../needsYou";
 import type { WorkerState } from "../types";
+import { latestTaskTurn } from "../workerState";
 
 /** 卡住偵測的時鐘：有人在跑時每 30 秒重算一次，沒人在跑就不跑計時器。 */
 const STUCK_TICK_MS = 30_000;
@@ -30,7 +31,8 @@ export type NeedsYouState = {
 export function useNeedsYou(workers: WorkerState[], activeId: string | null, viewing: boolean): NeedsYouState {
   const [seenTurnKeys, setSeenTurnKeys] = useState<Record<string, string | null>>({});
   const active = activeId ? workers.find((worker) => worker.id === activeId) : undefined;
-  const activeLastKey = active?.turns[active.turns.length - 1]?.key ?? null;
+  // 記「最近一個任務回合」：失敗回合後緊跟一則通知時，看過的是那個失敗回合，不是通知。
+  const activeLastKey = active ? latestTaskTurn(active.turns)?.key ?? null : null;
   const activeBusy = Boolean(active?.busy);
   useEffect(() => {
     if (!viewing || !activeId || !activeLastKey || activeBusy) return;

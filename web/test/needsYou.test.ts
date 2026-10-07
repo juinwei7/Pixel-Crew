@@ -59,6 +59,19 @@ test("seen failures and questions drop out; decisions and approvals stay until r
   assert.deepEqual(kinds, ["approval", "decision"]);
 });
 
+test("a notice after a failed turn doesn't hide the failure from needs-you or crew attention", () => {
+  const stopped = worker("st", { turns: [turn("t1", "error", []), turn("n1", "done", [], { notice: true, command: "⛔ 自動循環已停止" })] });
+  const [item] = collectNeedsYou([stopped]);
+  assert.equal(item?.kind, "failed");
+  assert.equal(item?.turnKey, "t1");
+  assert.equal(item?.key, "failed:st:t1");
+  assert.equal(collectNeedsYou([stopped], { seenTurnKeys: { st: "t1" } }).length, 0);
+  assert.equal(workerAttention(stopped), "error");
+  // 循環問你通知本身仍是「要你拍板」。
+  const asked = worker("as", { turns: [turn("t1", "error", []), turn("n1", "done", [], { notice: true, autopilotAsk: true })] });
+  assert.equal(collectNeedsYou([asked])[0]?.kind, "decision");
+});
+
 test("ephemeral NPCs only surface approvals", () => {
   const temp = worker("tmp", { ephemeralKind: "warroom", turns: [turn("t1", "error", [])] });
   const tempApproval = { ...approving, id: "tmp2", ephemeralKind: "research" as const };

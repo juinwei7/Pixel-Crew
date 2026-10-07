@@ -65,6 +65,19 @@ test("busy→idle transition notifies task completion or failure by turn status"
   assert.equal(diffNotifications(snap([busy]), [busy]).length, 0);
 });
 
+test("a notice right after a failed turn still reports the failure, not a completion", () => {
+  const busy = emptyWorker("w1", "小助手", null, true, 0, "claude", "/repo");
+  const stopped = {
+    ...emptyWorker("w1", "小助手", null, false, 0, "claude", "/repo"),
+    turns: [doneTurn("error"), { key: "notice-1", command: "⛔ 自動循環已停止：上一回合發生錯誤", status: "done", items: [], notice: true } satisfies Turn],
+  };
+  const events = diffNotifications(snap([busy]), [stopped]);
+  assert.equal(events.length, 1);
+  assert.match(events[0].title, /任務失敗/);
+  assert.equal(events[0].tag, "turn:w1:turn-1");
+  assert.equal(events[0].body, "跑測試");
+});
+
 test("first sight of a worker only establishes a baseline", () => {
   const withApproval = { ...emptyWorker("w1", "小助手", null, true, 0, "claude", "/repo"), turns: [approvalTurn("a-1")] };
   assert.equal(diffNotifications(new Map(), [withApproval]).length, 0);

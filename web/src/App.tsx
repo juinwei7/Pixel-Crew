@@ -40,6 +40,7 @@ import { t } from "./i18n";
 import type { ApprovalDecision, DepartmentMission, WorkerState } from "./types";
 
 import { diffNeedsYouNotifications, diffNotifications, snapshotWorker, type WorkerSnapshot } from "./notifications";
+import { latestTaskTurn } from "./workerState";
 import { nextNeedsYou, type NeedsYouItem, type NeedsYouKind } from "./needsYou";
 import { useNeedsYou } from "./hooks/useNeedsYou";
 import { useEventCallbacks, useStableBy } from "./hooks/useStable";
@@ -1018,7 +1019,7 @@ export function App() {
       const [kind, workerId] = event.tag.split(":");
       if (kind !== "turn" || !workerId) continue;
       const worker = workerList.find((item) => item.id === workerId);
-      if (worker?.turns[worker.turns.length - 1]?.status === "done") celebrateWorker(workerId);
+      if (worker && latestTaskTurn(worker.turns)?.status === "done") celebrateWorker(workerId);
     }
     if (!preferences.notificationsEnabled || !events.length) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;
@@ -2111,7 +2112,10 @@ export function App() {
           if (submissionMode !== "warroom") return send(activeId, command);
           // 作戰室：呼叫後端 orchestrator——會自動冒出 3 個短命角色 NPC（ephemeralKind: "warroom"）走到會議桌，兩輪辯論（表態→反駁）、
           // 主持用較強模型裁決，跑完自動散會刪除。回傳結構化裁決顯示在結果卡。過程幾分鐘，畫面上看得到。
-          await launchWarroom(command.text);
+          // 不 await：開會（席位不足還要排隊）可能等上幾十分鐘，輸入框在 onSubmit 回來前會擋下所有 NPC
+          // 的送出。進度由 warroomRunning／warroomQueued 的狀態列另外追；已有一場在跑就把草稿退回。
+          if (warroomRunning) return t("作戰室討論中，請等這場結束…");
+          void launchWarroom(command.text);
           return null;
         }}
         onInterrupt={() => {

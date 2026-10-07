@@ -150,6 +150,15 @@ export function emptyWorker(
   };
 }
 
+/** 最近一個任務回合（跳過純通知回合）。「循環已停止」「撞到用量上限」這類通知常緊跟在失敗回合之後，它們不是任務：
+ *  判斷「剛完成還是失敗」（桌面通知、彩帶、需要你、隊員狀態）都看這個，不能看末尾那筆。 */
+export function latestTaskTurn(turns: readonly Turn[]): Turn | undefined {
+  for (let index = turns.length - 1; index >= 0; index--) {
+    if (!turns[index].notice) return turns[index];
+  }
+  return undefined;
+}
+
 /** Pure reducer — snapshot restore just replays the event history. */
 export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerState {
   const next: WorkerState = {
@@ -170,10 +179,18 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
   const currentOrResumedTurn = (): Turn | null => {
     const running = currentTurn();
     if (running) return running;
-    const last = next.turns[next.turns.length - 1];
+    // 末尾的純通知回合不是任務：往前找最後一個任務回合接續（全是通知才退回接續最後一筆），
+    // 並把它移到最後——執行中的回合永遠排在末尾，輸出與 turn_end 才落得回它身上。
+    let index = next.turns.length - 1;
+    for (let candidate = index; candidate >= 0; candidate--) {
+      if (!next.turns[candidate].notice) { index = candidate; break; }
+    }
+    const last = next.turns[index];
     if (!last || last.status !== "done") return null;
     const resumed: Turn = { ...last, status: "running", items: [...last.items] };
-    next.turns[next.turns.length - 1] = resumed;
+    delete resumed.notice;
+    next.turns.splice(index, 1);
+    next.turns.push(resumed);
     next.busy = true;
     return resumed;
   };
@@ -192,13 +209,19 @@ export function applyRunnerEvent(w: WorkerState, event: RunnerEvent): WorkerStat
       // notice：純系統通知，沒有真的送進 runner、不會有 turn_end 收尾——顯示成已結束的訊息即可，
       // 不能開一個 running turn 或翻 busy（否則通知會讓 NPC 看起來在忙、之後又被誤標成中止）。
       if (event.notice) {
-        next.turns.push({
+        const notice: Turn = {
           key: nextKey(),
           command: event.text,
           status: "done",
           items: [],
+          notice: true,
           ...(event.autopilotAsk ? { autopilotAsk: true, askOptions: event.askOptions ?? [] } : {}),
-        });
+        };
+        // 有回合正在跑（例如自動循環剛送出這一步、教練緊接著補一則階梯進度通知）：通知插在它
+        // 前面，執行中的回合留在末尾——否則後續輸出會被接到通知卡上、turn_end 收掉的也是通知，
+        // 真正那一步永遠停在「執行中」（重整重播也一樣）。
+        if (next.turns[next.turns.length - 1]?.status === "running") next.turns.splice(next.turns.length - 1, 0, notice);
+        else next.turns.push(notice);
         break;
       }
       next.turns.push({

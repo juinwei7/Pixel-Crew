@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { HOLD_CONFIRM_MS, holdOutcome } from "../uxMotion";
+import { HOLD_CONFIRM_MS, holdKeyAction, holdOutcome } from "../uxMotion";
 import { Modal } from "./Modal";
 import { t } from "../i18n";
 
@@ -91,7 +91,12 @@ function HoldConfirmButton({ onConfirm }: { onConfirm(): void }) {
         onPointerUp={release}
         onPointerLeave={release}
         onPointerCancel={release}
-        onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !event.repeat) { event.preventDefault(); start(); } }}
+        onKeyDown={(event) => {
+          const action = holdKeyAction(event.key, event.repeat);
+          if (action === "ignore") return;
+          event.preventDefault();
+          if (action === "start") start();
+        }}
         onKeyUp={(event) => { if (event.key === "Enter" || event.key === " ") release(); }}
         onClick={() => {
           if (performance.now() - lastInputAt.current > 400 && !done.current) { done.current = true; onConfirm(); }

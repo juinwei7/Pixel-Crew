@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { attentionSummary, holdOutcome, HOLD_CONFIRM_MS, logContentCount, shortcutLabel, takeShortcutHint, trackUnseen } from "../src/uxMotion";
+import { attentionSummary, holdKeyAction, holdOutcome, HOLD_CONFIRM_MS, logContentCount, shortcutLabel, takeShortcutHint, trackUnseen } from "../src/uxMotion";
 import { emptyWorker } from "../src/workerState";
 import { ConfirmDialog } from "../src/components/ConfirmDialog";
 import { PanelSkeleton } from "../src/components/BuildMoment";
@@ -60,6 +60,16 @@ test("shortcut hints map to the real shortcuts and show once per action", () => 
 test("hold-to-confirm only confirms after the full hold", () => {
   assert.equal(holdOutcome(HOLD_CONFIRM_MS - 1), "too-short");
   assert.equal(holdOutcome(HOLD_CONFIRM_MS), "confirm");
+});
+
+test("holding Enter/Space starts the hold once and swallows key auto-repeat", () => {
+  assert.equal(holdKeyAction("Enter", false), "start");
+  assert.equal(holdKeyAction(" ", false), "start");
+  // 自動重複的 keydown 要擋預設動作（否則每次都對按鈕觸發 click，提早確認），但不重新計時。
+  assert.equal(holdKeyAction("Enter", true), "swallow");
+  assert.equal(holdKeyAction(" ", true), "swallow");
+  assert.equal(holdKeyAction("Tab", false), "ignore");
+  assert.equal(holdKeyAction("Escape", true), "ignore");
 });
 
 test("danger confirmations become hold-to-confirm; normal ones stay a plain click", () => {

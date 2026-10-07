@@ -36,11 +36,11 @@ export function unansweredAutopilotAsk(worker: Pick<WorkerState, "turns">): bool
   return worker.turns[worker.turns.length - 1]?.autopilotAsk === true;
 }
 
-/** 最近一個真實回合（跳過系統回合與循環問你通知）若是失敗，回它的 key；否則 null。 */
+/** 最近一個真實回合（跳過系統回合與通知回合）若是失敗，回它的 key；否則 null。 */
 export function latestErrorTurnKey(worker: Pick<WorkerState, "turns">): string | null {
   for (let i = worker.turns.length - 1; i >= 0; i--) {
     const turn: Turn = worker.turns[i];
-    if (turn.system || turn.autopilotAsk) continue;
+    if (turn.system || turn.notice || turn.autopilotAsk) continue;
     return turn.status === "error" ? turn.key : null;
   }
   return null;
@@ -107,11 +107,11 @@ export function missionStepOf(mission: DepartmentMission | null | undefined): Sc
   };
 }
 
-/** 最近一個真實回合（跳過系統回合與循環問你通知）。 */
+/** 最近一個真實回合（跳過系統回合與通知回合）。 */
 function latestRealTurn(worker: Pick<WorkerState, "turns">): Turn | null {
   for (let i = worker.turns.length - 1; i >= 0; i--) {
     const turn = worker.turns[i];
-    if (turn.system || turn.autopilotAsk) continue;
+    if (turn.system || turn.notice || turn.autopilotAsk) continue;
     return turn;
   }
   return null;

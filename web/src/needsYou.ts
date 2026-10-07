@@ -2,6 +2,7 @@
 // 都從這裡拿同一份排序好的清單，不再各自用不同條件判斷「誰在等你」。
 // 全部是純函式：不碰 DOM、不送請求、不讀時鐘（now 由呼叫端傳進來）。
 import type { ApprovalItem, Turn, WorkerState } from "./types";
+import { latestTaskTurn } from "./workerState";
 
 /** 需要你處理的種類，依優先序排列（越前面越急）。
  *  - approval：工具呼叫卡在等你核准，NPC 停住了。
@@ -102,14 +103,17 @@ export function workerNeedsYou(worker: WorkerState, options: CollectNeedsYouOpti
     if (last.autopilotAsk) {
       return { ...base, key: `decision:${worker.id}:${last.key}`, kind: "decision", detail: oneLine(lastAssistantText(last) || last.command) };
     }
-    if (last.status === "error" && seen !== last.key) {
-      return { ...base, key: `failed:${worker.id}:${last.key}`, kind: "failed", detail: oneLine(last.command) };
+    // 失敗／提問看最近一個任務回合：失敗後緊跟的「循環已停止」「撞到用量上限」通知不能把「失敗」蓋掉。
+    const task = latestTaskTurn(worker.turns);
+    if (!task) return null;
+    if (task.status === "error" && seen !== task.key) {
+      return { ...base, turnKey: task.key, key: `failed:${worker.id}:${task.key}`, kind: "failed", detail: oneLine(task.command) };
     }
-    if (last.status === "done" && seen !== last.key) {
-      const text = lastAssistantText(last);
+    if (task.status === "done" && seen !== task.key) {
+      const text = lastAssistantText(task);
       if (text && endsWithQuestion(text)) {
         const lines = text.trim().split(/\n+/).filter((line) => line.trim());
-        return { ...base, key: `question:${worker.id}:${last.key}`, kind: "question", detail: oneLine(lines[lines.length - 1] ?? text) };
+        return { ...base, turnKey: task.key, key: `question:${worker.id}:${task.key}`, kind: "question", detail: oneLine(lines[lines.length - 1] ?? text) };
       }
     }
     return null;
