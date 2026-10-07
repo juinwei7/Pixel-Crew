@@ -76,3 +76,15 @@ test("autopilot stand-in answers and auto-resolve write to the re-read task, not
   assert.match(disable, /store\.getBossTask\(task\.id\)/);
   assert.doesNotMatch(disable, /persistBossTask\(task\)/);
 });
+
+test("a malformed next-step reply is retried once and never labelled a normal finish", () => {
+  const advance = block("async function advanceAutopilot(", "app.get(\"/api/autopilot\"");
+  assert.match(advance, /decideWithFormatRepair\(/);
+  // 正常結束只留給模型明確選 stop；格式失敗走失敗文案。
+  assert.doesNotMatch(advance, /!decision \|\| decision\.action === "stop"/);
+  assert.match(advance, /autopilotFormatFailureNote\(parsed\.failure\)/);
+  for (const name of ["autoAnswerBossTask", "autoResolveBossTask"]) {
+    const body = block(`async function ${name}(`, name === "autoAnswerBossTask" ? "async function autoResolveBossTask(" : "async function advanceAutopilot(");
+    assert.match(body, /decideWithFormatRepair\(/, `${name} 要有格式修復重問`);
+  }
+});

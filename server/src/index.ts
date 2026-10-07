@@ -200,6 +200,8 @@ import {
   autopilotNextPrompt,
   clampAutopilotSteps,
   clampAutopilotMinutes,
+  decideWithFormatRepair,
+  explainAutopilotFailure,
   parseAutopilotDecision,
   type AutopilotHistoryEntry,
 } from "./autopilot.js";
@@ -207,6 +209,8 @@ import {
   AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
   autopilotAnswerPrompt,
   autopilotResolvePrompt,
+  explainAutopilotAnswerFailure,
+  explainAutopilotResolveFailure,
   parseAutopilotAnswerDecision,
   parseAutopilotResolveDecision,
 } from "./autopilotResolve.js";
@@ -5998,6 +6002,16 @@ function autopilotHook(task: BossTask): void {
   void advanceAutopilot(task, state);
 }
 
+// 自動循環的決策呼叫（不用工具、150s 上限）；格式修復重問也走同一條。
+function autopilotDecisionRunner(provider: ProviderId, workspacePath: string, model: string | null): (prompt: string) => Promise<string> {
+  return async (prompt) => (await runDetachedTurn(provider, workspacePath, model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
+}
+
+// 格式修了一次仍壞：誠實標成失敗（不是正常結束），附上最後一次被拒的原因。
+function autopilotFormatFailureNote(failure: string): string {
+  return t("⛔ 自動循環已停止：決策模型連續兩次未能給出有效的下一步格式（{error}）。", { error: failure });
+}
+
 // 自動接手代答：決策模型在 discovery 問了 clarification、老闆不在時，讓幕僚長用安全
 // 有界的假設代答（例如問題給了「先出範本版」的退路就選它），代答後重新跑決策；
 // 真的需要老闆本人的資訊（實體資料、憑證、不可逆決定）就停下等人。
@@ -6021,10 +6035,15 @@ async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<voi
       attemptNumber: attempts + 1,
       maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
     });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, task.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotAnswerDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_answer",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotAnswerDecision,
+        explain: explainAutopilotAnswerFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
@@ -6035,8 +6054,13 @@ async function autoAnswerBossTask(task: BossTask, attempts: number): Promise<voi
     // 後續變更全掛在重讀的版本上——舊快照整列寫回會蓋掉期間的回覆／取消，刪掉的交辦還會復活。
     const live = store.getBossTask(task.id);
     if (!pendingQuestionUnchanged(task, live)) return;
-    if (!decision || decision.action === "wait") {
-      const reason = decision?.action === "wait" ? decision.reason : "";
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
       disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : t("⛔ 自動循環已停止：上一個交辦需要你處理或未成功；接手後可再打開開關。"));
@@ -6102,10 +6126,15 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
       attemptNumber: attempts + 1,
       maxAttempts: AUTOPILOT_RESOLVE_MAX_ATTEMPTS,
     });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, task.workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotResolveDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_resolve",
+        run: autopilotDecisionRunner(runtime.provider, task.workspacePath, runtime.model),
+        parse: parseAutopilotResolveDecision,
+        explain: explainAutopilotResolveFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(task, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
@@ -6118,8 +6147,13 @@ async function autoResolveBossTask(task: BossTask, attempts: number): Promise<vo
     if (!snapshotStillCurrent(task.status, live)) return;
     const liveMission = activeMissions.get(mission.id) ?? store.getDepartmentMission(mission.id);
     if (!liveMission || liveMission.status !== "needs_attention") return;
-    if (!decision || decision.action === "wait") {
-      const reason = decision?.action === "wait" ? decision.reason : "";
+    if (!parsed.ok) {
+      disableAutopilotWithNote(live, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "wait") {
+      const reason = decision.reason;
       disableAutopilotWithNote(live, reason
         ? t("⛔ 自動循環已停止：{reason}；接手後可再打開開關。", { reason })
         : stopNote);
@@ -6178,16 +6212,27 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
       .slice(-8)
       .map((item) => ({ objective: item.objective, report: item.finalReport ? collaborationText(item.finalReport, 600) : undefined }));
     const prompt = autopilotNextPrompt({ workspaceLabel: autopilotWorkspaceLabel(workspacePath), history, stepsRemaining: state.stepsRemaining - 1 });
-    let decision;
+    let parsed;
     try {
-      const text = (await runDetachedTurn(runtime.provider, workspacePath, runtime.model, undefined, null, prompt, 150_000, { kind: "no_tools" })).text;
-      decision = parseAutopilotDecision(text);
+      parsed = await decideWithFormatRepair({
+        prompt,
+        tag: "autopilot_next",
+        run: autopilotDecisionRunner(runtime.provider, workspacePath, runtime.model),
+        parse: parseAutopilotDecision,
+        explain: explainAutopilotFailure,
+      });
     } catch (error) {
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：決策模型無法給出下一步（{error}）。", { error: (error as Error).message }));
       return;
     }
-    if (!decision || decision.action === "stop") {
-      const reason = decision?.action === "stop" ? decision.reason : "";
+    // 格式修了一次仍壞是失敗，不能跟模型自己選擇 stop 一樣標成「正常結束」。
+    if (!parsed.ok) {
+      disableAutopilotWithNote(justFinished, autopilotFormatFailureNote(parsed.failure));
+      return;
+    }
+    const decision = parsed.decision;
+    if (decision.action === "stop") {
+      const reason = decision.reason;
       disableAutopilotWithNote(justFinished, t("🅿️ 自動循環正常結束{reason}。要接著討論或調整，直接在這張交辦回覆即可（有專屬團隊會由同一隊接手）；要再自動接續就重開開關。", { reason: reason ? t("：{reason}", { reason }) : "" }));
       return;
     }

@@ -6,11 +6,17 @@ import {
   AUTOPILOT_MAX_STEPS,
   AUTOPILOT_MIN_STEPS,
   autopilotNextPrompt,
+  autopilotRepairPrompt,
   clampAutopilotMinutes,
   clampAutopilotSteps,
+  decideWithFormatRepair,
   explainAutopilotFailure,
   parseAutopilotDecision,
 } from "../src/autopilot.js";
+import {
+  explainAutopilotResolveFailure,
+  parseAutopilotResolveDecision,
+} from "../src/autopilotResolve.js";
 
 test("clampAutopilotSteps bounds to [MIN, MAX] and defaults on garbage", () => {
   assert.equal(clampAutopilotSteps(undefined), AUTOPILOT_DEFAULT_STEPS);
@@ -84,4 +90,72 @@ test("parseAutopilotDecision rejects malformed output", () => {
 test("explainAutopilotFailure returns prose for bad output, null for good", () => {
   assert.match(String(explainAutopilotFailure("nothing here")), /Missing an <autopilot_next>/);
   assert.equal(explainAutopilotFailure('<autopilot_next>{"action":"stop","reason":"done"}</autopilot_next>'), null);
+});
+
+function scriptedRunner(replies: string[]) {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    run: async (prompt: string) => {
+      prompts.push(prompt);
+      const reply = replies.shift();
+      if (reply === undefined) throw new Error("unexpected extra call");
+      return reply;
+    },
+  };
+}
+
+const nextDecision = { tag: "autopilot_next" as const, parse: parseAutopilotDecision, explain: explainAutopilotFailure };
+
+test("decideWithFormatRepair returns a valid first reply without a second call", async () => {
+  const runner = scriptedRunner(['<autopilot_next>{"action":"stop","reason":"done"}</autopilot_next>']);
+  const outcome = await decideWithFormatRepair({ prompt: "BASE", run: runner.run, ...nextDecision });
+  assert.deepEqual(outcome, { ok: true, decision: { action: "stop", reason: "done" } });
+  assert.equal(runner.prompts.length, 1);
+});
+
+test("decideWithFormatRepair re-asks once with the rejection reason and accepts the repair", async () => {
+  // 以前一則格式抖動就把整條循環關掉（下一步那條還標成「正常結束」）。
+  const runner = scriptedRunner([
+    "下一步做 X 吧",
+    '<autopilot_next>{"action":"task","objective":"補上 X 的測試","reason":"收尾"}</autopilot_next>',
+  ]);
+  const outcome = await decideWithFormatRepair({ prompt: "BASE", run: runner.run, ...nextDecision });
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.ok && outcome.decision.action, "task");
+  assert.equal(runner.prompts.length, 2);
+  assert.ok(runner.prompts[1].startsWith("BASE"));
+  assert.match(runner.prompts[1], /Missing an <autopilot_next>/);
+  assert.match(runner.prompts[1], /ONLY the single marked <autopilot_next> JSON block/);
+});
+
+test("decideWithFormatRepair reports a failure (not a decision) when the repair is malformed too", async () => {
+  const runner = scriptedRunner([
+    "nope",
+    '<autopilot_resolve>{"action":"reassign"}</autopilot_resolve>',
+  ]);
+  const outcome = await decideWithFormatRepair({
+    prompt: "BASE",
+    tag: "autopilot_resolve",
+    run: runner.run,
+    parse: parseAutopilotResolveDecision,
+    explain: explainAutopilotResolveFailure,
+  });
+  assert.equal(outcome.ok, false);
+  assert.match(!outcome.ok ? outcome.failure : "", /"action" must be exactly/);
+  assert.equal(runner.prompts.length, 2);
+});
+
+test("decideWithFormatRepair lets a model-call error propagate to the caller", async () => {
+  await assert.rejects(
+    decideWithFormatRepair({ prompt: "BASE", run: async () => { throw new Error("timeout"); }, ...nextDecision }),
+    /timeout/,
+  );
+});
+
+test("autopilotRepairPrompt keeps the base prompt and names the expected block", () => {
+  const repair = autopilotRepairPrompt("BASE", "bad json", "autopilot_answer");
+  assert.ok(repair.startsWith("BASE"));
+  assert.match(repair, /rejected: bad json/);
+  assert.match(repair, /<autopilot_answer>/);
 });
