@@ -313,7 +313,7 @@ import {
 import { queryToolPolicy, readOnlyMcpToolNames } from "./toolPolicy.js";
 import { McpConfigWatcher, type McpConfigChange } from "./mcpConfigWatcher.js";
 import { localDay } from "./dayReport.js";
-import { decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
+import { brainSwapLessonNotice, decideBrainSwap, splitHandoffLesson, BRAIN_SWAP_THRESHOLD_TOKENS } from "./brainSwap.js";
 import { AppSettingsStore } from "./appSettings.js";
 import { setLang, t, tc } from "./i18n.js";
 import { accumulateSwallowedText, parseLimitReset } from "./limitResume.js";
@@ -1841,7 +1841,7 @@ function brainSwapHook(worker: Worker, event: RunnerEvent): void {
       const stored = addLesson(worker.id, lesson);
       if (stored.ok) {
         learnedLesson = stored.lesson;
-        record(worker, { type: "user_message", system: true, text: t("🧠 換腦蒸餾出一條做事心法，已沉澱進長期記憶：{lesson}", { lesson: stored.lesson }) });
+        record(worker, brainSwapLessonNotice(stored.lesson));
       }
     }
     // 只在 complete_swap 路徑發這個事件，不污染其他流程；前端拿 learned 決定閃現內容。

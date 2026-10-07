@@ -125,3 +125,12 @@ export function splitHandoffLesson(text: string): { summary: string; lesson: str
   if (!summary || !lesson) return { summary: full, lesson: null };
   return { summary, lesson };
 }
+
+/**
+ * 「蒸餾出一條心法」的紀錄卡。必須是 notice：它沒有真的送進 runner、永遠等不到 turn_end——
+ * 記成一般（system）user_message 的話，前端會掛一張永遠「進行中」的卡，而且客戶端剛好在
+ * 換腦送摘要前的空檔連線時，伺服器的未完成回合收尾會把它補成一筆假的「工作階段已中止」。
+ */
+export function brainSwapLessonNotice(lesson: string): Extract<RunnerEvent, { type: "user_message" }> {
+  return { type: "user_message", notice: true, text: t("🧠 換腦蒸餾出一條做事心法，已沉澱進長期記憶：{lesson}", { lesson }) };
+}
