@@ -159,6 +159,7 @@ The backend normalizes both CLIs' native events into a single Worker event proto
 - macOS, Linux, or 64-bit Windows 10 22H2 / Windows 11.
 - At least one of Claude Code CLI or Codex CLI installed (not being logged in yet is fine — the UI walks you through login).
 - A local repository that you're comfortable letting the chosen agent operate on.
+- Optional: video understanding needs `ffmpeg` and `ffprobe` (frames + audio); pasting a video link also needs `yt-dlp`. Each can be pointed at an absolute path with the variables below; without them only the video features are unavailable.
 
 Confirm the CLIs are available:
 
@@ -213,6 +214,9 @@ Config file: `server/.env`
 | `PORT` | `8787` | Backend port |
 | `DB_PATH` | OS per-user app-data directory | SQLite database location; defaults to `%LOCALAPPDATA%\Pixel Crew\cockpit.sqlite` on Windows |
 | `AVATAR_DIR` | `avatars/` next to the database | Local storage directory for normalized NPC PNGs and validated GIFs |
+| `FFMPEG_BIN` | `ffmpeg` | Optional; executable used to extract video frames and audio; may be an absolute path |
+| `FFPROBE_BIN` | `ffprobe` | Optional; executable used to probe video duration; may be an absolute path |
+| `YTDLP_BIN` | `yt-dlp` | Optional; downloader for pasted video links; may be an absolute path |
 | `WHISPER_SERVER_BIN` | `whisper-server` | Optional `whisper.cpp` transcription-server executable; may be an absolute path |
 | `VOICE_SERVER_PORT` | `8793` | Loopback port for the local `whisper-server` |
 
