@@ -793,6 +793,8 @@ Reply again with ONLY the single marked <worker_autopilot_next> JSON block — n
 // 發「已達上限」通知搶走 turn_end 收尾的時機。
 export type WorkerAutopilotSweepView = {
   present: boolean;
+  /** ⚡無限制模式：不給無人看管的循環驅動，一律撤掉（即使暫停中或正在跑——撤的是之後的步數）。 */
+  unattendedForbidden?: boolean;
   /** 暫停等 owner 回覆：不推進、不因時限／步數收掉（owner 回覆時由發話入口解除暫停）。 */
   paused?: boolean;
   busy: boolean;
@@ -806,6 +808,7 @@ export type WorkerAutopilotSweepView = {
 
 export type WorkerAutopilotSweepAction =
   | "drop" // NPC 已消失：清登記
+  | "disable_unattended" // ⚡無限制模式：撤掉循環（開機補掃、先開後切模式都走這裡兜底）
   | "wait" // 這輪不動：忙碌／讓路中／決策進行中／退避未到
   | "disable_steps" // 閒置且步數用盡（正常路徑由 turn_end 收，這是崩潰窗口的兜底）
   | "disable_deadline" // 閒置且超過時間上限
@@ -814,6 +817,7 @@ export type WorkerAutopilotSweepAction =
 
 export function workerAutopilotSweepAction(view: WorkerAutopilotSweepView): WorkerAutopilotSweepAction {
   if (!view.present) return "drop";
+  if (view.unattendedForbidden) return "disable_unattended";
   if (view.paused) return "wait";
   if (view.busy || view.queued || view.yielding || view.advancing) return "wait";
   if (view.stepsRemaining <= 0) return "disable_steps";

@@ -390,6 +390,16 @@ test("sweep action: idle over limits disables; retry gates by due/exhausted", ()
   assert.equal(workerAutopilotSweepAction(sweepView({ retry: { registered: true, due: false, exhausted: true } })), "exhausted");
 });
 
+test("sweep action: an NPC in unrestricted (invincible) mode is never driven unattended", () => {
+  // 開機補掃、先開循環後切模式：一律撤掉——即使暫停中、正在跑或還在退避（撤的是之後的步數）。
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: true })), "disable_unattended");
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: true, paused: true })), "disable_unattended");
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: true, busy: true })), "disable_unattended");
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: true, retry: { registered: true, due: false, exhausted: false } })), "disable_unattended");
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: true, present: false })), "drop");
+  assert.equal(workerAutopilotSweepAction(sweepView({ unattendedForbidden: false })), "advance");
+});
+
 test("autopilotContextFromHistory：跳過換腦/交接的 system 回合，不誤當工作結果", () => {
   const ctx = autopilotContextFromHistory([
     { type: "user_message", text: "原始任務：把終端機做漂亮" },

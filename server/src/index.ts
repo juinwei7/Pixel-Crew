@@ -6330,20 +6330,28 @@ function disableWorkerAutopilotWithNote(worker: Worker, note: string, ask?: { op
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
 }
 
-// 按停止＝連個人自動循環一起停。Claude 的中止只發 error、不經 turn_end，循環會被 15s 保底掃當成
-// 停擺而補送下一步；Codex 的中止回合則會被當成「上一回合發生錯誤」。所以停止端點先撤掉武裝（決策
-// 進行中的那步也會因狀態不在而作廢），註記則等被中止的回合真的收尾才貼——回合還開著時插 notice 卡，
-// 前端會把那張卡當成最後一個 turn，被中止的回合就永遠掛著「進行中」。
+// 由外部動作撤掉循環（按停止、切成無限制模式…）：立即撤掉武裝（決策進行中的那步也會因狀態不在
+// 而作廢），註記則等 NPC 正在跑的回合真的收尾才貼——回合還開著時插 notice 卡，前端會把那張卡當成
+// 最後一個 turn，正在跑的回合就永遠掛著「進行中」。
 const workerAutopilotStopNotes = new Map<string, string>();
 
-function stopWorkerAutopilotForInterrupt(worker: Worker): void {
+function disarmWorkerAutopilot(worker: Worker, note: string): void {
   if (!workerAutopilotByWorker.delete(worker.id)) return;
   workerAutopilotRetry.resolve(worker.id);
   persistWorkerAutopilotStates();
-  const note = t("⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。");
   if (worker.runner.busy) workerAutopilotStopNotes.set(worker.id, note);
   else record(worker, { type: "user_message", text: note, notice: true });
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
+}
+
+// ⚡無限制模式（--dangerously-skip-permissions、不掛核准橋）不給無人看管的自動循環驅動，
+// 比照排程（見排程掃描）與隊員商量（consult.ts）。開啟時拒絕；之後才切成無限制則在每個入口撤掉。
+function workerAutopilotInvincibleNote(): string {
+  return t("⛔ 自動循環已停止：此 NPC 處於⚡無限制模式（跳過所有審批），不給自動循環無人看管地驅動。審批改為「完全信任」或「安全」後可再打開開關。");
+}
+// 每次都現讀（別讓 TS 的型別收窄跨 await 沿用）：決策期間 owner 可能才切成無限制模式。
+function workerAutopilotForbidden(worker: Worker): boolean {
+  return worker.autoApproveMode === "invincible";
 }
 
 // 循環撞到步數／時間上限而停時用：除了貼停止註記，再補送一個「收尾交接」回合，讓 NPC 主動給擁有者
@@ -6442,6 +6450,7 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
   const state = workerAutopilotByWorker.get(worker.id);
   if (!state) return;
   if (worker.ephemeralKind) { workerAutopilotByWorker.delete(worker.id); workerAutopilotRetry.resolve(worker.id); persistWorkerAutopilotStates(); return; }
+  if (workerAutopilotForbidden(worker)) { disableWorkerAutopilotWithNote(worker, workerAutopilotInvincibleNote()); return; }
   // 暫停等 owner 回覆中：什麼都不做（owner 發話時 resumeWorkerAutopilotIfPaused 會先解除暫停）。
   if (state.paused) return;
   if (event.isError && lastTurnWasSystem(worker.history)) {
@@ -6472,6 +6481,7 @@ function workerAutopilotHook(worker: Worker, event: RunnerEvent): void {
 }
 
 async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAutopilotState): Promise<void> {
+  if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
   workerAutopilotAdvancing.add(worker.id);
   try {
     const runtime = resolveWorkerDecisionRuntime(worker);
@@ -6661,6 +6671,8 @@ async function advanceWorkerAutopilot(worker: Worker, state: PersistedWorkerAuto
     }
     // 決策期間使用者可能搶先發話或排了佇列：放棄這步（不扣步數），循環留著等下個回合結束再想。
     if (worker.runner.busy || store.listQueue(worker.id).length > 0) return;
+    // 決策期間被切成⚡無限制模式：這步不送。
+    if (workerAutopilotForbidden(worker)) { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); return; }
     live.stepsRemaining -= 1;
     persistWorkerAutopilotStates();
     // 最後一步的決策帶著整輪復盤——存起來讓下一輪循環從這裡往上爬（機制一）。
@@ -6699,6 +6711,7 @@ function sweepWorkerAutopilot(): void {
     const worker = workers.get(workerId);
     const action = workerAutopilotSweepAction({
       present: !!worker,
+      unattendedForbidden: worker ? workerAutopilotForbidden(worker) : false,
       paused: !!state.paused,
       busy: worker?.runner.busy ?? false,
       queued: worker ? store.listQueue(workerId).length > 0 : false,
@@ -6722,6 +6735,7 @@ function sweepWorkerAutopilot(): void {
       persistWorkerAutopilotStates();
       continue;
     }
+    if (action === "disable_unattended") { disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote()); continue; }
     if (action === "disable_steps") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達步數上限，自動停止。要繼續就再打開開關。")); continue; }
     if (action === "disable_deadline") { disableWorkerAutopilotWithNote(worker, t("✅ 自動循環已達時間上限，自動停止。要繼續就再打開開關。")); continue; }
     if (action === "exhausted") {
@@ -6766,6 +6780,10 @@ app.post("/api/workers/:id/autopilot", (req, res) => {
   const enabled = Boolean(req.body?.enabled);
   if (enabled) {
     if (worker.ephemeralKind) { res.status(409).json({ error: t("臨時 NPC 不能開自動循環") }); return; }
+    if (workerAutopilotForbidden(worker)) {
+      res.status(409).json({ error: t("此 NPC 處於⚡無限制模式（跳過所有審批），不能開自動循環；審批改為「完全信任」或「安全」後再開。") });
+      return;
+    }
     // 開之前先確認決策模型可用，別讓開關開了卻在第一步就默默熄火（比照 BOSS 循環端點）。
     // 用 account-aware 版本：指定帳號可用時就能開，不被共用登入狀態綁死。
     const runtime = resolveWorkerDecisionRuntime(worker);
@@ -9385,6 +9403,8 @@ app.post("/api/workers/:id/auto-approve", (req, res) => {
     if (worker.runner.busy) worker.runner.interrupt(); else worker.runner.stop();
     if (workerProviderReady(worker)) worker.runner.warmup();
   }
+  // 切成無限制模式：個人自動循環不能在無人看管下繼續驅動它。
+  if (mode === "invincible") disarmWorkerAutopilot(worker, workerAutopilotInvincibleNote());
   persistWorker(worker);
   broadcast({ type: "worker_updated", worker: workerSummary(worker) });
   res.json({ ok: true, autoApproveMode: worker.autoApproveMode });
@@ -10105,7 +10125,9 @@ app.post("/api/workers/:id/interrupt", (req, res) => {
     res.status(409).json({ error: missionInProgress(worker.id) ? t("Department Mission 請從 Mission 面板取消") : t("協作任務請從協作面板取消") });
     return;
   }
-  stopWorkerAutopilotForInterrupt(worker); // 先撤循環：否則中止後它會自己再送下一步
+  // 按停止＝連個人自動循環一起停：Claude 的中止只發 error、不經 turn_end，循環會被 15s 保底掃
+  // 當成停擺而補送下一步；Codex 的中止回合則會被當成「上一回合發生錯誤」。先撤再中止。
+  disarmWorkerAutopilot(worker, t("⏹ 自動循環已停止：你按了停止。要繼續就再打開開關。"));
   worker.runner.interrupt();
   broadcast({ type: "worker_status", workerId: worker.id, busy: false });
   res.json({ ok: true });

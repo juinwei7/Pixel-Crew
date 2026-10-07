@@ -16,7 +16,7 @@ function block(startMarker: string): string {
 
 test("Stop disarms the personal autopilot before interrupting the runner", () => {
   const route = block('app.post("/api/workers/:id/interrupt"');
-  const disarm = route.indexOf("stopWorkerAutopilotForInterrupt(worker)");
+  const disarm = route.indexOf("disarmWorkerAutopilot(worker,");
   const interrupt = route.indexOf("worker.runner.interrupt()");
   assert.ok(disarm >= 0, "停止端點必須撤掉個人自動循環（Claude 的中止不經 turn_end，循環會自己再送下一步）");
   assert.ok(disarm < interrupt, "要在中止 runner 之前撤，Codex 的中止回合才不會被當成「上一回合出錯」");
@@ -27,4 +27,23 @@ test("the Stop note waits for the interrupted turn to close (turn_end or error)"
   const flush = hook.indexOf("workerAutopilotStopNotes.get(worker.id)");
   const turnEndOnly = hook.indexOf('if (event.type !== "turn_end") return;');
   assert.ok(flush >= 0 && flush < turnEndOnly, "停止註記要在 error 事件也能貼出（Claude 的中止只發 error）");
+});
+
+test("unrestricted (invincible) mode is refused at enable time and disarms the loop on every later path", () => {
+  const enable = block('app.post("/api/workers/:id/autopilot"');
+  assert.ok(enable.indexOf("workerAutopilotForbidden(worker)") >= 0, "開循環時要拒絕⚡無限制模式");
+  assert.ok(
+    enable.indexOf("workerAutopilotForbidden(worker)") < enable.indexOf("setWorkerAutopilot("),
+    "要在武裝之前拒絕，連「開了立即想第一步」都不能發生",
+  );
+  const modeRoute = block('app.post("/api/workers/:id/auto-approve"');
+  assert.match(modeRoute, /if \(mode === "invincible"\) disarmWorkerAutopilot\(worker, workerAutopilotInvincibleNote\(\)\)/);
+  const hook = block("function workerAutopilotHook(");
+  assert.match(hook, /workerAutopilotForbidden\(worker\)/);
+  const advance = indexSource.slice(indexSource.indexOf("async function advanceWorkerAutopilot("), indexSource.indexOf("function sweepWorkerAutopilot("));
+  // 開頭擋一次、決策回來要送之前再擋一次（決策期間才切模式）。
+  assert.equal(advance.match(/workerAutopilotForbidden\(worker\)/g)?.length, 2);
+  const sweep = block("function sweepWorkerAutopilot(");
+  assert.match(sweep, /unattendedForbidden: worker \? workerAutopilotForbidden\(worker\) : false/);
+  assert.match(sweep, /action === "disable_unattended"/);
 });
