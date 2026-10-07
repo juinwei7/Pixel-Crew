@@ -1,6 +1,7 @@
 import type { CollaborationResult } from "./collaboration.js";
 import type { RunnerEvent } from "./claudeRunner.js";
 import type { ProviderId } from "./providers/types.js";
+import type { AutoApproveMode } from "./protocol.js";
 import { t } from "./i18n.js";
 
 export type DepartmentMissionStatus =
@@ -319,6 +320,16 @@ export function missionActiveWorkerId(mission: DepartmentMission): string | null
 
 export function missionLocksWorkspace(mission: DepartmentMission): boolean {
   return MISSION_ACTIVE_STATUSES.includes(mission.status);
+}
+
+/**
+ * Mission runner 實際採用的自動核准模式。老闆交辦派到既有部門時，成員是 "off" 就在這支
+ * Mission 的 runner 上升成 "safe"（唯讀工具免逐一點核准，寫檔／危險 Bash 照擋），其餘照成員
+ * 原設定。只作用在 Mission runner、不寫回 worker——以前直接改 worker.autoApproveMode，
+ * turn_end 就持久化，交辦結束後成員的直接對話也一路 safe 下去、沒人改回來。
+ */
+export function missionRunnerApproveMode(memberMode: AutoApproveMode, origin: MissionOrigin | undefined): AutoApproveMode {
+  return origin === "boss" && memberMode === "off" ? "safe" : memberMode;
 }
 
 // --- Pre-planning roundtable ------------------------------------------------

@@ -145,6 +145,7 @@ import {
   isAsyncAgentLaunch,
   missionActiveWorkerId,
   missionLocksWorkspace,
+  missionRunnerApproveMode,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -2242,7 +2243,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         onEvent,
         mission.workspacePath,
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       )
@@ -2251,7 +2252,7 @@ function missionRunnerFor(mission: DepartmentMission, worker: Worker): MissionRu
         mission.workspacePath,
         () => claudeCapabilitiesFor(mission.workspacePath).getAllowedTools(),
         () => composeWorkerPrompt(worker),
-        () => worker.autoApproveMode,
+        () => missionRunnerApproveMode(worker.autoApproveMode, mission.origin),
         checkpoint ? { sessionId: checkpoint.sessionId, completedTurns: checkpoint.completedTurns } : undefined,
         () => homeForWorker(worker),
       );
@@ -5527,11 +5528,9 @@ function advanceBossTaskStages(task: BossTask): void {
   }).slice(0, 30_000);
   // Boss 交辦跑在「既有部門」時，成員的自動核准預設是 "off"，每個唯讀工具（WebSearch/
   // WebFetch/Read…）都會停下來等老闆點核准，整張交辦被拖到極慢（使用者實際回報）。交辦
-  // 本來就是「授權這支部隊去把事做完」，這裡把參與成員從 off 升到 safe：只自動放行唯讀
-  // 工具，寫檔／危險 Bash 仍照擋。dedicated 專屬部隊建立時已設 full，不受此影響。
-  for (const member of [lead, ...eligibility.members]) {
-    if (member.autoApproveMode === "off") member.autoApproveMode = "safe";
-  }
+  // 本來就是「授權這支部隊去把事做完」，所以 origin: "boss" 的 Mission runner 一律以
+  // missionRunnerApproveMode 從 off 升到 safe——只在這支 Mission 的 runner 上，不改成員本身
+  // 的設定，交辦一結束、成員回到直接對話就還是原本的 off。dedicated 專屬部隊建立時已設 full。
   const launched = launchDepartmentMission(lead, eligibility.members, objective, next.acceptanceCriteria, {
     attachmentIds: task.attachmentIds ?? [],
     executionMode: next.executionMode ?? task.executionMode ?? "project",
