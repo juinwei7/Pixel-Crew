@@ -185,6 +185,8 @@ import {
   parseBossTaskDecision,
   reconcileBossTaskStall,
   shareGuestBossTaskError,
+  dedicatedCrewApproveMode,
+  isShareGuestAccess,
   type BossTask,
   type BossTaskAcceptanceVerdict,
   type BossTaskMessage,
@@ -5024,6 +5026,8 @@ async function createDepartmentForObjective(input: {
   workspacePath: string;
   provider: ProviderId;
   count: number;
+  /** 見 dedicatedCrewApproveMode：主人的交辦 full，分享訪客碰過的交辦 safe。 */
+  approveMode: "full" | "safe";
 }): Promise<Department | null> {
   const { workspacePath, provider } = input;
   const purpose = normalizeDepartmentPurpose(input.purpose);
@@ -5059,7 +5063,8 @@ async function createDepartmentForObjective(input: {
   // 老闆交辦的專屬部門 NPC 預設「完全自動核准（full）」：這些是為單一交辦臨時建、任務一結束就
   // 解散的短命工，讓它們能自己把交辦一路做完，不必每顆指令都停下來等老闆點核准（否則像 `which
   // python` 這種安全指令也會卡住整張交辦）。full 仍會擋下 rm -rf 這類毀滅性指令當最後安全網。
-  for (const worker of created) worker.autoApproveMode = "full";
+  // 分享訪客碰過的交辦例外，降成 safe（見 dedicatedCrewApproveMode）。
+  for (const worker of created) worker.autoApproveMode = input.approveMode;
   const department: Department = {
     id: departmentId,
     name: `${EPHEMERAL_DEPT_PREFIX}${purpose.slice(0, 14)}`,
@@ -5173,6 +5178,7 @@ async function runDedicatedDepartmentTaskInner(task: BossTask): Promise<void> {
     workspacePath: task.workspacePath,
     provider: task.decisionProvider,
     count: task.executionBudget?.maxAgents ?? 3,
+    approveMode: dedicatedCrewApproveMode(task),
   });
   // 建部門要跑最長 90s 的規劃 LLM：期間老闆可能已取消／刪除這張交辦，手上是舊快照
   // （decide 路徑既有同款護欄；自動重試讓這條競態更容易踩到——交互自審補上）。
@@ -5237,6 +5243,7 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
       workspacePath: task.workspacePath,
       provider: task.decisionProvider,
       count: task.executionBudget?.maxAgents ?? 3,
+      approveMode: dedicatedCrewApproveMode(task),
     });
     // 與 dedicated 路徑同款取消護欄：重建部門的長流程期間交辦被終結就放手（交互自審補上）。
     if (!snapshotStillCurrent(task.status, store.getBossTask(task.id))) {
@@ -5353,6 +5360,7 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true,
         workspacePath: task.workspacePath,
         provider: task.decisionProvider,
         count: decision.memberCount,
+        approveMode: dedicatedCrewApproveMode(task),
       });
       // 建部門又跑了最長 90s 的規劃 LLM：與 dedicated 路徑同款護欄，套用前重讀，作廢就放手；
       // 剛建好的隊一併解散——它還不在任何 stage 上，取消／刪除的清理掃不到它。
@@ -5944,7 +5952,7 @@ function disableAutopilotWithNote(task: BossTask, note: string): void {
 }
 
 // 從交辦目標直接開一張新的 Boss Task（給自動循環程式化建立用；行為對齊 POST /api/boss-tasks）。
-async function spawnBossTask(workspacePath: string, objective: string, note?: string): Promise<BossTask | null> {
+async function spawnBossTask(workspacePath: string, objective: string, note?: string, requestedByShareGuest = false): Promise<BossTask | null> {
   const runtime = resolveDecisionRuntime(undefined, undefined, workspacePath);
   if ("error" in runtime) return null;
   const now = new Date().toISOString();
@@ -5971,6 +5979,7 @@ async function spawnBossTask(workspacePath: string, objective: string, note?: st
     stages: [],
     finalReport: null,
     error: null,
+    ...(requestedByShareGuest ? { requestedByShareGuest: true } : {}),
     createdAt: now,
     updatedAt: now,
     completedAt: null,
@@ -6298,7 +6307,8 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
     disbandTaskEphemeralDepartments(justFinished);
     let spawned: BossTask | null;
     try {
-      spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
+      // 下一張是從上一張接續出來的：訪客碰過的交辦，接續的交辦也一樣不給臨時隊 full。
+      spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }), justFinished.requestedByShareGuest === true);
     } catch (error) {
       // 以前這裡沒有 catch：探索意外丟錯會變成 unhandledRejection，循環既沒回報也沒停。
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦（{error}）。", { error: (error as Error).message || String(error) }));
@@ -7005,6 +7015,7 @@ app.post("/api/boss-tasks", async (req, res) => {
     stages: [],
     finalReport: null,
     error: null,
+    ...(isShareGuestAccess(req.headers["x-pc-access"]) ? { requestedByShareGuest: true } : {}),
     createdAt: now,
     updatedAt: now,
     completedAt: null,
@@ -7212,6 +7223,8 @@ app.post("/api/boss-tasks/:id/messages", async (req, res) => {
   if (!attachmentRecordsForPersist) return;
   const attachmentIds = attachmentRecordsForPersist.map((attachment) => attachment.id);
   task.attachmentIds = [...new Set([...(task.attachmentIds ?? []), ...attachmentIds])];
+  // 訪客追問也算碰過：之後重建的臨時隊不給 full（見 dedicatedCrewApproveMode）。
+  if (isShareGuestAccess(req.headers["x-pc-access"])) task.requestedByShareGuest = true;
   task.messages.push(bossTaskMessage(
     "boss",
     message || t("請依附加檔案處理後續工作"),

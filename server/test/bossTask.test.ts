@@ -10,6 +10,8 @@ import {
   explainBossTaskDecisionFailure,
   parseBossTaskDecision,
   shareGuestBossTaskError,
+  dedicatedCrewApproveMode,
+  isShareGuestAccess,
   type BossTask,
 } from "../src/bossTask.js";
 import type { AssignmentDecisionCandidate } from "../src/assignmentDecision.js";
@@ -451,4 +453,14 @@ test("share guests cannot ask for a dedicated (full auto-approve) crew", () => {
   assert.equal(shareGuestBossTaskError("shr", null), null);
   assert.equal(shareGuestBossTaskError("own", { dedicatedDepartment: true }), null);
   assert.equal(shareGuestBossTaskError(undefined, { dedicatedDepartment: true }), null);
+});
+
+test("a crew built for a task a share guest touched never gets full auto-approve", () => {
+  // 訪客擋得了「直接要求專屬部門」，擋不了決策模型自己建隊或追問時重建隊——所以看的是交辦本身。
+  assert.equal(dedicatedCrewApproveMode({}), "full");
+  assert.equal(dedicatedCrewApproveMode({ requestedByShareGuest: false }), "full");
+  assert.equal(dedicatedCrewApproveMode({ requestedByShareGuest: true }), "safe");
+  assert.equal(isShareGuestAccess("shr"), true);
+  assert.equal(isShareGuestAccess("own"), false);
+  assert.equal(isShareGuestAccess(undefined), false);
 });

@@ -125,3 +125,15 @@ test("a spawned task that fails is reported instead of leaving the loop silently
   const catchAt = decide.lastIndexOf("} catch (error) {");
   assert.match(decide.slice(catchAt), /autopilotHook\(task\);/);
 });
+
+test("every crew built for a boss task takes its approval mode from the task, and guest requests mark the task", () => {
+  const create = block("async function createDepartmentForObjective(", "\n}\n");
+  assert.match(create, /worker\.autoApproveMode = input\.approveMode/);
+  assert.doesNotMatch(create, /autoApproveMode = "full"/);
+  const calls = indexSource.match(/createDepartmentForObjective\(\{[\s\S]*?\}\);/g) ?? [];
+  assert.ok(calls.length >= 3);
+  for (const call of calls) assert.match(call, /approveMode: dedicatedCrewApproveMode\(task\)/);
+  assert.match(block('app.post("/api/boss-tasks", async', "res.status(201)"), /isShareGuestAccess\(req\.headers\["x-pc-access"\]\) \? \{ requestedByShareGuest: true \}/);
+  assert.match(block('app.post("/api/boss-tasks/:id/messages", async', "\n});\n"), /if \(isShareGuestAccess\(req\.headers\["x-pc-access"\]\)\) task\.requestedByShareGuest = true;/);
+  assert.match(indexSource, /spawnBossTask\([^;]*justFinished\.requestedByShareGuest === true\)/);
+});
