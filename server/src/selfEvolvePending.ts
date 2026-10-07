@@ -8,6 +8,7 @@ import path from "node:path";
 import { evaluatePostInstall, type PostInstallChecks, type PostInstallResult } from "./selfEvolveInstall.js";
 
 export type PendingSelfInstall = {
+  /** pc-selfrebuild 交棒給 pc-selfinstall 的時間（epoch ms）；開機驗收只認這之後的安裝 log。 */
   firedAt: number;
   reason: string;
   changedFiles: string[];
@@ -53,6 +54,63 @@ export function evaluateBootResolution(marker: PendingSelfInstall | null, checks
   if (!marker) return { action: "none" };
   const result = evaluatePostInstall(checks);
   return result.healthy ? { action: "confirm_ok", result } : { action: "rollback", result };
+}
+
+export type TimestampedLogLine = { at: number; message: string };
+
+/**
+ * 解析 pc-selfrebuild／pc-selfinstall 的 log：每行是「{Get-Date -Format o} 訊息」，時間戳帶時區
+ * （例：2026-10-07T10:40:36.1234567+08:00），可直接換成 epoch ms 跟 marker 比。沒有時間戳的行
+ * （例如被導進 log 的 npm 輸出）略過。
+ */
+export function parseTimestampedLog(text: string): TimestampedLogLine[] {
+  const out: TimestampedLogLine[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^(\d{4}-\d{2}-\d{2}T\S+) (.*)$/.exec(line);
+    if (!m) continue;
+    const at = Date.parse(m[1]);
+    if (Number.isFinite(at)) out.push({ at, message: m[2] });
+  }
+  return out;
+}
+
+export type SelfInstallVerdict = {
+  /** pending＝pc-selfinstall 還沒對這次安裝下結論（換入／健康輪詢中）。 */
+  state: "pending" | "healthy" | "failed";
+  /** 這次安裝的段落裡有沒有 SWAPPED OK（新版真的換進 app 了）。 */
+  swapped: boolean;
+};
+
+/**
+ * 讀 self-install.log，取 pc-selfinstall 對「這一次」安裝下的結論。開機解析器必須等它——自己進得了
+ * listen 不代表健康，而且晉升回滾點若搶在它的健康輪詢之前，接著判失敗時會「回滾」到這個壞版本。
+ * - 只認 marker.firedAt 之後才開始（=== self-install start ===）的段落：之前安裝留下的
+ *   SWAPPED OK／HEALTHY OK 一律不算數。
+ * - marker 記了 stagedSha256 時，段落記的 staged hash 也要相符（確定是在裝這一版）。
+ * - 段落裡有 UNHEALTHY／FATAL → failed（它會自己回滾，或根本沒裝）；有最終那行「=== self-install OK」
+ *   → healthy；都還沒有 → pending。回滾路徑也會印 HEALTHY OK（舊版起來了），所以不認 HEALTHY OK。
+ */
+export function readSelfInstallVerdict(logText: string, marker: PendingSelfInstall): SelfInstallVerdict {
+  const wantHash = (marker.stagedSha256 || "").trim().toUpperCase();
+  const matches = (lines: TimestampedLogLine[]) =>
+    !wantHash || lines.some((l) => l.message.trim().toUpperCase() === `STAGED HASH: ${wantHash}`);
+  let session: TimestampedLogLine[] | null = null;
+  let current: TimestampedLogLine[] | null = null;
+  for (const line of parseTimestampedLog(logText)) {
+    if (line.message.startsWith("=== self-install start ===")) {
+      if (current && matches(current)) session = current;
+      current = line.at >= marker.firedAt ? [line] : null;
+      continue;
+    }
+    current?.push(line);
+  }
+  if (current && matches(current)) session = current;
+  if (!session) return { state: "pending", swapped: false };
+  const has = (re: RegExp) => session!.some((l) => re.test(l.message));
+  const swapped = has(/SWAPPED OK/);
+  if (has(/UNHEALTHY|^FATAL/)) return { state: "failed", swapped };
+  if (has(/^=== self-install OK/)) return { state: "healthy", swapped };
+  return { state: "pending", swapped };
 }
 
 export class PendingSelfInstallStore {
