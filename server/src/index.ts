@@ -172,7 +172,7 @@ import {
   type AssignmentDecisionCandidate,
 } from "./assignmentDecision.js";
 import { replaceWithFreshSession, switchAccountWithReset } from "./freshSession.js";
-import { cleanWorkerSession, isClearCommand, matchNativeCommand, parseGoalCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
+import { cleanWorkerSession, interceptedAppCommand, isClearCommand, matchNativeCommand, type AppCommand, type GoalCommand, type WorkerCleanDeps } from "./nativeCommands.js";
 import {
   applyBossTaskRecordPatch,
   bossTaskDecisionPrompt,
@@ -2206,6 +2206,17 @@ function announceClaudeGoal(worker: Worker, command: GoalCommand): void {
     isError: false,
     permissionDenials: [],
   });
+}
+
+// 執行 interceptedAppCommand 攔下的指令（/message 與排隊 drain 共用）。兩者都會補一個 turn_end，
+// 所以排隊的下一則會照常接著 drain。
+function runAppCommand(worker: Worker, command: AppCommand): { ok: true; cleaned?: true; goal?: string | null } | { ok: false; error: string } {
+  if (command.type === "clean") {
+    const result = cleanWorkerAndAnnounce(worker);
+    return result.ok ? { ok: true, cleaned: true } : result;
+  }
+  announceClaudeGoal(worker, command.command);
+  return { ok: true, goal: getExtras(worker.id).goal };
 }
 
 function missionRunnerKey(missionId: string, workerId: string): string {
@@ -8756,8 +8767,15 @@ function drainWorkerQueue(worker: Worker): void {
   const imageLabels = images.map((image, index) => `[Image #${index + 1}: ${image.name}]`).join(" ");
   const documentLabels = documents.map((document, index) => `[Document #${index + 1}: ${document.name}]`).join(" ");
   const text = [next.message, imageLabels, documentLabels].filter(Boolean).join("\n");
+  // 排隊的 /clear、/clean、Claude /goal 跟直送一樣由 app 處理，不能原樣送進 CLI（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, next.message, images.length + documents.length > 0);
   try {
-    worker.runner.send(next.message, images, documents);
+    if (appCommand) {
+      const result = runAppCommand(worker, appCommand);
+      if (!result.ok) throw new Error(result.error);
+    } else {
+      worker.runner.send(next.message, images, documents);
+    }
   } catch (error) {
     const previous = queueSendAttempts.get(worker.id);
     const attempts = previous?.itemId === next.id ? previous.attempts + 1 : 1;
@@ -8774,6 +8792,7 @@ function drainWorkerQueue(worker: Worker): void {
   }
   queueSendAttempts.delete(worker.id);
   store.removeQueueItem(worker.id, next.id);
+  if (appCommand) { broadcastQueue(worker.id); return; }
   record(worker, { type: "user_message", text });
   captureOpenUserRequest(worker, text); // 真人佇列訊息（循環武裝時）落帳，防換腦／議程蒸發
   resumeWorkerAutopilotIfPaused(worker); // 暫停等你的循環：這則就是你的回答，跑完自動接著推進
@@ -8885,29 +8904,16 @@ app.post("/api/workers/:id/message", (req, res) => {
     res.status(400).json({ error: "message or attachment required" });
     return;
   }
-  if (matchNativeCommand(message) === "clean" || (
-    images.length === 0
-    && documents.length === 0
-    && isClearCommand(message)
-  )) {
-    const result = cleanWorkerAndAnnounce(worker);
+  // `/clear`、`/clean` 由 app 重建工作階段；Codex 的 `/goal` 走 app-server，Claude 的 stream-json
+  // 沒有對應 RPC，由 app 模擬同樣的 get/set/clear 並帶著目標重生閒置的 transport（見 interceptedAppCommand）。
+  const appCommand = interceptedAppCommand(worker.runner.provider, message, images.length + documents.length > 0);
+  if (appCommand) {
+    const result = runAppCommand(worker, appCommand);
     if (!result.ok) {
       res.status(409).json({ error: result.error });
       return;
     }
-    res.json({ ok: true, cleaned: true });
-    return;
-  }
-  // Codex dispatches `/goal` through its app-server. Claude's stream-json
-  // transport has no equivalent slash-command RPC, so mirror the same
-  // get/set/clear semantics here and re-spawn its idle transport with the
-  // persisted goal appended to its system prompt.
-  const claudeGoal = worker.runner.provider === "claude" && images.length === 0 && documents.length === 0
-    ? parseGoalCommand(message)
-    : null;
-  if (claudeGoal) {
-    announceClaudeGoal(worker, claudeGoal);
-    res.json({ ok: true, goal: getExtras(worker.id).goal });
+    res.json(result);
     return;
   }
   if (worker.resumeCandidate) {
