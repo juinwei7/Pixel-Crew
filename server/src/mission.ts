@@ -25,6 +25,11 @@ export const MISSION_ACTIVE_STATUSES: DepartmentMissionStatus[] = [
 ];
 export type MissionExecutionMode = "research" | "project";
 export type MissionOrigin = "department" | "boss";
+// Review 要求修改時自動退回重做的輪數。依老闆指示不做查證回合（execute→review→correct 的來回
+// 是慢的另一主因）：設 0＝不自動重做，第一次 changes_requested 就停下（needs_attention／
+// correction_limit）由老闆決定重試、帶指示重跑或接受風險。要恢復自動修正就調回 2——
+// launchDepartmentMission、prepare API 的 maxCorrections 與警語都讀這裡，README 也要一起改。
+export const MISSION_MAX_CORRECTIONS = 0;
 
 export type DepartmentMissionStep = {
   id: string;

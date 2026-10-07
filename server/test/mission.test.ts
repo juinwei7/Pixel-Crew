@@ -8,6 +8,7 @@ import {
   missionActiveWorkerId,
   missionLocksWorkspace,
   missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -323,4 +324,13 @@ test("a boss task never rewrites a member's own approval mode", () => {
   const runnerFactory = source.slice(source.indexOf("function missionRunnerFor("), source.indexOf("function sendMissionRunner("));
   assert.doesNotMatch(runnerFactory, /\(\) => worker\.autoApproveMode,/);
   assert.equal(runnerFactory.match(/missionRunnerApproveMode\(worker\.autoApproveMode, mission\.origin\)/g)?.length, 2);
+});
+
+test("the prepare API reports the correction budget missions actually get", () => {
+  // launchDepartmentMission 早已改成 0（依老闆指示不做自動修正回合），prepare API 卻還回 2 並寫著
+  // 「最多自動退回修正兩輪」——兩邊都要讀同一個常數，警語也要跟著它講。
+  const source = readFileSync(fileURLToPath(new URL("../src/index.ts", import.meta.url)), "utf8");
+  assert.doesNotMatch(source, /maxCorrections: \d/);
+  assert.equal(source.match(/maxCorrections: MISSION_MAX_CORRECTIONS,/g)?.length, 2);
+  if (MISSION_MAX_CORRECTIONS === 0) assert.doesNotMatch(source, /退回修正兩輪/);
 });

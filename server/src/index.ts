@@ -146,6 +146,7 @@ import {
   missionActiveWorkerId,
   missionLocksWorkspace,
   missionRunnerApproveMode,
+  MISSION_MAX_CORRECTIONS,
   missionFormatRepairPrompt,
   missionFollowUpPrompt,
   missionPlanningPrompt,
@@ -4314,9 +4315,8 @@ function launchDepartmentMission(
     steps: [],
     currentStepIndex: null,
     correctionCount: 0,
-    // 依老闆指示不做查證回合（execute→review→correct 的來回是慢的另一主因）：research 本就是 0，
-    // project 也改成 0——只跑一次執行、不再自我 review/修正，換取速度。要恢復查證把 project 調回 2。
-    maxCorrections: 0,
+    // 依老闆指示不做自動修正回合（research 本就是 0，project 也改成 0），理由與恢復方式見常數註解。
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     error: null,
     createdAt: now,
     startedAt: now,
@@ -7354,12 +7354,12 @@ app.post("/api/workers/:bossId/missions/prepare", async (req, res) => {
     members: eligibility.members.map(workerSummary),
     objective,
     acceptanceCriteria,
-    maxCorrections: 2,
+    maxCorrections: MISSION_MAX_CORRECTIONS,
     warnings: [
       t("這次交辦就是工作授權；部門主管會以唯讀模式完成分工後直接開始，不再要求你核准一般計畫。"),
       t("NPC 會依各自職務執行，部門一次只跑一個步驟，最後由主管彙整成一份報告。"),
       t("Execute 使用各 NPC 原本的權限與核准設定；Consult／Review 固定唯讀。"),
-      t("Review 最多自動退回修正兩輪，超過後會停下來請你決定。"),
+      t("Review 要求修改時不會自動退回重做，會直接停下來請你決定（重試、帶指示重跑或接受風險）。"),
       t("Mission 不會自動 commit、push、merge、tag、publish 或 release。"),
     ],
   });
