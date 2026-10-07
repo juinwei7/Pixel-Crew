@@ -356,8 +356,8 @@ test("subagent-internal messages (parent_tool_use_id) are not surfaced as the pa
 });
 
 // 假的 claude CLI：照實錄（CLI 2.1.285）重現 resume 遺失對話的輸出順序——stderr 一行文字、
-// stdout 一行 is_error 的 result、稍後才非零退出；--session-id 則每收到一則訊息回一個成功 result。
-// resume 指定 alive-id 時：第一則成功，第二則才吐「找不到對話」（模擬 resume 成功後晚一點的無關失敗）。
+// stdout 一行 is_error 的 result、稍後才非零退出。resume dead-id 一啟動就吐這個；resume alive-id
+// 第一則成功、第二則才吐（模擬 resume 成功後晚一點的無關失敗）；其餘每收到一則訊息回一個成功 result。
 function fakeClaudeHarness() {
   const root = mkdtempSync(join(tmpdir(), "pixel-crew-fake-claude-"));
   const script = join(root, "fake-claude.mjs");
@@ -374,12 +374,13 @@ const missing = (id) => {
   setTimeout(() => process.exit(1), 50);
 };
 const ok = () => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "fresh ok" }) + "\\n");
-if (resumeAt >= 0 && args[resumeAt + 1] !== "alive-id") missing(args[resumeAt + 1]);
+const resumed = resumeAt >= 0 ? args[resumeAt + 1] : null;
+if (resumed === "dead-id") missing(resumed);
 else {
   let lines = 0;
   createInterface({ input: process.stdin }).on("line", () => {
     lines++;
-    if (resumeAt >= 0 && lines > 1) missing(args[resumeAt + 1]); else ok();
+    if (resumed === "alive-id" && lines > 1) missing(resumed); else ok();
   });
 }
 `);
@@ -457,6 +458,31 @@ test("a later failure after a successful resume is reported, not turned into a f
     assert.equal(ends[1].type === "turn_end" && ends[1].isError, true);
     assert.equal(harness.invocations().length, 1); // 沒有偷偷開新對話重跑
     assert.equal(session.getPersistenceState().sessionId, "alive-id");
+  } finally {
+    session.stop();
+    harness.restore();
+  }
+});
+
+// 列進 --allowedTools 的工具 CLI 直接執行、不問核准橋（實測 CLI 2.1.285：workspace 外的 Read 與
+// WebFetch 平常會問，列進去就不問）。一般檔位只能預先放行 MCP 規則，唯讀內建工具要留給核准橋。
+test("normal turns leave Read/WebFetch to the approval bridge; only read-only query turns pre-approve them", async () => {
+  const harness = fakeClaudeHarness();
+  const events: RunnerEvent[] = [];
+  const session = new ClaudeSession((event) => events.push(event), harness.root, () => ["mcp__github__*"]);
+  const allowedTools = (args: string[]) => args[args.indexOf("--allowedTools") + 1].split(",");
+  try {
+    session.send("一般回合");
+    await nextTurnEnd(events, 1);
+    session.send("唯讀查詢", [], [], { executionProfile: "read_only_query" });
+    await nextTurnEnd(events, 2);
+    const [normal, query, ...rest] = harness.invocations();
+    assert.equal(rest.length, 0);
+    assert.deepEqual(allowedTools(normal), ["mcp__github__*", "mcp__pixel_crew_approval__approval_prompt"]);
+    for (const tool of ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]) {
+      assert.equal(allowedTools(query).includes(tool), true, tool);
+    }
+    assert.equal(query[query.indexOf("--permission-mode") + 1], "plan");
   } finally {
     session.stop();
     harness.restore();
