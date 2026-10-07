@@ -27,3 +27,29 @@ test("deleting a boss task cancels its live or paused missions like /cancel does
   assert.ok(cancel < route.indexOf("disbandTaskEphemeralDepartments(task)"));
   assert.ok(cancel < route.indexOf("store.deleteBossTask(task.id)"));
 });
+
+test("disbanding a temporary crew cancels the missions still running on it", () => {
+  // 以前只停掉、移除成員：跑在這支隊上的 Mission 留在 activeMissions 裡收不到任何事件，
+  // 工作區鎖一路卡到重啟（重啟後還會被 listReservedDepartmentMissions 還原）。
+  const disband = block("function disbandEphemeralDepartment(", "function disbandTaskEphemeralDepartments(");
+  const cancel = disband.indexOf("cancelMissionForScopedRestart(mission)");
+  assert.notEqual(cancel, -1);
+  assert.ok(cancel < disband.indexOf("workers.delete(workerId)"), "要在移除成員前收掉 Mission");
+  assert.match(disband, /advanceBossTasksForMission\(mission\.id\)/);
+});
+
+test("autopilot disbands the finished task's crew before spawning the next task", () => {
+  const advance = block("async function advanceAutopilot(", "app.get(\"/api/autopilot\"");
+  const disband = advance.indexOf("disbandTaskEphemeralDepartments(justFinished)");
+  const spawn = advance.indexOf("await spawnBossTask(");
+  assert.notEqual(disband, -1);
+  assert.notEqual(spawn, -1);
+  assert.ok(disband < spawn, "先解散上一張的臨時團隊，下一張才不會被派進一支馬上要解散的隊");
+});
+
+test("boss routing only offers the deciding task's own temporary crew", () => {
+  const candidates = block("function bossTaskCandidates(", "function persistBossTask(");
+  assert.match(candidates, /routableDepartment\(department\.id, ephemeralDepartments, ownCrewIds\)/);
+  // 為交辦剛開的隊要交回同一張的第二輪決策。
+  assert.match(indexSource, /await decideBossTask\(task, false, \[department\.id\]\)/);
+});

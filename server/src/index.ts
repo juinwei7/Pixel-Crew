@@ -164,7 +164,7 @@ import {
   parseDepartmentPlan,
   type DepartmentPlan,
 } from "./departmentPlan.js";
-import { normalizeDepartmentName, type Department } from "./department.js";
+import { normalizeDepartmentName, routableDepartment, type Department } from "./department.js";
 import {
   assignmentDecisionPrompt,
   normalizeAssignmentClarifications,
@@ -4840,6 +4840,7 @@ app.post("/api/assignments", async (req, res) => {
   const eligible = new Map<string, { coordinator: Worker; members: Worker[] }>();
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments)) continue; // 別張交辦的臨時團隊，派進去會跟著它解散
     const departmentMembers = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const coordinator = workers.get(department.leadWorkerId) ?? departmentMembers[0];
     if (!coordinator) continue;
@@ -4963,9 +4964,12 @@ function bossTaskMessage(
   };
 }
 
-function bossTaskCandidates(): AssignmentDecisionCandidate[] {
+// ownCrewIds：這張交辦自己的臨時團隊（剛為它開的、重新交辦前原本在用的）；別張交辦的臨時團隊
+// 一律不列入——那張交辦收工就整支解散，派進去的 Mission 會失去全部成員、卡死工作區鎖。
+function bossTaskCandidates(ownCrewIds: readonly string[] = []): AssignmentDecisionCandidate[] {
   const candidates: AssignmentDecisionCandidate[] = [];
   for (const department of departments.values()) {
+    if (!routableDepartment(department.id, ephemeralDepartments, ownCrewIds)) continue;
     const members = [...workers.values()].filter((worker) => worker.departmentId === department.id);
     const lead = workers.get(department.leadWorkerId) ?? members[0];
     if (!lead || members.length === 0) continue;
@@ -5073,6 +5077,10 @@ async function createDepartmentForObjective(input: {
 function disbandEphemeralDepartment(departmentId: string): void {
   if (!ephemeralDepartments.has(departmentId)) return;
   ephemeralDepartments.delete(departmentId);
+  // 先收掉還跑在這支隊上的 Mission：成員一移除，Mission 就再也收不到事件，卻仍佔著工作區鎖
+  //（重啟後照樣被還原）。runner 一併停掉；解散完再讓引用它的交辦依 Mission 終態誠實收尾。
+  const orphanedMissions = [...activeMissions.values()].filter((mission) => mission.departmentId === departmentId && missionLocksWorkspace(mission));
+  for (const mission of orphanedMissions) cancelMissionForScopedRestart(mission);
   const memberIds = [...workers.values()].filter((worker) => worker.departmentId === departmentId).map((worker) => worker.id);
   for (const workerId of memberIds) {
     const worker = workers.get(workerId);
@@ -5089,6 +5097,7 @@ function disbandEphemeralDepartment(departmentId: string): void {
     store.deleteDepartment(departmentId);
     broadcast({ type: "department_removed", departmentId });
   }
+  for (const mission of orphanedMissions) advanceBossTasksForMission(mission.id);
 }
 
 // 解散一個交辦底下所有臨時部門。idempotent。
@@ -5256,17 +5265,17 @@ async function runDedicatedFollowUpInner(task: BossTask, followUp: string, liveD
   advanceBossTask(task);
 }
 
-async function decideBossTask(task: BossTask, allowCreateDepartment = true): Promise<void> {
+async function decideBossTask(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
   bossTaskDiscoveryWork.enter(task.id);
   try {
-    return await decideBossTaskInner(task, allowCreateDepartment);
+    return await decideBossTaskInner(task, allowCreateDepartment, ownCrewIds);
   } finally {
     bossTaskDiscoveryWork.exit(task.id);
   }
 }
 
-async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true): Promise<void> {
-  const candidates = bossTaskCandidates();
+async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true, ownCrewIds: readonly string[] = []): Promise<void> {
+  const candidates = bossTaskCandidates(ownCrewIds);
   if (candidates.length === 0 && !allowCreateDepartment) {
     task.status = "needs_attention";
     task.error = t("目前沒有可用的部門；請先建立具有職務的部門");
@@ -5347,7 +5356,7 @@ async function decideBossTaskInner(task: BossTask, allowCreateDepartment = true)
       }
       task.messages.push(bossTaskMessage("system", t("已建立「{name}」，交給它繼續規劃與執行。", { name: department.name })));
       persistBossTask(task);
-      await decideBossTask(task, false);
+      await decideBossTask(task, false, [department.id]);
       return;
     }
     const byDepartment = new Map(candidates.map((candidate) => [candidate.departmentId, candidate]));
@@ -6156,13 +6165,14 @@ async function advanceAutopilot(justFinished: BossTask, state: AutopilotState): 
     // 使用者可能在生成期間關掉了開關——關了就不再推進。
     if (!autopilotByWorkspace.has(autopilotKey(workspacePath))) return;
     state.stepsRemaining -= 1;
+    // 巡迴推進到下一步＝上一個交辦收工，先把它的臨時團隊解散（不會再手動追問）——要在開下一張
+    // 之前：下一張的決策若把工作派進這支隊，接著一解散就會把它的 Mission 連同成員一起抽走。
+    disbandTaskEphemeralDepartments(justFinished);
     const spawned = await spawnBossTask(workspacePath, decision.objective, t("🔁 自動循環（自動決定的下一步）：{reason}", { reason: decision.reason || decision.objective.slice(0, 80) }));
     if (!spawned) {
       disableAutopilotWithNote(justFinished, t("⛔ 自動循環已停止：無法建立下一個交辦。"));
       return;
     }
-    // 巡迴推進到下一步＝上一個交辦收工，把它的臨時團隊解散（不會再手動追問）。
-    disbandTaskEphemeralDepartments(justFinished);
     broadcastAutopilot(workspacePath);
   } finally {
     state.running = false;
@@ -6933,6 +6943,8 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
     synthesisInFlight: bossTaskFinalizing.has(task.id),
   })) { res.status(409).json({ error: t("Boss 正在整理交辦內容，請稍後再重開") }); return; }
   const restartScope = bossTaskRestartScope(task);
+  // 重新規劃前記下這張交辦自己的臨時團隊：清空 stages 後決策仍可把工作交回同一隊，不另開新隊。
+  const ownCrewIds = task.stages.map((stage) => stage.departmentId).filter((id) => ephemeralDepartments.has(id));
   const preflightError = restartScope.members.length > 0
     ? await scopedRestartPreflightError(restartScope.members, restartScope.activeMissions)
     : null;
@@ -6968,7 +6980,7 @@ app.post("/api/boss-tasks/:id/restart", async (req, res) => {
   autopilotResolveAttempts.delete(task.id);
   task.messages.push(bossTaskMessage("system", t("已清空原本交辦並重新規劃；附件與稽核紀錄已保留。"), [], null, null, timestampAfter(clearedAt)));
   persistBossTask(task);
-  await decideBossTask(task);
+  await decideBossTask(task, true, ownCrewIds);
   res.json({ bossTask: bossTaskForDisplay(task), ...preview });
 });
 
