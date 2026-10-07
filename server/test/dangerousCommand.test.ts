@@ -101,6 +101,44 @@ test("does not flag a plain Stop-Process by known PID — the common, low-risk c
   assert.equal(isDangerousCommand("taskkill /PID 1234").dangerous, false);
 });
 
+test("flags the Windows equivalents of rm -rf and mkfs, including full mode", () => {
+  for (const command of [
+    "Remove-Item -Recurse -Force C:\\repo\\dist",
+    "Remove-Item .\\build -Force",
+    "Remove-Item build -r -fo",
+    "ri node_modules -Recurse",
+    "rd build -Recurse -Force",
+    "rd /s /q C:\\repo\\dist",
+    "rmdir /S node_modules",
+    "del /f /s /q *.log",
+    "erase /q C:\\temp\\*",
+    "format D: /q",
+    "format.com e:",
+  ]) {
+    assert.equal(isDangerousCommand(command).dangerous, true, `expected "${command}" to be dangerous`);
+    assert.equal(evaluateAutoApproval("full", "Bash", command).allowed, false, `full mode must still ask for "${command}"`);
+  }
+});
+
+test("Windows delete/format patterns leave routine commands alone", () => {
+  for (const command of [
+    "Remove-Item .\\tmp.txt",
+    "Get-ChildItem -Recurse src",
+    "rmdir build",
+    "rd build",
+    "del old.log",
+    "git log --format=%H -n 5",
+    "npm run format",
+    "prettier --check src",
+    "clang-format -i src/main.c",
+    "go fmt ./...",
+    "git branch -d del-feature",
+    "curl -X DELETE https://api.example.com/items/1",
+  ]) {
+    assert.equal(isDangerousCommand(command).dangerous, false, `expected "${command}" to be safe`);
+  }
+});
+
 test("empty command is never dangerous", () => {
   assert.equal(isDangerousCommand("").dangerous, false);
   assert.equal(isDangerousCommand("   ").dangerous, false);
