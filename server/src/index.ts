@@ -74,7 +74,7 @@ import { registerVoiceRoutes } from "./voice/voiceRoutes.js";
 import multer from "multer";
 import { extractVideoFramesAndAudio, VideoProcessingError } from "./videoProcess.js";
 import { downloadVideoFromUrl, isProbableVideoUrl, VideoDownloadError } from "./videoDownload.js";
-import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot } from "./snapshotHistory.js";
+import { coalesceDeltaEvents, snapshotHistory, trimEventForSnapshot, trimRetainedHistory } from "./snapshotHistory.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { wsPerMessageDeflate } from "./wsCompression.js";
 import {
@@ -1694,9 +1694,7 @@ function recordUnsafe(worker: Worker, event: RunnerEvent): void {
   } else {
     worker.history.push(event);
   }
-  if (worker.history.length > MAX_HISTORY) {
-    worker.history.splice(0, worker.history.length - MAX_HISTORY);
-  }
+  trimRetainedHistory(worker.history, MAX_HISTORY); // 超長 turn 也保留它的 user_message（見 snapshotHistory.ts）
   if (worker.persistent && event.type !== "tool_call_output_delta") {
     store.appendEvent(worker.id, event, MAX_HISTORY);
   }
@@ -2539,7 +2537,7 @@ function reconcileDanglingTurn(worker: Worker): boolean {
   if (worker.runner.busy || !hasUnfinishedTurn(worker.history)) return false;
   const event: RunnerEvent = { type: "error", message: t("工作階段已中止；請重新下指令"), at: Date.now() };
   worker.history.push(event);
-  if (worker.history.length > MAX_HISTORY) worker.history.splice(0, worker.history.length - MAX_HISTORY);
+  trimRetainedHistory(worker.history, MAX_HISTORY);
   if (worker.persistent) store.appendEvent(worker.id, event, MAX_HISTORY);
   broadcastWorkerEvent(worker.id, event);
   return true;

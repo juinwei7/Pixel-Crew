@@ -1,4 +1,5 @@
 import type { RunnerEvent } from "./claudeRunner.js";
+import { t } from "./i18n.js";
 
 // 初始 snapshot 瘦身：**保留完整訊息筆數**（日誌照樣看得到），只把單筆超大的工具
 // 輸出/輸入等內容截短。真正把歷史脹到十幾 MB 的是少數幾筆巨大的工具輸出（單筆可達
@@ -76,8 +77,12 @@ export function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
   for (let i = 0; i < n; i++) if (history[i]?.type === "user_message") turnStarts.push(i);
   let start: number;
   if (turnStarts.length === 0) {
-    // 完全沒有 turn 邊界（只有 meta/text 之類）→ 保留尾段，別無更好選擇。
-    start = n - SNAPSHOT_MAX_EVENTS;
+    // 完全沒有 turn 邊界：這個 turn 的 user_message 已被推出保留上限（重啟後從 SQLite 載入的
+    // 歷史就可能如此）。只送尾段的話前端一個 turn 都開不出來、日誌整片空白，所以補一張佔位的
+    // 開頭卡，讓尾段事件有 turn 可掛。
+    const tail = history.slice(n - (SNAPSHOT_MAX_EVENTS - 1));
+    const opener: RunnerEvent = { type: "user_message", text: t("（這個回合開頭的訊息已超出保留上限，以下是後段紀錄）"), at: tail[0]?.at };
+    return [opener, ...tail].map(trimEventForSnapshot);
   } else {
     // (a) 尺寸視窗：最後 SNAPSHOT_MAX_EVENTS 筆，對齊到視窗內第一個 turn 開頭。
     const windowStart = n - SNAPSHOT_MAX_EVENTS;
@@ -104,6 +109,28 @@ export function snapshotHistory(history: RunnerEvent[]): RunnerEvent[] {
     }
   }
   return history.slice(start).map(trimEventForSnapshot);
+}
+
+// 保留歷史的裁切（record() 每筆事件都會走到）：從最舊的開始丟，但還開著的那個 turn 的
+// user_message 不能跟著丟——單一 turn 超過上限時它會被推出去，snapshot 只剩孤兒事件、前端
+// 開不出 turn、日誌一片空白。被切掉的範圍裡最後一個 turn 若還沒收尾（之後沒有 turn_end/error），
+// 而保留段的開頭又是它的中段事件，就把它的 user_message 釘在開頭、改丟後面那一筆中段事件，
+// 長度仍是 max。notice 不是 turn 開頭（不會有 turn_end），不算數。
+export function trimRetainedHistory(history: RunnerEvent[], max: number): void {
+  const excess = history.length - max;
+  if (excess <= 0) return;
+  const head = history[excess];
+  const headIsBoundary = !head || head.type === "turn_end" || head.type === "error" || (head.type === "user_message" && !head.notice);
+  let opener: RunnerEvent | null = null;
+  if (!headIsBoundary) {
+    for (let index = excess - 1; index >= 0; index--) {
+      const event = history[index]!;
+      if (event.type === "turn_end" || event.type === "error") break;
+      if (event.type === "user_message" && !event.notice) { opener = event; break; }
+    }
+  }
+  if (opener) history.splice(0, excess + 1, opener);
+  else history.splice(0, excess);
 }
 
 // 送前端前把「連續的文字 delta」合併成一則（text_delta 接 text_delta、thinking_delta 接

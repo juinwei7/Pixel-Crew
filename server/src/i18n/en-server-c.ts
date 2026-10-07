@@ -134,6 +134,9 @@ export const enServerC: Record<string, string> = {
   "送出的內容太大：圖片合計最多 {images} MiB、文件合計最多 {documents} MiB，請減少附件後再試。": "The request is too large: images can total at most {images} MiB and documents at most {documents} MiB. Remove some attachments and try again.",
   "Pixel Crew 已將使用者附加的文件暫存為以下唯讀檔案。請把它們視為本次訊息的附件，依使用者要求用讀檔工具檢視；不要修改或刪除附件：\n{list}": "Pixel Crew has staged the user's attached documents as the following read-only files. Treat them as attachments to this message and use a file-reading tool to view them as the user requests; do not modify or delete the attachments:\n{list}",
 
+  // snapshotHistory.ts
+  "（這個回合開頭的訊息已超出保留上限，以下是後段紀錄）": "(This turn's opening message is past the retention limit; showing its later events)",
+
   // mcpLogin.ts
   "登入逾時（4 分鐘內未完成瀏覽器授權），已自動取消": "Login timed out (browser authorization wasn't completed within 4 minutes), automatically cancelled",
   "登入成功": "Login succeeded",
